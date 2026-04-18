@@ -11,6 +11,7 @@ Run a full generative-adversarial development process: planner → contract nego
 /gan --target ~/projects/myapp "add dark mode"
 /gan --max-attempts 3 --threshold 8 "build a REST API"
 /gan --base-branch main --target ~/projects/myapp "refactor auth"
+/gan --branch-name feature/payments --target ~/projects/myapp "add Stripe"
 ```
 
 ## Argument parsing
@@ -28,7 +29,8 @@ Parse these flags from the user's message before doing anything else:
 | `--max-minutes <n>` | 60 | Orchestrator wall-clock budget. Abort cleanly when exceeded. |
 | `--label <string>` | none | Free-form tag recorded in telemetry. Use this to group A/B runs (e.g. `generator-opus`, `eval-sonnet`). |
 | `--telemetry-dir <path>` | `$GAN_TELEMETRY_DIR` or `$HOME/.gan-telemetry` | Where to persist config + outcomes. See [Telemetry](#telemetry). |
-| `--base-branch <name>` | `develop` | Branch to base each sprint worktree on. Must exist in the repo before running. |
+| `--base-branch <name>` | `develop` | Branch to base the run worktree on. Must exist in the repo before running. |
+| `--branch-name <name>` | `gan/<run-id>` | Name for the single branch that accumulates all sprint commits. |
 | `--no-telemetry` | false | Disable telemetry capture entirely for this run. |
 
 The remaining text after flags is the user prompt passed to the planner.
@@ -61,7 +63,8 @@ All state lives in `.gan/` in the current working directory (never inside `TARGE
 - Final contract: `.gan/sprint-{N}-contract.json`
 - Generator objection: `.gan/sprint-{N}-objection-{A}.json`
 - Eval feedback: `.gan/sprint-{N}-feedback-{A}.json` (A is 1-based: 1, 2, …, `maxAttempts`)
-- Worktree root: `.gan/worktrees/sprint-{N}-attempt-{A}/`
+- Worktree root: `.gan/worktree/` (single worktree for the entire run)
+- Sprint base commit: `.gan/sprint-{N}-base-commit.txt` (SHA recorded before generator runs)
 - PID tracking (evaluator): `.gan/eval-pids.txt`
 
 ### Single writer rule
@@ -85,8 +88,8 @@ Ask the user: `Found an interrupted run at sprint {currentSprint}/{totalSprints}
 |---|---|
 | `planning` | delete `.gan/spec.md`, restart Step 1 |
 | `negotiating` | delete `.gan/sprint-{N}-contract-draft.json`, `.gan/sprint-{N}-contract.json`, and `.gan/sprint-{N}-review.json`; restart Step 2a |
-| `building` | in TARGET_DIR mode, hard-reset branch `gan/sprint-{N}-attempt-{A}` to its merge-base with the starting branch; in greenfield mode, `git -C app checkout -- .` to discard uncommitted work. Do NOT increment `currentAttempt`. Restart the same attempt. |
-| `evaluating` | if `.gan/sprint-{N}-feedback-{A}.json` exists and validates against `feedback.schema.json`, treat it as the verdict and proceed. Otherwise respawn the evaluator. |
+| `building` | Reset the worktree to `.gan/sprint-{N}-base-commit.txt` (`git -C .gan/worktree reset --hard <SHA>`). Do NOT increment `currentAttempt`. Restart the same attempt. If `.gan/worktree/` is missing, recreate it from `progress.json.runBranch` (without `-b`). |
+| `evaluating` | The worktree should still be present. If `.gan/sprint-{N}-feedback-{A}.json` already exists and validates, treat it as the verdict and proceed. Otherwise respawn the evaluator. |
 | `complete` / `failed` | prompt the user; do not auto-resume. |
 
 ### Step 0.5 — TARGET_DIR preflight
@@ -97,57 +100,41 @@ If `--target` is supplied:
    `TARGET_DIR has uncommitted changes. Commit or stash before running /gan.`
 3. Record the starting branch in `progress.json.startingBranch` via `git -C <path> rev-parse --abbrev-ref HEAD`, so resume can recover.
 
-### Step 0.6 — Worktree preflight
+### Step 0.6 — Worktree setup
 
-The orchestrator creates one git worktree per attempt, branched off `<base-branch>` (default: `develop`). This keeps every sprint's work isolated and leaves a named branch for review after each passing sprint.
+The orchestrator creates **one worktree for the entire run**. All sprints commit to the same branch sequentially, so each sprint sees the full output of all previous sprints. On a failed attempt, the generator resets back to the commit that existed before that attempt started.
 
 **For TARGET_DIR mode:**
 1. Verify the base branch exists: `git -C <TARGET_DIR> rev-parse --verify <base-branch>`. If missing, abort:
    `Base branch '<base-branch>' not found in <TARGET_DIR>. Create it or pass --base-branch <other>.`
-2. Record `baseBranch` in `progress.json`.
+2. Determine the run branch name: `--branch-name` if provided, otherwise `gan/<run-id>`.
+3. Create the worktree:
+   ```sh
+   REPO_DIR="<TARGET_DIR>"
+   WORKTREE_ABS="$(pwd)/.gan/worktree"
+   BRANCH="<branch-name>"
+   git -C "$REPO_DIR" worktree add "$WORKTREE_ABS" -b "$BRANCH" "<base-branch>"
+   ```
+4. Record `worktreePath`, `runBranch`, and `baseBranch` in `progress.json`.
 
 **For greenfield mode (no `--target`):**
 1. Create `app/` if it does not exist.
 2. If `app/` is not a git repo, initialize it:
    ```sh
    git -C app init
-   git -C app checkout -b develop     # or <base-branch> if overridden
+   git -C app checkout -b <base-branch>
    git -C app commit --allow-empty -m "chore: initial commit"
    ```
-   If a repo already exists, verify `<base-branch>` is present (same check as TARGET_DIR).
-3. Record `baseBranch` in `progress.json`.
+3. Create the worktree from `app/` the same way as TARGET_DIR mode above.
 
-**Worktree creation (invoked at the start of each attempt in Step 2b):**
+**Resume:** If `.gan/worktree/` already exists as a valid worktree (check with `git -C <REPO_DIR> worktree list`), skip creation and reuse it. The branch already has the commits from completed sprints.
 
+**Teardown:** The worktree filesystem (`.gan/worktree/`) is removed at the end of the run (success or failure) to keep `.gan/` clean. The branch (`<run-branch>`) is always kept for inspection and merging:
 ```sh
-REPO_DIR="<TARGET_DIR or $(pwd)/app>"
-WORKTREE_ABS="$(pwd)/.gan/worktrees/sprint-{N}-attempt-{A}"
-BRANCH="gan/sprint-{N}-attempt-{A}"
-
-# If this worktree already exists (resume path), skip creation
-if git -C "$REPO_DIR" worktree list --porcelain | grep -q "$WORKTREE_ABS"; then
-  echo "Worktree already exists, reusing."
-else
-  git -C "$REPO_DIR" worktree add "$WORKTREE_ABS" -b "$BRANCH" "<base-branch>"
-fi
+git -C "$REPO_DIR" worktree remove .gan/worktree --force 2>/dev/null || true
 ```
 
-Pass `WORKTREE_PATH: <WORKTREE_ABS>` in the prompt to the generator and evaluator for this attempt.
-
-**Worktree cleanup (invoked after sprint passes or after final failure):**
-
-```sh
-# Remove the worktree filesystem — the branch is kept for inspection
-git -C "$REPO_DIR" worktree remove "$WORKTREE_ABS" --force 2>/dev/null || true
-```
-
-Only remove the passing attempt's worktree on success. On failure, remove all worktrees for that sprint so the next sprint starts clean.
-
-**Resume and worktrees:**
-
-Update the resume table entries:
-- `building`: re-create the worktree for the current attempt if it is missing (branch may already exist from a partial run — detect with `git -C <REPO> rev-parse --verify <BRANCH>` and use `git -C <REPO> worktree add <PATH> <BRANCH>` without `-b` if so).
-- `evaluating`: the worktree should still be present; if missing, recreate it from the existing branch.
+Pass `WORKTREE_PATH: <WORKTREE_ABS>` in every prompt to the generator and evaluator.
 
 ### Step 0.75 — Telemetry init
 
@@ -274,12 +261,21 @@ For `attempt` from 1 to `maxAttempts` (inclusive):
 
 Update `progress.json`: `status: "building"`, `currentAttempt: attempt`, `attemptsTotal: attemptsTotal + 1`.
 
-Create the worktree for this attempt (see Step 0.6 — Worktree creation). The worktree is at `.gan/worktrees/sprint-{N}-attempt-{attempt}/` on branch `gan/sprint-{N}-attempt-{attempt}` based off `<base-branch>`.
+If `attempt > 1` (retry): reset the worktree branch back to the sprint's base commit so the generator starts clean:
+```sh
+SPRINT_BASE=$(cat .gan/sprint-{N}-base-commit.txt)
+git -C .gan/worktree reset --hard "$SPRINT_BASE"
+```
+
+If `attempt == 1`: record the current HEAD as the sprint's base commit:
+```sh
+git -C .gan/worktree rev-parse HEAD > .gan/sprint-{N}-base-commit.txt
+```
 
 Build generator prompt:
 - Base: `Sprint {N}, attempt {attempt}`
-- Append: `WORKTREE_PATH: <absolute path to .gan/worktrees/sprint-{N}-attempt-{attempt}/>`
-- If `--target` was provided, append: `TARGET_DIR: <path>` (for context only — generator works in the worktree)
+- Append: `WORKTREE_PATH: <absolute .gan/worktree path>`
+- If `--target` was provided, append: `TARGET_DIR: <path>` (for context — generator works in the worktree)
 
 Spawn `gan-generator`.
 
@@ -311,20 +307,22 @@ Read `passed` and `blockingConcerns` from the feedback file.
 - **If `passed: true` (and we didn't just reroute for blocking):**
   - Increment `completedSprints` in progress.json
   - Log: `✓ Sprint {N} PASSED on attempt {attempt}`
-  - Print: `Branch ready for review: gan/sprint-{N}-attempt-{attempt}`
-  - Remove the worktree (keep the branch): `git -C <REPO_DIR> worktree remove .gan/worktrees/sprint-{N}-attempt-{attempt} --force`
+  - Delete `.gan/sprint-{N}-base-commit.txt` (no longer needed).
   - Delete `.gan/sprint-{N}-contract-draft.json` if any leftover exists.
-  - Break attempt loop, continue to next sprint.
+  - Break attempt loop, continue to next sprint (generator commits remain on the branch).
 
 - **If `passed: false` and `attempt < maxAttempts`:**
   - Log: `✗ Sprint {N} failed attempt {attempt}, retrying...`
   - Continue attempt loop.
 
 - **If `passed: false` and `attempt == maxAttempts`:**
+  - Reset the worktree back to the sprint base commit (leave the branch clean at the last passing state):
+    ```sh
+    git -C .gan/worktree reset --hard "$(cat .gan/sprint-{N}-base-commit.txt)"
+    ```
   - Update `progress.json`: `status: "failed"`, `failureReason: "sprint {N} failed max-attempts"`.
   - Log: `✗ Sprint {N} FAILED after {maxAttempts} attempts — stopping`
-  - Remove all worktrees for this sprint: for A in 1..maxAttempts, `git -C <REPO_DIR> worktree remove .gan/worktrees/sprint-{N}-attempt-{A} --force 2>/dev/null || true`
-  - Run the telemetry finalize step (see [Telemetry](#telemetry)).
+  - Run worktree teardown (Step 0.6) and telemetry finalize (see [Telemetry](#telemetry)).
   - Print summary table (see Step 3). Stop the entire harness. Do not continue to further sprints.
 
 **Failure-path telemetry:** any abort earlier in the flow (planner didn't report sprint count, contract negotiation failed, schema validation failed, budget cap reached) must also run the telemetry finalize step before exiting. Telemetry captures failed runs; they're the most informative ones for A/B comparisons.
@@ -351,15 +349,14 @@ Print a summary table:
 ════════════════════════════════════════
 ```
 
-Also print the passing branch for each sprint so the user can review and merge:
+Run worktree teardown (Step 0.6) then print the branch for review:
 
 ```
-Branches ready for review:
-  Sprint 1 → gan/sprint-1-attempt-1  (based on develop)
-  Sprint 2 → gan/sprint-2-attempt-2  (based on develop)
-  Sprint 3 → gan/sprint-3-attempt-1  (based on develop)
+Branch ready for review: gan/<run-id>  (based on develop)
 
-Merge or squash each branch into develop when satisfied.
+Inspect, then merge or squash into develop when satisfied:
+  git checkout develop
+  git merge --no-ff gan/<run-id>
 ```
 
 Finally, run the telemetry finalize step (below) before exiting.

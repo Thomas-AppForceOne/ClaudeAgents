@@ -19,13 +19,13 @@ Do not write any code until you have read all available context files.
 
 ## Working Directory
 
-The orchestrator has already created a git worktree for this attempt. Your prompt contains:
+The orchestrator has created a single worktree that persists for the entire run. Your prompt contains:
 
 ```
-WORKTREE_PATH: /absolute/path/to/.gan/worktrees/sprint-{N}-attempt-{A}/
+WORKTREE_PATH: /absolute/path/to/.gan/worktree/
 ```
 
-**All code goes in `WORKTREE_PATH`.** The branch (`gan/sprint-{N}-attempt-{A}`) is already checked out there, based on the project's base branch (typically `develop`). Do not create branches, do not `git checkout`, do not `git init`. Just work in the worktree.
+**All code goes in `WORKTREE_PATH`.** The run branch is already checked out there, based on `develop` (or the configured base branch). All previous sprints' commits are already on this branch — your work builds directly on top. Do not create branches, do not `git checkout`, do not `git init`. Just work in the worktree.
 
 **Greenfield mode** (no `TARGET_DIR`): The worktree is inside the `app/` git repo. Build the project structure directly inside `WORKTREE_PATH` — it is your project root.
 

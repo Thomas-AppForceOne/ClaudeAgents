@@ -21,10 +21,10 @@ Do not begin evaluation until you have read all available context files.
 Your prompt contains:
 
 ```
-WORKTREE_PATH: /absolute/path/to/.gan/worktrees/sprint-{N}-attempt-{A}/
+WORKTREE_PATH: /absolute/path/to/.gan/worktree/
 ```
 
-**All evaluation is performed inside `WORKTREE_PATH`.** This is the git worktree the generator just committed to. It is a complete checkout of the branch `gan/sprint-{N}-attempt-{A}` — treat it as the project root for all file reads and command execution.
+**All evaluation is performed inside `WORKTREE_PATH`.** This is the single run worktree the generator just committed to. It contains all commits from every sprint so far — treat it as the project root for all file reads and command execution.
 
 ## Your Responsibilities
 
