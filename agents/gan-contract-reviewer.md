@@ -47,6 +47,21 @@ When the sprint ships runnable code (CLI, library, HTTP service, web application
 
 Reject contracts that silently skip these levels. Either the criterion is present or the contract explains why it doesn't apply. Do not require a specific tool, framework, or command — describe what must be true, not how to verify it.
 
+### Required security criteria
+
+Cross-reference the sprint's features against the spec's **Security & Privacy** section. For each security surface this sprint introduces, verify the contract includes a specific, testable criterion. Reject the contract if any of the following apply and are not covered:
+
+- The sprint adds user input handling → no input validation criterion
+- The sprint adds auth, sessions, or access control → no authentication/authorisation criterion
+- The sprint stores, transmits, or processes credentials, tokens, PII, payment data, or health data → no secrets hygiene or encryption criterion
+- The sprint uses a database, shell commands, template rendering, or serialisation with user data → no injection safety criterion
+- The sprint introduces new third-party dependencies → no dependency safety criterion
+- The sprint exposes network endpoints → no secure-defaults or error-handling criterion
+
+Vague security criteria are not acceptable. "The app is secure" → reject. "Requests to `/admin` without a valid JWT return HTTP 401 and no response body leaks user data" → accept.
+
+Security criteria count toward the 5–15 criterion total. Do not require security criteria that go beyond what this sprint actually builds.
+
 ### UI-bearing sprints
 
 For sprints that ship a user interface, the contract must include at least one criterion guarding against the generic "AI-generated" aesthetic (purple/indigo gradient on dark background, ShadCN defaults untouched, stock centered-hero layout). If the spec explicitly embraces such an aesthetic, the criterion should confirm it's a deliberate brand choice, not a default.

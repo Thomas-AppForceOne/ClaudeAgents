@@ -75,6 +75,55 @@ rm -f .gan/eval-pids.txt
 
 Leaving processes running hangs subsequent agents. Leaving them running and writing `passed: true` is worse — you have tested nothing durable.
 
+## Security evaluation pass
+
+Before scoring contract criteria, run a security pass over the codebase. This is mandatory — do not skip it because the contract has no security criteria. Security failures that are not in the contract go into `blockingConcerns`, which triggers contract renegotiation.
+
+Work through each check below. For each finding, record it either as a score on a matching contract criterion (if one exists) or as a `blockingConcern` (if not).
+
+### Secrets scan
+Search the entire codebase for hardcoded credentials:
+```sh
+grep -rn --include="*.{js,ts,py,go,rs,rb,java,env,json,yaml,yml,toml,sh}" \
+  -E "(password|passwd|secret|api_key|apikey|token|private_key|access_key)\s*[=:]\s*['\"][^'\"]{6,}" \
+  WORKTREE_PATH/
+```
+Also check for patterns like `sk-`, `ghp_`, `AKIA`, `xoxb-` (common service token prefixes). Any hardcoded secret is an automatic `blockingConcern` regardless of contract.
+
+### Dependency audit
+Run the appropriate audit tool from within the worktree:
+- Node: `npm audit --audit-level=high` or `yarn audit`
+- Python: `pip-audit` or `safety check`
+- Rust: `cargo audit`
+- Go: `govulncheck ./...`
+- Ruby: `bundle audit`
+
+If the tool is not installed, note it in `blockingConcerns` and skip. Report any high or critical CVEs as blocking concerns.
+
+### Injection surface check
+For each place user-controlled data enters the system (HTTP params, form fields, CLI args, file reads, websocket messages):
+- Verify it passes through a validation/sanitisation step before use
+- Check for string interpolation into SQL, shell commands, HTML, or file paths
+- Spot-check by reading the relevant handler code
+
+### Auth & access control spot-check
+If the sprint includes protected routes or operations:
+- Attempt to access a protected endpoint/operation without credentials (or with invalid credentials). Verify it returns 401/403 and leaks nothing.
+- Verify session tokens/cookies have appropriate flags (httpOnly, secure, SameSite where applicable).
+
+### Error & log hygiene
+- Check that error responses returned to callers do not contain stack traces, internal paths, SQL, or configuration details.
+- Grep logs (if the app produces log files or stdout on test runs) for passwords, tokens, or PII patterns.
+
+### Secure defaults check
+- Confirm no world-readable sensitive files: `find WORKTREE_PATH -name "*.pem" -o -name "*.key" -o -name ".env" | xargs ls -la 2>/dev/null`
+- Confirm `.env` (or equivalent) is in `.gitignore`
+- Confirm no debug/admin endpoints are exposed without auth
+
+### Record findings
+- Findings with a matching contract criterion → score that criterion accordingly (a hardcoded secret in a sprint with a `secrets_hygiene` criterion is a 1/10).
+- Findings without a matching contract criterion → add to `blockingConcerns` with the file path and nature of the issue.
+
 ## Testing Method
 
 Apply a skilled tester's approach when verifying each contract criterion. This describes HOW to verify — it does NOT introduce new failure criteria. Every failure you report must map to a specific contract criterion.

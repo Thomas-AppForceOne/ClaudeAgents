@@ -54,11 +54,39 @@ The JSON structure must be exactly:
 }
 ```
 
+## Required security criteria
+
+Every sprint that ships runnable code must include criteria covering the security surfaces it introduces. Derive these from the spec's **Security & Privacy** section and the features in this sprint. Do not add generic security criteria — only those relevant to what this sprint actually builds.
+
+Apply the following checklist. For each item that applies, write a specific, testable criterion. Omit only if the sprint genuinely does not touch that surface, and note why.
+
+1. **Input validation** — every externally-sourced value (user input, query params, request bodies, file content, environment variables, CLI args) is validated and rejected if malformed, before it reaches business logic or storage.
+
+2. **Authentication & authorisation** — protected routes/operations require valid credentials. Unauthenticated or unauthorised requests are rejected with an appropriate status (401/403), not silently served or crashed on.
+
+3. **Secrets hygiene** — no credentials, API keys, tokens, or passwords appear in source code, committed config files, or log output. Secrets are loaded from environment variables or a secrets manager.
+
+4. **Injection safety** — wherever user-controlled data is used in queries, shell commands, template rendering, or serialisation, parameterised/escaped methods are used. No raw string interpolation into SQL, shell, HTML, or XML.
+
+5. **Encryption in transit** — all network communication carrying sensitive data uses TLS. No plaintext HTTP for auth flows or data APIs.
+
+6. **Sensitive data in logs** — passwords, tokens, PII, payment data, and health data must not appear in application logs, error messages, or stack traces surfaced to the user.
+
+7. **Dependency safety** — no dependency with a known critical or high CVE is introduced. The project's standard audit tool (npm audit, pip-audit, cargo audit, govulncheck, etc.) reports no high/critical issues.
+
+8. **Secure defaults** — the application starts in a secure configuration without manual hardening: no debug endpoints exposed, no default credentials, file permissions on sensitive files are restrictive (not world-readable), CORS is not wide-open unless explicitly required.
+
+9. **Error handling** — errors do not leak internal paths, stack traces, or system information to untrusted callers. Internal errors are logged; sanitised messages are returned externally.
+
+10. **Cryptography correctness** — if this sprint implements any cryptographic operation (hashing, signing, encryption), it uses a well-reviewed library and a vetted algorithm. No MD5/SHA-1 for security purposes, no ECB mode, no homebrew crypto.
+
+Criteria that are context-dependent (e.g. authorisation) must specify the concrete behaviour to verify, not just "authorisation works".
+
 ## Rules
 
 - Each criterion must be SPECIFIC and TESTABLE — not vague like "works well" or "looks good"
-- Include 5–15 criteria per sprint depending on complexity
-- Criteria should cover: functionality, error handling, code quality, and user experience
+- Include 5–15 criteria per sprint depending on complexity (security criteria count toward this total)
+- Criteria should cover: functionality, error handling, code quality, user experience, and security
 - `criteria[].name` must match `^[a-zA-Z0-9_]+$` (no spaces, no hyphens) so downstream tooling can reference it
 - Every criterion's `threshold` MUST equal the integer from `THRESHOLD:` in your prompt (default 7 if absent). Raise it for specific criteria only when the spec explicitly calls for a stricter bar; never lower it below the default.
 - Do NOT restate criteria already satisfied by a passing prior sprint. If carry-forward coverage is needed, phrase it as `regression_sprint_K: pre-existing tests from sprint K still pass`.

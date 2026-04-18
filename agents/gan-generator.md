@@ -46,6 +46,49 @@ WORKTREE_PATH: /absolute/path/to/.gan/worktree/
 4. Make a descriptive git commit after each feature passes
 5. Self-evaluate your work against the contract before declaring the sprint complete
 
+## Secure coding standards
+
+These apply to every line of code you write, regardless of whether the sprint contract has explicit security criteria. Security is not a feature — it is a baseline.
+
+### Secrets & credentials
+- Never hardcode API keys, passwords, tokens, private keys, or connection strings in source code or committed config files.
+- Load secrets from environment variables or a secrets manager. Document which variables are required in a `.env.example` (never `.env`).
+- Add `.env`, `*.pem`, `*.key`, `id_rsa`, and similar to `.gitignore` before the first commit.
+- Never log secrets, even in debug output.
+
+### Input validation & injection prevention
+- Validate and sanitise all externally-sourced data (user input, HTTP request bodies/params/headers, file content, CLI args, environment variables) before it reaches business logic, storage, or rendering.
+- Use parameterised queries or an ORM for all database access — never string-interpolate user data into SQL.
+- Use safe shell APIs (execFile, subprocess with list args) rather than shell string interpolation when calling subprocesses.
+- Escape or sanitise data before inserting into HTML, XML, JSON templates, or any output format.
+- Validate file paths against a known root before reading or writing — prevent path traversal.
+
+### Authentication & authorisation
+- Protected routes and operations must check credentials before executing. Return 401 for unauthenticated, 403 for unauthorised.
+- Use established libraries for auth (JWT, OAuth, bcrypt/argon2 for password hashing). Never roll your own.
+- Sessions must have expiry, secure-flag, httpOnly-flag, and SameSite where applicable.
+- Enforce the principle of least privilege: code, services, and users get only the permissions they need.
+
+### Encryption
+- All network communication carrying sensitive data must use TLS. Never send credentials or PII over plaintext HTTP.
+- Use modern, reviewed algorithms: AES-256-GCM for symmetric encryption, RSA-OAEP or Ed25519 for asymmetric, SHA-256+ for hashing. No MD5 or SHA-1 for security purposes, no ECB mode.
+- Never implement cryptographic primitives yourself — use the standard library or a widely-audited package.
+
+### Error handling & logging
+- Internal errors must be caught and logged internally. Return sanitised, generic messages to external callers — never stack traces, file paths, SQL errors, or internal state.
+- Logs must not contain passwords, tokens, full credit card numbers, SSNs, or equivalent PII. Truncate or redact before logging.
+- Use structured logging; avoid string interpolation that could smuggle untrusted values into log lines (log injection).
+
+### Dependencies
+- Pin dependencies to specific versions (not `^` or `~` ranges) in lock files. Commit lock files.
+- Before adding a new dependency, verify it is actively maintained and has no known critical/high CVEs. Use the ecosystem's audit tool (npm audit, pip-audit, cargo audit, govulncheck, bundle audit) and fix or justify any findings before committing.
+- Prefer widely-used, well-reviewed libraries over obscure alternatives for security-sensitive operations.
+
+### Secure defaults
+- The application must be secure in its default configuration — no debug endpoints, no admin interfaces without auth, no permissive CORS (`*`) unless explicitly required by the spec.
+- Sensitive files (private keys, config with credentials) must not be world-readable. Set restrictive file permissions (0600 or 0640).
+- Database connections and service accounts must use dedicated credentials with minimal permissions — not root or admin accounts.
+
 ## Rules
 
 - Build ONE feature at a time. Do not try to implement everything at once.
