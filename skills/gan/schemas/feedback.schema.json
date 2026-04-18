@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GAN evaluator feedback",
+  "type": "object",
+  "required": [
+    "sprintNumber",
+    "attempt",
+    "passed",
+    "feedback",
+    "blockingConcerns",
+    "overallSummary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sprintNumber": { "type": "integer", "minimum": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "passed": { "type": "boolean" },
+    "feedback": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["criterion", "score", "threshold", "details"],
+        "additionalProperties": false,
+        "properties": {
+          "criterion": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
+          "score": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "threshold": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "blockingConcerns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["summary", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "overallSummary": { "type": "string" }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GAN telemetry run summary",
+  "type": "object",
+  "required": [
+    "runId",
+    "startedAt",
+    "endedAt",
+    "durationSeconds",
+    "status",
+    "totalSprints",
+    "completedSprints",
+    "attemptsTotal",
+    "objectionsTotal",
+    "blockingConcernsTotal",
+    "sprintResults",
+    "models",
+    "flags"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z?-[a-f0-9]{4}$" },
+    "label": { "type": ["string", "null"] },
+    "resumedFrom": { "type": ["string", "null"] },
+    "startedAt": { "type": "string" },
+    "endedAt": { "type": "string" },
+    "durationSeconds": { "type": "integer", "minimum": 0 },
+    "status": { "enum": ["complete", "failed"] },
+    "failureReason": { "type": ["string", "null"] },
+    "totalSprints": { "type": "integer", "minimum": 0 },
+    "completedSprints": { "type": "integer", "minimum": 0 },
+    "attemptsTotal": { "type": "integer", "minimum": 0 },
+    "objectionsTotal": { "type": "integer", "minimum": 0 },
+    "blockingConcernsTotal": { "type": "integer", "minimum": 0 },
+    "sprintResults": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sprint", "passed", "attempts"],
+        "additionalProperties": false,
+        "properties": {
+          "sprint": { "type": "integer", "minimum": 1 },
+          "passed": { "type": "boolean" },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "firstAttemptScoreMean": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "required": ["planner", "proposer", "reviewer", "generator", "evaluator"],
+      "additionalProperties": false,
+      "properties": {
+        "planner": { "type": ["string", "null"] },
+        "proposer": { "type": ["string", "null"] },
+        "reviewer": { "type": ["string", "null"] },
+        "generator": { "type": ["string", "null"] },
+        "evaluator": { "type": ["string", "null"] }
+      }
+    },
+    "flags": {
+      "type": "object",
+      "required": ["maxAttempts", "threshold", "maxAttemptsTotal", "maxMinutes"],
+      "additionalProperties": true,
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "threshold": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "maxAttemptsTotal": { "type": "integer", "minimum": 1 },
+        "maxMinutes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "target": { "type": ["string", "null"] }
+  }
+}
