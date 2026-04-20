@@ -15,7 +15,10 @@
     "blockingConcernsTotal",
     "sprintResults",
     "models",
-    "flags"
+    "flags",
+    "tokens",
+    "userPrompt",
+    "specs"
   ],
   "additionalProperties": true,
   "properties": {
@@ -69,6 +72,32 @@
         "maxMinutes": { "type": "integer", "minimum": 1 }
       }
     },
-    "target": { "type": ["string", "null"] }
+    "target": { "type": ["string", "null"] },
+    "userPrompt": { "type": "string" },
+    "specs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "tokens": {
+      "type": ["object", "null"],
+      "required": ["total", "byRole", "complete"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": ["integer", "null"], "minimum": 0 },
+        "byRole": {
+          "type": "object",
+          "required": ["planner", "proposer", "reviewer", "generator", "evaluator"],
+          "additionalProperties": false,
+          "properties": {
+            "planner": { "type": ["integer", "null"], "minimum": 0 },
+            "proposer": { "type": ["integer", "null"], "minimum": 0 },
+            "reviewer": { "type": ["integer", "null"], "minimum": 0 },
+            "generator": { "type": ["integer", "null"], "minimum": 0 },
+            "evaluator": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "complete": { "type": "boolean" }
+      }
+    }
   }
 }

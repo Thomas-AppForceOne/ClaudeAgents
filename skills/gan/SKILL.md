@@ -26,7 +26,7 @@ Parse these flags from the user's message before doing anything else:
 | `--max-attempts <n>` | 3 | Max total attempts per sprint (including the first). After attempt `n` fails, the sprint is failed. |
 | `--threshold <n>` | 7 | Default per-criterion threshold on a 1–10 scale. Passed to the proposer, which stamps it on every criterion. |
 | `--max-attempts-total <n>` | 15 | Abort the whole run if cumulative generator invocations across all sprints hit this. |
-| `--max-minutes <n>` | 60 | Orchestrator wall-clock budget. Abort cleanly when exceeded. |
+| `--max-minutes <n>` | 360 | Orchestrator wall-clock budget. Abort cleanly when exceeded. |
 | `--label <string>` | none | Free-form tag recorded in telemetry. Use this to group A/B runs (e.g. `generator-opus`, `eval-sonnet`). |
 | `--telemetry-dir <path>` | `$GAN_TELEMETRY_DIR` or `$HOME/.gan-telemetry` | Where to persist config + outcomes. See [Telemetry](#telemetry). |
 | `--base-branch <name>` | `develop` | Branch to base the run worktree on. Must exist in the repo before running. |
@@ -153,9 +153,10 @@ Unless `--no-telemetry` is set:
   "flags": {
     "spec": null, "specs": null, "target": "<path or null>",
     "maxAttempts": 3, "threshold": 7,
-    "maxAttemptsTotal": 15, "maxMinutes": 60
+    "maxAttemptsTotal": 15, "maxMinutes": 360
   },
-  "userPrompt": "<first 500 chars of the user's prompt>",
+  "userPrompt": "<the user's full prompt text, verbatim — do not truncate>",
+  "specs": ["<path or basename>", "..."],
   "models": {
     "planner": "<value of 'model:' in agents/gan-planner.md>",
     "proposer": "<...>",
@@ -171,6 +172,16 @@ Unless `--no-telemetry` is set:
 ```
 
 Read each agent's `model:` frontmatter from `$HOME/.claude/agents/gan-*.md` (follow symlinks). If unreadable, record `null`.
+
+**`userPrompt`**: the full prompt the user invoked `/gan` with, verbatim. Do not truncate — older versions of this skill stored only 500 chars; that lost information needed to reproduce or compare runs. Include it in full even if long.
+
+**`specs`**: an array of the specification files this run targets.
+- If `--spec <path>` was passed: `[<path>]`.
+- If `--specs <dir>` was passed: list every `*.md` file under `<dir>` at invocation time (not `ROADMAP.md` or index files — those are navigation, not specs).
+- If neither flag was passed but the user's prompt names a spec file that exists on disk (e.g. "implement specifications/foo.md"), resolve and record `[<that path>]`.
+- Otherwise: `[]` (empty array, not null). Prompt-only runs are valid; they just have no canonical spec.
+
+Paths are recorded relative to `TARGET_DIR` when `--target` is set, otherwise relative to `cwd`. This keeps them portable for A/B comparison across machines.
 
 Remember the `runId` and `telemetryDir` for later steps. Persist them in `progress.json` as `telemetry.runId` and `telemetry.dir` so resume preserves them.
 
@@ -293,6 +304,7 @@ Update `progress.json`: `status: "evaluating"`.
 Build evaluator prompt:
 - Append: `WORKTREE_PATH: <absolute path to .gan/worktrees/sprint-{N}-attempt-{attempt}/>`
 - If `--target` was provided, append: `TARGET_DIR: <path>` (for context)
+- If `--target` is set, read `<TARGET_DIR>/CLAUDE.md` and look for a section titled "Test credentials" (or similar). If present, copy the sourcing snippet into the evaluator prompt verbatim so the evaluator uses the project's real test credentials rather than silently skipping credential-gated tests. Never inline the actual credential values — source them from the file the project's CLAUDE.md names.
 
 Spawn `gan-evaluator`. Verify `.gan/sprint-{N}-feedback-{attempt}.json` exists and validates against `feedback.schema.json`.
 
@@ -349,13 +361,39 @@ Print a summary table:
 ════════════════════════════════════════
 ```
 
-Run worktree teardown (Step 0.6) then print the branch for review:
+Run worktree teardown (Step 0.6).
+
+#### Step 3.1 — TARGET_DIR hygiene (only on `complete` status)
+
+Evaluators frequently mount plugin/test artifacts into `TARGET_DIR` to drive live HTTP / container tests. Preflight (Step 0.5) guaranteed the working tree was clean, so anything untracked now was left by the run and must be removed before the orchestrator continues. On `failed` runs, skip this step — the user may want to inspect the leftovers for debugging.
+
+If `--target` was set:
+1. `git -C <TARGET_DIR> status --porcelain` — if empty, skip the rest of this step.
+2. `git -C <TARGET_DIR> clean -fd` to remove untracked files/directories. Never use `-x` (that would wipe ignored files like `.env`, `vendor/`, build output the user cares about).
+3. `git -C <TARGET_DIR> stash list` — drop any stash whose message contains the run id or a sprint reference (e.g. matching `gan/<run-id>` or `sprint <N>`); leave unrelated stashes alone.
+4. Re-check `git -C <TARGET_DIR> status --porcelain` — abort the handoff with a clear warning if anything remains (means the run touched tracked files, which is a bug).
+
+#### Step 3.2 — Repo handoff policy (only on `complete` status)
+
+Before printing the final summary, read `<TARGET_DIR>/CLAUDE.md` (if present). Repos often define post-run obligations there: spec/ADR lifecycle, PR target branch, documentation updates, etc. Honour them. Typical shape, when the repo's CLAUDE.md calls for it:
+
+- Archive or delete any spec file the run fully implemented, per the repo's lifecycle section.
+- Update any roadmap/index file to reflect completion.
+- Commit those changes on the run branch as a separate commit (message: `chore: archive implemented spec + update roadmap` or equivalent).
+- Push the branch and open a PR with `gh pr create --base <target from CLAUDE.md>`. **Never** infer the base branch from `gh`'s default — pass `--base` explicitly. If CLAUDE.md forbids opening a PR without human approval, stop here and print the merge instructions below instead.
+
+If `<TARGET_DIR>/CLAUDE.md` is absent or says nothing about post-run flow, fall through to the manual handoff below.
+
+#### Step 3.3 — Final summary
+
+Print the branch and (if a PR was opened) its URL:
 
 ```
-Branch ready for review: gan/<run-id>  (based on develop)
+Branch ready for review: gan/<run-id>  (based on <base-branch>)
+PR opened: <pr-url-or-"not opened, see repo CLAUDE.md">
 
-Inspect, then merge or squash into develop when satisfied:
-  git checkout develop
+If no PR: inspect, then merge or squash when satisfied:
+  git checkout <base-branch>
   git merge --no-ff gan/<run-id>
 ```
 
@@ -374,6 +412,7 @@ Purpose: keep a durable, cross-project record of every `/gan` run and its outcom
   runs.jsonl                    # append-only summary; one row per ended run
   runs/<run-id>/
     config.json                 # written at Step 0.75
+    agent-calls.jsonl           # one row per sub-agent invocation (see below)
     summary.json                # written at finalize; same as the jsonl row
     state/                      # snapshot of the project's .gan/ at end
       progress.json
@@ -383,6 +422,23 @@ Purpose: keep a durable, cross-project record of every `/gan` run and its outcom
       sprint-*-feedback-*.json
       sprint-*-objection-*.json
 ```
+
+### Per-agent call accounting
+
+Every time the orchestrator spawns a sub-agent (planner, proposer, reviewer, generator, evaluator) the Agent tool's result includes a `<usage>` block with `total_tokens` and `duration_ms`. Immediately after each such call returns, append a single JSON line to `<telemetry-dir>/runs/<run-id>/agent-calls.jsonl`:
+
+```json
+{"ts": "2026-04-17T18:42:32Z", "role": "generator", "sprint": 2, "attempt": 1, "model": "opus", "totalTokens": 48213, "durationMs": 92451, "toolUses": 12}
+```
+
+Rules:
+- `role` is one of `planner | proposer | reviewer | generator | evaluator`.
+- `sprint` / `attempt` are null for the planner (it runs once before sprints start).
+- `model` is the same value recorded in `config.json.models[role]` — null if unknown.
+- If the agent result has no `<usage>` block for any reason, write the row with `totalTokens: null` and `durationMs: null` rather than omitting the row. Do **not** fabricate numbers.
+- Use the same atomic-append pattern as `runs.jsonl` (a tmp file + concat, or `flock`).
+
+This file is the source of truth for cost analysis; the aggregated `tokens` block in `summary.json` is derived from it at finalize.
 
 `runs.jsonl` rows conform to `schemas/telemetry-summary.schema.json`:
 
@@ -408,12 +464,26 @@ Purpose: keep a durable, cross-project record of every `/gan` run and its outcom
     "planner": "opus", "proposer": "opus", "reviewer": "opus",
     "generator": "sonnet", "evaluator": "opus"
   },
-  "flags": { "maxAttempts": 3, "threshold": 7, "maxAttemptsTotal": 15, "maxMinutes": 60 },
+  "flags": { "maxAttempts": 3, "threshold": 7, "maxAttemptsTotal": 15, "maxMinutes": 360 },
+  "userPrompt": "implement the first specification in the roadmap...",
+  "specs": ["specifications/roadmap_bug_feature_tests_specification.md"],
+  "tokens": {
+    "total": 412883,
+    "byRole": {
+      "planner": 18420, "proposer": 42011, "reviewer": 31204,
+      "generator": 228401, "evaluator": 92847
+    },
+    "complete": true
+  },
   "target": null
 }
 ```
 
+`tokens.complete` is `true` only if every row in `agent-calls.jsonl` has a non-null `totalTokens`. If any row is null, set `complete: false` and still write the partial sum (it's a lower bound, clearly marked).
+
 ### Finalize step (invoke before any exit path — success OR failure)
+
+This step is **mandatory** on every exit path — success, failure, budget abort, schema validation abort. Skipping it silently corrupts the A/B dataset. If `--no-telemetry` was set, skip the whole step; otherwise every numbered substep below MUST run.
 
 1. Compute end metrics:
    - `endedAt`: ISO timestamp now.
@@ -425,11 +495,16 @@ Purpose: keep a durable, cross-project record of every `/gan` run and its outcom
    - `sprintResults[]`: for each sprint N in 1..`totalSprints`:
      - `passed`: true iff the highest-attempt feedback has `passed: true`.
      - `attempts`: number of `sprint-N-feedback-*.json` files.
-     - `firstAttemptScoreMean`: mean of `feedback[].score` in `sprint-N-feedback-1.json` (null if missing).
-2. Snapshot: copy every file under `.gan/` into `<telemetry-dir>/runs/<run-id>/state/` (use `cp -a .gan/. <target>/state/`).
+     - `firstAttemptScoreMean`: compute as `jq '[.feedback[].score] | add / length'` on `.gan/sprint-N-feedback-1.json`. Null **only** if the file doesn't exist or has no `feedback[]` entries. Do not write null as a shortcut — if the file exists, compute the number.
+   - `tokens`: read every row from `<telemetry-dir>/runs/<run-id>/agent-calls.jsonl` and sum `totalTokens` grouped by `role` plus an overall total. Set `tokens.complete` per the rule above. If the file is missing or empty (shouldn't happen — every sub-agent call writes a row), set `tokens: null` and record `failureReason: "agent-calls.jsonl missing at finalize"` if status was otherwise complete. Do **not** invent numbers.
+   - `userPrompt`: copy verbatim from `config.json.userPrompt`.
+   - `specs`: copy verbatim from `config.json.specs`.
+2. Snapshot: copy every file under `.gan/` into `<telemetry-dir>/runs/<run-id>/state/` (use `cp -a .gan/. <telemetry-dir>/runs/<run-id>/state/`). This step is required — without it the analysis pipeline can't reconstruct what went wrong.
 3. Write `<telemetry-dir>/runs/<run-id>/summary.json` with the full row.
 4. Atomically append the row to `<telemetry-dir>/runs.jsonl` as a single `\n`-terminated line. Use `flock <telemetry-dir>/runs.jsonl.lock -c '...'` or write to `runs.jsonl.tmp.<run-id>` then `cat >> runs.jsonl` — never do naive `>>` from multiple simultaneous runs.
 5. If `--no-telemetry` was set, skip all of the above.
+
+**Incomplete rows are worse than missing rows.** If any required field cannot be computed honestly (e.g. `agent-calls.jsonl` went missing, the `.gan/` directory was wiped mid-run), do NOT write a partial summary.json or append to runs.jsonl. Instead, leave `config.json` in place as evidence the run existed, write a `finalize-error.txt` in `runs/<run-id>/` explaining what was missing, and exit. The A/B dataset must never contain rows where unknowns are silently filled with zeros or nulls — that poisons cost comparisons.
 
 **Never** put telemetry inside the project directory, `.gan/`, or `TARGET_DIR`. If `<telemetry-dir>` is somehow a subpath of the current cwd, warn and skip — this exists to survive project deletion.
 
