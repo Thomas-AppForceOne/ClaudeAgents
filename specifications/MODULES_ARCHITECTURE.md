@@ -37,12 +37,6 @@ This specification defines the **modules architecture** that enables ClaudeAgent
 ```
 ClaudeAgents/
 ├── src/
-│   ├── core/                      # Core agent framework (always available)
-│   │   ├── Agent.js
-│   │   ├── Task.js
-│   │   ├── Runner.js
-│   │   └── index.js
-│   │
 │   └── modules/                   # Optional tech-stack modules
 │       ├── docker/
 │       │   ├── PortRegistry.js
@@ -50,7 +44,7 @@ ClaudeAgents/
 │       │   ├── ContainerHealth.js
 │       │   ├── PortValidator.js
 │       │   ├── ContainerNaming.js
-│       │   └── index.js           # Barrel export
+│       │   └── index.js           # Barrel export + prerequisite check
 │       │
 │       ├── web/                   # Placeholder for future web module
 │       │   └── index.js
@@ -59,24 +53,30 @@ ClaudeAgents/
 │           └── index.js
 │
 ├── docs/
-│   ├── README.md                  # General ClaudeAgents overview
-│   ├── GETTING_STARTED.md         # Quick start guide
-│   ├── MODULES.md                 # Module system guide
+│   ├── MODULES.md                 # Module system guide + installation
 │   └── modules/
 │       ├── DOCKER.md              # Docker module documentation
 │       ├── WEB.md                 # Web module (future)
 │       └── PYTHON.md              # Python module (future)
 │
 ├── tests/
-│   ├── core/                      # Tests for core framework
 │   └── modules/
-│       ├── docker/                # Docker module tests (no Docker required)
-│       └── ...
+│       └── docker/                # node:test suites — no Docker required
+│           ├── PortRegistry.test.js
+│           ├── PortDiscovery.test.js
+│           ├── ContainerHealth.test.js
+│           ├── PortValidator.test.js
+│           └── ContainerNaming.test.js
+│
+├── .github/
+│   └── workflows/
+│       └── test.yml               # GitHub Actions: node --test on push/PR
 │
 ├── specifications/
 │   └── MODULES_ARCHITECTURE.md    # This file
 │
-└── package.json
+├── install.sh                     # Symlinks agents/skills + runs npm link
+└── package.json                   # name: "claudeagents", exports map
 ```
 
 ---
@@ -140,6 +140,37 @@ try {
   // Fall back to non-Docker approach
 }
 ```
+
+### Installation
+
+Modules are distributed via **`npm link`** — a global symlink from the Node.js package registry into the ClaudeAgents repo. Edits to the repo are reflected in all consuming projects immediately, matching the symlink philosophy of `install.sh` for agents and skills.
+
+**`package.json` (repo root):**
+```json
+{
+  "name": "claudeagents",
+  "version": "0.1.0",
+  "description": "Optional modules for the ClaudeAgents framework",
+  "exports": {
+    "./modules/docker":  "./src/modules/docker/index.js",
+    "./modules/web":     "./src/modules/web/index.js",
+    "./modules/python":  "./src/modules/python/index.js"
+  }
+}
+```
+
+**One-time setup per machine** (handled by `install.sh`):
+```bash
+cd /path/to/ClaudeAgents
+npm link
+```
+
+**Usage in any project** — no per-project install step:
+```javascript
+const Docker = require('claudeagents/modules/docker');
+```
+
+> **Note:** `npm link` registers the package against the active Node version. If you use `nvm` and switch versions, re-run `npm link` from the ClaudeAgents repo.
 
 ---
 
@@ -376,13 +407,15 @@ modules/python/
 ## Implementation Plan
 
 ### Phase 1: Establish Module Architecture
-**Goal:** Set up directory structure and module system pattern
+**Goal:** Set up directory structure, package, and CI
 
 **Tasks:**
-1. Create `/src/modules/` directory structure
-2. Create `/docs/MODULES.md` (module system guide)
-3. Update package.json to support module imports
-4. Document in main README.md
+1. Create `/src/modules/` directory structure with placeholder `web/` and `python/` stubs
+2. Create `package.json` with `name: "claudeagents"` and `exports` map
+3. Extend `install.sh` to run `npm link` after symlinking agents/skills
+4. Create `.github/workflows/test.yml` (GitHub Actions, `node --test`)
+5. Create `/docs/MODULES.md` (module system guide + installation instructions)
+6. Document module system in main `README.md`
 
 **Duration:** 1-2 hours
 
@@ -405,8 +438,8 @@ modules/python/
 
 **Tasks:**
 1. Create `/docs/modules/DOCKER.md` (API reference + examples)
-2. Add unit tests (no Docker required)
-3. Create example script showing usage
+2. Add `node:test` unit tests for all 5 utilities (no Docker required)
+3. Create example script showing end-to-end usage
 
 **Duration:** 2-3 hours
 
@@ -416,9 +449,18 @@ modules/python/
 
 ### Module Architecture
 - [ ] `/src/modules/` directory exists with clear structure
-- [ ] `/docs/MODULES.md` explains how modules work
+- [ ] `/docs/MODULES.md` explains how modules work and how to install
 - [ ] Modules can be imported independently without breaking core
 - [ ] Missing modules don't prevent ClaudeAgents from running
+
+### Installation
+- [ ] `package.json` exists with `name: "claudeagents"` and correct `exports` map
+- [ ] `install.sh` runs `npm link` after symlinking agents/skills
+- [ ] `require('claudeagents/modules/docker')` works after running `install.sh`
+
+### CI
+- [ ] `.github/workflows/test.yml` runs `node --test` on every push and PR
+- [ ] All tests pass on the GitHub Actions macOS runner
 
 ### Docker Module
 - [ ] All 5 utilities implemented and exported
@@ -431,9 +473,9 @@ modules/python/
 - [ ] No hard dependencies (Docker check at runtime)
 
 ### Testing
-- [ ] Unit tests for all utilities (no Docker required)
-- [ ] Integration test showing module import and usage
-- [ ] Error cases covered (port in use, Docker not installed, etc.)
+- [ ] `node:test` unit tests for all 5 utilities (no Docker required)
+- [ ] Integration test showing `require('claudeagents/modules/docker')` and basic usage
+- [ ] Error cases covered (port in use, Docker not installed, unsupported platform, etc.)
 - [ ] macOS path handling validated; Linux/Windows path edge cases noted in docs
 
 ### Documentation
@@ -473,7 +515,34 @@ modules/python/
 - Human-readable (8 chars visible)
 - No dependency on path structure
 
-### 5. Why JSON for Port Registry
+### 5. Why `node:test` for Testing
+**Decision:** Use Node.js built-in `node:test` module with `node --test`.
+
+**Rationale:**
+- Zero dependencies — no Jest, Mocha, or Chai in `package.json`
+- Consistent with the module philosophy (no unnecessary deps)
+- Ships with Node.js 18+; no install step in CI
+- Built-in mocking (Node 22+) covers the main need: faking `docker ps` output
+- Run: `node --test tests/modules/docker/*.test.js`
+
+### 6. Why GitHub Actions for CI
+**Decision:** `.github/workflows/test.yml` runs on every push and PR targeting `main`.
+
+**Rationale:**
+- Native to GitHub where the repo lives — no external service
+- macOS runner (`macos-latest`) matches the only fully-implemented platform (PortValidator)
+- Workflow is a single `node --test` call — minimal surface area to maintain
+
+### 7. Why `npm link` for Distribution
+**Decision:** `install.sh` runs `npm link` to register the package globally.
+
+**Rationale:**
+- Matches the existing symlink philosophy for agents and skills
+- One setup per machine; works across all projects without per-project configuration
+- Edits to the repo are reflected immediately (symlink, not a copy)
+- Clear migration path to `npm publish` later with no code changes in consuming projects
+
+### 8. Why JSON for Port Registry
 **Decision:** Use `.gan/port-registry.json` format.
 
 **Rationale:**
