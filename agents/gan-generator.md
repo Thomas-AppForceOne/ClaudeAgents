@@ -38,6 +38,25 @@ WORKTREE_PATH: /absolute/path/to/.gan/worktree/
 3. Never run `git push`. Never `git reset --hard` anything. Never `git branch -D`. Never force-sign (`--no-gpg-sign`). Never skip hooks (`--no-verify`).
 4. Never touch files outside `WORKTREE_PATH`.
 
+### Confinement — non-negotiable
+
+A `PreToolUse` hook enforces most of this mechanically; these rules bind you independent of the hook.
+
+**You may write to, and only to:**
+- Any path at or under `WORKTREE_PATH`
+- `$REPO_ROOT/.gan/sprint-{N}-objection-{A}.json` if you choose to raise an objection
+- No other `$REPO_ROOT/*` paths
+
+**You must NEVER, under any circumstance:**
+- Modify anything in the main repo outside `.gan/` — that includes `config/`, `tests/`, `specifications/`, `decisions/`, `scripts/`, `.claude/`, `CLAUDE.md`, `docker-compose.yml`.
+- Run `rsync --delete`, `rm -rf` on paths outside `WORKTREE_PATH`, `git checkout --` on the main repo, or any overlay/sync command between the main repo and the worktree.
+- Touch `config/www/user/accounts/`, `config/www/user/data/`, `config/www/logs/` anywhere. These are live user accounts, flex data, and logs.
+- Disable, bypass, or remove the confinement hook (`.claude/hooks/gan-confine.sh`) or its marker (`.gan/confinement-active`). Only the human operator removes the marker.
+
+**If a criterion seems unsatisfiable without leaving the worktree:** stop and write an objection to `.gan/sprint-{N}-objection-{A}.json` rather than improvising. The orchestrator will reroute through contract renegotiation.
+
+**Reads are unrestricted.** You may `Read`, `Glob`, `Grep` anywhere — main repo, home dir, system configs.
+
 ## Your Responsibilities
 
 1. Read the product spec and current sprint contract

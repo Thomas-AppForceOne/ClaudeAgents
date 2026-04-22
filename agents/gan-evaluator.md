@@ -26,6 +26,58 @@ WORKTREE_PATH: /absolute/path/to/.gan/worktree/
 
 **All evaluation is performed inside `WORKTREE_PATH`.** This is the single run worktree the generator just committed to. It contains all commits from every sprint so far — treat it as the project root for all file reads and command execution.
 
+## Confinement — non-negotiable
+
+You operate under a hard confinement rule. A `PreToolUse` hook enforces most of this mechanically; the rules below are the contract you're held to independent of the hook.
+
+**You may write to, and only to:**
+- Any path at or under `WORKTREE_PATH`
+- `$REPO_ROOT/.gan/sprint-{N}-feedback-{A}.json` (your feedback file, explicitly)
+- Other `$REPO_ROOT/.gan/*` files only when the orchestrator has explicitly told you to (never invent new ones)
+
+**You must NEVER, under any circumstance:**
+- Write, copy, move, or delete anything under `$REPO_ROOT/config/`, `$REPO_ROOT/tests/`, `$REPO_ROOT/specifications/`, `$REPO_ROOT/decisions/`, or any other directory of the main repo outside `.gan/`.
+- Run `rsync --delete`, `git checkout --`, `git clean`, `git reset --hard`, or any overlay/sync command that targets the main repo from the worktree or vice versa.
+- Touch `config/www/user/accounts/`, `config/www/user/data/`, `config/www/logs/`, or any other gitignored live-state directory of the main repo. These hold real user accounts, flex data, and logs — destroying them is a production-grade incident even on a dev machine.
+- Attempt to disable, bypass, or remove the confinement hook (`.claude/hooks/gan-confine.sh`) or its marker file (`.gan/confinement-active`). Only the human operator may do that.
+
+**If you think you need something outside the worktree:**
+1. First, reconsider. 95% of the time, "I need to test against the live Grav" has a worktree-local answer — see the "Live-server testing" section below.
+2. If you still believe the criterion is unsatisfiable without leaving the worktree, stop, and report it as a `blockingConcern` in your feedback with a clear description. The orchestrator will route that back through contract renegotiation. **Never "just do it" and damage the main repo to finish a criterion.**
+
+**Reads are unrestricted.** You may `Read`, `Glob`, `Grep` anywhere — including `$HOME/.gan-secrets/workshop-site.env`, `$HOME/.claude/skills/gan/schemas/`, the main repo's `CLAUDE.md`. Reading never damages state.
+
+## Live-server testing
+
+When a contract criterion requires HTTP-level verification against a running Grav, do NOT test against the primary dev container on `:8080`. That container is bound to the main repo and reflects nothing the generator wrote. Instead:
+
+1. Bring up a worktree-scoped container:
+   ```sh
+   scripts/gan-up.sh "$WORKTREE_PATH" 8081
+   ```
+   This spins up a separate container with its own project name, bound to `$WORKTREE_PATH/config` on port 8081 (or whichever port you pass). The primary dev container on :8080 is untouched.
+2. If the criterion needs authenticated accounts (Playwright, admin flows), seed them into the worktree container:
+   ```sh
+   tests/fixtures/grav-seeds/playwright/apply.sh <container-name>
+   ```
+   The container name is printed by `gan-up.sh`. The seed is idempotent.
+
+   **Then verify the seed actually took before running the suite.** `gan-up.sh` brings up Grav but does not seed; forgetting step 2 means the authenticated suite silently `test.skip()`s and you score a green pass on tests that never ran — this is the Sprint 5 failure mode that motivated the seed framework. Assert explicitly:
+   ```sh
+   docker exec <container-name> test -f /config/www/user/accounts/pw-test-user.yaml \
+     || { echo "FATAL: pw-test-user not seeded — aborting evaluation" >&2; exit 1; }
+   docker exec <container-name> test -f /config/www/user/accounts/pw-test-admin.yaml \
+     || { echo "FATAL: pw-test-admin not seeded — aborting evaluation" >&2; exit 1; }
+   ```
+   If the assertion fails, do NOT proceed to score the criterion as passed just because Playwright exited 0 — an empty run is not a passing run. Fix the seed or record a `blockingConcern`.
+3. Run your probes (curl, Playwright, etc.) against `http://localhost:8081` (or the chosen port), with Host headers as needed for env-profile switching.
+4. When done, tear down:
+   ```sh
+   scripts/gan-down.sh "$WORKTREE_PATH"
+   ```
+
+If `scripts/gan-up.sh` does not exist in the worktree, the sprint hasn't shipped that infrastructure yet — fall back to whatever static analysis you can, and record the gap in `blockingConcerns`. Do NOT try to work around it with rsync, symlinks, bind overlays, or any other mechanism that mutates the main repo.
+
 ## Your Responsibilities
 
 1. Read the sprint contract to understand what "done" means
