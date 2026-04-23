@@ -114,8 +114,6 @@ detection:
 
 A repo with `package.json` but no lockfile and no `start`/`dev`/`build` script (e.g. the ClaudeAgents framework repo, which publishes `package.json` only for `npm link` to support its runtime-utility modules) does **not** activate the web-node stack; it falls through to `stacks/generic.md` or to whichever stack it genuinely matches.
 
-Composites are backward-compatible: stacks whose detection is unambiguous by filename alone (most stacks) continue to use the flat-array form. This is an additive schema change — no `schemaVersion` bump.
-
 ### scope
 Array of globs describing which files in the repo this stack *owns*. Used by agents to avoid cross-contamination in polyglot repos: a stack's `securitySurfaces`, `secretsGlob`, `auditCmd`, `buildCmd`/`testCmd`/`lintCmd` only apply to files inside its scope.
 
@@ -183,10 +181,11 @@ The contract-proposer prompt loses its hardcoded security checklist; all securit
 
 ## Versioning
 
+ClaudeAgents is a WIP project and does not carry backward-compatibility guarantees. `schemaVersion` is a structural marker so the lint script and agents can reject files authored against an older schema shape, not a compatibility contract.
+
 - **Current version:** `schemaVersion: 1`. Every stack file must declare it.
-- **Compatibility policy:** agents refuse to load a stack file with `schemaVersion` higher than the agent's known version — hard error, naming the file and the two versions. Agents load lower versions that still match their known schema (only additive changes between versions; see below).
-- **Bump policy:** bump the version only when a **breaking** change lands (field removed, semantics changed). Additive changes (new optional field) do not bump — existing stack files remain valid.
-- **Migration:** when a version bump happens, the repo ships a migration note and a lint rule; agents do not auto-migrate stack files.
+- **Mismatch:** agents refuse to load a stack file whose `schemaVersion` does not exactly match the agent's known version — hard error, naming the file and the two versions. Stack files are updated in lockstep with the agents that read them; there are no cross-version loaders.
+- **Bumping:** any schema change (additive or breaking) bumps the version. There is no "additive is free" carve-out while the project is pre-1.0.
 
 ## Acceptance criteria
 
@@ -196,7 +195,7 @@ The contract-proposer prompt loses its hardcoded security checklist; all securit
 - A JSON-schema lint script validates every `stacks/*.md` body-YAML at CI time.
 - The lint script rejects: legacy `runCmd`, unstructured (string) `auditCmd`, markdown prose outside the YAML block that references schema fields, missing `schemaVersion`, detection entries that use an unknown form (any entry must be a string glob, `{path, contains}`, `{allOf: [...]}`, or `{anyOf: [...]}`).
 - A repo that declares `package.json` but no lockfile and no `start`/`dev`/`build` script does not activate `stacks/web-node.md` — verified by a fixture where `/gan --print-config` lists only `stacks/generic.md` as active.
-- Loading a stack with `schemaVersion` greater than the agent's known version produces a hard error naming the file and both versions.
+- Loading a stack whose `schemaVersion` does not exactly match the agent's known version produces a hard error naming the file and both versions.
 - A polyglot repo where two active stacks declare `cacheEnv` entries for the same `envVar` with different `valueTemplate`s halts with the conflict error from "Conflict resolution" above.
 - The contract-proposer instantiates a `securitySurfaces` entry iff the template-instantiation protocol's conditions hold; sprints that don't touch a surface's scope or keywords do not surface that criterion.
 

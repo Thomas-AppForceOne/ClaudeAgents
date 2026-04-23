@@ -49,7 +49,7 @@ Override the per-criterion default threshold for this project.
 Rules:
 
 - Agents read `project.md` **after** loading the active stacks; overlay adds, never subtracts principles. It cannot delete a baseline security requirement.
-- The schema is strictly additive across versions; `schemaVersion: 1` fixes the v1 splice-point set. New splice points get `schemaVersion: 2` and agents refuse to load higher versions than they know.
+- ClaudeAgents is pre-1.0 and carries no backward-compatibility guarantees; `schemaVersion` is a structural marker. Overlays must declare the exact version their agents understand; a mismatch is a hard error. Any schema change — additive or breaking — bumps the version.
 
 ### When to use `stack.override` vs. a project-tier stack file
 

@@ -65,17 +65,17 @@ Three zones per project, modelled on the Linux filesystem hierarchy. Each zone h
 - **Git:** ignored (`.gitignore: .gan-cache/`).
 - **Contents:** per-worktree build caches (Gradle user home, pnpm store, etc.).
 
-## Migration from today's `.gan/`
+## Replacing today's `.gan/`
 
-`.gan/` is retired as a directory. Its current contents map to the new zones as follows:
+`.gan/` is retired as a directory. Its current contents map to the new zones:
 
 - `.gan/progress.json`, `.gan/contracts/`, `.gan/telemetry/` → `.gan-state/runs/<run-id>/…`.
 - `.gan/port-registry.json` (MODULES_ARCHITECTURE.md) → `.gan-state/modules/docker/port-registry.json`.
 - Any `.gan/` content that is actually config (none today, but guard the case) → `.claude/gan/`.
 
-`gan-recover.md`'s archive path changes from `.gan/` to `.gan-state/runs/<run-id>/`. The recover flow gains a safety check: it never touches `.gan-state/modules/`, preventing the current collision class entirely.
+`gan-recover.md`'s archive path changes from `.gan/` to `.gan-state/runs/<run-id>/`. The recover flow must never touch `.gan-state/modules/`, preventing the current collision class entirely.
 
-Projects with an existing `.gan/` directory on first run after this ships are migrated once, transparently, with a one-line log entry. No user action required.
+ClaudeAgents is pre-1.0; there is no migration path for stale `.gan/` directories. A pre-existing `.gan/` on first run after this ships is treated as a hard error with instructions to delete it manually. Users wanting to preserve run state from before this spec should archive it themselves.
 
 ## Rules
 
@@ -86,7 +86,7 @@ Projects with an existing `.gan/` directory on first run after this ships are mi
 
 ## Acceptance criteria
 
-- `/gan` on a project with a pre-existing `.gan/` transparently migrates to `.gan-state/runs/<run-id>/` on first run and logs a single-line migration notice; subsequent runs behave as if `.gan/` never existed.
+- `/gan` on a project with a pre-existing top-level `.gan/` halts with a hard error instructing the user to delete or rename the directory before re-running. No auto-migration.
 - A Docker module writing `.gan-state/modules/docker/port-registry.json` is never touched by `gan-recover`'s archive or delete steps — verified by a regression test that runs the recovery flow on a project with an active registry and asserts the registry file is unchanged.
 - `gan-recover.md`'s archive step only ever sees paths under `.gan-state/runs/<run-id>/`.
 - `scripts/parity-check.sh` normalisation (spec 06) is updated to strip `.gan-state/runs/<run-id>/` and `.gan-cache/<worktree-id>/` path prefixes.
@@ -100,4 +100,4 @@ None. Prerequisite for the MODULES_ARCHITECTURE.md port-registry relocation and 
 ## Value / effort
 
 - **Value**: high. Resolves the `.gan/` collision between MODULES and the `/gan` skill, and prevents the same class of collision from recurring as new stateful tools land.
-- **Effort**: small-medium. The three zones are mostly renames of things that already exist plus one-time migration logic in the skill.
+- **Effort**: small. The three zones are mostly renames of things that already exist; the skill emits a hard error on pre-existing `.gan/` rather than migrating it.

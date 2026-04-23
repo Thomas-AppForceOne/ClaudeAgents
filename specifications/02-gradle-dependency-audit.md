@@ -1,6 +1,6 @@
 # 02 — Gradle dependency audit branch
 
-**Status:** Phase 1 quick win. Superseded by spec 06 once Phase 2 ships — the Gradle audit logic (detection + `auditCmd` + "no audit tool configured" fallback) migrates into `stacks/gradle.md` and this in-agent branch is removed. Do not re-land this spec's changes if spec 06 has already shipped.
+**Status:** Phase 1 quick win. Delete this spec the moment spec 06 lands — the Gradle audit logic (detection + `auditCmd` + "no audit tool configured" fallback) moves into `stacks/gradle.md` and this in-agent branch is removed wholesale. ClaudeAgents is pre-1.0; there is no dual-path window.
 
 ## Problem
 

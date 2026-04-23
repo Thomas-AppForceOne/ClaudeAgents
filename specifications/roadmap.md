@@ -22,7 +22,7 @@ Separates *orchestration* from *stack mechanics* so new stacks become a file dro
 
 4. [04-stack-plugin-schema.md](04-stack-plugin-schema.md) — Define the `stacks/<name>.md` file format.
 5. [05-stack-detection-and-dispatch.md](05-stack-detection-and-dispatch.md) — Agents detect the stack and load the matching file.
-6. [06-extract-builtin-stacks.md](06-extract-builtin-stacks.md) — Move the existing web/node, python, rust, go logic out of agent prompts into stack files. No behavior change.
+6. [06-extract-builtin-stacks.md](06-extract-builtin-stacks.md) — Move the existing web/node, python, rust, go logic out of agent prompts into stack files.
 
 ## Phase 3 — New stacks
 
@@ -46,7 +46,7 @@ Lets users add context and criteria without forking agents. Kept strictly generi
 
 - **Phase 1** ships before refactor because the fixes are tiny, orthogonal, and benefit every project today. Deferring them behind the refactor delays value.
 - **Phase 1.5** (spec 14) is placed before Phase 2 because it resolves a real directory collision between MODULES_ARCHITECTURE.md and the `/gan` skill. It is independent of the stack-plugin work but benefits every later spec that writes project-level files.
-- **Phase 2** is a prerequisite for Phases 3 and 4. It is itself a no-op behavior change (existing stacks keep working), so it can land without user-visible risk.
+- **Phase 2** is a prerequisite for Phases 3 and 4.
 - **Phase 3** proves the plugin system by adding the first new stacks.
 - **Phase 4** is listed after stacks because the overlay's most useful splice point (`stack.override`) only makes sense once stacks exist as a concept.
 - **Phase 5** is last because it describes state that only becomes complex once Phase 4 resolution is in place.

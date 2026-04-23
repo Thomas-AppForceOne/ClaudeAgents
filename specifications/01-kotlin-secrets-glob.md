@@ -1,6 +1,6 @@
 # 01 — Kotlin/Gradle secrets glob
 
-**Status:** Phase 1 quick win. Superseded by spec 06 once Phase 2 ships — the Kotlin secrets glob migrates into `stacks/kotlin.md` and this in-agent patch is removed. Do not re-land this spec's changes if spec 06 has already shipped.
+**Status:** Phase 1 quick win. Delete this spec the moment spec 06 lands — the Kotlin secrets glob moves into `stacks/kotlin.md` and this in-agent patch is removed wholesale. ClaudeAgents is pre-1.0; there is no dual-path window.
 
 ## Problem
 
