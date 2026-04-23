@@ -87,7 +87,34 @@ Rules:
 ## Field reference
 
 ### detection
-Array of patterns that activate this stack. Each entry is either a string glob (matched against repo paths) or an object `{ path, contains }` (path glob that must *also* contain one of the given strings). Multiple entries OR together.
+Array of patterns that activate this stack. The top-level array is OR-semantics: the stack activates if **any** entry matches.
+
+An entry is one of:
+
+- **String glob** — matched against repo paths. Matches if any repo path matches the glob.
+- **`{ path, contains }`** — a path glob that must *also* contain at least one of the given strings (OR across the `contains` list).
+- **`{ allOf: [...] }`** — a group that matches only if **every** sub-entry matches. Sub-entries may themselves be any form (including nested `allOf` / `anyOf`).
+- **`{ anyOf: [...] }`** — a group that matches if **any** sub-entry matches. Equivalent to the top-level semantics but scoped to a group. Useful inside `allOf` for "this AND one-of-these".
+
+**When to use composites.** A bare filename is enough when the filename is rare and unambiguous (`AndroidManifest.xml`, `Cargo.toml`, `go.mod`). Use `allOf` + `anyOf` when a single file's presence is necessary but not sufficient — e.g. `package.json` exists in any Node-packaged project (including tooling, libraries, and frameworks) and must be combined with evidence of actual runtime intent to avoid misdetection.
+
+**Example — disambiguated web-node detection:**
+
+```yaml
+detection:
+  - allOf:
+      - package.json
+      - anyOf:
+          - package-lock.json
+          - pnpm-lock.yaml
+          - yarn.lock
+          - path: package.json
+            contains: ["\"start\"", "\"dev\"", "\"build\""]
+```
+
+A repo with `package.json` but no lockfile and no `start`/`dev`/`build` script (e.g. the ClaudeAgents framework repo, which publishes `package.json` only for `npm link` to support its runtime-utility modules) does **not** activate the web-node stack; it falls through to `stacks/generic.md` or to whichever stack it genuinely matches.
+
+Composites are backward-compatible: stacks whose detection is unambiguous by filename alone (most stacks) continue to use the flat-array form. This is an additive schema change — no `schemaVersion` bump.
 
 ### scope
 Array of globs describing which files in the repo this stack *owns*. Used by agents to avoid cross-contamination in polyglot repos: a stack's `securitySurfaces`, `secretsGlob`, `auditCmd`, `buildCmd`/`testCmd`/`lintCmd` only apply to files inside its scope.
@@ -167,7 +194,8 @@ The contract-proposer prompt loses its hardcoded security checklist; all securit
 - The parse contract and field reference are documented in the repo README.
 - The schema frontmatter includes a `schemaVersion` field; current value is `1`.
 - A JSON-schema lint script validates every `stacks/*.md` body-YAML at CI time.
-- The lint script rejects: legacy `runCmd`, unstructured (string) `auditCmd`, markdown prose outside the YAML block that references schema fields, missing `schemaVersion`.
+- The lint script rejects: legacy `runCmd`, unstructured (string) `auditCmd`, markdown prose outside the YAML block that references schema fields, missing `schemaVersion`, detection entries that use an unknown form (any entry must be a string glob, `{path, contains}`, `{allOf: [...]}`, or `{anyOf: [...]}`).
+- A repo that declares `package.json` but no lockfile and no `start`/`dev`/`build` script does not activate `stacks/web-node.md` — verified by a fixture where `/gan --print-config` lists only `stacks/generic.md` as active.
 - Loading a stack with `schemaVersion` greater than the agent's known version produces a hard error naming the file and both versions.
 - A polyglot repo where two active stacks declare `cacheEnv` entries for the same `envVar` with different `valueTemplate`s halts with the conflict error from "Conflict resolution" above.
 - The contract-proposer instantiates a `securitySurfaces` entry iff the template-instantiation protocol's conditions hold; sprints that don't touch a surface's scope or keywords do not surface that criterion.

@@ -8,7 +8,7 @@ With the schema (04) and dispatch (05) in place, the existing stack-specific log
 
 Extract each of the current hardcoded stacks into its own file under `stacks/`, with no behavior change:
 
-- `stacks/web-node.md` — captures the existing JS/TS logic (`npm audit`, current secrets glob subset, TLS/CORS/session security surfaces, `node`/`npm start`-style run command).
+- `stacks/web-node.md` — captures the existing JS/TS logic (`npm audit`, current secrets glob subset, TLS/CORS/session security surfaces, `node`/`npm start`-style run command). **Detection must use the composite form** defined in spec 04: `package.json` alone is insufficient; a lockfile (`package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`) or a `start`/`dev`/`build` script in `package.json` is also required. This prevents spurious activation on Node-packaged repositories that are not web-node applications — including the ClaudeAgents framework repo itself (which ships `package.json` only to support `npm link` for its runtime-utility modules).
 - `stacks/python.md` — `pip-audit` / `safety`, Python surfaces.
 - `stacks/rust.md` — `cargo audit`.
 - `stacks/go.md` — `govulncheck`.
@@ -28,6 +28,7 @@ Once extracted, the agent prompts drop their hardcoded lists and rely on the act
 - `tests/fixtures/stacks/js-ts-minimal/` — a small JS/TS project exercising `npm audit` and the web security surfaces.
 - `tests/fixtures/stacks/python-minimal/` — pyproject + one module.
 - `tests/fixtures/stacks/polyglot-android-node/` — proves cross-contamination is prevented (the cross-check fixture from spec 05).
+- `tests/fixtures/stacks/node-packaged-non-web/` — a repo with only a `package.json` (no lockfile, no `start`/`dev`/`build` script), mimicking the ClaudeAgents framework's own shape. Asserts that the tightened web-node detection (spec 04) does **not** activate `stacks/web-node.md` and the repo falls through to `stacks/generic.md`.
 - one fixture per extracted stack, minimally configured to trigger its detection.
 
 Parity is measured by running `/gan` (or the evaluator in isolation) on each fixture against the `main` branch **before** and **after** this change, then diffing the resulting feedback JSON. The diff is normalised to remove non-semantic noise before comparison:
