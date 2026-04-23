@@ -4,107 +4,173 @@
 
 Today, stack-specific logic is mixed into every agent prompt: the planner has a list of detection rules (`pyproject.toml` → Python, `package.json` → JS/TS, …), the evaluator has a hardcoded secrets glob, the contract-proposer's security checklist assumes a web server. Adding a new stack means editing every agent. This does not scale and forces stacks to be biased toward the one the repo was written against (web/node).
 
-## Proposed change
+## Parse contract
 
-Define a single schema used by all agents: `stacks/<name>.md`. Each file declares everything the agents need to operate on that stack:
+A stack file is a markdown document with **one YAML frontmatter block** and **one canonical YAML body block**. Agents never parse markdown prose for semantic content.
 
 ```
 ---
 name: android
 description: Android client (Gradle, Kotlin/Java)
+schemaVersion: 1
 ---
 
-## detection
-Files or directory patterns that identify this stack. Multiple may match in a
-polyglot repo. **This schema is the single authority for how detection rules
-are declared.** The evaluation algorithm (union, scope filtering, fallback to
-generic, tier restriction) is owned by spec 05. Individual stack specs
-(06, 07, 08, …) must declare only their stack-unique patterns here — they
-must not restate algorithm behavior.
+```yaml
+detection:
+  - settings.gradle.kts
+  - settings.gradle
+  - path: build.gradle.kts
+    contains: ["com.android.application", "com.android.library"]
 
-- settings.gradle.kts, settings.gradle
-- build.gradle.kts with `com.android.application` or `com.android.library`
+scope:
+  - "**/*.kt"
+  - "**/*.kts"
+  - "**/AndroidManifest.xml"
+  - "**/build.gradle*"
+  - "**/src/main/**"
 
-## scope
-Glob(s) describing which files in the repo this stack *owns*. Used by agents
-to avoid cross-contamination in polyglot repos: a stack's security surfaces,
-secrets glob, and audit command only apply to files inside its scope. If
-omitted, scope defaults to the detection patterns plus any files with
-extensions listed in `secretsGlob`.
+secretsGlob:
+  - kt
+  - kts
+  - java
+  - gradle
+  - gradle.kts
+  - xml
+  - properties
+  - env
+  - json
+  - yaml
+  - yml
 
-- **/*.kt, **/*.kts, **/AndroidManifest.xml, **/build.gradle*, **/src/main/**
+cacheEnv:
+  - envVar: GRADLE_USER_HOME
+    valueTemplate: "<worktree>/.gan-cache/gradle"
 
-## secretsGlob
-File-extension list for the evaluator's secrets grep.
+auditCmd:
+  command: "./gradlew dependencyCheckAnalyze"
+  fallback: "./gradlew :app:dependencyCheckAnalyze"
+  absenceSignal: blockingConcern
+  absenceMessage: "No dependency-audit tool configured for this Gradle project."
 
-- kt, kts, java, gradle, gradle.kts, xml, properties, env, json, yaml, yml
+buildCmd: "./gradlew assembleDebug"
+testCmd: "./gradlew testDebugUnitTest"
+lintCmd: "./gradlew lintDebug"
 
-## cacheEnv
-Environment variables the skill must set (scoped to the worktree) before
-running any command from this stack, to avoid daemon/lockfile collisions
-between concurrent worktrees. Each entry is `{ envVar, valueTemplate }`;
-`<worktree>` in `valueTemplate` is substituted with the absolute worktree
-path at run time. Optional — omit for stacks whose tools have no shared
-user-level cache. (Supersedes the Phase 1 hardcoded catalog in spec 03.)
-
-- GRADLE_USER_HOME: `<worktree>/.gan-cache/gradle`
-
-## auditCmd
-Command to run during the dependency-audit pass, and how to interpret its
-exit code / output. Structured so agents never have to parse prose.
-
-- command: `./gradlew dependencyCheckAnalyze`
-- fallback: `./gradlew :app:dependencyCheckAnalyze` (optional)
-- absenceSignal: blockingConcern
-- absenceMessage: "No dependency-audit tool configured for this Gradle project."
-
-## buildCmd
-Command that compiles/assembles the project without running tests or lint.
-
-- `./gradlew assembleDebug`
-
-## testCmd
-Command that runs the stack's unit/integration tests.
-
-- `./gradlew testDebugUnitTest`
-
-## lintCmd
-Command that runs the stack's linter/static analysis. Separate from build
-and test so agents can report lint failures distinctly and overlays can
-override lint without rewriting the whole command pipeline.
-
-- `./gradlew lintDebug`
-
-## securitySurfaces
-List of surfaces this stack exposes, each with a **template** criterion the
-contract-proposer can instantiate when the sprint touches that surface.
-Surfaces are scoped: they only apply to sprints that modify files inside
-this stack's `scope`.
-
-- exported_components: "Activities/Services/Providers declared `android:exported=\"true\"` must validate caller identity or intent extras."
-- deep_links: …
-- webview_js_bridge: …
-- network_security_config: …
-
-## conventions
-Optional free-text pointer to stack-wide conventions or idioms.
+securitySurfaces:
+  - id: exported_components
+    template: >
+      Activities/Services/Providers declared `android:exported="true"` must
+      validate caller identity or intent extras.
+    triggers:
+      scope: ["**/AndroidManifest.xml", "**/*Activity.kt", "**/*Service.kt"]
+      keywords: ["android:exported=\"true\"", "<activity", "<service"]
+  - id: webview_js_bridge
+    template: >
+      `addJavascriptInterface` usage must gate methods with `@JavascriptInterface`
+      and restrict the loaded origin.
+    triggers:
+      keywords: ["addJavascriptInterface", "WebView"]
 ```
 
-**Legacy `runCmd` is removed.** Stacks that previously combined build/test/lint
-into a single string must split them into `buildCmd`, `testCmd`, and `lintCmd`.
-This keeps failure signals distinct and gives overlays (specs 09/11) a stable
-surface to override one phase at a time.
+## conventions
+Optional free-text markdown after the YAML block. Not machine-parsed; agents
+pass it verbatim to any model that reads the stack file as context.
+```
 
-The schema is a **contract** between agents and stack files. Changes to it are versioned; each stack file declares a schema version in its frontmatter.
+Rules:
+
+- **Frontmatter** carries only file-level identity (`name`, `description`, `schemaVersion`).
+- **The body YAML block** (first fenced ```` ```yaml ```` block after the frontmatter) is the **sole source of semantic content**. Any field defined in this spec is required to live there.
+- **Markdown headings and prose** after the YAML block are for human readers only. Agents never extract fields from them.
+- The lint script (see acceptance criteria) validates the body YAML against a published JSON-schema.
+
+## Field reference
+
+### detection
+Array of patterns that activate this stack. Each entry is either a string glob (matched against repo paths) or an object `{ path, contains }` (path glob that must *also* contain one of the given strings). Multiple entries OR together.
+
+### scope
+Array of globs describing which files in the repo this stack *owns*. Used by agents to avoid cross-contamination in polyglot repos: a stack's `securitySurfaces`, `secretsGlob`, `auditCmd`, `buildCmd`/`testCmd`/`lintCmd` only apply to files inside its scope.
+
+**Precedence with `detection`:** `detection` decides whether the stack is active at all; `scope` decides which files its rules apply to once active. A file matching `detection` but outside `scope` contributes to activation but is not evaluated against this stack's rules.
+
+**Default:** if omitted, `scope` is the union of `detection` path globs and `**/*.{ext}` for every extension in `secretsGlob`.
+
+**Worked example — polyglot Android + Python repo:**
+
+```
+repo/
+  android/app/src/main/kotlin/Foo.kt     → in android.scope, not in python.scope
+  android/app/src/main/AndroidManifest.xml → in android.scope, not in python.scope
+  services/api/src/main.py               → in python.scope, not in android.scope
+  scripts/release.py                     → in python.scope, not in android.scope
+```
+
+Both stacks are active (both detections match). Android's `exported_components` surface evaluates only `android/app/**`; Python's secrets glob evaluates only `services/api/**` and `scripts/**`. A `.py` file is never checked against Android surfaces.
+
+### secretsGlob
+Array of file extensions (no leading dot) the evaluator's secrets grep inspects. Applied only to files inside `scope`.
+
+### cacheEnv
+Array of `{ envVar, valueTemplate }` objects. The skill orchestrator exports each entry before running any command from this stack, substituting `<worktree>` with the absolute worktree path.
+
+**Conflict resolution (polyglot repos):** when two active stacks declare `cacheEnv` entries with the same `envVar`:
+1. If the `valueTemplate` strings are identical, export once. No conflict.
+2. If they differ, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user must resolve via an overlay (spec 09 `stack.override` or a project-tier replacement per spec 12).
+
+### auditCmd
+Object with:
+- `command` (string, required) — the audit command to run.
+- `fallback` (string, optional) — alternate command to try if the primary exits nonzero with a "not configured" signal.
+- `absenceSignal` — one of `blockingConcern`, `warning`, `silent`.
+- `absenceMessage` (string, required if `absenceSignal` ≠ `silent`).
+
+Applied only to files inside `scope`.
+
+### buildCmd / testCmd / lintCmd
+Strings. Separate fields so failure signals stay distinct and overlays (specs 09/11) can override one phase at a time. **Legacy `runCmd` is rejected by the lint script** — stacks that previously combined phases must split them.
+
+### securitySurfaces
+Array of surfaces this stack exposes, each with a template criterion the contract-proposer may instantiate. See "Template instantiation protocol" below.
+
+## Template instantiation protocol
+
+The contract-proposer decides whether to instantiate a `securitySurfaces` entry as a contract criterion using the surface's `triggers` block:
+
+```yaml
+triggers:
+  scope: ["**/AndroidManifest.xml", "**/*Activity.kt"]   # optional
+  keywords: ["android:exported", "<activity"]            # optional
+```
+
+Algorithm, per surface per sprint:
+
+1. Compute the set of files the sprint's plan will *touch* (create, modify, or delete), as declared by the planner's spec output.
+2. Intersect that set with the surface's `triggers.scope` globs (if present) AND the stack's own `scope` globs. If the intersection is empty, skip this surface.
+3. If `triggers.keywords` is present, search the touched files (existing content + proposed diffs if available) for any keyword. If none match, skip this surface.
+4. Otherwise, instantiate the `template` string as a contract criterion. The `template` is used verbatim — no interpolation. Variables (file paths, keyword hits) are recorded as *rationale* alongside the criterion, not substituted into it.
+
+Both `triggers.scope` and `triggers.keywords` are optional. A surface with neither is instantiated unconditionally whenever the stack is active and the sprint touches any file in the stack's `scope`.
+
+The contract-proposer prompt loses its hardcoded security checklist; all security criteria originate from active stacks' `securitySurfaces`. (Retirement of the hardcoded checklist is spec 06's responsibility.)
+
+## Versioning
+
+- **Current version:** `schemaVersion: 1`. Every stack file must declare it.
+- **Compatibility policy:** agents refuse to load a stack file with `schemaVersion` higher than the agent's known version — hard error, naming the file and the two versions. Agents load lower versions that still match their known schema (only additive changes between versions; see below).
+- **Bump policy:** bump the version only when a **breaking** change lands (field removed, semantics changed). Additive changes (new optional field) do not bump — existing stack files remain valid.
+- **Migration:** when a version bump happens, the repo ships a migration note and a lint rule; agents do not auto-migrate stack files.
 
 ## Acceptance criteria
 
-- A new `stacks/example.md` file following the schema can be dropped in without editing any agent.
-- The schema is documented in the repo README.
-- The schema frontmatter includes a `schemaVersion` field so future changes are explicit.
-- A JSON-schema or equivalent lint script validates every `stacks/*.md` at CI time.
-- The lint script rejects any stack file that still uses the legacy `runCmd` field — stacks must use `buildCmd` / `testCmd` / `lintCmd`.
-- `auditCmd` is accepted only as a structured object (`command`, optional `fallback`, `absenceSignal`, `absenceMessage`); free-text `auditCmd` fails the lint.
+- A new `stacks/example.md` file following the parse contract can be dropped in without editing any agent.
+- The parse contract and field reference are documented in the repo README.
+- The schema frontmatter includes a `schemaVersion` field; current value is `1`.
+- A JSON-schema lint script validates every `stacks/*.md` body-YAML at CI time.
+- The lint script rejects: legacy `runCmd`, unstructured (string) `auditCmd`, markdown prose outside the YAML block that references schema fields, missing `schemaVersion`.
+- Loading a stack with `schemaVersion` greater than the agent's known version produces a hard error naming the file and both versions.
+- A polyglot repo where two active stacks declare `cacheEnv` entries for the same `envVar` with different `valueTemplate`s halts with the conflict error from "Conflict resolution" above.
+- The contract-proposer instantiates a `securitySurfaces` entry iff the template-instantiation protocol's conditions hold; sprints that don't touch a surface's scope or keywords do not surface that criterion.
 
 ## Dependencies
 

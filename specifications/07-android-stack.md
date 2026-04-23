@@ -18,14 +18,14 @@ Add `stacks/android.md` following the schema (04). Key contents:
 - **buildCmd**: `./gradlew assembleDebug`.
 - **testCmd**: `./gradlew testDebugUnitTest`.
 - **lintCmd**: `./gradlew lintDebug`.
-- **securitySurfaces** (template criteria the contract-proposer instantiates when a sprint touches the surface):
-  - `exported_components` — Activities/Services/Providers/Receivers with `android:exported="true"` must validate caller identity or intent extras.
-  - `deep_links` — intent filters accepting `http(s)` or custom schemes must validate and sanitise input before use.
-  - `webview_js_bridge` — `addJavascriptInterface` usage must gate methods with `@JavascriptInterface` and restrict the loaded origin.
-  - `network_security_config` — release builds must pin certificates for known backend hosts or use a documented Network Security Config.
-  - `keystore_usage` — cryptographic keys are stored in Android Keystore, never in SharedPreferences.
-  - `encrypted_storage` — sensitive data on disk uses `EncryptedSharedPreferences` or equivalent.
-  - `proguard_r8` — release builds have minification/obfuscation enabled unless the spec explicitly justifies otherwise.
+- **securitySurfaces** — template criteria instantiated per spec 04's template-instantiation protocol. Each surface below lists its `triggers` so "touches the surface" is decidable without guesswork.
+  - `exported_components` — template: "Activities/Services/Providers/Receivers with `android:exported=\"true\"` must validate caller identity or intent extras." Triggers: scope `**/AndroidManifest.xml`, `**/*Activity.kt`, `**/*Service.kt`, `**/*Provider.kt`, `**/*Receiver.kt`; keywords `android:exported`, `<activity`, `<service`, `<provider`, `<receiver`.
+  - `deep_links` — template: "Intent filters accepting `http(s)` or custom schemes must validate and sanitise input before use." Triggers: scope `**/AndroidManifest.xml`; keywords `<intent-filter`, `android:scheme`, `android.intent.action.VIEW`.
+  - `webview_js_bridge` — template: "`addJavascriptInterface` usage must gate methods with `@JavascriptInterface` and restrict the loaded origin." Triggers: keywords `addJavascriptInterface`, `WebView`.
+  - `network_security_config` — template: "Release builds must pin certificates for known backend hosts or use a documented Network Security Config." Triggers: scope `**/AndroidManifest.xml`, `**/network_security_config.xml`, `**/OkHttp*.kt`, `**/Retrofit*.kt`; keywords `OkHttpClient`, `Retrofit`, `HttpsURLConnection`, `networkSecurityConfig`.
+  - `keystore_usage` — template: "Cryptographic keys are stored in Android Keystore, never in SharedPreferences." Triggers: keywords `KeyStore`, `SharedPreferences`, `Cipher`, `KeyGenerator`.
+  - `encrypted_storage` — template: "Sensitive data on disk uses `EncryptedSharedPreferences` or equivalent." Triggers: keywords `SharedPreferences`, `openFileOutput`, `FileOutputStream`, `Room.databaseBuilder`.
+  - `proguard_r8` — template: "Release builds have minification/obfuscation enabled unless the spec explicitly justifies otherwise." Triggers: scope `**/build.gradle*`, `**/proguard-rules.pro`; keywords `minifyEnabled`, `isMinifyEnabled`, `proguardFiles`.
 
 ## Acceptance criteria
 

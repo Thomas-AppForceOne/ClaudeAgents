@@ -6,7 +6,7 @@ Projects often need small, local adjustments to `/gan` behavior without forking 
 
 ## Proposed change
 
-Add a project-scoped overlay file: `.claude/gan/project.md`. The repo owns the path and schema; the user opts in by creating the file. Missing file = no overlay, defaults apply.
+Add a project-scoped overlay file: `.claude/gan/project.md`. The repo owns the path and schema; the user opts in by creating the file. Missing file = no overlay, defaults apply. This path is zone 1 (config) in the filesystem layout defined in [spec 14](14-gan-filesystem-layout.md); it is user-authored and committed to the repo.
 
 Minimal v1 splice points:
 

@@ -27,7 +27,7 @@ Semantics:
 - Each listed file is read verbatim and included in the agent's context when it starts its task.
 - Missing files are reported as a warning (not a hard failure) — documentation moves around; a stale path should not block a run.
 - Files are read once per run. There is no caching across runs — the content may change.
-- The lists are capped (e.g. 20 files, 200 KB total) to keep agent context bounded. Excess triggers an error with a clear message.
+- The lists are capped: **20 files maximum per splice point, 200 KB total per splice point** (sum of all file sizes for that list). The skill orchestrator enforces both caps at overlay-load time, before any agent starts. Exceeding either cap is a hard error naming the splice point, the file count or byte total, and the offending file (for per-file issues). Agents never see a partial list; either the full list loads or the run halts.
 
 No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 

@@ -10,6 +10,12 @@ Small, additive patches. Each one makes the existing pipeline work better on mor
 2. [02-gradle-dependency-audit.md](02-gradle-dependency-audit.md) — Add a Gradle branch to the evaluator's dependency audit step.
 3. [03-worktree-build-cache-isolation.md](03-worktree-build-cache-isolation.md) — Give each run worktree its own build cache to avoid daemon/lockfile conflicts.
 
+## Phase 1.5 — Filesystem layout (foundation)
+
+Pins the three-zone project filesystem (config / state / cache) before any stateful tool lands. Prerequisite for the MODULES_ARCHITECTURE.md port-registry relocation and for every later spec that writes files under a project root.
+
+14. [14-gan-filesystem-layout.md](14-gan-filesystem-layout.md) — `.claude/gan/` (config), `.gan-state/` (durable state), `.gan-cache/` (ephemeral cache). Retires today's single-purpose `.gan/` directory and assigns each zone a single lifecycle owner.
+
 ## Phase 2 — Stack-plugin refactor (foundation)
 
 Separates *orchestration* from *stack mechanics* so new stacks become a file drop, not an agent rewrite. Everything after this phase depends on it.
@@ -39,6 +45,7 @@ Lets users add context and criteria without forking agents. Kept strictly generi
 ## Ordering rationale
 
 - **Phase 1** ships before refactor because the fixes are tiny, orthogonal, and benefit every project today. Deferring them behind the refactor delays value.
+- **Phase 1.5** (spec 14) is placed before Phase 2 because it resolves a real directory collision between MODULES_ARCHITECTURE.md and the `/gan` skill. It is independent of the stack-plugin work but benefits every later spec that writes project-level files.
 - **Phase 2** is a prerequisite for Phases 3 and 4. It is itself a no-op behavior change (existing stacks keep working), so it can land without user-visible risk.
 - **Phase 3** proves the plugin system by adding the first new stacks.
 - **Phase 4** is listed after stacks because the overlay's most useful splice point (`stack.override`) only makes sense once stacks exist as a concept.
@@ -52,6 +59,8 @@ Lets users add context and criteria without forking agents. Kept strictly generi
 - **Stacks** (`stacks/<name>.md`, this roadmap) are *declarative agent configuration* — markdown files that tell agents which files to scan, which commands to run, and which security surfaces to check. They solve "what should the agents do for this tech stack" problems.
 
 A single tech stack may have both (e.g. a future `docker` stack file declaring detection and security surfaces, paired with the existing `modules/docker` runtime utilities) or only one. Neither layer subsumes the other.
+
+**Filesystem boundaries between the layers are formalised in [spec 14](14-gan-filesystem-layout.md).** In particular, modules that persist state across runs (e.g. the Docker port registry) must write to `.gan-state/modules/<name>/`, not to `.gan/` — the latter is retired by spec 14 in favour of zone-scoped directories with single-owner lifecycles.
 
 ## Out of scope for this roadmap
 

@@ -4,6 +4,8 @@
 **Scope:** `skills/gan/SKILL.md` in this repo
 **Target repo:** ClaudeAgents (this repo). No dependencies on any external consumer repo.
 
+> **Filesystem layout note.** This spec was authored before [spec 14 (gan filesystem layout)](14-gan-filesystem-layout.md). Once spec 14 ships, every reference to `.gan/` below maps to `.gan-state/runs/<run-id>/`, and the archive target moves from `<telemetry-dir>/runs/<run-id>/gan-state/` to whatever path spec 14's zone-2 rules dictate. The recovery *mechanism* described here is unchanged; only the paths move. Spec 14 additionally forbids this spec's teardown from touching `.gan-state/modules/` — preventing collisions with module-owned durable state such as the Docker port registry.
+
 ---
 
 ## Problem

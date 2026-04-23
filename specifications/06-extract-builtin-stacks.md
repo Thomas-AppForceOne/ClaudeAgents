@@ -19,11 +19,32 @@ Extract each of the current hardcoded stacks into its own file under `stacks/`, 
 
 Once extracted, the agent prompts drop their hardcoded lists and rely on the active stack set. Specs 01 and 02 are retired by this extraction — their behavior is preserved inside the stack files, not in agent prompts. Spec 03's hardcoded env-var catalog is likewise retired: each cache-using stack (`stacks/gradle.md`, `stacks/web-node.md`, any future tool-cache-bearing stack) declares its own `cacheEnv` per spec 04, and the skill orchestrator drops its temporary catalog.
 
+**The contract-proposer's hardcoded security checklist is also retired.** The proposer today enumerates ~10 generic security criteria directly in its prompt. After this extraction, all security criteria originate from active stacks' `securitySurfaces` via the template-instantiation protocol defined in spec 04. The proposer retains its sprint-shape logic (threshold selection, rationale writing) but owns zero stack-specific content.
+
+## Parity test harness
+
+"Identical behavior before and after" is measured against a fixed set of fixture repos under `tests/fixtures/stacks/`:
+
+- `tests/fixtures/stacks/js-ts-minimal/` — a small JS/TS project exercising `npm audit` and the web security surfaces.
+- `tests/fixtures/stacks/python-minimal/` — pyproject + one module.
+- `tests/fixtures/stacks/polyglot-android-node/` — proves cross-contamination is prevented (the cross-check fixture from spec 05).
+- one fixture per extracted stack, minimally configured to trigger its detection.
+
+Parity is measured by running `/gan` (or the evaluator in isolation) on each fixture against the `main` branch **before** and **after** this change, then diffing the resulting feedback JSON. The diff is normalised to remove non-semantic noise before comparison:
+
+- strip timestamps, durations, PIDs, and worktree paths
+- sort array fields with no declared order (e.g. `blockingConcerns` by `id`)
+- drop token-usage counts and model identifiers
+
+The normalised diff must be empty. A harness script `scripts/parity-check.sh` runs the before/after comparison in CI and fails the PR on any non-empty diff.
+
 ## Acceptance criteria
 
 - Running `/gan` on an existing JS/TS project produces identical evaluator behavior before and after this change (diff the feedback JSON).
 - Running `/gan` on a Python project identical before and after.
 - No agent prompt still contains hardcoded file extensions, audit commands, or stack-specific security criteria. Concretely: `gan-evaluator.md` must contain zero references to `kt`, `kts`, `gradle`, `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, or any other tool-specific token. The same applies to every other agent prompt.
+- `gan-contract-proposer.md` (or whichever agent today owns the security checklist) contains zero hardcoded security criteria. Every security criterion in a generated contract traces to a `securitySurfaces` entry in an active stack.
+- `scripts/parity-check.sh` produces an empty normalised diff for every fixture in `tests/fixtures/stacks/`.
 - Regression tests (if any exist in the repo) continue to pass.
 
 ## Dependencies

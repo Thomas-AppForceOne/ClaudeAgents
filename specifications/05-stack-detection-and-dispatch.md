@@ -19,6 +19,73 @@ Add a detection-and-dispatch step that every agent performs the same way:
 
 All agents share the same dispatch logic — codified as a short protocol in each agent's entry section, not reimplemented.
 
+## Error model
+
+The dispatch step fails closed. Every error below halts the run with a clear message naming the offending file; none degrade silently.
+
+- **Malformed stack file** — frontmatter missing, body YAML block absent, YAML parse error, or JSON-schema validation failure (per spec 04 lint). Error: `stack <path>: <validation detail>`. Applies uniformly whether the file is in `stacks/`, `~/.claude/gan/stacks/`, or `.claude/gan/stacks/` (tiers from spec 12).
+- **schemaVersion mismatch** — stack file declares a `schemaVersion` greater than the agent's known version. Hard error per spec 04's versioning rules.
+- **Invalid detection glob** — a pattern that cannot be parsed as a glob. Error: `stack <name>: invalid detection pattern <pattern>`.
+- **cacheEnv conflict** — two active stacks declare the same `envVar` with different `valueTemplate` values. Handled per spec 04's "Conflict resolution" rule; the error surfaces here because dispatch is where the conflict becomes observable.
+- **Overlay references unknown stack** — an overlay's `stack.override` (spec 09) names a stack not present in any tier. Error: `overlay forces stack <name> but no matching stack file found`.
+- **Empty scope after activation** — a stack is active (detection matched) but its `scope` globs match no files. This is a *warning*, not an error: scope is there to filter rules, not to re-assert activation. The warning appears in the spec 13 startup log.
+
+Absent errors: stacks whose `auditCmd` tool is not installed do not fail dispatch — that case is handled by the stack's `auditCmd.absenceSignal` at evaluation time.
+
+## Interaction with overlay `stack.override` (spec 09)
+
+When an overlay declares `stack.override`, it **replaces** the detection result — auto-detection is skipped and the active set is exactly the named stacks. This is the only way for users to activate a stack whose detection rules do not match the repo (spec 12 restricts detection declarations to tier 3).
+
+Worked example:
+
+```
+Repo has: package.json (matches stacks/web-node.md detection)
+Overlay: .claude/gan/project.md
+  stack.override: [web-node, docker]
+Result: active set = {web-node, docker}. Auto-detection is skipped.
+         stacks/docker.md is activated even though its detection would not
+         have matched (no Dockerfile present — maybe the project uses Compose
+         files outside the default detection).
+```
+
+`stack.override` cannot be additive to detection — it is all-or-nothing. Users who want "auto-detected stacks plus one extra" must list the full set explicitly.
+
+## `stacks/generic.md` fallback definition
+
+`stacks/generic.md` ships with the repo (at tier 3, per spec 12) and is the activated stack when auto-detection finds zero matches and no overlay provides `stack.override`. Its body YAML:
+
+```yaml
+detection: []   # never auto-matches; only activated via fallback
+scope:
+  - "**/*"
+secretsGlob:
+  - env
+  - json
+  - yaml
+  - yml
+  - txt
+  - md
+  - ini
+  - conf
+  - cfg
+cacheEnv: []
+auditCmd:
+  command: "true"
+  absenceSignal: warning
+  absenceMessage: "No dependency-audit tool is available for an unrecognised stack."
+buildCmd: ""
+testCmd: ""
+lintCmd: ""
+securitySurfaces:
+  - id: plaintext_secrets
+    template: >
+      No hardcoded credentials, API keys, or private keys in any file.
+    triggers:
+      keywords: ["password", "secret", "api_key", "apikey", "token", "BEGIN PRIVATE KEY"]
+```
+
+Empty `buildCmd`/`testCmd`/`lintCmd` instruct the evaluator to skip those phases and record them as "not run — unrecognised stack" rather than fail. The generic stack never produces blocking concerns by itself; its purpose is to keep the evaluator running end-to-end on unknown projects.
+
 ## Acceptance criteria
 
 - A repo with only `package.json` activates exactly `stacks/web-node.md`.

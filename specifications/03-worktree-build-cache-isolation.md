@@ -10,7 +10,7 @@ This is not Android-specific. It also hits sbt, pnpm (shared store), and any too
 
 ## Proposed change
 
-Before any build command runs inside the worktree, set tool-specific cache/daemon environment variables to paths scoped to that worktree.
+Before any build command runs inside the worktree, set tool-specific cache/daemon environment variables to paths scoped to that worktree. All cache paths live under `.gan-cache/<worktree-id>/` — zone 3 of the filesystem layout defined in [spec 14](14-gan-filesystem-layout.md). This zone is ephemeral and safe to delete; no module or spec may use it for durable state.
 
 **Phase 1 (pre-plugin-refactor):** the skill orchestrator holds a minimal, temporary list of the most common offenders so the fix ships immediately. Examples of the shape (not an exhaustive list; treated as an implementation detail, not as a core-owned catalog):
 

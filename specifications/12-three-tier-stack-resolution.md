@@ -8,7 +8,7 @@ Even with a stack plugin system (04/05) and overlays (09/11), a user may need to
 
 Extend stack-file resolution to three tiers, highest priority first:
 
-1. `.claude/gan/stacks/<name>.md` — project-specific.
+1. `.claude/gan/stacks/<name>.md` — project-specific. Zone 1 (config) per [spec 14](14-gan-filesystem-layout.md); user-authored and committed.
 2. `~/.claude/gan/stacks/<name>.md` — user-personal.
 3. `<repo>/stacks/<name>.md` — built-in defaults shipped with ClaudeAgents.
 
