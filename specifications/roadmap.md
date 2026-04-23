@@ -62,6 +62,17 @@ A single tech stack may have both (e.g. a future `docker` stack file declaring d
 
 **Filesystem boundaries between the layers are formalised in [spec 14](14-gan-filesystem-layout.md).** In particular, modules that persist state across runs (e.g. the Docker port registry) must write to `.gan-state/modules/<name>/`, not to `.gan/` — the latter is retired by spec 14 in favour of zone-scoped directories with single-owner lifecycles.
 
+### Runtime boundary: maintainer tooling vs. user-facing behavior
+
+ClaudeAgents targets developers in every ecosystem — Swift/iOS, C++/embedded, Rust, Go, Kotlin/Android, Python, JS, and whatever comes next. Forcing a Node runtime onto an iOS developer who only wants `/gan` to understand their Xcode project would break that promise. The RFC therefore splits tooling by who runs it:
+
+- **Maintainer tooling** (spec 04's stack-file lint script, spec 06's capability-check harness, any other script that runs in ClaudeAgents' own CI or on a contributor's machine) **may assume Node 18+**, since MODULES_ARCHITECTURE.md already establishes Node as the maintainer runtime. These scripts never run on a user's machine.
+- **User-facing behavior** (reading stacks, applying overlays, resolving the three-tier cascade, producing `--print-config` output, emitting validation errors on malformed input) **is owned by the agent at runtime**. The agent parses YAML, applies the cascade, and reports errors using its own execution context. No additional runtime is required on the user's machine beyond Claude Code itself.
+
+Specs remain runtime-neutral: the schema in spec 04 is a language-neutral JSON Schema; the capability-check format in spec 06 is a documented format. The Node scripts that ClaudeAgents ships are the reference implementation, not a requirement. A third party can implement alternative tooling in Swift, Rust, Python, or shell without rewriting specs.
+
+User-facing agent output (error messages, suggestions, dry-run reports) must never reference a maintainer-only script by name. If a stack file is malformed during a `/gan` run, the agent reports the structural problem directly — it does not tell the user to run `npm run lint-stacks`.
+
 ## Out of scope for this roadmap
 
 - Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge. Curation belongs to whatever agent a user chooses to run outside ClaudeAgents.

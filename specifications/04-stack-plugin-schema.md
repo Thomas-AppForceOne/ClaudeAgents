@@ -187,12 +187,20 @@ ClaudeAgents is a WIP project and does not carry backward-compatibility guarante
 - **Mismatch:** agents refuse to load a stack file whose `schemaVersion` does not exactly match the agent's known version — hard error, naming the file and the two versions. Stack files are updated in lockstep with the agents that read them; there are no cross-version loaders.
 - **Bumping:** any schema change (additive or breaking) bumps the version. There is no "additive is free" carve-out while the project is pre-1.0.
 
+## Runtime boundary
+
+The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation of the lint script because Node is the framework's maintainer runtime (per MODULES_ARCHITECTURE.md), but the reference script has no special authority over the JSON Schema.
+
+User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — is owned by the agent at runtime. The agent parses YAML and reports structural problems directly. User-facing output must not reference the maintainer-only lint script by name; an iOS or embedded-C++ developer running `/gan` has no reason to have Node installed and must never be told to run a Node command.
+
 ## Acceptance criteria
 
 - A new `stacks/example.md` file following the parse contract can be dropped in without editing any agent.
 - The parse contract and field reference are documented in the repo README.
+- The JSON Schema for the stack-file body YAML is published alongside the spec so third-party tooling can validate stack files without depending on the Node reference implementation.
 - The schema frontmatter includes a `schemaVersion` field; current value is `1`.
-- A JSON-schema lint script validates every `stacks/*.md` body-YAML at CI time.
+- A JSON-schema lint script (Node 18+ reference implementation) validates every `stacks/*.md` body-YAML at CI time.
+- User-facing error messages when a malformed stack file is loaded during a `/gan` run do not reference the lint script or any Node command — the agent reports the structural problem directly.
 - The lint script rejects: legacy `runCmd`, unstructured (string) `auditCmd`, markdown prose outside the YAML block that references schema fields, missing `schemaVersion`, detection entries that use an unknown form (any entry must be a string glob, `{path, contains}`, `{allOf: [...]}`, or `{anyOf: [...]}`).
 - A repo that declares `package.json` but no lockfile and no `start`/`dev`/`build` script does not activate `stacks/web-node.md` — verified by a fixture where `/gan --print-config` lists only `stacks/generic.md` as active.
 - Loading a stack whose `schemaVersion` does not exactly match the agent's known version produces a hard error naming the file and both versions.

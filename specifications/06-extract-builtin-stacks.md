@@ -37,14 +37,14 @@ The diff is normalised before comparison to remove non-semantic noise:
 - sort array fields with no declared order (e.g. `blockingConcerns` by `id`)
 - drop token-usage counts and model identifiers
 
-The normalised diff against each golden must be empty. A harness script `scripts/capability-check.sh` runs the comparison in CI and fails the PR on any diff. Golden files are hand-authored (not auto-captured from the pre-refactor evaluator) — this is a WIP project and we want the test to assert what the new system *should* do, not replay whatever it happened to do before.
+The normalised diff against each golden must be empty. The capability-check format (fixture layout, golden-file shape, normalisation rules) is documented as a language-neutral format; the harness is run in ClaudeAgents' CI by a reference Node 18+ implementation at `scripts/capability-check`, following the maintainer-tooling / user-facing split defined in roadmap.md. This is a maintainer tool — a user running `/gan` on their own repo never invokes it. Golden files are hand-authored (not auto-captured from the pre-refactor evaluator) — this is a WIP project and we want the test to assert what the new system *should* do, not replay whatever it happened to do before.
 
 ## Acceptance criteria
 
 - Running `/gan` on each fixture in `tests/fixtures/stacks/` produces a feedback JSON that matches the fixture's golden file (after normalisation).
 - No agent prompt still contains hardcoded file extensions, audit commands, or stack-specific security criteria. Concretely: `gan-evaluator.md` must contain zero references to `kt`, `kts`, `gradle`, `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, or any other tool-specific token. The same applies to every other agent prompt.
 - `gan-contract-proposer.md` (or whichever agent today owns the security checklist) contains zero hardcoded security criteria. Every security criterion in a generated contract traces to a `securitySurfaces` entry in an active stack.
-- `scripts/capability-check.sh` produces an empty normalised diff for every fixture in `tests/fixtures/stacks/`.
+- `scripts/capability-check` (the reference implementation) produces an empty normalised diff for every fixture in `tests/fixtures/stacks/` when run in CI.
 
 ## Dependencies
 
