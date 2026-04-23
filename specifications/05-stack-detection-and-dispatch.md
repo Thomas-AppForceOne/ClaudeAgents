@@ -6,6 +6,8 @@ Even with a schema defined (spec 04), agents need a uniform way to select which 
 
 ## Proposed change
 
+**This spec is the single authority for the detection-and-dispatch algorithm.** Spec 04 owns the schema for *declaring* detection rules; spec 12 extends *where* stack files may be resolved from (three tiers) and adds the restriction that detection rules may only be declared at tier 3 (repo). Individual stack specs declare only their stack-unique patterns.
+
 Add a detection-and-dispatch step that every agent performs the same way:
 
 1. Enumerate all `stacks/*.md` files (from the repo, for now — spec 12 extends this to three tiers).

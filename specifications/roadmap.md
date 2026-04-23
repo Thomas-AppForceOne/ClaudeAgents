@@ -44,6 +44,15 @@ Lets users add context and criteria without forking agents. Kept strictly generi
 - **Phase 4** is listed after stacks because the overlay's most useful splice point (`stack.override`) only makes sense once stacks exist as a concept.
 - **Phase 5** is last because it describes state that only becomes complex once Phase 4 resolution is in place.
 
+## Relationship to MODULES_ARCHITECTURE.md
+
+`MODULES_ARCHITECTURE.md` and this roadmap describe **two different extensibility layers** that coexist without overlap:
+
+- **Modules** (`src/modules/<name>/`) are *runtime utility libraries* — imperative JavaScript code that agents `require()` at execution time (e.g. `claudeagents/modules/docker` for port discovery and container health checks). They solve "how do I do the thing" problems.
+- **Stacks** (`stacks/<name>.md`, this roadmap) are *declarative agent configuration* — markdown files that tell agents which files to scan, which commands to run, and which security surfaces to check. They solve "what should the agents do for this tech stack" problems.
+
+A single tech stack may have both (e.g. a future `docker` stack file declaring detection and security surfaces, paired with the existing `modules/docker` runtime utilities) or only one. Neither layer subsumes the other.
+
 ## Out of scope for this roadmap
 
 - Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge. Curation belongs to whatever agent a user chooses to run outside ClaudeAgents.

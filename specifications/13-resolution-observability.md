@@ -22,7 +22,9 @@ Each agent, as its first visible output, prints a single structured record namin
 
 Missing sources are listed explicitly (`(none)`), not silently omitted — "nothing loaded" is also useful information.
 
-**B. `gan --print-config` flag**
+**B. `--print-config` flag**
+
+Parsed by the `/gan` skill at its argument-parsing step, alongside the `--recover` / `--list-recoverable` flags defined in `gan-recover.md`. All top-level `/gan` flags are defined in a single table in SKILL.md; this spec does not re-home flag parsing.
 
 Resolves everything without running a sprint and prints a single JSON document:
 
@@ -49,6 +51,8 @@ Resolves everything without running a sprint and prints a single JSON document:
 ```
 
 The JSON is stable (documented) so users and CI can diff configs across branches or environments.
+
+Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in spec 09 (project overlay) and spec 11 (user overlay). This spec's `mergedSplicePoints` object simply reports the result of merging the overlays per those specs' semantics. Any new splice point added in a future spec 09/11 revision automatically appears here with no edit required.
 
 ## Acceptance criteria
 

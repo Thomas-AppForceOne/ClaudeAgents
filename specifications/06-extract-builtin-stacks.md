@@ -17,7 +17,7 @@ Extract each of the current hardcoded stacks into its own file under `stacks/`, 
 - `stacks/gradle.md` — absorbs the Phase 1 Gradle branch from spec 02: detection on `settings.gradle` / `settings.gradle.kts` / `build.gradle*`; `auditCmd` with the Gradle branch logic including the "no audit tool configured" `blockingConcern` fallback.
 - `stacks/generic.md` — conservative fallback (spec 05).
 
-Once extracted, the agent prompts drop their hardcoded lists and rely on the active stack set. Specs 01 and 02 are retired by this extraction — their behavior is preserved inside the stack files, not in agent prompts.
+Once extracted, the agent prompts drop their hardcoded lists and rely on the active stack set. Specs 01 and 02 are retired by this extraction — their behavior is preserved inside the stack files, not in agent prompts. Spec 03's hardcoded env-var catalog is likewise retired: each cache-using stack (`stacks/gradle.md`, `stacks/web-node.md`, any future tool-cache-bearing stack) declares its own `cacheEnv` per spec 04, and the skill orchestrator drops its temporary catalog.
 
 ## Acceptance criteria
 

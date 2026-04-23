@@ -51,6 +51,14 @@ Rules:
 - Agents read `project.md` **after** loading the active stacks; overlay adds, never subtracts principles. It cannot delete a baseline security requirement.
 - The schema is strictly additive across versions; `schemaVersion: 1` fixes the v1 splice-point set. New splice points get `schemaVersion: 2` and agents refuse to load higher versions than they know.
 
+### When to use `stack.override` vs. a project-tier stack file
+
+Both this overlay and spec 12's three-tier resolution let a project change its active stack set. Pick deliberately:
+
+- Use **`stack.override`** here when the stack file (its detection rules, audit commands, surfaces) is correct and you only need to force which stacks are active — e.g. a KMP repo where auto-detection picks `web-node` for the JS interop module and you want to force `[kmp]`.
+- Use a **project-tier stack file** (`.claude/gan/stacks/<name>.md`, spec 12) when the stack's *contents* need to change for this project — e.g. a different `auditCmd`, a tighter `scope`, project-specific `securitySurfaces`. Spec 12 replaces the tier-3 stack file with the project-tier one wholesale.
+- Combining both is allowed: a project-tier stack file defines the stack, and `stack.override` in this overlay forces it active even when detection would not select it.
+
 ## Acceptance criteria
 
 - A `project.md` with `proposer.additionalCriteria` causes the listed criteria to appear in every generated contract for that project.

@@ -1,5 +1,7 @@
 # 03 — Worktree build-cache isolation
 
+**Status:** Ships Phase 1 with a temporary hardcoded env-var catalog in the skill orchestrator. Post-Phase-2 the catalog is owned by the `cacheEnv` field in spec 04 (schema) and populated by individual stack files per spec 06 (extraction). This spec is not superseded — the worktree-scoping mechanism remains here; only the *list of env vars* migrates out.
+
 ## Problem
 
 `/gan` runs in a git worktree. For build systems with a shared daemon or user-level cache (Gradle, sbt, Maven, some language servers), two worktrees on the same machine — or an interrupted run resumed while the original daemon is still up — can collide on lockfiles, daemon ports, or cached state. Symptoms: hung builds, stale class files, mysterious "file already locked" errors.

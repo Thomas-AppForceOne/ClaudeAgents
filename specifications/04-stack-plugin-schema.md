@@ -16,7 +16,11 @@ description: Android client (Gradle, Kotlin/Java)
 
 ## detection
 Files or directory patterns that identify this stack. Multiple may match in a
-polyglot repo.
+polyglot repo. **This schema is the single authority for how detection rules
+are declared.** The evaluation algorithm (union, scope filtering, fallback to
+generic, tier restriction) is owned by spec 05. Individual stack specs
+(06, 07, 08, …) must declare only their stack-unique patterns here — they
+must not restate algorithm behavior.
 
 - settings.gradle.kts, settings.gradle
 - build.gradle.kts with `com.android.application` or `com.android.library`

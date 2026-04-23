@@ -1,5 +1,7 @@
 # 01 — Kotlin/Gradle secrets glob
 
+**Status:** Phase 1 quick win. Superseded by spec 06 once Phase 2 ships — the Kotlin secrets glob migrates into `stacks/kotlin.md` and this in-agent patch is removed. Do not re-land this spec's changes if spec 06 has already shipped.
+
 ## Problem
 
 `gan-evaluator.md` runs a hardcoded grep for hardcoded credentials using this file-extension list:

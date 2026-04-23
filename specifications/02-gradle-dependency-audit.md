@@ -1,5 +1,7 @@
 # 02 — Gradle dependency audit branch
 
+**Status:** Phase 1 quick win. Superseded by spec 06 once Phase 2 ships — the Gradle audit logic (detection + `auditCmd` + "no audit tool configured" fallback) migrates into `stacks/gradle.md` and this in-agent branch is removed. Do not re-land this spec's changes if spec 06 has already shipped.
+
 ## Problem
 
 The evaluator's dependency-audit pass runs `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, or `bundle audit` depending on the detected stack. For Gradle projects (Android, KMP, server-side Kotlin/Java) it falls through to "tool not installed — note in blockingConcerns and skip." A CVE-producing dependency therefore ships without a blocking concern on any Gradle project.
