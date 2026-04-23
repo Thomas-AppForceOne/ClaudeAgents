@@ -43,6 +43,10 @@ Resolves everything without running a sprint and prints a single JSON document:
     "evaluator.additionalChecks": [/* … */],
     "runner.thresholdOverride": 9
   },
+  "discarded": [
+    {"scope": "proposer",                        "byTier": "project"},
+    {"scope": "generator.additionalRules",       "byTier": "user"}
+  ],
   "additionalContext": {
     "planner":  ["docs/architecture.md"],
     "proposer": ["docs/pr-checklist.md"]
@@ -54,12 +58,16 @@ The JSON is stable (documented) so users and CI can diff configs across branches
 
 Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in spec 09 (project overlay) and spec 11 (user overlay). This spec's `mergedSplicePoints` object simply reports the result of merging the overlays per those specs' semantics. Any new splice point added in a future spec 09/11 revision automatically appears here with no edit required.
 
+The `discarded` array reports every block or field where `discardInherited: true` was applied during resolution. Each entry names the scope that was discarded (a block like `proposer`, or a specific field like `generator.additionalRules`) and the tier that declared the discard (`user` or `project`). This lets a debugger see at a glance why an upstream value failed to reach the final merged config.
+
 ## Acceptance criteria
 
 - Every agent's startup log lists exactly the files it loaded; no silent omissions.
 - `gan --print-config` runs without creating a worktree or invoking subagents, and prints valid JSON conforming to a documented schema.
 - A missing file in `additionalContext` shows up in both the startup log and the `--print-config` output with a clear "missing" marker.
-- Running `--print-config` on a repo with no overlays at all produces a valid JSON document with every source marked not-loaded.
+- Running `--print-config` on a repo with no overlays at all produces a valid JSON document with every source marked not-loaded and an empty `discarded` array.
+- A project overlay declaring `proposer.discardInherited: true` appears in `--print-config`'s `discarded` array as `{"scope": "proposer", "byTier": "project"}`.
+- A field-level discard like `generator.additionalRules.discardInherited: true` appears as `{"scope": "generator.additionalRules", "byTier": "<tier>"}`.
 
 ## Dependencies
 
