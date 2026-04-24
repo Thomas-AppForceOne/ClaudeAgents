@@ -70,7 +70,9 @@ ClaudeAgents/
 │
 ├── .github/
 │   └── workflows/
-│       └── test.yml               # GitHub Actions: node --test on push/PR
+│       ├── shared-setup.yml       # Reusable workflow: checkout + Node 18 + cache
+│       ├── test-modules.yml       # Runs `node --test tests/modules/**`
+│       └── test-capability.yml    # Runs scripts/capability-check (spec 06)
 │
 ├── specifications/
 │   └── MODULES_ARCHITECTURE.md    # This file
@@ -413,7 +415,7 @@ modules/python/
 1. Create `/src/modules/` directory structure with placeholder `web/` and `python/` stubs
 2. Create `package.json` with `name: "claudeagents"` and `exports` map
 3. Extend `install.sh` to run `npm link` after symlinking agents/skills
-4. Create `.github/workflows/test.yml` (GitHub Actions, `node --test`)
+4. Create the CI workflows per roadmap.md "CI workflow structure": `.github/workflows/shared-setup.yml` (reusable), `.github/workflows/test-modules.yml` (this spec's tests), and `.github/workflows/test-capability.yml` (spec 06's capability-check). All three must land together — `test-modules.yml` calls `shared-setup.yml`, and spec 06's later work extends `test-capability.yml`.
 5. Create `/docs/MODULES.md` (module system guide + installation instructions)
 6. Document module system in main `README.md`
 
@@ -459,7 +461,9 @@ modules/python/
 - [ ] `require('claudeagents/modules/docker')` works after running `install.sh`
 
 ### CI
-- [ ] `.github/workflows/test.yml` runs `node --test` on every push and PR
+- [ ] `.github/workflows/shared-setup.yml` exists as a reusable workflow (`workflow_call`) performing checkout + Node 18 install + dependency cache
+- [ ] `.github/workflows/test-modules.yml` calls `shared-setup.yml` and runs `node --test tests/modules/**` on every push and PR
+- [ ] `.github/workflows/test-capability.yml` is present (owned by spec 06) and also uses `shared-setup.yml`
 - [ ] All tests pass on the GitHub Actions macOS runner
 
 ### Docker Module
@@ -526,7 +530,7 @@ modules/python/
 - Run: `node --test tests/modules/docker/*.test.js`
 
 ### 6. Why GitHub Actions for CI
-**Decision:** `.github/workflows/test.yml` runs on every push and PR targeting `main`.
+**Decision:** CI runs on every push and PR targeting `main` via one workflow per test category, all reusing a shared setup workflow. Files: `shared-setup.yml`, `test-modules.yml`, `test-capability.yml`. See roadmap.md "CI workflow structure" for the authoritative layout.
 
 **Rationale:**
 - Native to GitHub where the repo lives — no external service

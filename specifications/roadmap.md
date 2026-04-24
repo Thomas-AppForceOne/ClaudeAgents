@@ -73,6 +73,21 @@ Specs remain runtime-neutral: the schema in spec 04 is a language-neutral JSON S
 
 User-facing agent output (error messages, suggestions, dry-run reports) must never reference a maintainer-only script by name. If a stack file is malformed during a `/gan` run, the agent reports the structural problem directly — it does not tell the user to run `npm run lint-stacks`.
 
+### CI workflow structure
+
+Maintainer tooling runs in GitHub Actions under `.github/workflows/`. The layout is **one workflow file per test category, each delegating shared setup to a single reusable workflow**:
+
+- `.github/workflows/test-modules.yml` — owned by MODULES_ARCHITECTURE.md; runs `node --test tests/modules/**`.
+- `.github/workflows/test-capability.yml` — owned by spec 06; runs the capability-check reference implementation against every fixture under `tests/fixtures/stacks/`.
+- `.github/workflows/shared-setup.yml` — a reusable workflow (`workflow_call`) that handles checkout, Node 18+ install, and dependency caching. Every category workflow begins with `uses: ./.github/workflows/shared-setup.yml` so the Node version and cache configuration live in one place.
+
+Rules:
+
+- Every category workflow runs on `push` and `pull_request` by default; a category may declare additional triggers (cron, manual dispatch) in its own file.
+- New test categories (e.g. a future `test-stack-lint.yml` for spec 04's JSON-Schema validator) are added as new category workflow files that reuse `shared-setup.yml`. No category may bypass the shared setup.
+- The reusable workflow is the single source of truth for Node version bumps, cache keys, and any future framework-level CI dependency. Category workflows must not pin their own Node version independently.
+- The file names above are authoritative: `test-modules.yml`, `test-capability.yml`, and `shared-setup.yml`. New categories follow the `test-<category>.yml` pattern. Implementations must not rename them.
+
 ## Out of scope for this roadmap
 
 - Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge. Curation belongs to whatever agent a user chooses to run outside ClaudeAgents.
