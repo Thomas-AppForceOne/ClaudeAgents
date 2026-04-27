@@ -39,6 +39,18 @@ The MCP server and tooling that fulfill Phases 0–1.
 - [R3-cli-wrapper.md](R3-cli-wrapper.md) — *Stub.* `gan validate`, `gan config`, `gan stacks`.
 - [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — *Stub.* Lint script, schema publisher, capability-check runner, CI workflows.
 
+## Revision break — post-R contract audit
+
+The R series is the first time the F-phase contracts and C-phase data models are exercised against real code (the MCP server, installer, CLI, lint). Before Phase 3 begins, every contract spec is re-audited against its implementation to surface gaps the spec missed.
+
+Specs to revisit, with what to verify:
+
+- **F2** — confirm the function surface and structured-error model match what R1 actually exposes; refine signatures, error codes, and bulk-read shapes if implementation surfaced different patterns.
+- **F3** — confirm the JSON Schema documents at `schemas/<type>-vN.json` cover everything R1 needs to validate; add fields or invariants the implementation found necessary.
+- **C1, C2, C3, C4, C5** — confirm the algorithms and merge rules described match what R1's resolver actually does; clarify ambiguities found during implementation.
+
+Like the post-E1 break, this is a checkpoint: specs are revised in place; no new files. No Phase 3 work begins until the audit closes.
+
 ## Phase 3 — Agent integration
 
 Existing agents start using the new system.
@@ -76,6 +88,18 @@ Apply the system to ecosystems beyond the bootstrap set.
 - [S1-android-stack.md](S1-android-stack.md) — Android client stack file.
 - [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
 - [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — *Stub.* iOS Swift / SwiftUI stack.
+
+## Revision break — post-S schema audit
+
+Phase 5 lands three concrete, real-world stack files (Android, KMP, iOS) that exercise C1's schema against ecosystems the framework was not initially designed around. If any stack needed a workaround, omitted a useful concept, or stretched a field beyond its intended use, that's a signal that C1's schema needs an extension.
+
+Specs to revisit, with what to verify:
+
+- **C1** — confirm every field used by S1, S2, S3 was usable as designed. If a stack needed a new field shape (composite detection variants, additional securitySurface trigger types, scheme/destination placeholders for iOS), land it here as a schema bump rather than as per-stack workarounds.
+- **C2** — confirm the detection algorithm handles the realistic detection composites the three stacks declare without ambiguity.
+- **F3** — bump `schemas/stack-vN.json` if C1's shape changed.
+
+This is a checkpoint: specs are revised in place; no new files. No Phase 6 work begins until the audit closes.
 
 ## Phase 6 — Resolution observability
 
