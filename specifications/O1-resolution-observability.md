@@ -6,30 +6,39 @@ Once stack dispatch (C2), overlays (C3, C4), and three-tier resolution (C5) are 
 
 ## Proposed change
 
-Two mechanisms — one automatic, one on demand:
+Two mechanisms — one automatic, one on demand. Both surface data the Configuration API (F2) already produces; this spec defines how that data reaches the user.
 
 **A. Startup log line (automatic, every run)**
 
-Each agent, as its first visible output, prints a single structured record naming every file it loaded, in order:
+The skill orchestrator, after `validateAll()` succeeds and before spawning agents, prints a single structured record summarising the resolved config it captured from `getResolvedConfig()`:
 
 ```
-[gan-planner] loaded:
+/gan loaded:
   stacks: android.md (project), web-node.md (repo)
   user overlay: ~/.claude/gan/config.md
   project overlay: .claude/gan/project.md
   additionalContext: docs/architecture.md, docs/conventions.md
+  discarded: proposer (by project), generator.additionalRules (by user)
 ```
 
 Missing sources are listed explicitly (`(none)`), not silently omitted — "nothing loaded" is also useful information.
 
-**B. `--print-config` flag**
+The orchestrator owns this line because it owns the snapshot. Spawned agents do not re-emit their own loaded-files line; they consume the snapshot the orchestrator captured (per F2's validation timing).
 
-Parsed by the `/gan` skill at its argument-parsing step, alongside the `--recover` / `--list-recoverable` flags defined in `O2-recovery.md`. All top-level `/gan` flags are defined in a single table in SKILL.md; this spec does not re-home flag parsing.
+**B. `gan config print` and the `/gan --print-config` flag**
 
-Resolves everything without running a sprint and prints a single JSON document:
+Two equivalent surfaces for the same data:
+
+- `gan config print` (R3) is the human/script entry point. It calls `getResolvedConfig()` and prints the result.
+- `/gan --print-config` is the Claude Code skill's flag. It runs `validateAll()` + `getResolvedConfig()` and prints the result without creating a worktree or spawning sprint agents.
+
+Both produce identical JSON when given `--json`. The flag parsing for `/gan --print-config` lives in SKILL.md alongside `--recover` / `--list-recoverable` from O2; this spec does not re-home flag parsing.
+
+The output:
 
 ```json
 {
+  "apiVersion": 1,
   "activeStacks": [
     {"name": "android", "tier": "project", "path": ".claude/gan/stacks/android.md", "schemaVersion": 1},
     {"name": "web-node", "tier": "repo",    "path": "stacks/web-node.md",          "schemaVersion": 1}
@@ -54,26 +63,33 @@ Resolves everything without running a sprint and prints a single JSON document:
 }
 ```
 
-The JSON is stable (documented) so users and CI can diff configs across branches or environments.
+The JSON shape is stable so users and CI can diff configs across branches or environments. The shape is exactly what `getResolvedConfig()` returns from F2.
 
-Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in spec C3 (project overlay) and spec C4 (user overlay). This spec's `mergedSplicePoints` object simply reports the result of merging the overlays per those specs' semantics. Any new splice point added in a future spec C3/11 revision automatically appears here with no edit required.
+Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in C3. This spec's `mergedSplicePoints` object simply reports the cascade-resolved result per C4's merge rules. Any new splice point added in a future C3 revision automatically appears here with no edit required.
 
 The `discarded` array reports every block or field where `discardInherited: true` was applied during resolution. Each entry names the scope that was discarded (a block like `proposer`, or a specific field like `generator.additionalRules`) and the tier that declared the discard (`user` or `project`). This lets a debugger see at a glance why an upstream value failed to reach the final merged config.
 
 ## Acceptance criteria
 
-- Every agent's startup log lists exactly the files it loaded; no silent omissions.
-- `gan --print-config` runs without creating a worktree or invoking subagents, and prints valid JSON conforming to a documented schema.
-- A missing file in `additionalContext` shows up in both the startup log and the `--print-config` output with a clear "missing" marker.
-- Running `--print-config` on a repo with no overlays at all produces a valid JSON document with every source marked not-loaded and an empty `discarded` array.
-- A project overlay declaring `proposer.discardInherited: true` appears in `--print-config`'s `discarded` array as `{"scope": "proposer", "byTier": "project"}`.
+- The skill orchestrator's startup log lists exactly the files reflected in the resolved config it received from `getResolvedConfig()`; no silent omissions.
+- `gan config print` and `/gan --print-config` produce byte-identical JSON output (with `--json`) for the same project state.
+- Running `/gan --print-config` does not create a worktree, spawn sprint agents, or write to zone 2.
+- A missing file in `additionalContext` shows up in both surfaces with a clear "missing" marker.
+- Running `--print-config` on a repo with no overlays produces a valid JSON document with every source marked not-loaded and an empty `discarded` array.
+- A project overlay declaring `proposer.discardInherited: true` appears in the `discarded` array as `{"scope": "proposer", "byTier": "project"}`.
 - A field-level discard like `generator.additionalRules.discardInherited: true` appears as `{"scope": "generator.additionalRules", "byTier": "<tier>"}`.
 
 ## Dependencies
 
-- C2, C3, C4, C5 (this is the debugging layer for all of them).
+- F2 (the API that produces the data this spec surfaces)
+- R1 (reference implementation of that API)
+- R3 (`gan config print` lives here)
+- C2, C3, C4, C5 (the resolution layers being made observable)
 
-## Value / effort
+## Note on E1 dependency
 
-- **Value**: high once resolution complexity exists. Without it, every support request starts with "I don't know what it loaded."
-- **Effort**: small-medium. The startup log is trivial; `--print-config` is mostly a plumbing refactor so the resolution logic can run standalone without side effects.
+The startup-log mechanism described under part A relies on the orchestrator (SKILL.md) being the single point that captures and forwards the resolved snapshot, with agents consuming it instead of re-loading. That coordination is finalised by E1 (agent prompt rewrite). Until E1 lands, agents may still read configuration directly; the startup log can ship at the orchestrator level immediately, but per-agent log lines should not be re-introduced — they are obsolete under F2's "orchestrator captures, agents consume" model.
+
+## Bite-size note
+
+Sprint slices: `gan config print` (R3 already drafts this) → `/gan --print-config` flag in SKILL.md → orchestrator startup log → `discarded` array surfacing. Each is independently testable.

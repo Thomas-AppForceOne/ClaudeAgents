@@ -184,14 +184,14 @@ The contract-proposer prompt loses its hardcoded security checklist; all securit
 ClaudeAgents is a WIP project and does not carry backward-compatibility guarantees. `schemaVersion` is a structural marker so the lint script and agents can reject files authored against an older schema shape, not a compatibility contract.
 
 - **Current version:** `schemaVersion: 1`. Every stack file must declare it.
-- **Mismatch:** agents refuse to load a stack file whose `schemaVersion` does not exactly match the agent's known version — hard error, naming the file and the two versions. Stack files are updated in lockstep with the agents that read them; there are no cross-version loaders.
+- **Mismatch:** the Configuration API (F2) refuses to serve a stack file whose `schemaVersion` does not exactly match the API's known version — hard error, naming the file and the two versions. The agent calling `getStack()` or `getResolvedConfig()` receives a structured `SchemaMismatch` error. Stack files are updated in lockstep with the API that reads them; there are no cross-version loaders.
 - **Bumping:** any schema change (additive or breaking) bumps the version. There is no "additive is free" carve-out while the project is pre-1.0.
 
 ## Runtime boundary
 
-The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation of the lint script because Node is the framework's maintainer runtime (per M1-modules-architecture.md), but the reference script has no special authority over the JSON Schema.
+The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document at `schemas/stack-vN.json` (per F3) so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation in R1 (the Configuration MCP server) and in R4's lint script, but the reference implementations have no special authority over the JSON Schema.
 
-User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — is owned by the agent at runtime. The agent parses YAML and reports structural problems directly. User-facing output must not reference the maintainer-only lint script by name; an iOS or embedded-C++ developer running `/gan` has no reason to have Node installed and must never be told to run a Node command.
+User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — flows through the Configuration API per F2. Agents call `getStack()` / `getResolvedConfig()`; on validation failure the API returns a structured error with file, line, and field provenance. The agent surfaces that error to the user verbatim. User-facing output must not reference the maintainer-only lint script by name; an iOS or embedded-C++ developer running `/gan` has no reason to have Node installed and must never be told to run a Node command.
 
 ## Acceptance criteria
 

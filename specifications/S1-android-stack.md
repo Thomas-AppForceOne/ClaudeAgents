@@ -39,7 +39,10 @@ Add `stacks/android.md` following the schema (C1). Key contents:
 
 - C1, C2, E2.
 
-## Value / effort
+## Note on E1 dependency
 
-- **Value**: high for any Android user; also validates whether the schema from C1 is expressive enough. If Android cannot be modelled cleanly, the schema needs revision.
-- **Effort**: medium. The security-surface catalog needs careful authoring — too vague and criteria are untestable; too specific and they cease to be templates.
+The acceptance criteria reference contract-proposer and evaluator behavior that flows through agents. Agents read this stack file's data via the Configuration API per F2 — not by parsing the file directly. That coordination is finalised by E1 (agent prompt rewrite). The stack file itself is fully specifiable today and can land before E1; the *acceptance* of "the contract-proposer generates X" requires E1 to be in place so the proposer is calling `getResolvedConfig()` and applying surface-instantiation per C1's protocol.
+
+## Bite-size note
+
+The stack file lands in two halves: detection + commands first (no surfaces), then security surfaces in a follow-up. This keeps reviewable surface area small and lets a Phase 5 sprint deliver Android coverage incrementally. Acceptance gating waits for E1 before declaring the surface-instantiation criteria fully met.

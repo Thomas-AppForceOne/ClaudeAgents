@@ -1,10 +1,24 @@
-# /gan Recovery — Spec
+# O2 — Recovery
 
 **Status:** Specification (ready for implementation)
 **Scope:** `skills/gan/SKILL.md` in this repo
 **Target repo:** ClaudeAgents (this repo). No dependencies on any external consumer repo.
 
-> **Filesystem layout note.** This spec was authored before [spec F1 (gan filesystem layout)](F1-filesystem-layout.md). Once spec F1 ships, every reference to `.gan/` below maps to `.gan-state/runs/<run-id>/`, and the archive target moves from `<telemetry-dir>/runs/<run-id>/gan-state/` to whatever path spec F1's zone-2 rules dictate. The recovery *mechanism* described here is unchanged; only the paths move. Spec 14 additionally forbids this spec's teardown from touching `.gan-state/modules/` — preventing collisions with module-owned durable state such as the Docker port registry.
+> **Architectural alignment note.** This spec was authored before the F1 filesystem layout, the F2 Configuration API, and the phase-coded restructure. It needs revision to fit the new architecture; the *intent* (a way to resume a previously-aborted run) is unchanged but the *mechanism* below assumes the old `.gan/` directory model and a separate archive directory. Under F1, run state already lives at `.gan-state/runs/<run-id>/` and persists across runs by default, which simplifies the flow considerably.
+>
+> Adjustments that apply when reading the body below in the new world:
+>
+> - Read every `.gan/` reference as `.gan-state/runs/<run-id>/` (zone 2 per F1).
+> - The "archive on abort" step described in §1 / §2 collapses under F1: the run state is already where the archive would have been. A real revision will reframe abort handling as marking metadata (status, archive-metadata.json) on the existing per-run directory rather than moving it.
+> - The skill's Step 0 calls F2's `validateAll()` before any recovery action. A run cannot be recovered into an environment whose configuration is currently invalid.
+> - Recovery must never touch `.gan-state/modules/` — that is module-owned durable state and survives across runs.
+> - Configuration (stacks, overlays) is read through the Configuration API per F2, not parsed directly. This applies whenever the recovery flow needs to know which stacks were active or whether an overlay changed since the archived run was created.
+>
+> ### Note on E1 dependency
+>
+> A full reconception of the archive flow under F1 also depends on E1 (agent prompt rewrite). Several of this spec's mechanisms — Step 0 prompts, the resume state machine — are agent-side prose that will be rewritten when E1 lands. Reconceiving the archive flow today would mean editing prose that's about to be replaced. The preferred sequence is: complete this pass (path notes + alignment guidance), let E1 happen, then write a new revision of O2 that fits the post-E1 world.
+>
+> Until that revision lands, treat this spec as **descriptive of intent, not prescriptive of mechanism**: implementers building the recovery flow under F1 should follow the spirit (resumable runs, state-on-abort persistence, no module-zone interference) and adapt the concrete steps to the new layout.
 
 ---
 

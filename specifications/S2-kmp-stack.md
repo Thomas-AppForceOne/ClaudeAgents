@@ -38,7 +38,10 @@ Contents:
 
 - C1, C2, S1 (shares the Kotlin/Gradle pieces already extracted; S1 also validates whether the schema supports surface templates).
 
-## Value / effort
+## Note on E1 dependency
 
-- **Value**: medium-high — KMP is growing and no existing tooling covers it. Also stress-tests the polyglot union logic from spec C2.
-- **Effort**: medium. The hardest part is `runCmd` pragmatics (what to actually run given variable target availability). Keep the stack file honest about skipped targets.
+Acceptance criteria that reference contract-proposer and evaluator behavior depend on E1 (agent prompt rewrite) for those agents to call the Configuration API and apply surface instantiation per C1. The stack file is specifiable today; full acceptance gating waits for E1.
+
+## Bite-size note
+
+Two-sprint shape: detection + build/test/lint commands first; security surfaces and target-availability handling in a follow-up. iOS simulator availability is a runtime question — the spec captures it as a blocking-concern signal but the implementation defers to S3 / a future iOS simulator module for the actual probe.
