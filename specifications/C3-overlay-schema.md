@@ -52,7 +52,7 @@ runner:
 
 | Path | Shape | Default | Allowed in user overlay |
 |---|---|---|---|
-| `stack.override` | list of stack names | `[]` | Yes |
+| `stack.override` | list of stack names | `[]` | **No (forces detection bypass; user-tier values would silently disable auto-detection in every project)** |
 | `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` | Yes |
 | `proposer.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
 | `planner.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
@@ -60,7 +60,9 @@ runner:
 | `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` | Yes |
 | `runner.thresholdOverride` | integer | agent's baked-in threshold | Yes |
 
-A user overlay declaring `additionalContext` is a hard error at load time per F2's structured error model.
+A user overlay declaring `additionalContext` or `stack.override` is a hard error at load time per F2's structured error model. The reasoning differs:
+- `additionalContext`: the listed paths are project-relative and meaningless at user scope.
+- `stack.override`: per C2, any non-empty value for this field replaces auto-detection. A user-tier value would silently disable auto-detection in every project the user touches — almost never the intent.
 
 ## `discardInherited`
 

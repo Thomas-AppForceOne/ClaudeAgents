@@ -18,6 +18,7 @@ Resolution rules:
 
 - For each **active stack name** (per C2's detection algorithm), the API serves the file from the highest-priority tier that contains it.
 - A project tier file **replaces** the lower-tier file for that stack — no partial merging. Replacement is coarse but predictable; users who want additive behavior should use overlays (C3), not shadow the stack file.
+- **Replacement is wholesale.** A project-tier `stacks/docker.md` that omits a `pairsWith` declaration drops the pairing — even if the repo-tier file declared one. If the user wants the pairing preserved, they must re-declare `pairsWith` in their project-tier file. The `pairs-with.js` invariant fires on any inconsistency between the resolved (highest-priority) stack file's `pairsWith` and the corresponding module's manifest.
 - `schemaVersion` in the stack file frontmatter must exactly match the API's known stack schema version; mismatch is a hard `SchemaMismatch` error.
 - The API records which tier each active stack came from and exposes it via `getResolvedConfig()` for O1's observability surface.
 

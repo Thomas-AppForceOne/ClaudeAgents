@@ -86,6 +86,12 @@ Rules:
 
 ## Field reference
 
+### name (frontmatter)
+
+The stack's identifier. Must be **lowercase ASCII letters, digits, and hyphens only** (`^[a-z][a-z0-9-]*$`). The filename `stacks/<name>.md` must match the frontmatter `name` exactly. The lint script enforces both.
+
+This rule prevents case-sensitivity collisions across macOS / Linux / Windows filesystems (e.g. `Android.md` and `android.md` resolving to the same or different file depending on host OS) and prevents names that would not be valid as MCP tool parameter values.
+
 ### detection
 Array of patterns that activate this stack. The top-level array is OR-semantics: the stack activates if **any** entry matches.
 

@@ -30,6 +30,10 @@ Applied at both user ⊕ default and project ⊕ user-resolved steps. Unless `di
 
 "Higher tier" means closer to the leaf: project > user > default. List merges preserve order: lower-tier entries appear first, higher-tier entries appended after, so downstream consumers that care about list order see a predictable sequence.
 
+**Duplicate-key positioning.** When a higher-tier entry overrides a lower-tier entry by key (e.g. same `name` in `additionalCriteria`, same `command` in `additionalChecks`), the overriding entry takes the **lower-tier slot's position** — not the appended position. This avoids surprise reordering when a higher tier merely refines an existing entry. The lower-tier entry is removed; the higher-tier entry is inserted at the lower-tier's index.
+
+**Execution-order semantics.** For lists of commands (`evaluator.additionalChecks`), merge order *is* execution order: lower-tier entries run before higher-tier entries appended after them. Consumers may rely on this ordering. A user-tier check that must run before a project-tier check is a legitimate use case; a project-tier check that depends on a user-tier check having already run is also legitimate.
+
 ## `discardInherited` interaction
 
 For each block or field, if `discardInherited: true` is set at a given level, that level's merge input from the tier above is treated as empty before that level's own values are applied. Mechanism and syntax in C3.
