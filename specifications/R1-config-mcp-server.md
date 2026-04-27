@@ -75,10 +75,18 @@ Every write function:
 1. Loads the current file (or composes a new one if absent).
 2. Applies the requested change in memory.
 3. Validates the new state through the same pipeline `validateAll()` uses, scoped to the affected file plus any invariants the change could break.
-4. On success, writes the file back, preserving any prose outside the YAML body block.
+4. On success, writes the file back, preserving any prose outside the YAML body block byte-identically (the YAML body block is replaced in place; everything else — frontmatter, markdown headings, conventions section, comments — is byte-identical before and after).
 5. On failure, returns a structured error and does not persist.
 
 Write atomicity: file writes use temp-file + rename so concurrent readers never see a partially-written file. The reference implementation does not need cross-process locking — only the MCP server writes; concurrent readers via the API serialise through the server.
+
+`appendToStackField` and `removeFromStackField` are implemented as a single atomic load-mutate-validate-persist cycle inside the server. Two concurrent calls to either operation on the same field serialise through the server's single-writer discipline; neither can observe the other's intermediate state. This avoids the R-M-W race that would arise from a caller doing `getStack()` + `updateStackField()` in two MCP round-trips.
+
+### Project rooting
+
+Every MCP tool takes a `projectRoot: string` parameter (per F2). The server treats this as the source of truth for path resolution; it never falls back to its own cwd, the calling client's cwd, or any per-connection state. Calls with mismatched or missing-layout `projectRoot` return `MissingFile`.
+
+Multiple Claude Code clients connecting to the same long-lived server work concurrently against different projects without ambiguity: each call carries its own `projectRoot` and resolves independently.
 
 ### Versioning
 

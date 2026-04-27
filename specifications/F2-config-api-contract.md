@@ -19,9 +19,19 @@ A stable function contract used by agents and the CLI alike. Language-neutral; r
 5. **Hand-edits remain valid.** Users edit files in their editor. Readers validate at load time and error on malformed files. The API is the sanctioned write path, not the only one.
 6. **Free-form prose is read-only via the API.** Stack-file `conventions` sections are exposed through `getStackConventions()` but have no setter. To edit prose, open the file.
 
+### Project rooting
+
+Every API function takes an explicit `projectRoot: string` parameter (an absolute path to the project the call resolves against). This is mandatory, not optional.
+
+Rationale: the MCP server is long-lived and may be reached by multiple Claude Code clients across multiple projects in a single session. Relying on the server's cwd, the calling client's cwd, or any implicit per-connection state is brittle (MCP does not carry cwd in the protocol). An explicit `projectRoot` argument is verbose for the caller but unambiguous; it is the only sound choice given the long-lived-server design.
+
+In practice, the orchestrator (E1) captures `projectRoot` once per `/gan` run and includes it in every API call it makes. Agents consume the snapshot and rarely call the API directly; when they do, they receive `projectRoot` from the orchestrator's context. The CLI (R3) takes `--project-root` defaulting to the current working directory.
+
+A function called with a `projectRoot` that does not contain the framework's expected directory layout (no `.claude/gan/`, no usable repo root) returns a structured `MissingFile` error rather than searching upward.
+
 ### Function surface
 
-Function names are camelCase with a verb prefix.
+Function names are camelCase with a verb prefix. Every function takes `projectRoot` as its first argument; the tables below omit it for readability but it is required.
 
 **Reads:**
 
@@ -36,21 +46,28 @@ Function names are camelCase with a verb prefix.
 | `getModuleState(moduleName, key)` | Durable state value for a module from F1 zone 2. |
 | `listModules()` | Registered modules with `pairsWith` status. |
 | `getApiVersion()` | API contract version this server implements. |
+| `getTrustState()` | Whether the current `(projectRoot, content-hash)` is approved per F4; diff details if not. |
 
 **Writes:**
 
 | Function | Effect |
 |---|---|
-| `updateStackField(name, field, value)` | Validates the change against the stack schema and any cross-file invariants, then persists. Refuses inconsistent state. |
+| `updateStackField(name, field, value)` | Validates the change against the stack schema and any cross-file invariants, then persists. Refuses inconsistent state. For list-shaped fields, this is a wholesale replacement; prefer `appendToStackField` / `removeFromStackField` for collection edits. |
+| `appendToStackField(name, field, value)` | Atomic append for list-shaped fields. Reads the current list, appends `value` (with a duplicate-policy parameter: `error` / `skip` / `allow`), validates, persists. Avoids the read-modify-write race that bare `updateStackField` would expose. |
+| `removeFromStackField(name, field, key)` | Atomic remove for keyed-list-shaped fields (`securitySurfaces` by `id`, etc.). |
 | `setOverlayField(path, value, tier="project")` | Updates a single splice point at the named tier. Tier defaults to project. |
 | `setModuleState(moduleName, key, value)` | Writes a durable module-state value to zone 2. |
 | `registerModule(moduleName, manifest)` | Records a module's `pairsWith` and capabilities. Refuses inconsistent pairing. |
+| `trustApprove(contentHash, note?)` | Records approval of the current content hash for this project. Per F4. |
+| `trustRevoke()` | Removes any trust approval for this project. Per F4. |
+
+**Concurrency.** The MCP server is the sole writer to all framework files. Within a single `/gan` run, agents execute serially under orchestrator control; no two agents in one run modify the same field. The R-M-W race that would arise from concurrent `getStack()` + `updateStackField()` calls is **not** exposed by the framework's normal use pattern. For exotic external callers (e.g. a script using R3 in a multi-process setup), the dedicated `appendToStackField` / `removeFromStackField` operations preserve atomicity.
 
 **Validation:**
 
 | Function | Effect |
 |---|---|
-| `validateAll()` | Full pipeline: per-file schema validation, then cross-file invariants. Returns OK or a structured report. Idempotent; safe to call repeatedly. |
+| `validateAll()` | Full pipeline: per-file schema validation, cross-file invariants, trust check (per F4). Returns OK or a structured report. Idempotent; safe to call repeatedly. |
 | `validateStack(name)` | Single-stack schema check. |
 | `validateOverlay(tier)` | Single-tier overlay schema check. |
 
