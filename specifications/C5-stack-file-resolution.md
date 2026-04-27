@@ -34,7 +34,9 @@ Detection rules live only in tier 3 (built-in) for v1 — project tiers can over
 
 - C1, C2 (the dispatch algorithm whose results this resolves)
 - C3 (for `stack.override` interaction), C4 (for the user tier)
-- F2, R1 (resolution runs inside the API)
+- F2 (resolution runs inside the API)
+
+R1 implements the resolution; the dependency runs from R1 to C5, not the reverse.
 
 ## Bite-size note
 

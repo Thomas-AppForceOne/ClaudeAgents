@@ -209,7 +209,7 @@ User-facing behavior — reading a stack file when `/gan` runs, reporting a malf
 
 ## Dependencies
 
-None from earlier specs. Prerequisite for 05, 06, 07, 08, 09, 11, 12.
+None from earlier specs. Prerequisite for C2, C3, C5, R1, E2, S1, S2, S3.
 
 ## Value / effort
 

@@ -7,7 +7,7 @@ Multiple specs and external documents write files into project-level directories
 - `/gan` orchestration uses `.gan/` for per-run state (progress.json, contracts, worktree metadata) that is **archived or deleted on teardown** (O2-recovery.md).
 - M1-modules-architecture.md stores `.gan/port-registry.json` as a **durable** cross-run registry mapping worktree → host port → container. Archived-on-teardown and durable are incompatible lifecycles in the same directory; the registry is either lost (after `/gan` archives `.gan/`) or misread as stale orchestration state (triggering a spurious recovery prompt).
 - Overlays (spec C3) and tier-2 stack files (spec C5) live in `.claude/gan/` — user-authored configuration, committed to the repo.
-- Spec 03's per-worktree build cache uses `<worktree>/.gan-cache/` — ephemeral, safe to delete.
+- Per-worktree build caches use `<worktree>/.gan-cache/` — ephemeral, safe to delete (consumed by stack `cacheEnv` declarations per C1).
 
 As we add more stateful tools (Python venv tracking, DB seed registries, Terraform state locators, …), every new tool will collide with one of these directories unless the layout is formalised. This spec pins the boundaries before that happens.
 
@@ -95,7 +95,7 @@ ClaudeAgents is pre-1.0; there is no migration path for stale `.gan/` directorie
 
 ## Dependencies
 
-None. Prerequisite for the M1-modules-architecture.md port-registry relocation and for any future stateful-module work. Spec 03 (cache isolation), spec C3 (overlay), spec C5 (stack resolution), and O2-recovery.md reference this spec for directory ownership.
+None. Prerequisite for the M1-modules-architecture.md port-registry relocation and for any future stateful-module work. Specs C3 (overlay), C5 (stack resolution), R1 (server reads/writes per these zones), and O2-recovery.md reference this spec for directory ownership.
 
 ## Value / effort
 

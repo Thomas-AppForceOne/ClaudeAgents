@@ -91,7 +91,8 @@ Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category
 ## Dependencies
 
 - F3 (schemas this tooling validates against)
-- E3 (capability-check format)
+
+E3 owns the capability-check fixture/golden/normalisation format; R4's `scripts/capability-check` implementation depends on E3 at implementation time, but the R4 spec catalogues the script's *existence* without committing to format details.
 
 ## Bite-size note
 

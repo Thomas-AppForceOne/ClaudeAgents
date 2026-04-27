@@ -98,7 +98,8 @@ Empty `buildCmd`/`testCmd`/`lintCmd` instruct the evaluator to skip those phases
 
 - C1 (schema)
 - F2 (the algorithm runs inside the API; agents consume results, not implement)
-- R1 (reference implementation of the algorithm)
+
+R1 implements this algorithm; the dependency runs from R1 to C2, not the reverse.
 
 ## Bite-size note
 

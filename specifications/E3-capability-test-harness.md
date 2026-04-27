@@ -90,9 +90,9 @@ When the evaluator's intended output changes (new stack, new criterion, schema b
 
 ## Dependencies
 
-- E2 (the refactor this harness gates)
 - C1, C2 (data the fixtures exercise)
-- R4 (the script lives there and is invoked by CI)
+
+E2 is gated by this harness, not the other way around. R4 hosts the reference script's filename in its directory layout but the format described here is authored independently of R4.
 
 ## Bite-size note
 

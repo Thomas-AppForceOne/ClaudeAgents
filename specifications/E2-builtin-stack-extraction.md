@@ -33,7 +33,8 @@ Correctness of the extraction is gated by the capability test harness (E3) — a
 ## Dependencies
 
 - C1, C2, R1 (writes happen via the API, not direct file edits)
-- E3 (capability harness gates the refactor)
+
+E3 gates the refactor in implementation; E2 itself is authorable independently of E3.
 
 ## Value / effort
 

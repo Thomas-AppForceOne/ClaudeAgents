@@ -133,8 +133,8 @@ Incremental landing is **not** recommended. A half-rewritten agent set leaves th
 - F2 (API contract)
 - R1 (the API the agents consume)
 - C1, C2, C3, C4, C5 (data shapes the snapshot exposes)
-- E2 (the stack files agents read about)
-- E3 (the capability harness gating the rewrite)
+
+E2 (stack extraction) and E3 (capability harness) are companion specs in Phase 3 — E1's per-agent rewrites coordinate with E2's stack files at implementation time, and the rewrite's correctness is gated by E3's harness. None of those dependencies prevent E1 from being authored first; the spec text describes the rewrite pattern abstractly.
 
 ## Bite-size note
 

@@ -111,7 +111,8 @@ The API never writes prose. When an updater modifies a stack file, prose outside
 ## Dependencies
 
 - F1 (filesystem layout — what the API stores into).
-- F3 (schema authority — what the API validates against).
+
+F3 (schema authority) is referenced throughout this spec as the source of validation rules, but F2's contract can be authored without F3 being authored first; the implementation in R1 is what depends on both.
 
 ## Bite-size note
 

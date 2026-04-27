@@ -62,7 +62,13 @@ Apply the system to ecosystems beyond the bootstrap set.
 - [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
 - [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — *Stub.* iOS Swift / SwiftUI stack.
 
-## Phase 6 — User-facing extensibility
+## Phase 6 — Resolution observability
+
+User-facing extensibility (Phase 7) leans on the provenance reporting added here, so observability lands first.
+
+- [O1-resolution-observability.md](O1-resolution-observability.md) — Startup log line, `gan config print`, discard reporting.
+
+## Phase 7 — User-facing extensibility
 
 Hands-on customisation surface.
 
@@ -70,10 +76,9 @@ Hands-on customisation surface.
 - [U2-user-overlay-ux.md](U2-user-overlay-ux.md) — `~/.claude/gan/config.md`, cross-project preferences, auto-memory integration.
 - [U3-additional-context-splice.md](U3-additional-context-splice.md) — `additionalContext` splice points for planner/proposer.
 
-## Phase 7 — Observability and operations
+## Phase 8 — Recovery
 
-- [O1-resolution-observability.md](O1-resolution-observability.md) — Startup log line, `gan config print`, discard reporting.
-- [O2-recovery.md](O2-recovery.md) — Per-run state archive, `--recover`, `--list-recoverable` (updated for F1 zones and F2 API).
+- [O2-recovery.md](O2-recovery.md) — Per-run state archive, `--recover`, `--list-recoverable`. Reconceived for F1 zones and F2 API; lands after E1 so the agent integration pattern is in place.
 
 ## Bite-size sizing
 

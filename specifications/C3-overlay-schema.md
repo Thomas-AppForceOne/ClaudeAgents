@@ -114,7 +114,8 @@ Rules:
 
 - F2 (API contract), F3 (schema authority)
 - C1 (parse contract reused)
-- C4 (cascade and merge semantics across tiers)
+
+C4 (cascade) builds on this spec, not the other way around. C4 is referenced throughout for merge semantics but is authored after C3.
 
 ## Bite-size note
 
