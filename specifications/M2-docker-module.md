@@ -1,26 +1,192 @@
 # M2 — Docker module
 
-**Status:** Stub. Drafted in Phase 4. Content sourced from M1's current Docker section.
+## Problem
 
-## Purpose
+Projects that run inside Docker containers have a recurring set of cross-cutting concerns when used with `/gan`'s git-worktree workflow:
 
-First concrete runtime utility module. Provides agents with reusable JavaScript utilities for Docker container and port management in git worktrees.
+- Each worktree needs its own container instance (otherwise concurrent runs collide).
+- Each container needs a unique host port (otherwise the second one fails to bind).
+- After a sprint completes, the right container needs to be stopped — not all containers, not the wrong one.
+- Across runs and shell sessions, the framework needs to remember which port belongs to which worktree.
+- Container health checks must distinguish "port bound" from "service responding."
 
-## Anticipated content
+The Docker module bundles these utilities so agents and orchestrators reuse one battle-tested implementation rather than reinventing the helpers per project.
 
-- `PortRegistry` — persists port assignments across shell sessions. State stored at `.gan-state/modules/docker/port-registry.json` (zone 2 per F1).
-- `PortDiscovery` — three-layer fallback (env → registry → docker ps → fallback).
-- `ContainerHealth` — HTTP-based health checks (not just port binding).
-- `PortValidator` — platform-specific port-availability checks.
-- `ContainerNaming` — convention-driven container names tied to worktree paths.
-- Pairing: declared `pairsWith: docker` and consistent with a future `stacks/docker.md`. The Configuration API enforces this on registration (F2).
+## Proposed change
+
+Add `src/modules/docker/` as the first concrete module under M1's architecture. Node 18+. Pairs with a future `stacks/docker.md` (when it exists; pairing is enforced by the API at registration time per M1).
+
+### Layout
+
+```
+src/modules/docker/
+  manifest.json
+  index.js                  # barrel: prerequisite check + re-exports
+  PortRegistry.js
+  PortDiscovery.js
+  ContainerHealth.js
+  PortValidator.js
+  ContainerNaming.js
+  README.md                 # module-internal documentation
+```
+
+Tests live under `tests/modules/docker/` (one `*.test.js` per utility) and run via `node --test`.
+
+### Manifest
+
+```json
+{
+  "name": "docker",
+  "schemaVersion": 1,
+  "pairsWith": "docker",
+  "description": "Container and port management for git worktree workflows.",
+  "prerequisites": [
+    {"command": "docker --version", "errorHint": "Install Docker Desktop or Docker Engine."}
+  ],
+  "exports": ["PortRegistry", "PortDiscovery", "ContainerHealth", "PortValidator", "ContainerNaming"],
+  "stateKeys": ["port-registry"],
+  "configKey": "docker"
+}
+```
+
+### Project configuration
+
+A project using the Docker module declares `.claude/gan/modules/docker.yaml`:
+
+```yaml
+schemaVersion: 1
+containerPattern: "myapp-*"
+fallbackPort: 8080
+healthCheck:
+  path: "/health"
+  expectStatus: 200
+  timeoutSeconds: 30
+```
+
+Schema lives at `schemas/module-config-docker-v1.json`. Modules read this via `getResolvedConfig().modules.docker`.
+
+### Utilities
+
+#### PortRegistry
+
+Persists worktree → port + container-name mappings across runs.
+
+```javascript
+class PortRegistry {
+  // The registry persists state at .gan-state/modules/docker/port-registry.json
+  // via the Configuration API. Constructor takes no path argument; the module
+  // owns its zone-2 location.
+  register(worktreePath, port, containerName)
+  lookup(worktreePath)        // → { port, containerName } or null
+  getAll()                    // → array of all entries
+  release(worktreePath)       // remove entry
+}
+```
+
+State written through `setModuleState("docker", "port-registry", ...)`. The module is the sole writer of its registry; concurrent writes from two `/gan` runs are serialised through the Configuration MCP server.
+
+#### PortDiscovery
+
+Resolves a port for a container using a fallback chain.
+
+```javascript
+async function discoverPort(options) {
+  // Layers, in order:
+  // 1. options.envVar (if set and that env var is exported)
+  // 2. PortRegistry lookup for the current worktree
+  // 3. `docker ps --filter "name=<containerPattern>"` parsing
+  // 4. options.fallbackPort
+  // Throws if no port is discovered and no fallback is provided.
+}
+```
+
+#### ContainerHealth
+
+HTTP-level health check. Distinguishes "port bound" from "service ready":
+
+```javascript
+async function waitForHealthy(port, options) {
+  // Polls http://localhost:<port><options.path> until expected status code.
+  // Times out per options.timeoutSeconds. Returns true on success;
+  // throws TimeoutError on failure with diagnostic detail (last response,
+  // last error).
+}
+```
+
+#### PortValidator
+
+Platform-aware check that a port is free before binding:
+
+- macOS: uses `lsof -i :<port>`.
+- Linux: uses `ss -lnt sport = :<port>` (or `netstat` fallback).
+- Windows: stub that throws `PlatformNotSupported`.
+
+Used by `PortRegistry.register()` to refuse registering a port that's already in use by something the module didn't allocate.
+
+#### ContainerNaming
+
+Convention-driven container naming tied to worktree paths:
+
+```javascript
+function nameForWorktree(worktreePath, options) {
+  // Returns a deterministic, container-safe string derived from the
+  // worktree path's last segment plus a short hash. e.g.
+  //   /Users/.../proj-worktree-a1b2c3 → "proj-worktree-a1b2c3-9f8e"
+}
+```
+
+### Prerequisite check
+
+`index.js` runs `docker --version` before re-exporting utilities. Failure throws with the manifest's `errorHint`. An agent catching this can either fall back or raise a blocking concern.
+
+### Concurrency
+
+Two `/gan` runs on the same machine, in different worktrees of the same project, can both use the Docker module without colliding because:
+
+- Each worktree gets a different port (PortRegistry refuses duplicates; PortDiscovery picks a new one when needed).
+- Each worktree gets a different container name (ContainerNaming is deterministic on worktree path).
+- Registry writes go through the Configuration API, which serialises them.
+
+### Recovery semantics
+
+When a `/gan` run aborts, O2's recovery flow archives `.gan-state/runs/<run-id>/` but leaves `.gan-state/modules/docker/port-registry.json` intact. The next run sees the previous registry and can either reuse the port (worktree still alive) or release the entry (worktree gone).
+
+### What this module does not do
+
+- It does not build Docker images.
+- It does not generate Dockerfiles or docker-compose configs.
+- It does not orchestrate multi-container applications.
+- It does not declare security surfaces (that's `stacks/docker.md`'s job, when it exists).
+
+The module is utilities; the stack file (when authored) is policy.
+
+## Acceptance criteria
+
+- `src/modules/docker/manifest.json` validates against `schemas/module-manifest-v1.json`.
+- The module registers with the Configuration MCP server on startup; `listModules()` reports it.
+- Importing the module's barrel without Docker installed throws with the manifest's `errorHint`.
+- `PortRegistry` persists state under `.gan-state/modules/docker/port-registry.json` via the Configuration API; reading the file directly bypasses the API but yields the same JSON.
+- `PortDiscovery` resolves correctly from each layer of its fallback chain, validated by per-layer unit tests.
+- `ContainerHealth.waitForHealthy()` succeeds on a healthy fixture container and throws a `TimeoutError` with diagnostic detail on a hung container.
+- `PortValidator` correctly identifies a bound vs. free port on macOS and Linux; throws `PlatformNotSupported` on Windows.
+- `ContainerNaming.nameForWorktree()` is deterministic for the same input and produces container-name-safe strings.
+- O2's recovery flow against a fixture leaves `port-registry.json` byte-identical before and after.
+- Two concurrent `/gan` runs on the same machine, same project, different worktrees do not collide on ports or container names.
 
 ## Dependencies
 
-- F1 (filesystem layout — zone 2 for port registry)
-- F2 (API contract — for `pairsWith` invariant)
-- M1 (modules architecture — install/distribution model)
+- F1 (filesystem zones — port-registry lives in zone 2)
+- F2 (API contract — `get/setModuleState`, `getResolvedConfig`)
+- F3 (schema authority — module-manifest and module-config schemas)
+- M1 (modules architecture)
 
 ## Bite-size note
 
-This is not a single sprint. Each utility is independently testable. Recommend ordering: PortRegistry → PortDiscovery → ContainerHealth → PortValidator → ContainerNaming, as later utilities depend on earlier abstractions.
+Five utilities, each independently sprintable. Recommend ordering:
+1. PortRegistry (foundational; the others depend on it).
+2. ContainerNaming (pure function, no external dependencies).
+3. PortValidator (platform branching; isolated test surface).
+4. PortDiscovery (composes the previous three).
+5. ContainerHealth (composes none of the above; can land anytime).
+
+Per-utility unit tests land alongside each utility commit. Integration tests against the recovery flow land last.
