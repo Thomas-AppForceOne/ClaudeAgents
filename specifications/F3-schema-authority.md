@@ -62,13 +62,30 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 
 Invariants are implemented in code (R1) but live conceptually here so the catalog is centralised.
 
-### API versioning
+### Versioning across axes
 
-The API contract itself is versioned separately from per-file schemas. The current API version is exposed via `getApiVersion()` (F2). Mismatches between caller and server produce a structured `UnknownApiVersion` error.
+The framework tracks four independent version axes. They evolve on different cadences. This subsection reconciles them so reviewers and implementers can see the whole picture in one place.
 
-API version bumps happen when F2's function surface or error model changes. They are independent of file-schema bumps; both can change at different cadences.
+| Axis | Owner | Bumps when… | Read by | Authoritative spec |
+|---|---|---|---|---|
+| **Per-file `schemaVersion`** | F3 + each domain spec (one per file type) | Any change to a `schemas/<type>-vN.json` document. | The API at file load; lint at CI time. | F3 |
+| **API contract version** | F2 | F2's function surface, parameter shapes, return shapes, or structured-error model changes in any way. | Agents, CLI, third-party tooling via `getApiVersion()`. | F2 |
+| **MCP protocol version** | Anthropic's MCP spec | The MCP spec itself revises. | The MCP transport handshake. | external (Anthropic) |
+| **npm package semver** | R1 | Any release of `@claudeagents/config-server`, by usual semver rules — major bump for breaking API or schema changes, minor for additive, patch for fixes. | npm registry, `install.sh`. | R1 |
 
-This is also independent of MCP's own protocol version; both must agree, but they evolve separately.
+Bump propagation rules:
+
+- A bump on the **API contract version** forces a major npm bump (the package's externally-visible behavior changed).
+- A bump on **any per-file schemaVersion** is internal to the package. The npm version may still bump (major if the bump removes a field; minor if additive) but the api contract version need not.
+- An **MCP protocol bump** is forced upon the framework by the host. R1 must support the MCP versions Claude Code supports; agents and CLI inherit transparently.
+- The four axes are otherwise orthogonal. A schema can bump without an API-contract bump, and vice versa.
+
+Mismatches:
+
+- API contract mismatch (caller version ≠ server version): structured `UnknownApiVersion` error from F2.
+- File schemaVersion mismatch: structured `SchemaMismatch` error with file path and both versions.
+- MCP protocol mismatch: handled by the MCP transport layer; surfaces as a connection failure to the user.
+- npm semver: the install path's concern; users and CI pin via `package.json` ranges.
 
 ### Integration with R4 lint
 
