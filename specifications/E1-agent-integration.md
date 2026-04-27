@@ -85,6 +85,7 @@ The generator may write code in the worktree (its job); that is not API territor
 | Hardcoded "run the app" via stack-specific commands. | Reads `snapshot.activeStacks[*].buildCmd` separately from test and lint. |
 | No project-level evaluator extension point. | Runs `snapshot.mergedSplicePoints["evaluator.additionalChecks"]` after the stack's own commands. |
 | Cross-contamination risk in polyglot repos. | Applies stack-scoped fields only to files inside that stack's `scope` per C2. |
+| Monolithic prompt mixing deterministic decisions and LLM analysis. | **Carves out a deterministic core** at `src/agents/evaluator-core/` exposing pure functions that produce a structured evaluator plan from typed inputs (snapshot + sprint plan + worktree state). The LLM portion of the evaluator runs after the core, consuming its output. E3's harness exercises the core directly. |
 | (No config writes.) | (No config writes; produces the feedback JSON the discriminator consumes.) |
 
 #### gan-recover (the agent role described in O2)
@@ -104,14 +105,14 @@ The full reconception of O2 to fit F1 lives in O2's revision (which depends on t
 **Single coordinated PR**, internally split into per-agent commits for review. Recommended commit order:
 
 1. R1 in place (prerequisite — not E1's work, but E1 cannot land without it).
-2. Orchestrator (SKILL.md) rewrite: validateAll → getResolvedConfig → snapshot → spawn. The capability harness (E3) immediately starts being meaningful.
+2. Orchestrator (SKILL.md) rewrite: validateAll → getResolvedConfig → snapshot → spawn. The evaluator-pipeline harness (E3) immediately starts being meaningful.
 3. gan-evaluator rewrite (largest surface, highest test coverage in E3).
 4. gan-contract-proposer rewrite (retires the hardcoded checklist).
 5. gan-generator rewrite (smallest surface change).
 6. gan-planner rewrite.
 7. O2 revision lands separately afterwards (per its header note).
 
-The capability test suite (E3) gates the PR: a passing capability check means each agent's rewrite preserves behavior on every fixture.
+The evaluator-pipeline harness (E3) gates the PR: a passing evaluator-pipeline check means each agent's rewrite preserves behavior on every fixture.
 
 Incremental landing is **not** recommended. A half-rewritten agent set leaves the framework in a state where some agents are reading files and others are reading the snapshot, with no guarantee they agree. The risk of subtle bugs outweighs the review-size benefit.
 
@@ -134,7 +135,7 @@ Incremental landing is **not** recommended. A half-rewritten agent set leaves th
 - R1 (the API the agents consume)
 - C1, C2, C3, C4, C5 (data shapes the snapshot exposes)
 
-E2 (stack extraction) and E3 (capability harness) are companion specs in Phase 3 — E1's per-agent rewrites coordinate with E2's stack files at implementation time, and the rewrite's correctness is gated by E3's harness. None of those dependencies prevent E1 from being authored first; the spec text describes the rewrite pattern abstractly.
+E2 (stack extraction) and E3 (evaluator-pipeline harness) are companion specs in Phase 3 — E1's per-agent rewrites coordinate with E2's stack files at implementation time, and the rewrite's correctness is gated by E3's harness. None of those dependencies prevent E1 from being authored first; the spec text describes the rewrite pattern abstractly.
 
 ## Bite-size note
 
@@ -146,4 +147,4 @@ Per the migration approach: one coordinated PR, but each agent is its own sprint
 4. gan-generator (~ one sprint).
 5. gan-planner (~ one sprint).
 
-The full PR is then five sprint slices stitched together with capability tests gating each merge. O2's revision is a separate sprint that follows.
+The full PR is then five sprint slices stitched together with evaluator-pipeline tests gating each merge. O2's revision is a separate sprint that follows.

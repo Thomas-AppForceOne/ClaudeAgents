@@ -21,14 +21,14 @@ Once extracted, the agent prompts drop their hardcoded lists and rely on the act
 
 **The contract-proposer's hardcoded security checklist is also retired.** The proposer today enumerates ~10 generic security criteria directly in its prompt. After this extraction, all security criteria originate from active stacks' `securitySurfaces` via the template-instantiation protocol defined in spec C1. The proposer retains its sprint-shape logic (threshold selection, rationale writing) but owns zero stack-specific content.
 
-Correctness of the extraction is gated by the capability test harness (E3) — a separate spec covering the fixture layout, golden files, and normalisation rules.
+Correctness of the extraction is gated by the evaluator-pipeline harness (E3) — a separate spec covering the fixture layout, evaluator-plan goldens, and normalisation rules.
 
 ## Acceptance criteria
 
 - Running `/gan` on each fixture in `tests/fixtures/stacks/` produces a feedback JSON that matches the fixture's golden file (after normalisation).
 - No agent prompt still contains hardcoded file extensions, audit commands, or stack-specific security criteria. Concretely: `gan-evaluator.md` must contain zero references to `kt`, `kts`, `gradle`, `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, or any other tool-specific token. The same applies to every other agent prompt.
 - `gan-contract-proposer.md` (or whichever agent today owns the security checklist) contains zero hardcoded security criteria. Every security criterion in a generated contract traces to a `securitySurfaces` entry in an active stack.
-- `scripts/capability-check` (the reference implementation) produces an empty normalised diff for every fixture in `tests/fixtures/stacks/` when run in CI.
+- `scripts/evaluator-pipeline-check` (E3's reference implementation) produces an empty normalised diff for every fixture in `tests/fixtures/stacks/` when run in CI.
 
 ## Dependencies
 

@@ -37,7 +37,7 @@ The MCP server and tooling that fulfill Phases 0–1.
 - [R1-config-mcp-server.md](R1-config-mcp-server.md) — Node 18+ MCP server implementing F2.
 - [R2-installer.md](R2-installer.md) — `install.sh`, MCP registration, zone preparation.
 - [R3-cli-wrapper.md](R3-cli-wrapper.md) — `gan validate`, `gan config`, `gan stacks`.
-- [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, capability-check runner, CI workflows.
+- [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, evaluator-pipeline-check runner, pair-names check, CI workflows.
 
 ## Revision break — post-R contract audit
 
@@ -57,7 +57,7 @@ Existing agents start using the new system.
 
 - [E1-agent-integration.md](E1-agent-integration.md) — Orchestrator and agent prompt rewrites. SKILL.md, gan-planner, gan-contract-proposer, gan-generator, gan-evaluator, gan-recover all consume the Configuration API instead of parsing files. Single coordinated PR with per-agent sprint slices.
 - [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
-- [E3-capability-test-harness.md](E3-capability-test-harness.md) — Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation.
+- [E3-evaluator-pipeline-harness.md](E3-evaluator-pipeline-harness.md) — Tests the evaluator's *deterministic core* (snapshot → active stacks → security surfaces → commands → keywords). Fixtures + hand-authored evaluator-plan goldens. No LLM in CI. Optional E4 (LLM-eval suite, if ever needed) is a separate, future, non-gating spec.
 
 **Implementation order within Phase 3 (numbering is "spec authored first," not implementation order):** E1 (orchestrator + agent rewrites) → E3 (harness + bootstrap fixtures) → E2 (extract built-in stacks under the harness). E2 is gated by E3 per E2's own text; E3 cannot test the rewrites until E1 lands.
 
@@ -143,7 +143,7 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 - **The Configuration API is a black box.** Agents know function names; they do not know storage, schemas, or merge logic. Specs F2 and R1 own the contract.
 - **Maintainer tooling assumes Node 18+.** User-facing behavior is owned by the agent at runtime. iOS, embedded C++, Swift-only developers never need Node to use `/gan`.
 - **Pre-1.0 WIP project.** No backward-compatibility guarantees; any schema change bumps `schemaVersion`. No transitional dual-path windows.
-- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-capability}.yml`. New categories follow `test-<category>.yml`.
+- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas}.yml`. New categories follow `test-<category>.yml`.
 - **Module ↔ stack name pairing** is enforced by the Configuration API at registration time. No separate lint subsystem needed.
 
 ## Out of scope for this roadmap

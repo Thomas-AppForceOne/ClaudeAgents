@@ -18,7 +18,7 @@ scripts/
   publish-schemas/
     index.js           # extracts JSON Schemas from spec annotations,
                        # writes schemas/<type>-vN.json deterministically
-  capability-check/
+  evaluator-pipeline-check/
     index.js           # E3's reference implementation
   pair-names/
     index.js           # standalone pairsWith consistency check
@@ -49,7 +49,7 @@ The schemas in `schemas/<type>-vN.json` are authored as JSON Schema documents in
 
 This script exists so spec content remains the single source of truth even though the schemas are physical files for runtime use.
 
-### `capability-check`
+### `evaluator-pipeline-check`
 
 E3's reference implementation. Runs every fixture under `tests/fixtures/stacks/`, captures the evaluator output, normalises (strip timestamps, sort unordered arrays, drop tokens), diffs against the fixture's golden file. Fails on any non-empty diff.
 
@@ -65,7 +65,7 @@ Per the roadmap's locked CI structure:
 .github/workflows/
   shared-setup.yml       # reusable: checkout + Node 18 + npm ci + cache
   test-modules.yml       # runs `node --test tests/modules/**`
-  test-capability.yml    # runs scripts/capability-check
+  test-evaluator-pipeline.yml    # runs scripts/evaluator-pipeline-check
   test-stack-lint.yml    # runs scripts/lint-stacks + scripts/pair-names
   test-schemas.yml       # runs scripts/publish-schemas in dry-run mode
 ```
@@ -83,7 +83,7 @@ Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category
 
 - `node scripts/lint-stacks` validates every `stacks/*.md` and exits with structured failure when any file violates the schema.
 - `node scripts/publish-schemas --dry-run` exits non-zero if the on-disk schemas drift from the authoring source.
-- `node scripts/capability-check` exits 0 with empty normalised diff for the bootstrap fixture set; exits non-zero with the diff on stderr otherwise.
+- `node scripts/evaluator-pipeline-check` exits 0 with empty normalised diff for the bootstrap fixture set; exits non-zero with the diff on stderr otherwise.
 - `node scripts/pair-names` exits 0 when every shared name has consistent `pairsWith` declarations; non-zero otherwise.
 - The five CI workflows under `.github/workflows/` run on every push and PR; they all reuse `shared-setup.yml`.
 - No CI workflow pins a Node version independently of `shared-setup.yml`.
@@ -92,8 +92,8 @@ Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category
 
 - F3 (schemas this tooling validates against)
 
-E3 owns the capability-check fixture/golden/normalisation format; R4's `scripts/capability-check` implementation depends on E3 at implementation time, but the R4 spec catalogues the script's *existence* without committing to format details.
+E3 owns the capability-check fixture/golden/normalisation format; R4's `scripts/evaluator-pipeline-check` implementation depends on E3 at implementation time, but the R4 spec catalogues the script's *existence* without committing to format details.
 
 ## Bite-size note
 
-Each script is one sprint. Recommend order: `lint-stacks` first (immediately useful, smallest), then `pair-names`, then `capability-check`, then `publish-schemas`. Workflow files land alongside the scripts they invoke.
+Each script is one sprint. Recommend order: `lint-stacks` first (immediately useful, smallest), then `pair-names`, then `evaluator-pipeline-check`, then `publish-schemas`. Workflow files land alongside the scripts they invoke.
