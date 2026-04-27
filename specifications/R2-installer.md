@@ -1,30 +1,76 @@
 # R2 — Installer
 
-**Status:** Stub. Drafted in Phase 2.
+## Problem
 
-## Purpose
+ClaudeAgents has many moving parts: agents, skills, the Configuration MCP server (R1), CLI (R3), filesystem zones (F1), Claude Code config integration. A user dropping into the framework should not have to assemble these pieces by hand. The installer's job is one-script setup so the user runs one command, restarts Claude Code once, and `/gan` works.
 
-`install.sh` (or equivalent) bootstraps ClaudeAgents on a user's machine in one run. After successful execution and one Claude Code restart, `/gan` is fully operational.
+## Proposed change
 
-## Anticipated content
+`install.sh` at the repo root. Bash, POSIX-compatible. Idempotent. Reversible via `install.sh --uninstall`.
 
-- Prerequisite checks: Node 18+, git, Claude Code presence.
-- Steps performed:
-  1. Symlink agents and skills into the user's Claude Code config.
-  2. Install the R1 MCP server (npm install -g or equivalent).
-  3. Register the MCP server in Claude Code's config.
-  4. Prepare filesystem zones (F1) for the current project if applicable.
-  5. Run `validateAll()` against the user's config; abort install on validation failure.
-- Friction acknowledged: one Claude Code restart is required after install for the MCP server to be loaded. First `/gan` invocation may show a one-time MCP permission prompt.
-- Idempotency: running `install.sh` twice is safe; second run upgrades or no-ops.
-- Uninstaller: `install.sh --uninstall` reverses the install cleanly.
+### Responsibilities
+
+1. **Prerequisite checks.** Verify Node 18+, git, and Claude Code are installed. Bail with a clear actionable error on each missing prerequisite (include the install command for that platform).
+2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
+3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant).
+4. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
+5. **Prepare filesystem zones for the current project (if `install.sh` is run inside a git repo).** Create `.gan-state/` and `.gan-cache/` and add them to `.gitignore` if not already present. `.claude/gan/` is left alone (created lazily when the user first authors an overlay).
+6. **Run `validateAll()` against the current project.** A first sanity check; reports any pre-existing config issues. A failure here is a warning, not an installer abort, since the project may legitimately have no overlays yet.
+7. **Print a final status block.** "ClaudeAgents installed. Restart Claude Code once; on first `/gan` invocation, approve the MCP server when prompted. After that, you're ready."
+
+### Friction profile
+
+The user accepts:
+
+- One Claude Code restart after `install.sh` finishes (Claude Code loads the new MCP server entry on launch).
+- One MCP-server permission prompt on the first `/gan` invocation after install (Claude Code's standard security flow for newly-registered servers).
+
+Both are one-time. Subsequent runs are friction-free.
+
+### Idempotency
+
+Running `install.sh` twice in a row is safe. The second run:
+
+- Re-verifies prerequisites.
+- Re-applies symlinks (no-op if already present).
+- Updates the MCP server version pin if it changed in the repo.
+- Validates the existing project config.
+- Reports "already installed (versions match)" or "upgraded from <old> to <new>".
+
+### Uninstall
+
+`install.sh --uninstall` reverses the install:
+
+- Removes the agent and skill symlinks.
+- Removes the MCP server entry from Claude Code's config (does not uninstall the npm package, since other tools may depend on it).
+- Leaves filesystem zones intact (they contain user state; the user opts in to their removal).
+- Prints the equivalent npm and rm commands needed to clean up further if desired.
+
+### Failure handling
+
+Any failure halts the installer with a non-zero exit code, an error message naming what failed, and a remediation hint. The installer never leaves the system in a half-installed state: each step is gated on the previous step's success, and a step that creates state (npm install, MCP config edit) is reversed before exit if a later step in the same install phase fails.
+
+### What the installer does not do
+
+- It does not modify the user's shell profile (no PATH edits beyond what npm-global already provides).
+- It does not install Node, git, or Claude Code. Those are prerequisites the user manages.
+- It does not configure project-specific overlays. `.claude/gan/project.md` is the user's deliberate authoring step.
+
+## Acceptance criteria
+
+- A clean machine with prerequisites installed reaches "ready to run `/gan` after one Claude Code restart" with one execution of `install.sh`.
+- `install.sh` exits non-zero with a clear message when any prerequisite is missing, naming the prerequisite and an install hint.
+- Running `install.sh` twice does not duplicate MCP config entries, does not create duplicate symlinks, and does not reinstall an already-current npm package.
+- `install.sh --uninstall` removes the symlinks and MCP config entry; subsequent `/gan` invocations report "ClaudeAgents not installed".
+- A failure mid-install (simulated by killing the npm step) leaves the system either fully pre-install or fully post-install, never half-configured.
+- The installer does not touch `.claude/gan/`, `.gan-state/runs/`, or any user data not created by itself.
 
 ## Dependencies
 
 - F1 (zones to prepare)
-- F2 (API contract — installer verifies the server implements it)
+- F2 (API contract — installer's `validateAll()` call uses this)
 - R1 (MCP server to install)
 
 ## Bite-size note
 
-Sprintable as: skeleton install.sh → MCP registration → zone preparation → uninstall logic → idempotency tests.
+Sprintable as: prerequisite checks → symlink logic → npm install → Claude Code config edit → zone preparation → validation call → uninstall path → idempotency tests.
