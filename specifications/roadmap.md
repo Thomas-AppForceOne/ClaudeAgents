@@ -17,8 +17,8 @@ Specs are organised by **phase code** (F = foundation, C = configuration domains
 System contracts that every later spec depends on.
 
 - [F1-filesystem-layout.md](F1-filesystem-layout.md) — Three project zones (`.claude/gan/`, `.gan-state/`, `.gan-cache/`) with single-owner lifecycles. Retires the old `.gan/` directory.
-- [F2-config-api-contract.md](F2-config-api-contract.md) — *Stub.* Black-box function surface, MCP binding, validation timing, install/restart story, error model.
-- [F3-schema-authority.md](F3-schema-authority.md) — *Stub.* JSON Schema location, `schemaVersion` semantics, lint integration.
+- [F2-config-api-contract.md](F2-config-api-contract.md) — Black-box function surface, MCP binding, validation timing, install/restart story, error model.
+- [F3-schema-authority.md](F3-schema-authority.md) — JSON Schema location, `schemaVersion` semantics, lint integration.
 
 ## Phase 1 — Configuration domains
 
@@ -34,10 +34,10 @@ Data models the API exposes.
 
 The MCP server and tooling that fulfill Phases 0–1.
 
-- [R1-config-mcp-server.md](R1-config-mcp-server.md) — *Stub.* Node 18+ MCP server implementing F2.
-- [R2-installer.md](R2-installer.md) — *Stub.* `install.sh`, MCP registration, zone preparation.
-- [R3-cli-wrapper.md](R3-cli-wrapper.md) — *Stub.* `gan validate`, `gan config`, `gan stacks`.
-- [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — *Stub.* Lint script, schema publisher, capability-check runner, CI workflows.
+- [R1-config-mcp-server.md](R1-config-mcp-server.md) — Node 18+ MCP server implementing F2.
+- [R2-installer.md](R2-installer.md) — `install.sh`, MCP registration, zone preparation.
+- [R3-cli-wrapper.md](R3-cli-wrapper.md) — `gan validate`, `gan config`, `gan stacks`.
+- [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, capability-check runner, CI workflows.
 
 ## Revision break — post-R contract audit
 
@@ -78,8 +78,8 @@ This revision break is a checkpoint, not a deliverable phase: no new specs are a
 
 Runtime utility libraries; independent of Phases 0–3 conceptually.
 
-- [M1-modules-architecture.md](M1-modules-architecture.md) — *Pending rewrite.* Module install path, `pairsWith` enforcement via API, distribution. Today's MODULES_ARCHITECTURE.md content; full rewrite scheduled.
-- [M2-docker-module.md](M2-docker-module.md) — *Stub.* PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming. Persists state in `.gan-state/modules/docker/`.
+- [M1-modules-architecture.md](M1-modules-architecture.md) — Module manifest, lifecycle, `pairsWith` enforcement via API, filesystem zone boundaries, distribution.
+- [M2-docker-module.md](M2-docker-module.md) — PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming. Persists state in `.gan-state/modules/docker/`.
 
 ## Phase 5 — New stacks
 
@@ -87,7 +87,7 @@ Apply the system to ecosystems beyond the bootstrap set.
 
 - [S1-android-stack.md](S1-android-stack.md) — Android client stack file.
 - [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
-- [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — *Stub.* iOS Swift / SwiftUI stack.
+- [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — iOS Swift / SwiftUI stack.
 
 ## Revision break — post-S schema audit
 
@@ -121,7 +121,7 @@ Hands-on customisation surface.
 
 ## Bite-size sizing
 
-Every spec aims to be small enough that one sprint of focused work delivers a complete, mergeable result. Where a spec covers multiple concerns (currently C3 and C4 mix schema with UX), a future content commit splits it. Sprint-level splits are noted at the end of each spec's "Bite-size note" or status banner.
+Every spec aims to be small enough that one sprint of focused work delivers a complete, mergeable result. Sprint-level slicing within a spec is noted in each spec's "Bite-size note" section.
 
 ## Cross-cutting principles
 
