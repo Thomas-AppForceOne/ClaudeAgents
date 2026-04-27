@@ -145,9 +145,10 @@ Array of file extensions (no leading dot) the evaluator's secrets grep inspects.
 ### cacheEnv
 Array of `{ envVar, valueTemplate }` objects. The skill orchestrator exports each entry before running any command from this stack, substituting `<worktree>` with the absolute worktree path.
 
-**Conflict resolution (polyglot repos):** when two active stacks declare `cacheEnv` entries with the same `envVar`:
+**Conflict resolution (polyglot repos).** When two active stacks declare `cacheEnv` entries with the same `envVar`:
 1. If the `valueTemplate` strings are identical, export once. No conflict.
-2. If they differ, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user must resolve via an overlay (spec C3 `stack.override` or a project-tier replacement per spec C5).
+2. If they differ, check the project overlay's `stack.cacheEnvOverride` (per C3) for a project-supplied value for that stack/envVar. If present, the override wins and no error is raised.
+3. If no override is supplied, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user resolves it by adding a `stack.cacheEnvOverride` entry to `.claude/gan/project.md` for the stack whose value should win (or supplying a third value).
 
 ### auditCmd
 Object with:

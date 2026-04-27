@@ -16,17 +16,17 @@ Each level merges into the resolved view from the level above, producing a cumul
 
 ## Merge rules per splice point
 
-Applied at both user ⊕ default and project ⊕ user-resolved steps. Unless `discardInherited` is set for the block or field, these are the default rules.
+The per-splice-point merge rules are catalogued authoritatively in **[C3's splice-point catalog](C3-overlay-schema.md#splice-point-catalog-authoritative)**. This spec does not duplicate that table; it specifies the cascade *mechanics* (how the rules in C3 are applied across tiers) without restating each rule.
 
-| Splice point | Shape | Merge rule |
-|---|---|---|
-| `stack.override` | list of stack names | **Union, dedup by string.** No element-level conflict possible. |
-| `proposer.additionalCriteria` | list of `{name, description, threshold}` | **Union, keyed by `name`.** On duplicate `name` between tiers, **higher tier wins** (its `description` and `threshold` replace the lower tier's entry for that name). |
-| `proposer.additionalContext` | list of file paths | **Project-only.** User overlay declaring this is a hard error per C3. |
-| `planner.additionalContext` | list of file paths | **Project-only.** Same rule. |
-| `generator.additionalRules` | list of strings | **Union, dedup by exact string.** No conflict model. |
-| `evaluator.additionalChecks` | list of `{command, on_failure}` | **Union, keyed by `command`.** On duplicate `command` between tiers, **higher tier wins** (its `on_failure` replaces the lower tier's). |
-| `runner.thresholdOverride` | integer | **Higher tier wins if defined.** Any non-empty higher-tier value replaces the lower-tier value. |
+The rules in C3 apply at both user ⊕ default and project ⊕ user-resolved steps. Unless `discardInherited` is set for the block or field, the catalog's "merge rule" column gives the operative semantics.
+
+**Common patterns:**
+
+- **Union, dedup by string** (e.g. `generator.additionalRules`): concatenate; remove duplicate strings; preserve lower-tier-first ordering.
+- **Union, keyed by `<key>`** (e.g. `proposer.additionalCriteria` keyed by `name`, `evaluator.additionalChecks` keyed by `command`): concatenate by key; on duplicate key, higher tier replaces lower; positioning rule below.
+- **Higher tier wins if defined** (e.g. `runner.thresholdOverride`): scalar override; any non-empty higher-tier value replaces the lower-tier value.
+- **Project-only** (e.g. `additionalContext`, `stack.override`, `stack.cacheEnvOverride`): user overlay declaring the field is a hard error.
+- **Deep merge** (e.g. `stack.cacheEnvOverride`): map-of-map; project keys win on duplicate at any depth; otherwise additive.
 
 "Higher tier" means closer to the leaf: project > user > default. List merges preserve order: lower-tier entries appear first, higher-tier entries appended after, so downstream consumers that care about list order see a predictable sequence.
 

@@ -48,21 +48,38 @@ runner:
 ```
 ```
 
-## Splice-point reference
+## Splice-point catalog (authoritative)
 
-| Path | Shape | Default | Allowed in user overlay |
-|---|---|---|---|
-| `stack.override` | list of stack names | `[]` | **No (forces detection bypass; user-tier values would silently disable auto-detection in every project)** |
-| `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` | Yes |
-| `proposer.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
-| `planner.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
-| `generator.additionalRules` | list of strings | `[]` | Yes |
-| `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` | Yes |
-| `runner.thresholdOverride` | integer | agent's baked-in threshold | Yes |
+This table is the **single source of truth** for every overlay splice point — its shape, its default, its tier-allowance, and its merge rule across the cascade. Other specs (C4 for cascade narrative, O1 for `mergedSplicePoints`, U1 / U2 for UX) reference this catalog rather than restating it. Adding a new splice point means editing this table and (if applicable) C4's narrative — never editing UX prose to keep specs consistent.
 
-A user overlay declaring `additionalContext` or `stack.override` is a hard error at load time per F2's structured error model. The reasoning differs:
-- `additionalContext`: the listed paths are project-relative and meaningless at user scope.
-- `stack.override`: per C2, any non-empty value for this field replaces auto-detection. A user-tier value would silently disable auto-detection in every project the user touches — almost never the intent.
+| Path | Shape | Default | Allowed in user overlay | Merge rule (default → user → project) |
+|---|---|---|---|---|
+| `stack.override` | list of stack names | `[]` | **No** (per-rationale below) | Project-only; user value rejected at load |
+| `stack.cacheEnvOverride` | map `<stack-name> → <envVar> → <valueTemplate>` | `{}` | Yes | Deep merge; project key wins on duplicate. Lets a project override one envVar of one stack without replacing the whole stack file. Resolves the cacheEnv conflict scenario in C1. |
+| `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` | Yes | Union, keyed by `name`. Higher tier wins on duplicate. |
+| `proposer.additionalContext` | list of file paths (per U3) | `[]` | **No** (paths are project-relative) | Project-only |
+| `planner.additionalContext` | list of file paths (per U3) | `[]` | **No** (paths are project-relative) | Project-only |
+| `generator.additionalRules` | list of strings | `[]` | Yes | Union, dedup by exact string |
+| `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` | Yes | Union, keyed by `command`. Higher tier wins on duplicate. Execution order = merge order. |
+| `runner.thresholdOverride` | integer | agent's baked-in threshold | Yes | Higher tier wins if defined |
+
+**User-overlay forbidden fields.** A user overlay declaring `additionalContext`, `stack.override`, or `stack.cacheEnvOverride` is a hard error at load time per F2's structured error model. The reasoning differs:
+- `additionalContext`: paths are project-relative and meaningless at user scope.
+- `stack.override`: per C2, any non-empty value replaces auto-detection. A user-tier value silently disables auto-detection in every project the user touches — almost never the intent.
+- `stack.cacheEnvOverride`: targets a specific stack's `cacheEnv`; the right value depends on the project's worktree paths and tooling, not the user's preference.
+
+**`stack.cacheEnvOverride` example.**
+
+```yaml
+stack:
+  cacheEnvOverride:
+    gradle:
+      GRADLE_USER_HOME: "<worktree>/.gan-cache/our-shared-gradle"
+    web-node:
+      PNPM_HOME: "<worktree>/.gan-cache/pnpm-pinned"
+```
+
+This lets a polyglot project resolve a `cacheEnv` collision (per C1's "Conflict resolution" rule) by overriding one envVar's `valueTemplate` without copying an entire stack file into `.claude/gan/stacks/`. The final `cacheEnv` for each stack is computed by deep-merging the override into the stack file's declared `cacheEnv`.
 
 ## `discardInherited`
 
