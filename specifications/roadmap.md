@@ -1,8 +1,16 @@
 # ClaudeAgents — Roadmap
 
-Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, S = new stacks, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order.
+## End state
 
-The Configuration API is the architectural backbone: agents access framework state only through it; storage details are a black box behind it. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
+ClaudeAgents is a framework for AI-driven software development workflows — sprint planning, code generation, review, verification — that works on any technology stack. When this redesign is fully shipped, a developer in any ecosystem (Swift on iOS, Kotlin on Android, embedded C++, Python, Rust, web/node, and more) installs ClaudeAgents once, restarts Claude Code once, and `/gan` operates on their project. Adding support for a new ecosystem is a file drop, not a code change. Developers on non-Node ecosystems never need to install Node to use the framework.
+
+The architectural backbone is a **Configuration API** that hides storage, validation, and merging behind a small set of named functions. Agents call those functions; they do not parse files, do not know schemas, and do not enumerate tiers. Stack files declare per-ecosystem behavior; overlays apply per-user and per-project customization through a cascading merge; runtime utility libraries (modules) provide imperative helpers paired by name with their stack files. The project filesystem is split into config, durable state, and cache zones with non-overlapping lifecycles, so persistent module state cannot collide with per-run orchestration data. Configuration files are hand-editable; the API validates on read and surfaces structured errors when something is wrong.
+
+The phases below trace the implementation path from foundations outward. Each spec is sized for a single sprint of focused work.
+
+## How to read the spec set
+
+Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, S = new stacks, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
 
 ## Phase 0 — Foundations
 
