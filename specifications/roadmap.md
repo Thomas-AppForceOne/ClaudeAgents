@@ -2,7 +2,7 @@
 
 ## End state
 
-ClaudeAgents is a framework for AI-driven software development workflows — sprint planning, code generation, review, verification — that works on any technology stack. When this redesign is fully shipped, a developer in any ecosystem (Swift on iOS, Kotlin on Android, embedded C++, Python, Rust, web/node, and more) installs ClaudeAgents once, restarts Claude Code once, and `/gan` operates on their project. Adding support for a new ecosystem is a file drop, not a code change. Developers on non-Node ecosystems never need to install Node to use the framework.
+ClaudeAgents is a framework for AI-driven software development workflows — sprint planning, code generation, review, verification — that works on any technology stack. When this redesign is fully shipped, a developer in any ecosystem (Swift on iOS, Kotlin on Android, embedded C++, Python, Rust, web/node, and more) installs ClaudeAgents once, restarts Claude Code once, and `/gan` operates on their project. Adding support for a new ecosystem is a file drop, not a code change. Node is required once at install time (the framework is distributed via npm); after install, daily workflow on a non-Node ecosystem never touches Node.
 
 The architectural backbone is a **Configuration API** that hides storage, validation, and merging behind a small set of named functions. Agents call those functions; they do not parse files, do not know schemas, and do not enumerate tiers. Stack files declare per-ecosystem behavior; overlays apply per-user and per-project customization through a cascading merge; runtime utility libraries (modules) provide imperative helpers paired by name with their stack files. The project filesystem is split into config, durable state, and cache zones with non-overlapping lifecycles, so persistent module state cannot collide with per-run orchestration data. Configuration files are hand-editable; the API validates on read and surfaces structured errors when something is wrong.
 
@@ -59,20 +59,22 @@ Existing agents start using the new system.
 - [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
 - [E3-capability-test-harness.md](E3-capability-test-harness.md) — Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation.
 
-## Revision break — post-E1 spec audit
+**Implementation order within Phase 3 (numbering is "spec authored first," not implementation order):** E1 (orchestrator + agent rewrites) → E3 (harness + bootstrap fixtures) → E2 (extract built-in stacks under the harness). E2 is gated by E3 per E2's own text; E3 cannot test the rewrites until E1 lands.
 
-E1 is the largest behavioral change in the roadmap and several downstream specs reference its outcome without yet knowing the concrete details. Before continuing past Phase 3, every spec that carries an "E1 dependency" note is re-audited against E1's actual implementation. Specs are revised in place; no new files are created here.
+## Revision break — post-E1 audit + O2 first prescriptive revision
+
+E1 is the largest behavioral change in the roadmap and several downstream specs reference its outcome without yet knowing the concrete details. Before continuing past Phase 3, every spec that carries an "E1 dependency" note is re-audited against E1's actual implementation. Most are revised in place. **O2 gets its first prescriptive authoring here — not just an audit.**
 
 Specs to revisit, with what to verify:
 
 - **O1** — confirm the orchestrator's startup-log shape matches what E1's coordinator actually emits; refine output format if needed.
-- **O2** — full reconception of the recovery flow under F1's zone layout and E1's snapshot model. The current spec is explicitly marked "descriptive of intent, not prescriptive"; this is where it becomes prescriptive.
+- **O2** — full reconception of the recovery flow under F1's zone layout and E1's snapshot model. The current spec is explicitly marked "descriptive of intent, not prescriptive"; this is where it becomes prescriptive. Real authoring work, not editing.
 - **S1, S2** — validate that contract-proposer and evaluator behavior described in acceptance criteria matches what the rewritten agents do; update criteria if E1 surfaced different patterns.
 - **U3** — validate that planner/proposer consumption of `additionalContext` works end-to-end via the snapshot; update the spec if the consumption pattern differs from what's currently described.
 
 Plus a general re-audit of every post-E1 spec for ambiguities E1 implementation may have surfaced.
 
-This revision break is a checkpoint, not a deliverable phase: no new specs are added, but no Phase 4 work begins until the audit closes. Doing the audit now prevents Phases 4–8 from being built on assumptions that turn out to be wrong.
+This break is a checkpoint with one substantive new authoring (O2). No Phase 4 work begins until both the audit and O2's revision close. Doing this now prevents Phases 4–8 from being built on assumptions that turn out to be wrong.
 
 ## Phase 4 — Modules
 
@@ -80,6 +82,19 @@ Runtime utility libraries; independent of Phases 0–3 conceptually.
 
 - [M1-modules-architecture.md](M1-modules-architecture.md) — Module manifest, lifecycle, `pairsWith` enforcement via API, filesystem zone boundaries, distribution.
 - [M2-docker-module.md](M2-docker-module.md) — PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming. Persists state in `.gan-state/modules/docker/`.
+
+## Revision break — post-M module surface audit
+
+M1 + M2 are the first time F2's module surface (`registerModule`, `getModuleState`, `setModuleState`, the `pairsWith` invariant) is exercised against real modules. R1's implementation of these in Phase 2 had no concrete module to validate against. Before Phase 5, the module-related parts of F2, F3, R1, M1 are re-audited against M2's actual implementation.
+
+Specs to revisit, with what to verify:
+
+- **F2** — confirm the module-state functions handle the project-rooting story correctly (see post-R audit) and that registration timing is unambiguous.
+- **F3** — confirm `module-manifest-v1.json` and any module-config schemas (e.g. `module-config-docker-v1.json`) cover what M2 actually needs.
+- **R1** — confirm the `pairsWith` invariant catches the failure modes M2 surfaces; confirm `registerModule` lifecycle (when it runs, idempotency, error handling) matches what M1 needs.
+- **M1** — refine the lifecycle prose if M2 implementation surfaced timing/sequencing details the architecture spec missed.
+
+Same checkpoint discipline as the other revision breaks: specs revised in place; no Phase 5 work begins until the audit closes.
 
 ## Phase 5 — New stacks
 
