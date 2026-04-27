@@ -43,7 +43,7 @@ The MCP server and tooling that fulfill Phases 0–1.
 
 Existing agents start using the new system.
 
-- **E1 (agent prompt rewrite, no spec doc).** Rewrite gan-planner, gan-generator, gan-evaluator, gan-contract-proposer, SKILL.md, and O2's recovery flow to call the Configuration API instead of parsing files. Single coordinated PR.
+- [E1-agent-integration.md](E1-agent-integration.md) — Orchestrator and agent prompt rewrites. SKILL.md, gan-planner, gan-contract-proposer, gan-generator, gan-evaluator, gan-recover all consume the Configuration API instead of parsing files. Single coordinated PR with per-agent sprint slices.
 - [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
 - [E3-capability-test-harness.md](E3-capability-test-harness.md) — Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation.
 
