@@ -57,6 +57,8 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 | `pairsWith.consistency` | M1 | If `src/modules/<name>/` and `stacks/<name>.md` both exist, both must declare `pairsWith` referring to each other; the names must match. |
 | `cacheEnv.no_conflict` | C1 | Across active stacks, no two stacks may declare `cacheEnv` entries with the same `envVar` and different `valueTemplate`. |
 | `additionalContext.path_resolves` | U3 | Each path listed in `planner.additionalContext` or `proposer.additionalContext` resolves to a readable file at validation time. Warning level (file may legitimately be missing during early authoring). |
+| `path.no_escape` | F4 | Every path declared in any committed config file (today: `planner.additionalContext`, `proposer.additionalContext`; future splice points must be added) resolves to a real path that is a descendant of the project root. Symlinks pointing outside the root are escapes. Hard error (`PathEscape`). |
+| `trust.approved` | F4 | If any committed file contains a command-declaring field and the project's content hash is not in the trust cache, validation fails with `UntrustedOverlay`. `GAN_TRUST=unsafe-trust-all` opts out. |
 | `overlay.tier_apiVersion` | C3 | Each overlay tier's `schemaVersion` matches the API's known overlay schema version. |
 | `stack.tier_apiVersion` | C1 | Each active stack file's `schemaVersion` matches the API's known stack schema version. |
 

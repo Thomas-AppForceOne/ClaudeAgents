@@ -81,7 +81,7 @@ All errors are structured objects:
 
 ```json
 {
-  "code": "SchemaMismatch | InvalidYAML | MissingFile | UnknownStack | UnknownSplicePoint | InvariantViolation | ValidationFailed | UnknownApiVersion",
+  "code": "SchemaMismatch | InvalidYAML | MissingFile | UnknownStack | UnknownSplicePoint | InvariantViolation | ValidationFailed | UnknownApiVersion | UntrustedOverlay | TrustCacheCorrupt | PathEscape",
   "file": "<path or null>",
   "field": "<dotted-path or null>",
   "line": "<int or null>",

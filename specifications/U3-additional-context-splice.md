@@ -27,6 +27,7 @@ Semantics:
 - Missing files are reported as a **warning** (not a hard failure) — documentation moves around; a stale path should not block a run. The warning surfaces in the validation report and in O1's startup log / `--print-config` output.
 - Files are read once per run. There is no caching across runs — the content may change.
 - The lists are capped: **20 files maximum per splice point, 200 KB total per splice point** (sum of all file sizes for that list). The API's validation pipeline enforces both caps at `validateAll()` time, before any agent runs. Exceeding either cap is a hard error naming the splice point, the file count or byte total, and the offending file (for per-file issues). Agents never see a partial list; either the full list loads or the run halts.
+- **Paths must not escape the project root.** Every path is resolved relative to the project root and verified to land inside it. Symlinks pointing outside the root are treated as escapes. Failures produce a `PathEscape` structured error per F4's path-resolution rules.
 
 No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 

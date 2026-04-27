@@ -19,6 +19,7 @@ System contracts that every later spec depends on.
 - [F1-filesystem-layout.md](F1-filesystem-layout.md) — Three project zones (`.claude/gan/`, `.gan-state/`, `.gan-cache/`) with single-owner lifecycles. Retires the old `.gan/` directory.
 - [F2-config-api-contract.md](F2-config-api-contract.md) — Black-box function surface, MCP binding, validation timing, install/restart story, error model.
 - [F3-schema-authority.md](F3-schema-authority.md) — JSON Schema location, `schemaVersion` semantics, lint integration.
+- [F4-threat-model-and-trust.md](F4-threat-model-and-trust.md) — Threat model, trust-cache contract, `UntrustedOverlay` error, `GAN_TRUST` modes, `--no-project-commands` flag, path-escape rules. Lands in Phase 0 because committed overlays + arbitrary commands is a real attack surface that needs closing before user-facing extensibility (Phase 7) opens it up.
 
 ## Phase 1 — Configuration domains
 
@@ -38,6 +39,7 @@ The MCP server and tooling that fulfill Phases 0–1.
 - [R2-installer.md](R2-installer.md) — `install.sh`, MCP registration, zone preparation.
 - [R3-cli-wrapper.md](R3-cli-wrapper.md) — `gan validate`, `gan config`, `gan stacks`.
 - [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, evaluator-pipeline-check runner, pair-names check, CI workflows.
+- [R5-trust-cache-impl.md](R5-trust-cache-impl.md) — Reference implementation of F4: hash function, cache I/O, `validateAll()` integration, `getTrustState`/`trustApprove` MCP tools, `--no-project-commands` runtime flag routing, `PathEscape` invariant.
 
 ## Revision break — post-R contract audit
 
