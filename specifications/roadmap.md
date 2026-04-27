@@ -47,6 +47,21 @@ Existing agents start using the new system.
 - [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
 - [E3-capability-test-harness.md](E3-capability-test-harness.md) — Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation.
 
+## Revision break — post-E1 spec audit
+
+E1 is the largest behavioral change in the roadmap and several downstream specs reference its outcome without yet knowing the concrete details. Before continuing past Phase 3, every spec that carries an "E1 dependency" note is re-audited against E1's actual implementation. Specs are revised in place; no new files are created here.
+
+Specs to revisit, with what to verify:
+
+- **O1** — confirm the orchestrator's startup-log shape matches what E1's coordinator actually emits; refine output format if needed.
+- **O2** — full reconception of the recovery flow under F1's zone layout and E1's snapshot model. The current spec is explicitly marked "descriptive of intent, not prescriptive"; this is where it becomes prescriptive.
+- **S1, S2** — validate that contract-proposer and evaluator behavior described in acceptance criteria matches what the rewritten agents do; update criteria if E1 surfaced different patterns.
+- **U3** — validate that planner/proposer consumption of `additionalContext` works end-to-end via the snapshot; update the spec if the consumption pattern differs from what's currently described.
+
+Plus a general re-audit of every post-E1 spec for ambiguities E1 implementation may have surfaced.
+
+This revision break is a checkpoint, not a deliverable phase: no new specs are added, but no Phase 4 work begins until the audit closes. Doing the audit now prevents Phases 4–8 from being built on assumptions that turn out to be wrong.
+
 ## Phase 4 — Modules
 
 Runtime utility libraries; independent of Phases 0–3 conceptually.
