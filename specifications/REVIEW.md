@@ -1,5 +1,7 @@
 # Specification review — introduction for the reviewer
 
+> **Update.** The first review pass landed (response in [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)) and produced a substantial spec revision before this letter goes to a second reviewer. The revision is captured across 11 commits between `c8cfea8` and `44ea967`. Highlights: F4 (threat model + trust boundaries) added to Phase 0; R5 (trust-cache reference impl) added to Phase 2; E3 reframed around an evaluator deterministic core (no LLM in CI); F2 gains explicit `projectRoot` on every call and atomic `appendToStackField`/`removeFromStackField`; C3's splice-point table is now the canonical catalog with merge rules; `stack.cacheEnvOverride` splice point closes the cacheEnv conflict path; `stack.override` forbidden in user tier; snapshot freshness pinned (frozen for whole run); post-M revision break added; E3 → E2 implementation order documented; `--no-project-commands` flag specified; Node honestly described as one-time install dep; many smaller edits.
+
 ## What you're looking at
 
 `specifications/` contains 25 specs plus this letter. They describe a redesign of ClaudeAgents — a framework for AI-driven software development workflows — into a tech-stack-agnostic system organised around a **Configuration API** that hides storage, validation, and merging behind a small set of named functions.
