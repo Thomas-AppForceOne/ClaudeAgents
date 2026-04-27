@@ -1,4 +1,4 @@
-# 09 — Project overlay file
+# C3 — Overlay schema
 
 ## Problem
 
@@ -6,11 +6,11 @@ Projects often need small, local adjustments to `/gan` behavior without forking 
 
 ## Proposed change
 
-Add a project-scoped overlay file: `.claude/gan/project.md`. The repo owns the path and schema; the user opts in by creating the file. Missing file = no overlay, defaults apply. This path is zone 1 (config) in the filesystem layout defined in [spec 14](14-gan-filesystem-layout.md); it is user-authored and committed to the repo.
+Add a project-scoped overlay file: `.claude/gan/project.md`. The repo owns the path and schema; the user opts in by creating the file. Missing file = no overlay, defaults apply. This path is zone 1 (config) in the filesystem layout defined in [spec F1](F1-filesystem-layout.md); it is user-authored and committed to the repo.
 
 ## Parse contract
 
-Same parse contract as stack files (spec 04): YAML frontmatter with `schemaVersion`, followed by a single canonical YAML body block. Markdown prose outside the YAML block is human-only and never read for semantic content.
+Same parse contract as stack files (spec C1): YAML frontmatter with `schemaVersion`, followed by a single canonical YAML body block. Markdown prose outside the YAML block is human-only and never read for semantic content.
 
 ```
 ---
@@ -49,13 +49,13 @@ runner:
 |---|---|---|
 | `stack.override` | list of stack names | `[]` |
 | `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` |
-| `proposer.additionalContext` | list of file paths (spec 10) | `[]` |
-| `planner.additionalContext` | list of file paths (spec 10) | `[]` |
+| `proposer.additionalContext` | list of file paths (spec U3) | `[]` |
+| `planner.additionalContext` | list of file paths (spec U3) | `[]` |
 | `generator.additionalRules` | list of strings | `[]` |
 | `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` |
 | `runner.thresholdOverride` | integer | agent's baked-in threshold |
 
-The cascade and merge semantics across default → user → project are defined in [spec 11](11-user-overlay.md).
+The cascade and merge semantics across default → user → project are defined in [spec C4](C4-three-tier-cascade.md).
 
 ## `discardInherited`
 
@@ -84,7 +84,7 @@ generator:
 Rules:
 
 - Allowed at both user and project overlay levels. User-level discard targets the agent-baked default; project-level discard targets the user-resolved view (which already includes the default).
-- If omitted, the field/block follows normal merge semantics (spec 11).
+- If omitted, the field/block follows normal merge semantics (spec C4).
 - `discardInherited: false` is valid and equivalent to omission. Useful when a field-level `false` needs to override a block-level `true` (see precedence below).
 - If both block-level `discardInherited: true` and a field inside the block carry their own `discardInherited: false`, the field-level value wins for that specific field — the rest of the block is still discarded. The more-specific declaration is authoritative.
 - `discardInherited` without a replacement value is allowed and resets the field to its default (or to nil, if that level is the one being discarded).
@@ -98,15 +98,15 @@ Rules:
 
 ### When to use `stack.override` vs. a project-tier stack file
 
-Both this overlay and spec 12's three-tier resolution let a project change its active stack set. Pick deliberately:
+Both this overlay and spec C5's three-tier resolution let a project change its active stack set. Pick deliberately:
 
 - Use **`stack.override`** here when the stack file (its detection rules, audit commands, surfaces) is correct and you only need to shape which stacks are active — e.g. a KMP repo where auto-detection picks `web-node` for the JS interop module and you want to force `[kmp]`. Note that by default `stack.override` merges with the user-level list (union with dedup); combine with `stack.discardInherited: true` if you want the project list to be authoritative alone.
-- Use a **project-tier stack file** (`.claude/gan/stacks/<name>.md`, spec 12) when the stack's *contents* need to change for this project — e.g. a different `auditCmd`, a tighter `scope`, project-specific `securitySurfaces`. Spec 12 replaces the tier-3 stack file with the project-tier one wholesale.
+- Use a **project-tier stack file** (`.claude/gan/stacks/<name>.md`, spec C5) when the stack's *contents* need to change for this project — e.g. a different `auditCmd`, a tighter `scope`, project-specific `securitySurfaces`. Spec 12 replaces the tier-3 stack file with the project-tier one wholesale.
 - Combining both is allowed: a project-tier stack file defines the stack, and `stack.override` in this overlay brings it into the active set.
 
 ## Acceptance criteria
 
-- A `project.md` with `proposer.additionalCriteria` causes the listed criteria to appear in every generated contract for that project, merged with any user-level criteria per spec 11.
+- A `project.md` with `proposer.additionalCriteria` causes the listed criteria to appear in every generated contract for that project, merged with any user-level criteria per spec C4.
 - A `project.md` with `evaluator.additionalChecks` runs those checks during evaluation; a failing command produces the declared `on_failure` signal.
 - A `project.md` with `stack.override` contributes the named stacks to the active set.
 - A `project.md` declaring `proposer.discardInherited: true` causes the final `proposer.*` values to be exactly what the project declared — no user-level `additionalCriteria` or `additionalContext` entries leak through.

@@ -1,4 +1,4 @@
-# 04 — Stack plugin schema
+# C1 — Stack plugin schema
 
 ## Problem
 
@@ -141,7 +141,7 @@ Array of `{ envVar, valueTemplate }` objects. The skill orchestrator exports eac
 
 **Conflict resolution (polyglot repos):** when two active stacks declare `cacheEnv` entries with the same `envVar`:
 1. If the `valueTemplate` strings are identical, export once. No conflict.
-2. If they differ, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user must resolve via an overlay (spec 09 `stack.override` or a project-tier replacement per spec 12).
+2. If they differ, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user must resolve via an overlay (spec C3 `stack.override` or a project-tier replacement per spec C5).
 
 ### auditCmd
 Object with:
@@ -153,7 +153,7 @@ Object with:
 Applied only to files inside `scope`.
 
 ### buildCmd / testCmd / lintCmd
-Strings. Separate fields so failure signals stay distinct and overlays (specs 09/11) can override one phase at a time. **Legacy `runCmd` is rejected by the lint script** — stacks that previously combined phases must split them.
+Strings. Separate fields so failure signals stay distinct and overlays (specs C3 / C4) can override one phase at a time. **Legacy `runCmd` is rejected by the lint script** — stacks that previously combined phases must split them.
 
 ### securitySurfaces
 Array of surfaces this stack exposes, each with a template criterion the contract-proposer may instantiate. See "Template instantiation protocol" below.
@@ -177,7 +177,7 @@ Algorithm, per surface per sprint:
 
 Both `triggers.scope` and `triggers.keywords` are optional. A surface with neither is instantiated unconditionally whenever the stack is active and the sprint touches any file in the stack's `scope`.
 
-The contract-proposer prompt loses its hardcoded security checklist; all security criteria originate from active stacks' `securitySurfaces`. (Retirement of the hardcoded checklist is spec 06's responsibility.)
+The contract-proposer prompt loses its hardcoded security checklist; all security criteria originate from active stacks' `securitySurfaces`. (Retirement of the hardcoded checklist is spec E2's responsibility.)
 
 ## Versioning
 
@@ -189,7 +189,7 @@ ClaudeAgents is a WIP project and does not carry backward-compatibility guarante
 
 ## Runtime boundary
 
-The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation of the lint script because Node is the framework's maintainer runtime (per MODULES_ARCHITECTURE.md), but the reference script has no special authority over the JSON Schema.
+The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation of the lint script because Node is the framework's maintainer runtime (per M1-modules-architecture.md), but the reference script has no special authority over the JSON Schema.
 
 User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — is owned by the agent at runtime. The agent parses YAML and reports structural problems directly. User-facing output must not reference the maintainer-only lint script by name; an iOS or embedded-C++ developer running `/gan` has no reason to have Node installed and must never be told to run a Node command.
 

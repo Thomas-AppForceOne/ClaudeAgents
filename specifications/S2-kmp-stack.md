@@ -1,4 +1,4 @@
-# 08 — Kotlin Multiplatform (KMP) stack
+# S2 — Kotlin Multiplatform (KMP) stack
 
 ## Problem
 
@@ -11,7 +11,7 @@ KMP projects share Kotlin code across multiple targets (Android, iOS, JVM, JS, n
 
 ## Proposed change
 
-Add `stacks/kmp.md` as a **sibling** of `stacks/android.md` (not a replacement). In a KMP+Android project, the dispatcher (spec 05) activates both and agents take the union.
+Add `stacks/kmp.md` as a **sibling** of `stacks/android.md` (not a replacement). In a KMP+Android project, the dispatcher (spec C2) activates both and agents take the union.
 
 Contents:
 
@@ -36,9 +36,9 @@ Contents:
 
 ## Dependencies
 
-- 04, 05, 07 (shares the Kotlin/Gradle pieces already extracted; 07 also validates whether the schema supports surface templates).
+- C1, C2, S1 (shares the Kotlin/Gradle pieces already extracted; S1 also validates whether the schema supports surface templates).
 
 ## Value / effort
 
-- **Value**: medium-high — KMP is growing and no existing tooling covers it. Also stress-tests the polyglot union logic from spec 05.
+- **Value**: medium-high — KMP is growing and no existing tooling covers it. Also stress-tests the polyglot union logic from spec C2.
 - **Effort**: medium. The hardest part is `runCmd` pragmatics (what to actually run given variable target availability). Keep the stack file honest about skipped targets.

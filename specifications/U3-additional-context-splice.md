@@ -1,4 +1,4 @@
-# 10 — additionalContext splice point
+# U3 — additionalContext splice point
 
 ## Problem
 
@@ -6,7 +6,7 @@ Projects often maintain living documentation — architecture notes, coding stan
 
 ## Proposed change
 
-Add two splice points to the project overlay (spec 09) that let the user **explicitly point** at documentation they want the agents to read:
+Add two splice points to the project overlay (spec C3) that let the user **explicitly point** at documentation they want the agents to read:
 
 ```
 ## planner.additionalContext
@@ -40,7 +40,7 @@ No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 
 ## Dependencies
 
-- 09 (overlay schema).
+- C3 (overlay schema).
 
 ## Value / effort
 

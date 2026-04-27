@@ -1,4 +1,4 @@
-# 07 — Android stack
+# S1 — Android stack
 
 ## Problem
 
@@ -6,19 +6,19 @@ Android is the first real test of the plugin system beyond the server/CLI world.
 
 - No server to spawn; "run the app" is compile + unit test + lint.
 - Relevant security surfaces are client-side: certificate pinning, Network Security Config, `android:exported`, intent / deep-link validation, WebView JavaScript bridges, ProGuard/R8 keep rules, encrypted storage, keystore usage.
-- `npm audit` has no analog without spec 02; even with it, the generated criteria come from the web checklist.
+- `npm audit` has no analog for Gradle projects; the Gradle audit branch lives in `stacks/gradle.md` (see E2), not in agent prompts.
 
 ## Proposed change
 
-Add `stacks/android.md` following the schema (04). Key contents:
+Add `stacks/android.md` following the schema (C1). Key contents:
 
 - **detection**: `AndroidManifest.xml`, `build.gradle.kts` with `com.android.application` or `com.android.library` plugin applied.
 - **secretsGlob**: `kt, kts, java, gradle, gradle.kts, xml, properties, env, json, yaml, yml`.
-- **auditCmd**: delegate to `stacks/gradle.md` (activated by detection union, per spec 05); Android does not restate Gradle audit logic.
+- **auditCmd**: delegate to `stacks/gradle.md` (activated by detection union, per spec C2); Android does not restate Gradle audit logic.
 - **buildCmd**: `./gradlew assembleDebug`.
 - **testCmd**: `./gradlew testDebugUnitTest`.
 - **lintCmd**: `./gradlew lintDebug`.
-- **securitySurfaces** — template criteria instantiated per spec 04's template-instantiation protocol. Each surface below lists its `triggers` so "touches the surface" is decidable without guesswork.
+- **securitySurfaces** — template criteria instantiated per spec C1's template-instantiation protocol. Each surface below lists its `triggers` so "touches the surface" is decidable without guesswork.
   - `exported_components` — template: "Activities/Services/Providers/Receivers with `android:exported=\"true\"` must validate caller identity or intent extras." Triggers: scope `**/AndroidManifest.xml`, `**/*Activity.kt`, `**/*Service.kt`, `**/*Provider.kt`, `**/*Receiver.kt`; keywords `android:exported`, `<activity`, `<service`, `<provider`, `<receiver`.
   - `deep_links` — template: "Intent filters accepting `http(s)` or custom schemes must validate and sanitise input before use." Triggers: scope `**/AndroidManifest.xml`; keywords `<intent-filter`, `android:scheme`, `android.intent.action.VIEW`.
   - `webview_js_bridge` — template: "`addJavascriptInterface` usage must gate methods with `@JavascriptInterface` and restrict the loaded origin." Triggers: keywords `addJavascriptInterface`, `WebView`.
@@ -37,9 +37,9 @@ Add `stacks/android.md` following the schema (04). Key contents:
 
 ## Dependencies
 
-- 04, 05, 06, 02.
+- C1, C2, E2.
 
 ## Value / effort
 
-- **Value**: high for any Android user; also validates whether the schema from 04 is expressive enough. If Android cannot be modelled cleanly, the schema needs revision.
+- **Value**: high for any Android user; also validates whether the schema from C1 is expressive enough. If Android cannot be modelled cleanly, the schema needs revision.
 - **Effort**: medium. The security-surface catalog needs careful authoring — too vague and criteria are untestable; too specific and they cease to be templates.

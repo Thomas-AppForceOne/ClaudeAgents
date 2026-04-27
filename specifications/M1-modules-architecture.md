@@ -72,10 +72,10 @@ ClaudeAgents/
 │   └── workflows/
 │       ├── shared-setup.yml       # Reusable workflow: checkout + Node 18 + cache
 │       ├── test-modules.yml       # Runs `node --test tests/modules/**`
-│       └── test-capability.yml    # Runs scripts/capability-check (spec 06)
+│       └── test-capability.yml    # Runs scripts/capability-check (spec E2)
 │
 ├── specifications/
-│   └── MODULES_ARCHITECTURE.md    # This file
+│   └── M1-modules-architecture.md    # This file
 │
 ├── install.sh                     # Symlinks agents/skills + runs npm link
 └── package.json                   # name: "claudeagents", exports map
@@ -415,7 +415,7 @@ modules/python/
 1. Create `/src/modules/` directory structure with placeholder `web/` and `python/` stubs
 2. Create `package.json` with `name: "claudeagents"` and `exports` map
 3. Extend `install.sh` to run `npm link` after symlinking agents/skills
-4. Create the CI workflows per roadmap.md "CI workflow structure": `.github/workflows/shared-setup.yml` (reusable), `.github/workflows/test-modules.yml` (this spec's tests), and `.github/workflows/test-capability.yml` (spec 06's capability-check). All three must land together — `test-modules.yml` calls `shared-setup.yml`, and spec 06's later work extends `test-capability.yml`.
+4. Create the CI workflows per roadmap.md "CI workflow structure": `.github/workflows/shared-setup.yml` (reusable), `.github/workflows/test-modules.yml` (this spec's tests), and `.github/workflows/test-capability.yml` (spec E2's capability-check). All three must land together — `test-modules.yml` calls `shared-setup.yml`, and spec E2's later work extends `test-capability.yml`.
 5. Create `/docs/MODULES.md` (module system guide + installation instructions)
 6. Document module system in main `README.md`
 
@@ -463,7 +463,7 @@ modules/python/
 ### CI
 - [ ] `.github/workflows/shared-setup.yml` exists as a reusable workflow (`workflow_call`) performing checkout + Node 18 install + dependency cache
 - [ ] `.github/workflows/test-modules.yml` calls `shared-setup.yml` and runs `node --test tests/modules/**` on every push and PR
-- [ ] `.github/workflows/test-capability.yml` is present (owned by spec 06) and also uses `shared-setup.yml`
+- [ ] `.github/workflows/test-capability.yml` is present (owned by spec E2) and also uses `shared-setup.yml`
 - [ ] All tests pass on the GitHub Actions macOS runner
 
 ### Docker Module

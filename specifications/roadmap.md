@@ -1,95 +1,86 @@
 # ClaudeAgents — Roadmap
 
-Ordered list of specs. Order reflects **value-for-effort first**, respecting dependencies. Each spec is individually shippable and testable.
+Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, S = new stacks, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order.
 
-## Phase 1 — Quick wins (no architectural change)
+The Configuration API is the architectural backbone: agents access framework state only through it; storage details are a black box behind it. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
 
-Small, additive patches. Each one makes the existing pipeline work better on more stacks without touching agent structure. Ship these first — they deliver value immediately and are independent of the later refactor.
+## Phase 0 — Foundations
 
-1. [01-kotlin-secrets-glob.md](01-kotlin-secrets-glob.md) — Add `.kt`, `.kts`, `.gradle.kts` to the evaluator's secrets grep.
-2. [02-gradle-dependency-audit.md](02-gradle-dependency-audit.md) — Add a Gradle branch to the evaluator's dependency audit step.
-3. [03-worktree-build-cache-isolation.md](03-worktree-build-cache-isolation.md) — Give each run worktree its own build cache to avoid daemon/lockfile conflicts.
+System contracts that every later spec depends on.
 
-## Phase 1.5 — Filesystem layout (foundation)
+- [F1-filesystem-layout.md](F1-filesystem-layout.md) — Three project zones (`.claude/gan/`, `.gan-state/`, `.gan-cache/`) with single-owner lifecycles. Retires the old `.gan/` directory.
+- [F2-config-api-contract.md](F2-config-api-contract.md) — *Stub.* Black-box function surface, MCP binding, validation timing, install/restart story, error model.
+- [F3-schema-authority.md](F3-schema-authority.md) — *Stub.* JSON Schema location, `schemaVersion` semantics, lint integration.
 
-Pins the three-zone project filesystem (config / state / cache) before any stateful tool lands. Prerequisite for the MODULES_ARCHITECTURE.md port-registry relocation and for every later spec that writes files under a project root.
+## Phase 1 — Configuration domains
 
-14. [14-gan-filesystem-layout.md](14-gan-filesystem-layout.md) — `.claude/gan/` (config), `.gan-state/` (durable state), `.gan-cache/` (ephemeral cache). Retires today's single-purpose `.gan/` directory and assigns each zone a single lifecycle owner.
+Data models the API exposes.
 
-## Phase 2 — Stack-plugin refactor (foundation)
+- [C1-stack-plugin-schema.md](C1-stack-plugin-schema.md) — Stack file schema, detection composites, parse contract.
+- [C2-stack-detection-and-dispatch.md](C2-stack-detection-and-dispatch.md) — Dispatch algorithm, scope filtering, generic fallback.
+- [C3-overlay-schema.md](C3-overlay-schema.md) — Overlay splice points, defaults, `discardInherited`.
+- [C4-three-tier-cascade.md](C4-three-tier-cascade.md) — default → user → project merge per splice point.
+- [C5-stack-file-resolution.md](C5-stack-file-resolution.md) — project → user → repo lookup for stack files.
 
-Separates *orchestration* from *stack mechanics* so new stacks become a file drop, not an agent rewrite. Everything after this phase depends on it.
+## Phase 2 — Reference implementation
 
-4. [04-stack-plugin-schema.md](04-stack-plugin-schema.md) — Define the `stacks/<name>.md` file format.
-5. [05-stack-detection-and-dispatch.md](05-stack-detection-and-dispatch.md) — Agents detect the stack and load the matching file.
-6. [06-extract-builtin-stacks.md](06-extract-builtin-stacks.md) — Move the existing web/node, python, rust, go logic out of agent prompts into stack files.
+The MCP server and tooling that fulfill Phases 0–1.
 
-## Phase 3 — New stacks
+- [R1-config-mcp-server.md](R1-config-mcp-server.md) — *Stub.* Node 18+ MCP server implementing F2.
+- [R2-installer.md](R2-installer.md) — *Stub.* `install.sh`, MCP registration, zone preparation.
+- [R3-cli-wrapper.md](R3-cli-wrapper.md) — *Stub.* `gan validate`, `gan config`, `gan stacks`.
+- [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — *Stub.* Lint script, schema publisher, capability-check runner, CI workflows.
 
-7. [07-android-stack.md](07-android-stack.md) — Android client stack file.
-8. [08-kmp-stack.md](08-kmp-stack.md) — Kotlin Multiplatform stack file (depends on 07 for shared Kotlin pieces).
+## Phase 3 — Agent integration
 
-## Phase 4 — Overlays (project and user customisation)
+Existing agents start using the new system.
 
-Lets users add context and criteria without forking agents. Kept strictly generic — ClaudeAgents owns the file paths and schemas; it never assumes anything about other tools' conventions.
+- **E1 (agent prompt rewrite, no spec doc).** Rewrite gan-planner, gan-generator, gan-evaluator, gan-contract-proposer, SKILL.md, and O2's recovery flow to call the Configuration API instead of parsing files. Single coordinated PR.
+- [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
+- **E3 (capability test harness, drafted alongside E2).** Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation. Ensures the agent rewrite preserves intended behavior.
 
-9. [09-project-overlay.md](09-project-overlay.md) — `.claude/gan/project.md` with a minimal set of splice points.
-10. [10-additional-context-splice.md](10-additional-context-splice.md) — Overlay points the planner at arbitrary project docs.
-11. [11-user-overlay.md](11-user-overlay.md) — `~/.claude/gan/config.md` for cross-project personal defaults.
-12. [12-three-tier-stack-resolution.md](12-three-tier-stack-resolution.md) — Resolve `stacks/<name>.md` in order: project → user → repo.
+## Phase 4 — Modules
 
-## Phase 5 — Observability
+Runtime utility libraries; independent of Phases 0–3 conceptually.
 
-13. [13-resolution-observability.md](13-resolution-observability.md) — Log which files were loaded at startup; `--print-config` flag to inspect resolved config without running a sprint.
+- [M1-modules-architecture.md](M1-modules-architecture.md) — *Pending rewrite.* Module install path, `pairsWith` enforcement via API, distribution. Today's MODULES_ARCHITECTURE.md content; full rewrite scheduled.
+- [M2-docker-module.md](M2-docker-module.md) — *Stub.* PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming. Persists state in `.gan-state/modules/docker/`.
 
-## Ordering rationale
+## Phase 5 — New stacks
 
-- **Phase 1** ships before refactor because the fixes are tiny, orthogonal, and benefit every project today. Deferring them behind the refactor delays value.
-- **Phase 1.5** (spec 14) is placed before Phase 2 because it resolves a real directory collision between MODULES_ARCHITECTURE.md and the `/gan` skill. It is independent of the stack-plugin work but benefits every later spec that writes project-level files.
-- **Phase 2** is a prerequisite for Phases 3 and 4.
-- **Phase 3** proves the plugin system by adding the first new stacks.
-- **Phase 4** is listed after stacks because the overlay's most useful splice point (`stack.override`) only makes sense once stacks exist as a concept.
-- **Phase 5** is last because it describes state that only becomes complex once Phase 4 resolution is in place.
+Apply the system to ecosystems beyond the bootstrap set.
 
-## Relationship to MODULES_ARCHITECTURE.md
+- [S1-android-stack.md](S1-android-stack.md) — Android client stack file.
+- [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
+- [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — *Stub.* iOS Swift / SwiftUI stack.
 
-`MODULES_ARCHITECTURE.md` and this roadmap describe **two different extensibility layers** that coexist without overlap:
+## Phase 6 — User-facing extensibility
 
-- **Modules** (`src/modules/<name>/`) are *runtime utility libraries* — imperative JavaScript code that agents `require()` at execution time (e.g. `claudeagents/modules/docker` for port discovery and container health checks). They solve "how do I do the thing" problems.
-- **Stacks** (`stacks/<name>.md`, this roadmap) are *declarative agent configuration* — markdown files that tell agents which files to scan, which commands to run, and which security surfaces to check. They solve "what should the agents do for this tech stack" problems.
+Hands-on customisation surface.
 
-A single tech stack may have both (e.g. a future `docker` stack file declaring detection and security surfaces, paired with the existing `modules/docker` runtime utilities) or only one. Neither layer subsumes the other.
+- **U1 (project overlay UX, drafted alongside C3).** Hand-editable `.claude/gan/project.md`, validation errors, examples.
+- **U2 (user overlay UX, drafted alongside C4).** `~/.claude/gan/config.md`, cross-project preferences.
+- [U3-additional-context-splice.md](U3-additional-context-splice.md) — `additionalContext` splice points for planner/proposer.
 
-**Filesystem boundaries between the layers are formalised in [spec 14](14-gan-filesystem-layout.md).** In particular, modules that persist state across runs (e.g. the Docker port registry) must write to `.gan-state/modules/<name>/`, not to `.gan/` — the latter is retired by spec 14 in favour of zone-scoped directories with single-owner lifecycles.
+## Phase 7 — Observability and operations
 
-### Runtime boundary: maintainer tooling vs. user-facing behavior
+- [O1-resolution-observability.md](O1-resolution-observability.md) — Startup log line, `gan config print`, discard reporting.
+- [O2-recovery.md](O2-recovery.md) — Per-run state archive, `--recover`, `--list-recoverable` (updated for F1 zones and F2 API).
 
-ClaudeAgents targets developers in every ecosystem — Swift/iOS, C++/embedded, Rust, Go, Kotlin/Android, Python, JS, and whatever comes next. Forcing a Node runtime onto an iOS developer who only wants `/gan` to understand their Xcode project would break that promise. The RFC therefore splits tooling by who runs it:
+## Bite-size sizing
 
-- **Maintainer tooling** (spec 04's stack-file lint script, spec 06's capability-check harness, any other script that runs in ClaudeAgents' own CI or on a contributor's machine) **may assume Node 18+**, since MODULES_ARCHITECTURE.md already establishes Node as the maintainer runtime. These scripts never run on a user's machine.
-- **User-facing behavior** (reading stacks, applying overlays, resolving the three-tier cascade, producing `--print-config` output, emitting validation errors on malformed input) **is owned by the agent at runtime**. The agent parses YAML, applies the cascade, and reports errors using its own execution context. No additional runtime is required on the user's machine beyond Claude Code itself.
+Every spec aims to be small enough that one sprint of focused work delivers a complete, mergeable result. Where a spec covers multiple concerns (currently C3 and C4 mix schema with UX), a future content commit splits it. Sprint-level splits are noted at the end of each spec's "Bite-size note" or status banner.
 
-Specs remain runtime-neutral: the schema in spec 04 is a language-neutral JSON Schema; the capability-check format in spec 06 is a documented format. The Node scripts that ClaudeAgents ships are the reference implementation, not a requirement. A third party can implement alternative tooling in Swift, Rust, Python, or shell without rewriting specs.
+## Cross-cutting principles
 
-User-facing agent output (error messages, suggestions, dry-run reports) must never reference a maintainer-only script by name. If a stack file is malformed during a `/gan` run, the agent reports the structural problem directly — it does not tell the user to run `npm run lint-stacks`.
-
-### CI workflow structure
-
-Maintainer tooling runs in GitHub Actions under `.github/workflows/`. The layout is **one workflow file per test category, each delegating shared setup to a single reusable workflow**:
-
-- `.github/workflows/test-modules.yml` — owned by MODULES_ARCHITECTURE.md; runs `node --test tests/modules/**`.
-- `.github/workflows/test-capability.yml` — owned by spec 06; runs the capability-check reference implementation against every fixture under `tests/fixtures/stacks/`.
-- `.github/workflows/shared-setup.yml` — a reusable workflow (`workflow_call`) that handles checkout, Node 18+ install, and dependency caching. Every category workflow begins with `uses: ./.github/workflows/shared-setup.yml` so the Node version and cache configuration live in one place.
-
-Rules:
-
-- Every category workflow runs on `push` and `pull_request` by default; a category may declare additional triggers (cron, manual dispatch) in its own file.
-- New test categories (e.g. a future `test-stack-lint.yml` for spec 04's JSON-Schema validator) are added as new category workflow files that reuse `shared-setup.yml`. No category may bypass the shared setup.
-- The reusable workflow is the single source of truth for Node version bumps, cache keys, and any future framework-level CI dependency. Category workflows must not pin their own Node version independently.
-- The file names above are authoritative: `test-modules.yml`, `test-capability.yml`, and `shared-setup.yml`. New categories follow the `test-<category>.yml` pattern. Implementations must not rename them.
+- **The Configuration API is a black box.** Agents know function names; they do not know storage, schemas, or merge logic. Specs F2 and R1 own the contract.
+- **Maintainer tooling assumes Node 18+.** User-facing behavior is owned by the agent at runtime. iOS, embedded C++, Swift-only developers never need Node to use `/gan`.
+- **Pre-1.0 WIP project.** No backward-compatibility guarantees; any schema change bumps `schemaVersion`. No transitional dual-path windows.
+- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-capability}.yml`. New categories follow `test-<category>.yml`.
+- **Module ↔ stack name pairing** is enforced by the Configuration API at registration time. No separate lint subsystem needed.
 
 ## Out of scope for this roadmap
 
-- Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge. Curation belongs to whatever agent a user chooses to run outside ClaudeAgents.
-- Reading arbitrary repo files (README, ARCHITECTURE, etc.) by auto-discovery. Users opt in explicitly via `additionalContext` (spec 10).
-- iOS, desktop, embedded stacks. Follow the Android/KMP template once it's proven; not roadmapped here.
+- Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge.
+- Reading arbitrary repo files (README, ARCHITECTURE, etc.) by auto-discovery. Users opt in explicitly via `additionalContext` (U3).
+- Desktop and embedded stacks beyond what S1–S3 demonstrate. Follow the same template once the pattern is proven.

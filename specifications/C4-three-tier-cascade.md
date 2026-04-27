@@ -1,4 +1,4 @@
-# 11 — User overlay file
+# C4 — Three-tier overlay cascade
 
 ## Problem
 
@@ -6,17 +6,17 @@ Some preferences are personal and cross-project: a user always wants `--threshol
 
 ## Proposed change
 
-Add a user-scoped overlay: `~/.claude/gan/config.md`. Same parse contract and schema as the project overlay (spec 09). Precedence is defined by the cascade below.
+Add a user-scoped overlay: `~/.claude/gan/config.md`. Same parse contract and schema as the project overlay (spec C3). Precedence is defined by the cascade below.
 
 ## Cascade
 
 Three levels, from most general to most specific:
 
-1. **Defaults** — baked into the agent. Always present. Values listed in spec 09's splice-point table.
+1. **Defaults** — baked into the agent. Always present. Values listed in spec C3's splice-point table.
 2. **User overlay** (`~/.claude/gan/config.md`) — personal preferences, cross-project. Optional.
 3. **Project overlay** (`.claude/gan/project.md`) — per-project adjustments. Optional.
 
-Each level is merged into the resolved view from the level above, producing a cumulative resolved config. The project overlay is the leaf and is authoritative on conflict. `discardInherited` at any level resets the relevant scope to "nothing" before that level's own values are applied (spec 09).
+Each level is merged into the resolved view from the level above, producing a cumulative resolved config. The project overlay is the leaf and is authoritative on conflict. `discardInherited` at any level resets the relevant scope to "nothing" before that level's own values are applied (spec C3).
 
 ## Merge rules per splice point
 
@@ -36,7 +36,7 @@ Applied at both user ⊕ default and project ⊕ user-resolved steps. Unless `di
 
 ## `discardInherited` interaction
 
-For each block or field, if `discardInherited: true` is set at a given level, that level's merge input from the tier above is treated as empty before this level's own values are applied. The mechanism and syntax are defined in spec 09 (same schema for both overlays).
+For each block or field, if `discardInherited: true` is set at a given level, that level's merge input from the tier above is treated as empty before this level's own values are applied. The mechanism and syntax are defined in spec C3 (same schema for both overlays).
 
 Consequences:
 
@@ -46,7 +46,7 @@ Consequences:
 
 ## Other rules
 
-- Parse contract, `schemaVersion` policy, and unknown-key handling are inherited from spec 09 (same schema for both overlays).
+- Parse contract, `schemaVersion` policy, and unknown-key handling are inherited from spec C3 (same schema for both overlays).
 - User overlay never reads files via `additionalContext` keys (enforced by the per-splice-point rule above). A user overlay declaring either `additionalContext` key produces a hard error at load time.
 - Missing user overlay is a no-op.
 
@@ -80,7 +80,7 @@ Consequences:
 
 ## Dependencies
 
-- 09.
+- C3.
 
 ## Value / effort
 

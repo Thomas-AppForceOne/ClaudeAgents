@@ -1,8 +1,8 @@
-# 13 — Resolution observability
+# O1 — Resolution observability
 
 ## Problem
 
-Once stack dispatch (05), overlays (09, 11), and three-tier resolution (12) are in place, it becomes hard for a user to answer "why did `/gan` do that?" — which stacks were active, which tier each stack came from, which overlay fields applied, which `additionalContext` files were read. Debugging a misbehaving run without this is guesswork.
+Once stack dispatch (C2), overlays (C3, C4), and three-tier resolution (C5) are in place, it becomes hard for a user to answer "why did `/gan` do that?" — which stacks were active, which tier each stack came from, which overlay fields applied, which `additionalContext` files were read. Debugging a misbehaving run without this is guesswork.
 
 ## Proposed change
 
@@ -24,7 +24,7 @@ Missing sources are listed explicitly (`(none)`), not silently omitted — "noth
 
 **B. `--print-config` flag**
 
-Parsed by the `/gan` skill at its argument-parsing step, alongside the `--recover` / `--list-recoverable` flags defined in `gan-recover.md`. All top-level `/gan` flags are defined in a single table in SKILL.md; this spec does not re-home flag parsing.
+Parsed by the `/gan` skill at its argument-parsing step, alongside the `--recover` / `--list-recoverable` flags defined in `O2-recovery.md`. All top-level `/gan` flags are defined in a single table in SKILL.md; this spec does not re-home flag parsing.
 
 Resolves everything without running a sprint and prints a single JSON document:
 
@@ -56,7 +56,7 @@ Resolves everything without running a sprint and prints a single JSON document:
 
 The JSON is stable (documented) so users and CI can diff configs across branches or environments.
 
-Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in spec 09 (project overlay) and spec 11 (user overlay). This spec's `mergedSplicePoints` object simply reports the result of merging the overlays per those specs' semantics. Any new splice point added in a future spec 09/11 revision automatically appears here with no edit required.
+Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in spec C3 (project overlay) and spec C4 (user overlay). This spec's `mergedSplicePoints` object simply reports the result of merging the overlays per those specs' semantics. Any new splice point added in a future spec C3/11 revision automatically appears here with no edit required.
 
 The `discarded` array reports every block or field where `discardInherited: true` was applied during resolution. Each entry names the scope that was discarded (a block like `proposer`, or a specific field like `generator.additionalRules`) and the tier that declared the discard (`user` or `project`). This lets a debugger see at a glance why an upstream value failed to reach the final merged config.
 
@@ -71,7 +71,7 @@ The `discarded` array reports every block or field where `discardInherited: true
 
 ## Dependencies
 
-- 05, 09, 11, 12 (this is the debugging layer for all of them).
+- C2, C3, C4, C5 (this is the debugging layer for all of them).
 
 ## Value / effort
 
