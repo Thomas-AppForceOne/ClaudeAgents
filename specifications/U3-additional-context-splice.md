@@ -43,10 +43,15 @@ No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 - F2, R1 (the API reads the files and exposes them via `getResolvedConfig()`)
 - F3 (the `additionalContext.path_resolves` cross-file invariant catalogued there fires for missing files)
 
-## Note on E1 dependency
+## Phase placement and E1 dependency
 
-Acceptance criterion 1 ("files' contents appear in the planner's / proposer's context at run time") requires those agents to read context from `getResolvedConfig().additionalContext` rather than from raw filesystem lookups. That coordination is finalised by E1 (agent prompt rewrite). The splice-point handling and the API-side file reading can land before E1; the round-trip into agent prompts depends on E1.
+This spec ships as a single Phase 7 unit per the roadmap. The implementation, however, has natural sub-tasks that the R1 / E1 sprint plans may absorb earlier:
+
+- **API-side splice-point handling and file reading** (the `additionalContext.path_resolves` invariant, cap enforcement, exposure via `getResolvedConfig().additionalContext`) is part of R1's resolver. It can land in Phase 2 as part of R1's sprint slices without authoring U3 first.
+- **Planner / proposer consumption** of the resolved context — making the agents actually read `snapshot.additionalContext.{planner,proposer}` and inject the contents into their working context — depends on E1 (agent prompt rewrite).
+
+U3 is the spec that pulls these threads together and adds the user-facing acceptance criteria. Authoring it in Phase 7 keeps the implementation honest: the user-visible promise ("the files I list show up in the agent's context") is only deliverable once E1 has landed.
 
 ## Bite-size note
 
-Splittable as: schema + API-side file reading + cap enforcement first → planner consumption (after E1's planner rewrite) → proposer consumption (after E1's proposer rewrite). Each agent's consumption is its own sprint slice within E1.
+Splittable as: schema + API-side file reading + cap enforcement first (R1 sprint) → planner consumption (E1 sprint slice) → proposer consumption (E1 sprint slice) → final U3 acceptance pass.

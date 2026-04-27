@@ -34,6 +34,8 @@ Two equivalent surfaces for the same data:
 
 Both produce identical JSON when given `--json`. The flag parsing for `/gan --print-config` lives in SKILL.md alongside `--recover` / `--list-recoverable` from O2; this spec does not re-home flag parsing.
 
+**Failure mode: fail-open.** `--print-config` is a debug surface. When `validateAll()` fails, the output prints both the partial resolved view (everything the resolver could compute despite the errors) **and** the structured error report. Both are JSON when `--json` is given; both surfaces are top-level keys in the output (`resolvedConfig` and `validationErrors`). Exit code reflects the validation status (non-zero on failure), but the user always gets the resolved view to debug from. This differs from a regular `/gan` run, which fails closed and prints only the validation report.
+
 The output:
 
 ```json
@@ -53,8 +55,8 @@ The output:
     "runner.thresholdOverride": 9
   },
   "discarded": [
-    {"scope": "proposer",                        "byTier": "project"},
-    {"scope": "generator.additionalRules",       "byTier": "user"}
+    {"scope": "proposer",                        "byTier": "project", "replacedWith": "2 entries"},
+    {"scope": "generator.additionalRules",       "byTier": "user",    "replacedWith": "empty"}
   ],
   "additionalContext": {
     "planner":  ["docs/architecture.md"],
@@ -67,7 +69,13 @@ The JSON shape is stable so users and CI can diff configs across branches or env
 
 Splice-point keys (`proposer.additionalCriteria`, `evaluator.additionalChecks`, `runner.thresholdOverride`, etc.) are **not** defined in this spec — they are authoritatively defined in C3. This spec's `mergedSplicePoints` object simply reports the cascade-resolved result per C4's merge rules. Any new splice point added in a future C3 revision automatically appears here with no edit required.
 
-The `discarded` array reports every block or field where `discardInherited: true` was applied during resolution. Each entry names the scope that was discarded (a block like `proposer`, or a specific field like `generator.additionalRules`) and the tier that declared the discard (`user` or `project`). This lets a debugger see at a glance why an upstream value failed to reach the final merged config.
+The `discarded` array reports every block or field where `discardInherited: true` was applied during resolution. Each entry names:
+
+- `scope` — the block (e.g. `proposer`) or specific field (e.g. `generator.additionalRules`) that was discarded.
+- `byTier` — the tier that declared the discard (`user` or `project`).
+- `replacedWith` — what the discarding tier provided instead. Either `"empty"` (the tier discarded but provided no replacement, so the field is now empty / at agent default) or `"<N> entries"` for list fields, or `"<value>"` for scalar fields. This makes "why is this value missing?" answerable without further inspection.
+
+The combination tells a debugger both *what* was discarded and *what replaced it*.
 
 ## Acceptance criteria
 
@@ -76,8 +84,9 @@ The `discarded` array reports every block or field where `discardInherited: true
 - Running `/gan --print-config` does not create a worktree, spawn sprint agents, or write to zone 2.
 - A missing file in `additionalContext` shows up in both surfaces with a clear "missing" marker.
 - Running `--print-config` on a repo with no overlays produces a valid JSON document with every source marked not-loaded and an empty `discarded` array.
-- A project overlay declaring `proposer.discardInherited: true` appears in the `discarded` array as `{"scope": "proposer", "byTier": "project"}`.
-- A field-level discard like `generator.additionalRules.discardInherited: true` appears as `{"scope": "generator.additionalRules", "byTier": "<tier>"}`.
+- A project overlay declaring `proposer.discardInherited: true` plus its own `proposer.additionalCriteria: [a, b]` appears in the `discarded` array as `{"scope": "proposer", "byTier": "project", "replacedWith": "2 entries"}`.
+- A field-level discard like `generator.additionalRules.discardInherited: true` with no replacement appears as `{"scope": "generator.additionalRules", "byTier": "<tier>", "replacedWith": "empty"}`.
+- Running `/gan --print-config` against a project with a malformed overlay prints both the partial resolved view (under `resolvedConfig`) and the validation errors (under `validationErrors`); exit code is non-zero. (Fail-open behavior, distinct from a regular `/gan` run.)
 
 ## Dependencies
 

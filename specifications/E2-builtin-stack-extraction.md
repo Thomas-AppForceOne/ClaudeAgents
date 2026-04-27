@@ -36,7 +36,19 @@ Correctness of the extraction is gated by the capability test harness (E3) — a
 
 E3 gates the refactor in implementation; E2 itself is authorable independently of E3.
 
+## Bite-size note
+
+E2 is larger than its "Value / effort" rating below suggests — eight stack files plus a contract-proposer retirement plus harness coordination. Recommended sprint slicing, with each slice gated by E3's harness:
+
+1. `stacks/web-node.md` (most-tested ecosystem; surfaces detection-composite issues first).
+2. `stacks/python.md`, `stacks/rust.md`, `stacks/go.md`, `stacks/ruby.md` (one slice each; small and similar).
+3. `stacks/kotlin.md` + `stacks/gradle.md` (one slice; they pair via detection-union).
+4. `stacks/generic.md` (the fallback; lands last because earlier slices may surface fields it needs).
+5. Contract-proposer hardcoded-checklist retirement.
+
+Alternative: collapse E2 into the same coordinated PR as E1 (the agent rewrite). They are inherently coupled — the rewrite cannot complete until stack files exist for the agents to read. Doing both in one PR with per-slice commits keeps review tractable while preserving end-to-end correctness gating.
+
 ## Value / effort
 
-- **Value**: medium on its own, but this is what retires the old code path and lets Phase 3 add new stacks cleanly. Without it, every new stack has to be added to both the agent prompt and a new stack file.
-- **Effort**: medium. The refactor is mechanical but touches every agent. Doing it in one PR with the capability tests above is safer than incremental moves.
+- **Value**: medium-high. Retires the old hardcoded code path and unblocks Phase 5's new stacks (Android, KMP, iOS).
+- **Effort**: medium-large. Mechanical per stack, but eight stacks + the proposer retirement is more sprint slices than its "medium" sibling specs.

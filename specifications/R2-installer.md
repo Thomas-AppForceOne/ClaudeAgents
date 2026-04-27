@@ -10,7 +10,7 @@ ClaudeAgents has many moving parts: agents, skills, the Configuration MCP server
 
 ### Responsibilities
 
-1. **Prerequisite checks.** Verify Node 18+, git, and Claude Code are installed. Bail with a clear actionable error on each missing prerequisite (include the install command for that platform).
+1. **Prerequisite checks.** Verify Node 18+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
 2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
 3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant).
 4. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
@@ -60,6 +60,7 @@ Any failure halts the installer with a non-zero exit code, an error message nami
 
 - A clean machine with prerequisites installed reaches "ready to run `/gan` after one Claude Code restart" with one execution of `install.sh`.
 - `install.sh` exits non-zero with a clear message when any prerequisite is missing, naming the prerequisite and an install hint.
+- `install.sh --no-claude-code` succeeds on a CI runner that has Node and git but no Claude Code; the resulting install lets `gan validate` and other CLI commands run, but `/gan` is not available (no Claude Code to host the skill).
 - Running `install.sh` twice does not duplicate MCP config entries, does not create duplicate symlinks, and does not reinstall an already-current npm package.
 - `install.sh --uninstall` removes the symlinks and MCP config entry; subsequent `/gan` invocations report "ClaudeAgents not installed".
 - A failure mid-install (simulated by killing the npm step) leaves the system either fully pre-install or fully post-install, never half-configured.

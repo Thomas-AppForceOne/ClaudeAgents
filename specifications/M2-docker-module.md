@@ -123,6 +123,8 @@ Platform-aware check that a port is free before binding:
 
 Used by `PortRegistry.register()` to refuse registering a port that's already in use by something the module didn't allocate.
 
+**Platform support disclosure.** The Docker module is **macOS and Linux only** in v1. Windows users importing this module hit `PlatformNotSupported` on `PortValidator` and on any operation that depends on it. Per M1's prerequisite-handling rules, an agent catching this error either falls back to non-module behavior or raises a structured blocking concern. A future Windows-supported revision is out of scope for this spec.
+
 #### ContainerNaming
 
 Convention-driven container naming tied to worktree paths:

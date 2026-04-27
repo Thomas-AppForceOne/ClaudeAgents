@@ -120,4 +120,4 @@ F3 (schema authority) is referenced throughout this spec as the source of valida
 
 ## Bite-size note
 
-This spec defines the contract only. The Node reference implementation lives in R1. Implementation can sprint on one function group at a time: reads first, then validation, then writes.
+F2 is contract-only — a single document, one sprint of authoring. Implementation slicing belongs in R1, which has its own bite-size note describing the sprint sequence.
