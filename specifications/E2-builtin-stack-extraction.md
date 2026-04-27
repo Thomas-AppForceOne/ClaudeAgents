@@ -21,23 +21,7 @@ Once extracted, the agent prompts drop their hardcoded lists and rely on the act
 
 **The contract-proposer's hardcoded security checklist is also retired.** The proposer today enumerates ~10 generic security criteria directly in its prompt. After this extraction, all security criteria originate from active stacks' `securitySurfaces` via the template-instantiation protocol defined in spec C1. The proposer retains its sprint-shape logic (threshold selection, rationale writing) but owns zero stack-specific content.
 
-## Capability test harness
-
-Correctness of the extraction is measured against a fixed set of fixture repos under `tests/fixtures/stacks/`. Each fixture has a golden-file assertion of the feedback JSON the evaluator is expected to produce; the test harness runs the evaluator and diffs against the golden.
-
-- `tests/fixtures/stacks/js-ts-minimal/` — a small JS/TS project exercising `npm audit` and the web security surfaces.
-- `tests/fixtures/stacks/python-minimal/` — pyproject + one module.
-- `tests/fixtures/stacks/polyglot-android-node/` — proves cross-contamination is prevented (the cross-check fixture from spec C2).
-- `tests/fixtures/stacks/node-packaged-non-web/` — a repo with only a `package.json` (no lockfile, no `start`/`dev`/`build` script), mimicking the ClaudeAgents framework's own shape. Asserts that the tightened web-node detection (spec C1) does **not** activate `stacks/web-node.md` and the repo falls through to `stacks/generic.md`.
-- one fixture per extracted stack, minimally configured to trigger its detection.
-
-The diff is normalised before comparison to remove non-semantic noise:
-
-- strip timestamps, durations, PIDs, and worktree paths
-- sort array fields with no declared order (e.g. `blockingConcerns` by `id`)
-- drop token-usage counts and model identifiers
-
-The normalised diff against each golden must be empty. The capability-check format (fixture layout, golden-file shape, normalisation rules) is documented as a language-neutral format; the harness is run in ClaudeAgents' CI by a reference Node 18+ implementation at `scripts/capability-check`, following the maintainer-tooling / user-facing split defined in roadmap.md. This is a maintainer tool — a user running `/gan` on their own repo never invokes it. Golden files are hand-authored (not auto-captured from the pre-refactor evaluator) — this is a WIP project and we want the test to assert what the new system *should* do, not replay whatever it happened to do before.
+Correctness of the extraction is gated by the capability test harness (E3) — a separate spec covering the fixture layout, golden files, and normalisation rules.
 
 ## Acceptance criteria
 
@@ -48,7 +32,8 @@ The normalised diff against each golden must be empty. The capability-check form
 
 ## Dependencies
 
-- C1, C2
+- C1, C2, R1 (writes happen via the API, not direct file edits)
+- E3 (capability harness gates the refactor)
 
 ## Value / effort
 

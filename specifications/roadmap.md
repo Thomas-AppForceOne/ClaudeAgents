@@ -37,7 +37,7 @@ Existing agents start using the new system.
 
 - **E1 (agent prompt rewrite, no spec doc).** Rewrite gan-planner, gan-generator, gan-evaluator, gan-contract-proposer, SKILL.md, and O2's recovery flow to call the Configuration API instead of parsing files. Single coordinated PR.
 - [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract web-node, python, rust, go, ruby, kotlin, gradle, generic into `stacks/<name>.md` files written via the API.
-- **E3 (capability test harness, drafted alongside E2).** Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation. Ensures the agent rewrite preserves intended behavior.
+- [E3-capability-test-harness.md](E3-capability-test-harness.md) — Fixtures, golden files, normalisation rules, the `scripts/capability-check` reference implementation.
 
 ## Phase 4 — Modules
 
@@ -58,8 +58,8 @@ Apply the system to ecosystems beyond the bootstrap set.
 
 Hands-on customisation surface.
 
-- **U1 (project overlay UX, drafted alongside C3).** Hand-editable `.claude/gan/project.md`, validation errors, examples.
-- **U2 (user overlay UX, drafted alongside C4).** `~/.claude/gan/config.md`, cross-project preferences.
+- [U1-project-overlay-ux.md](U1-project-overlay-ux.md) — Hand-editable `.claude/gan/project.md`, validation errors, examples, mental-model guide.
+- [U2-user-overlay-ux.md](U2-user-overlay-ux.md) — `~/.claude/gan/config.md`, cross-project preferences, auto-memory integration.
 - [U3-additional-context-splice.md](U3-additional-context-splice.md) — `additionalContext` splice points for planner/proposer.
 
 ## Phase 7 — Observability and operations

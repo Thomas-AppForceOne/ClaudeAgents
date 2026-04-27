@@ -2,15 +2,20 @@
 
 ## Problem
 
-Projects often need small, local adjustments to `/gan` behavior without forking agents or forking the stack files: add a criterion that always applies, override stack detection for a polyglot repo where dispatch picks wrong, tighten a threshold. Today the only option is shadowing the agent in `.claude/agents/`, which forks hundreds of lines of prompt to tweak one setting.
+Projects and users need to adjust `/gan` behavior without forking agents or stack files: add a criterion that always applies, force a stack in a polyglot repo, tighten a threshold. C3 defines the *schema* of the overlay files that carry these adjustments. The cascade across tiers lives in C4; the human-side experience lives in U1 (project) and U2 (user).
 
 ## Proposed change
 
-Add a project-scoped overlay file: `.claude/gan/project.md`. The repo owns the path and schema; the user opts in by creating the file. Missing file = no overlay, defaults apply. This path is zone 1 (config) in the filesystem layout defined in [spec F1](F1-filesystem-layout.md); it is user-authored and committed to the repo.
+Two overlay files share one schema:
+
+- **Project overlay:** `.claude/gan/project.md`. Zone 1 (config) per F1; committed to the repo.
+- **User overlay:** `~/.claude/gan/config.md`. Outside any project; user-personal.
+
+Both follow the same parse contract and field set. The only differences are the file location, the cascade tier they sit at (defined in C4), and a per-field rule that some splice points are forbidden in the user overlay (`additionalContext` keys).
 
 ## Parse contract
 
-Same parse contract as stack files (spec C1): YAML frontmatter with `schemaVersion`, followed by a single canonical YAML body block. Markdown prose outside the YAML block is human-only and never read for semantic content.
+Same as stack files (per C1): YAML frontmatter with `schemaVersion`, then a single canonical YAML body block. Markdown prose outside the YAML block is human-only and never read for semantic content.
 
 ```
 ---
@@ -45,23 +50,23 @@ runner:
 
 ## Splice-point reference
 
-| Path | Shape | Default |
-|---|---|---|
-| `stack.override` | list of stack names | `[]` |
-| `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` |
-| `proposer.additionalContext` | list of file paths (spec U3) | `[]` |
-| `planner.additionalContext` | list of file paths (spec U3) | `[]` |
-| `generator.additionalRules` | list of strings | `[]` |
-| `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` |
-| `runner.thresholdOverride` | integer | agent's baked-in threshold |
+| Path | Shape | Default | Allowed in user overlay |
+|---|---|---|---|
+| `stack.override` | list of stack names | `[]` | Yes |
+| `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` | Yes |
+| `proposer.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
+| `planner.additionalContext` | list of file paths (per U3) | `[]` | **No (paths are project-relative)** |
+| `generator.additionalRules` | list of strings | `[]` | Yes |
+| `evaluator.additionalChecks` | list of `{command, on_failure}` | `[]` | Yes |
+| `runner.thresholdOverride` | integer | agent's baked-in threshold | Yes |
 
-The cascade and merge semantics across default → user → project are defined in [spec C4](C4-three-tier-cascade.md).
+A user overlay declaring `additionalContext` is a hard error at load time per F2's structured error model.
 
 ## `discardInherited`
 
-Either overlay may declare `discardInherited: true` to discard all upstream values for a block or a single field, resetting it to the "nothing" state before applying this overlay's own values. Intended for cases where merge would yield the wrong result — typically because a user-level default is inappropriate for a specific project.
+Either overlay may declare `discardInherited: true` to discard upstream values before applying its own.
 
-**Block-level** — flag sits alongside the splice points inside a block and discards all fields under that block:
+**Block-level** — flag sits alongside the splice points inside a block:
 
 ```yaml
 proposer:
@@ -71,7 +76,7 @@ proposer:
       threshold: 10
 ```
 
-**Field-level** — wrap the field's value as `{ discardInherited: true, value: <original-value> }`. Discards only that field:
+**Field-level** — wrap the field's value as `{ discardInherited: true, value: <original-value> }`:
 
 ```yaml
 generator:
@@ -83,43 +88,34 @@ generator:
 
 Rules:
 
-- Allowed at both user and project overlay levels. User-level discard targets the agent-baked default; project-level discard targets the user-resolved view (which already includes the default).
-- If omitted, the field/block follows normal merge semantics (spec C4).
-- `discardInherited: false` is valid and equivalent to omission. Useful when a field-level `false` needs to override a block-level `true` (see precedence below).
-- If both block-level `discardInherited: true` and a field inside the block carry their own `discardInherited: false`, the field-level value wins for that specific field — the rest of the block is still discarded. The more-specific declaration is authoritative.
-- `discardInherited` without a replacement value is allowed and resets the field to its default (or to nil, if that level is the one being discarded).
-- An unknown path passed as a field-level wrapper (i.e. a `{discardInherited, value}` shape on a field that doesn't accept a structured form) is a hard error.
+- Allowed at both user and project overlay levels. User-level discard targets the agent-baked defaults; project-level discard targets the user-resolved view (which already includes the defaults).
+- Omitted = follow normal merge semantics (per C4).
+- `discardInherited: false` is valid and equivalent to omission. Useful for overriding a block-level `true` on a single field.
+- A field-level `discardInherited: false` inside a block whose `discardInherited: true` is set wins for that specific field — the rest of the block is still discarded. More-specific wins.
+- `discardInherited: true` without a replacement value is allowed; the field resets to its default.
+- An unknown field-level wrapper (a `{discardInherited, value}` shape on a field that doesn't accept the structured form) is a hard error.
 
-## Other rules
+## Validation rules
 
-- Agents read `project.md` **after** loading the active stacks; the overlay's role is to shape criteria and context, not to restate stack mechanics.
-- ClaudeAgents is pre-1.0 and carries no backward-compatibility guarantees; `schemaVersion` is a structural marker. Overlays must declare the exact version their agents understand; a mismatch is a hard error. Any schema change — additive or breaking — bumps the version.
-- Unknown splice-point keys in either overlay are a hard error at load time; agents never silently ignore a misspelled key.
-
-### When to use `stack.override` vs. a project-tier stack file
-
-Both this overlay and spec C5's three-tier resolution let a project change its active stack set. Pick deliberately:
-
-- Use **`stack.override`** here when the stack file (its detection rules, audit commands, surfaces) is correct and you only need to shape which stacks are active — e.g. a KMP repo where auto-detection picks `web-node` for the JS interop module and you want to force `[kmp]`. Note that by default `stack.override` merges with the user-level list (union with dedup); combine with `stack.discardInherited: true` if you want the project list to be authoritative alone.
-- Use a **project-tier stack file** (`.claude/gan/stacks/<name>.md`, spec C5) when the stack's *contents* need to change for this project — e.g. a different `auditCmd`, a tighter `scope`, project-specific `securitySurfaces`. Spec 12 replaces the tier-3 stack file with the project-tier one wholesale.
-- Combining both is allowed: a project-tier stack file defines the stack, and `stack.override` in this overlay brings it into the active set.
+- `schemaVersion` must exactly match the API's known overlay schema version (per F3). Mismatch is a `SchemaMismatch` error.
+- Unknown splice-point keys are hard errors. The error includes a similar-name suggestion when the key is close to a known one (per U1's error UX).
+- `additionalContext` in a user overlay is a hard error.
+- `discardInherited` values that are not strict booleans are hard errors.
 
 ## Acceptance criteria
 
-- A `project.md` with `proposer.additionalCriteria` causes the listed criteria to appear in every generated contract for that project, merged with any user-level criteria per spec C4.
-- A `project.md` with `evaluator.additionalChecks` runs those checks during evaluation; a failing command produces the declared `on_failure` signal.
-- A `project.md` with `stack.override` contributes the named stacks to the active set.
-- A `project.md` declaring `proposer.discardInherited: true` causes the final `proposer.*` values to be exactly what the project declared — no user-level `additionalCriteria` or `additionalContext` entries leak through.
-- A `project.md` declaring field-level `generator.additionalRules.discardInherited: true` with its own `value` discards user-level `additionalRules` while leaving other fields in the `generator` block merged normally.
-- A malformed `project.md` halts the run with a clear error — never silently ignores fields.
-- An unknown splice-point key halts the run with an error naming the key.
-- Missing `project.md` is a no-op; agents behave as if only defaults applied.
+- An overlay declaring every legal field validates successfully against `schemas/overlay-vN.json`.
+- An overlay with an unknown key fails validation with the offending key cited in the error.
+- A user overlay declaring `proposer.additionalContext` fails validation with a clear message.
+- A field-level `discardInherited: false` inside a block with `discardInherited: true` is honored: the surrounding block is discarded, that one field is merged.
+- The schema document `schemas/overlay-vN.json` is the authoritative source of truth; the prose in this spec is illustrative.
 
 ## Dependencies
 
-- 04 (parse contract), 05 (stack.override only meaningful once stacks exist).
+- F2 (API contract), F3 (schema authority)
+- C1 (parse contract reused)
+- C4 (cascade and merge semantics across tiers)
 
-## Value / effort
+## Bite-size note
 
-- **Value**: high. This is the main user-facing customisation lever.
-- **Effort**: medium. Schema discipline matters: every splice point added here becomes a contract the repo cannot break. Start with the five above and resist growth until real cases arrive.
+This spec covers schema and validation only. The cascade lives in C4; project UX in U1; user UX in U2; `additionalContext` semantics in U3. Each can land independently.
