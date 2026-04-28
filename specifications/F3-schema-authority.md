@@ -34,6 +34,17 @@ Every config file declares `schemaVersion` in its frontmatter. The API enforces:
 
 The API knows which versions it can read; this is part of its compiled-in metadata. An R1 instance built against `schemas/stack-v1.json` reads stack files with `schemaVersion: 1` and rejects any other version with a `SchemaMismatch` error.
 
+### Migration tooling
+
+Exact-match-required + frequent version bumps = real friction for users whose committed `.claude/gan/project.md` and `.claude/gan/stacks/*.md` files break on every framework update. The mitigation is a CLI subcommand: **`gan migrate-overlays --to=<schemaVersion>`** (per R3) does best-effort upgrades of overlay files in the current project to the named schema version.
+
+- Backs up originals to `.claude/gan/.migration-backup-<timestamp>/` before writing.
+- Refuses on any non-additive bump unless `--force`.
+- Logs every transformation (renamed field, restructured value, etc.) so the user can review what changed.
+- Returns non-zero on any file the tool cannot migrate; the user must hand-edit those.
+
+The maintainer cost of writing a migration per schema bump is low while there are few schemaVersions, and the user-facing pain of "your overlay broke and you have to read release notes" deferred until later would be much worse. Bake migration tooling now, not when the framework has thousands of users.
+
 ### Cross-file invariants
 
 Some validation rules span multiple files and cannot be expressed in a single JSON Schema. The API's validation pipeline runs cross-file checks **after** schema validation:

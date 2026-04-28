@@ -84,9 +84,11 @@ Function names are camelCase with a verb prefix. Every function takes `projectRo
 
 ### MCP binding
 
-Each function is an MCP tool. Tool names mirror function names. Parameter schemas are JSON Schema documents (per F3). Returns are structured JSON.
+Each function in this spec is an MCP tool. Tool names mirror function names. Parameter schemas are JSON Schema documents (per F3). Returns are structured JSON.
 
 The MCP server is a long-lived process while the host (Claude Code) is open. R2's installer registers it once; thereafter it is available to every `/gan` invocation.
+
+**Modules do not register their own MCP tools.** Modules (per M1) are runtime utility libraries; their state is read and written through the existing `getModuleState`/`setModuleState`/`registerModule` tools, keyed by module name. MCP does not generally support dynamic per-module tool registration mid-session, and the framework does not need it: every per-module operation routes through the shared tool surface above. A reader who sees `M2's PortRegistry` and wonders if Docker exposes its own MCP tools — it does not.
 
 ### Validation timing
 
