@@ -49,6 +49,18 @@ gan <subcommand> --help                 Per-subcommand help.
 
 **Trust-mutating commands** (`gan trust approve`, `gan trust revoke`) require `--project-root` explicitly. Other commands default `--project-root` to the canonical form of the current working directory; trust-mutating commands do not, to prevent the "approved the wrong project from the wrong terminal" footgun.
 
+### Help text
+
+Every user-facing entry point exposes help on demand.
+
+- `gan --help` (and `gan -h`, `gan help`) prints a top-level summary: one-line description of `gan`, the subcommand list with one-line descriptions, the global flags (`--json`, `--project-root`), the exit-code table, and a pointer to per-subcommand help.
+- `gan <subcommand> --help` (and `gan <subcommand> -h`) prints the subcommand's full surface: usage line, every flag and positional argument with type and default, at least one realistic invocation example, and the subset of exit codes that subcommand can produce. Trust-mutating commands additionally print the explicit `--project-root` requirement and the "approved the wrong project from the wrong terminal" rationale.
+- `gan` invoked with no subcommand prints the same content as `gan --help` and exits 0 (not 64) — bare invocation is treated as a help request, not a malformed command.
+- Unknown subcommands and unknown flags exit 64 (bad CLI arguments) with a one-line error pointing at `--help`. Help text never references maintainer-only scripts (per the roadmap's user-facing discipline rule).
+- Help output goes to stdout (so `gan --help | less` works) and exits 0.
+
+The help surface is the user's first contact with the tool when something goes wrong; it is part of the contract, not a nice-to-have. Tests assert non-empty content, the presence of every documented subcommand and flag, and that exit codes are 0 for help requests and 64 for malformed argument errors.
+
 ### Output format
 
 Default output is human-readable: tables for lists, key-value pairs for single values, structured prose for validation reports.
@@ -96,6 +108,9 @@ Comes with the npm package R2 already installs. No additional install step. Afte
 - `gan config set runner.thresholdOverride 8` updates the project overlay (creating it if absent), and a subsequent `gan config get runner.thresholdOverride` returns 8.
 - `gan stacks list` reflects the same active set the API exposes inside `/gan`.
 - Running `gan` against a project where the MCP server is uninstalled produces exit code 5 with a remediation hint pointing at `install.sh`.
+- `gan --help`, `gan -h`, `gan help`, and bare `gan` (no arguments) all print the top-level help to stdout and exit 0. Help text lists every subcommand from the surface table.
+- `gan <subcommand> --help` and `gan <subcommand> -h` print the subcommand's usage, flags, at least one example, and applicable exit codes; exits 0.
+- Unknown subcommands and unknown flags exit 64 with a one-line error and a pointer to `--help`.
 
 ## Dependencies
 

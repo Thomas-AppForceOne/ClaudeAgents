@@ -37,6 +37,19 @@ Running `install.sh` twice in a row is safe. The second run:
 - Validates the existing project config.
 - Reports "already installed (versions match)" or "upgraded from <old> to <new>".
 
+### Help text
+
+`install.sh --help` (and `-h`) prints to stdout and exits 0:
+
+- One-line description of what the installer does.
+- The flag list with one-line descriptions: `--uninstall`, `--no-claude-code`, `--help`.
+- A summary of what the installer creates and where (symlinks, MCP config entry, project filesystem zones).
+- Prerequisites the installer expects (Node 18+, git; Claude Code unless `--no-claude-code`).
+- The exit-code convention (0 success, non-zero on any failure with a named cause).
+- A pointer to the project README for fuller documentation.
+
+Bare `install.sh` runs the install (this is the primary verb and changing it would break muscle memory). Unknown flags exit non-zero with a one-line error and a pointer to `--help`. Help text is for users; it never references maintainer-only scripts.
+
 ### Uninstall
 
 `install.sh --uninstall` reverses the install:
@@ -65,6 +78,7 @@ Any failure halts the installer with a non-zero exit code, an error message nami
 - `install.sh --uninstall` removes the symlinks and MCP config entry; subsequent `/gan` invocations report "ClaudeAgents not installed".
 - A failure mid-install (simulated by killing the npm step) leaves the system either fully pre-install or fully post-install, never half-configured.
 - The installer does not touch `.claude/gan/`, `.gan-state/runs/`, or any user data not created by itself.
+- `install.sh --help` and `install.sh -h` print the help text to stdout and exit 0; the text lists every flag, the prerequisites, and a summary of what the installer creates. Unknown flags exit non-zero with a pointer to `--help`.
 
 ## Dependencies
 
@@ -75,3 +89,4 @@ Any failure halts the installer with a non-zero exit code, an error message nami
 ## Bite-size note
 
 Sprintable as: prerequisite checks → symlink logic → npm install → Claude Code config edit → zone preparation → validation call → uninstall path → idempotency tests.
+
