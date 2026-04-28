@@ -25,9 +25,20 @@ Every API function takes an explicit `projectRoot: string` parameter (an absolut
 
 Rationale: the MCP server is long-lived and may be reached by multiple Claude Code clients across multiple projects in a single session. Relying on the server's cwd, the calling client's cwd, or any implicit per-connection state is brittle (MCP does not carry cwd in the protocol). An explicit `projectRoot` argument is verbose for the caller but unambiguous; it is the only sound choice given the long-lived-server design.
 
-In practice, the orchestrator (E1) captures `projectRoot` once per `/gan` run and includes it in every API call it makes. Agents consume the snapshot and rarely call the API directly; when they do, they receive `projectRoot` from the orchestrator's context. The CLI (R3) takes `--project-root` defaulting to the current working directory.
+**Path canonicalisation is mandatory at the API boundary.** Before any read, write, or trust-cache lookup, the server canonicalises `projectRoot`:
+
+- Resolve symlinks (`fs.realpathSync.native` on Node).
+- Strip trailing slashes.
+- Normalise on case-insensitive filesystems by canonical-path comparison (so `/Users/Thak/x` and `/Users/thak/x` resolve to one key on macOS).
+- Reject paths that don't exist on disk with a `MissingFile` structured error.
+
+Two API calls with semantically-equivalent paths must resolve to the same canonical form. Without this rule, `getResolvedConfig("/x/proj")` and `getResolvedConfig("/x/proj/")` could differ in trust state — a footgun the canonicalisation closes.
+
+In practice, the orchestrator (E1) captures `projectRoot` once per `/gan` run and includes it in every API call it makes. Agents consume the snapshot and rarely call the API directly; when they do, they receive `projectRoot` from the orchestrator's context. The CLI (R3) takes `--project-root` defaulting to the canonical form of the current working directory; trust-mutating commands (per R3) require `--project-root` explicitly.
 
 A function called with a `projectRoot` that does not contain the framework's expected directory layout (no `.claude/gan/`, no usable repo root) returns a structured `MissingFile` error rather than searching upward.
+
+**Capability binding is out of scope for v1.** Any caller can pass any `projectRoot`. The trust model assumes orchestrator-controlled values: the orchestrator is the only direct caller in a `/gan` run, and it captures `projectRoot` from the host environment. If a future feature surfaces a user-influenced string into a `projectRoot` argument (e.g. "operate on this subtree" or any tool-injection vector), the API will dutifully resolve and may approve where it should not. There is no signed token. This is **acceptable for pre-1.0 and explicitly flagged for the post-R audit** so it is reviewed once R1's caller graph is concrete.
 
 ### Function surface
 

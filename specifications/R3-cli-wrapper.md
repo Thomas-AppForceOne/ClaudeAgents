@@ -32,10 +32,22 @@ gan stack show <name>                   Print one stack's full data.
 gan stack update <name> <field> <value>
                                         Update one field of a stack file.
 gan modules list                        List registered modules + pairsWith status.
+gan trust info [--project-root=<path>]  Show approval status, command-paths the approved overlay invokes, and a reminder that the trust hash does not cover those targets transitively.
+gan trust approve --project-root=<path> [--note=<text>]
+                                        Approve the current content hash for the named project. Trust-mutating; --project-root is REQUIRED (no cwd default), to prevent approving the wrong project from the wrong directory.
+gan trust revoke --project-root=<path>  Remove approval. Trust-mutating; --project-root is REQUIRED.
+gan trust list                          List all current approvals.
+gan trust export [--out=<path>] [--no-notes] [--project-root=<path>]
+                                        Write the trust cache (or a project slice) to a JSON manifest for CI consumption. --no-notes drops the `note` field for repos where notes contain sensitive context.
+gan trust import <path>                 Merge a trust manifest into the local cache. Logs each imported approval with provenance.
+gan migrate-overlays --to=<schemaVersion>
+                                        Best-effort upgrade of overlay files in the current project to the named schema version. Refuses on any non-additive bump unless `--force`. Backs up originals to `.claude/gan/.migration-backup-<timestamp>/` before writing.
 gan version                             Print API version, server version, schemas in use.
 gan --help                              Help text.
 gan <subcommand> --help                 Per-subcommand help.
 ```
+
+**Trust-mutating commands** (`gan trust approve`, `gan trust revoke`) require `--project-root` explicitly. Other commands default `--project-root` to the canonical form of the current working directory; trust-mutating commands do not, to prevent the "approved the wrong project from the wrong terminal" footgun.
 
 ### Output format
 

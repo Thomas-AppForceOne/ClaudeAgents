@@ -30,11 +30,39 @@ A trust-cache mechanism, an `UntrustedOverlay` error code, an interactive trust 
 
 The Configuration API's `validateAll()` adds a trust check after schema validation and cross-file invariants. It computes a content hash of every committed file that can declare a shell command and compares against a trust cache:
 
-- **Files in the hash:** `.claude/gan/project.md`, every file under `.claude/gan/stacks/`, every file under `.claude/gan/modules/`. Anything committed to the repo that can introduce a command.
-- **Hash algorithm:** SHA-256 over the concatenated content of the files above, in lexicographic-sorted-path order. Stable across machines.
+- **Files in the hash:** `.claude/gan/project.md`, every file under `.claude/gan/stacks/`, every file under `.claude/gan/modules/`. Anything committed to the repo that can declare a command directly.
+- **Hash algorithm:** SHA-256 per file, plus an aggregate SHA-256 over the per-file hashes in lexicographic-sorted-path order. Both per-file and aggregate hashes are stored in the cache so `getTrustDiff()` can report which specific files changed since approval. Stable across machines.
 - **Cache location:** `~/.claude/gan/trust-cache.json` (user-scoped, NOT committed). Per the F1 zone model this is technically zone 1 *for the user*, not for any project.
-- **Cache key:** `(absolute-project-root-path, content-hash)`.
-- **Cache value:** approval timestamp, optional one-line note the user typed at approval time.
+- **Cache key:** `(canonicalised-project-root-path, aggregate-content-hash)`. Path canonicalisation is specified in R5 (`realpath` on POSIX; `fs.realpathSync.native` on Node; reject paths whose canonical form is not a descendant of the user's home or other reasonable root). Trailing slashes, case-folding on case-insensitive filesystems, and symlinks are normalised away before keying.
+- **Cache value:** approval timestamp, the per-file hash map at approval time, and an optional one-line note.
+
+### Known limitation: hash blast radius is narrower than the executable surface
+
+The hash covers committed files that *declare* commands. It does **not** cover the targets those commands invoke. Specifically:
+
+- **In-repo scripts referenced by relative path** (e.g. `lintCmd: ./scripts/my-lint.sh`). Once `[a]` is approved, the script can be modified without invalidating the trust hash. A contributor changing the script ships executable code under the existing trust.
+- **Wrapper binaries and their dependencies** (e.g. `./gradlew` sources `gradle/wrapper/gradle-wrapper.jar`). Same class.
+- **`$PATH`-resolved binaries** (e.g. `command: cargo audit`). Out of scope by definition; system-level concern.
+
+This is an **accepted limitation** in v1, not a bug. Closing the gap fully (transitive script hashing, binary inclusion) materially raises implementation complexity and re-opens design questions (do we hash compiled .jar files? do we follow `#!` shebangs? do we transitively chase `source` directives?).
+
+The recommended user workflow under this limitation:
+
+1. **Approve `[a]` covers config changes only.** A maintainer reviewing a PR must `git diff` not just `.claude/gan/` but every script and binary the approved overlay invokes. The trust prompt is a *per-config-change* gate, not a *per-PR* gate.
+2. **CI mode `strict` is safer than `approved-hashes-only`** in repos with many in-repo scripts; CI re-runs the full review every time.
+3. **`gan trust info`** (R3) shows the user which command paths their approved overlay invokes, so they know what surface a given approval implicitly accepts.
+
+A future spec (placeholder **F5 — Transitive trust**) may extend the hash to cover referenced scripts. Out of scope for v1.
+
+### User-facing error text discipline
+
+Every error text path in F4's mechanism — `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`, the trust prompt, the `--no-project-commands` log lines — is owned by the agent or the CLI, not by `package.json`-coupled tooling. User-facing messages must:
+
+- Use shell remediation (`rm <path>`) not Node remediation (`npm run trust-reset`).
+- Refer to "the framework" or "ClaudeAgents," never "the Node MCP server" or "the npm package," in user-visible text.
+- Pass an iOS-developer-on-macOS readability check: a Swift dev who never installed Node beyond `install.sh` should understand every word.
+
+This is a discipline rule for implementers, not a runtime check. R5 implementations and the agent prompt rewrites in E1 must respect it; reviewers checking F4-related output should flag any leak.
 
 ### `UntrustedOverlay` error
 

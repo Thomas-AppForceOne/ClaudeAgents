@@ -56,7 +56,11 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
   "approvals": [
     {
       "projectRoot": "/Users/thak/projects/example",
-      "contentHash": "sha256:abc123...",
+      "aggregateHash": "sha256:abc123...",
+      "perFileHashes": {
+        ".claude/gan/project.md": "sha256:def456...",
+        ".claude/gan/stacks/android.md": "sha256:ghi789..."
+      },
       "approvedAt": "2026-04-25T14:33:21Z",
       "note": "ok, reviewed PR #142"
     }
@@ -64,9 +68,26 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
 }
 ```
 
-Reads/writes are atomic (temp-file + rename). Concurrent writes from two `/gan` runs are serialised through the MCP server's single-writer discipline.
+Per-file hashes are stored alongside the aggregate so `getTrustDiff()` can report exactly which files changed since approval — without storing previous file *contents* (which would balloon the cache and create a target for attackers).
 
-The file is created on first write. Missing file is equivalent to "no approvals." A malformed file is **not** silently regenerated — it's a `TrustCacheCorrupt` structured error directing the user to inspect or delete it. (Defensive: if the cache is corrupted, we don't want a silent reset to "deny everything," but we also don't want to blow it away without consent.)
+**File mode.** Created with mode `0600` (user read/write only). On every read/write, the cache I/O implementation verifies the mode and refuses to proceed if the file is world-readable or group-readable; users who paste secrets into the `note` field should not have them silently exposed by an installer mishap.
+
+**Path canonicalisation.** `projectRoot` is canonicalised before keying via `fs.realpathSync.native(projectRoot)` (Node) or its equivalent. Trailing slashes are removed, symlinks are resolved, and case-insensitive filesystems are normalised by canonical-path comparison. Two cache entries can never refer to the same on-disk directory under different keys.
+
+**Concurrency.** Reads/writes are atomic (temp-file + rename) for individual operations. Cross-process concurrency is handled with an OS-level advisory lock (`flock` on POSIX; equivalent on Windows): the writer acquires an exclusive lock on `~/.claude/gan/.trust-cache.lock` for the read-modify-write cycle. Two terminal windows running `/gan` against two different projects simultaneously serialise on the lock; neither loses an update. The lock file's existence does not interfere with the cache; only the lock state matters.
+
+**Corruption handling.** The file is created on first write. Missing file is equivalent to "no approvals." A malformed file is **not** silently regenerated — it's a `TrustCacheCorrupt` structured error with shell remediation: `rm ~/.claude/gan/trust-cache.json` (or instruct the user to inspect first). Per F4's user-facing error text discipline, the message refers to "the trust cache file," not "the npm package" or "the Node MCP server."
+
+### CI onboarding: trust manifest export/import
+
+`approved-hashes-only` mode requires the cache to be present in the CI runner's filesystem. F4 said this without specifying how. R5 ships:
+
+- `gan trust export [--out=trust-manifest.json]` — writes the current trust cache (or a project-scoped slice if `--project-root` is set) to a JSON file in the same shape as the cache.
+- `gan trust import <trust-manifest.json>` — reads the file and merges its approvals into the local cache. Each imported approval is logged with provenance ("imported from trust-manifest.json on 2026-04-27").
+
+**Recommended CI pattern:** the repo commits a `.claude/gan/trust-manifest.json` (or stores it as a CI secret if the org prefers). The CI runner's `install.sh --no-claude-code` step calls `gan trust import .claude/gan/trust-manifest.json`. `GAN_TRUST=approved-hashes-only` then operates against the imported approvals.
+
+The manifest format is identical to the cache so users do not learn two formats. Committing the manifest exposes the maintainer's approvals (timestamps, notes) but not any secret material; if `notes` are sensitive, omit them via `gan trust export --no-notes`.
 
 ### Integration with `validateAll()`
 
@@ -92,7 +113,7 @@ The trust check:
 The `/gan` skill orchestrator (E1's scope) presents the prompt when `validateAll()` returns `UntrustedOverlay`. Implementation:
 
 - The skill reads the user's choice from stdin.
-- On `[v]` (view diff): the skill calls a new `getTrustDiff(projectRoot)` MCP tool that returns the per-file diff between the previous approved content and the current content; the skill formats it as a unified diff and pipes it through the user's pager (or just prints it).
+- On `[v]` (view diff): the skill calls a new `getTrustDiff(projectRoot)` MCP tool that returns a structured diff against the previous approval. Because the cache stores **per-file hashes**, not per-file contents, the diff reports *which* files changed (compared to the approved per-file hash map) but not the actual content delta. The skill then offers the user a one-line follow-up suggestion: "run `git diff <approved-commit>..HEAD -- <changed-paths>` for content." If the user has not committed the cache's previous approval-time content, the skill cannot reconstruct the delta — that's the price of not storing prior content blobs in the cache (size cost; security posture). The user is expected to use git for content review; the trust prompt reports *that* something changed and *which files*, not *what* changed.
 - On `[a]` (approve): calls `trustApprove(projectRoot, currentHash)` and re-runs `validateAll()`.
 - On `[r]` (--no-project-commands): sets the runtime flag and continues without writing to the cache.
 - On `[c]` (cancel): returns control to the user.
@@ -134,7 +155,13 @@ Agents (and the orchestrator's command-running paths) consult this flag before e
 - Evaluator falls back from tier-1/tier-2 `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` to the tier-3 default for the matching stack name.
 - If no tier-3 fallback exists for a project-tier-only stack, the stack is treated as not-defined and the user gets a warning naming the stack.
 
-The skipped commands and fallbacks are recorded in the run's startup log (per O1) so the user can see what was suppressed.
+The skipped commands, fallbacks, **and any custom (project-tier-only) stacks that were dropped entirely** are recorded in the run's startup log (per O1). The log content includes:
+
+- Skipped commands: each `additionalChecks` entry that didn't run, with its source tier.
+- Tier fallbacks: each `<stack>.<field>` that fell back from tier-1/2 to tier-3, with both values.
+- **Custom stacks dropped:** any project-tier-only stack with no tier-3 match, with the stack name and a one-line note ("custom stack <name> entirely skipped — no tier-3 fallback exists; review the stack file directly to understand what its commands would have done").
+
+The user reviewing someone's PR who picked `[r]` should be able to see, from the log alone, which surfaces of the project went un-evaluated.
 
 ### `PathEscape` invariant
 
