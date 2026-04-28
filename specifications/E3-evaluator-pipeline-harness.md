@@ -109,6 +109,24 @@ CI invokes via a workflow named `test-evaluator-pipeline.yml` (replaces `test-ca
 - LLM verdicts on actual criteria. The deterministic core decides *what* to check; the LLM decides *whether* the change passes. The harness asserts the former and not the latter.
 - Free-form evaluator output (rationale text, blocker descriptions written by the LLM).
 - Token usage or model-specific behavior.
+- **Post-diff state.** The harness inputs are *pre-diff*: the worktree as it stands before the generator runs. C1's keyword-trigger algorithm explicitly says "search the touched files (existing content + proposed diffs if available)." A regression in post-diff keyword matching (e.g. a glob library quirk on a path with brackets, a regex anchored to line start that should have matched a diff hunk) would slip past this harness because it never sees a generator's diff. The harness's claim is therefore narrower than it might appear: it tests **the deterministic pipeline's pre-diff decisions**, not the runtime evaluator end-to-end.
+- **Planner-driven inputs to `appliesToFiles`.** The deterministic core takes a sprint plan as input. In production, the sprint plan is the *planner agent's* output — and the planner is LLM-driven. The harness sidesteps planner variance by using a synthetic `sprint-plan.json`. So `securitySurfacesInstantiated.appliesToFiles` is deterministic *given a fixed plan*; production inherits planner variance through this path. Honest framing: harness verifies the function's purity, not the agent's overall determinism.
+
+### Determinism prerequisites
+
+"Deterministic" only holds if the implementation pins libraries that exhibit cross-version behavioral drift. Specifically:
+
+- **Glob matching:** the deterministic core uses [picomatch](https://github.com/micromatch/picomatch) with a pinned major version. `picomatch` is chosen over `minimatch` and `node-glob` because it has the most documented escape and brace-expansion semantics. The pinned version is declared in R1's `package.json` and re-verified by R4's lint at publish time.
+- **Regex engine:** Node's V8-based RegExp. Behavior is stable per Node version. R5's `package.json` pins the Node engine range alongside the picomatch version.
+- **JSON output:** `JSON.stringify` with sorted keys via a small helper (no external library) so the harness output is deterministic across Node versions.
+
+Diverging from these choices in any future revision invalidates the goldens and requires a `--update-goldens` pass.
+
+### Future-proofing: gate new trigger types
+
+Today every `securitySurfaces` decision is keyword + glob — both expressible as pure functions. A future surface that needs LLM-aided semantic detection ("this diff introduces *intent* to expose data") cannot live in the deterministic core; if added, it would silently shrink the harness's coverage of "the deterministic pipeline" without anyone noticing.
+
+**Rule for new trigger types:** any `securitySurfaces.<id>.triggers.<type>` introduced in a future C1 revision must be expressible as a pure function over (file content, file path, sprint plan). Trigger types that require an LLM call go *outside* the deterministic core, and their absence from this harness must be called out in the spec that introduces them.
 
 ### Optional follow-up: LLM evaluation suite (E4)
 
