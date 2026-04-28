@@ -93,6 +93,7 @@ Two prior review passes have closed the architectural questions I most worried a
 - pairsWith on project-tier replacement explicitly documented in C5 with remediation hint in the error message.
 - `additionalChecks` execution order = merge order, documented in C4 with worked example showing in-place override positioning.
 - `gan migrate-overlays` CLI subcommand defined in R3; rationale documented in F3.
+- `--help` / `-h` is now contractually required on every user-facing command. R2 (`install.sh`) and R3 (`gan` CLI) gained Help text sections plus acceptance criteria specifying content, exit codes (0 on help, 64 on unknown args), and aliases. E1 added `/gan --help` as the only top-level flag that short-circuits *before* `validateAll()`, so a user with a broken config can still discover how to inspect or recover it.
 
 ## Known gaps still open
 
