@@ -41,14 +41,15 @@ The MCP server and tooling that fulfill Phases 0–1.
 - [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, evaluator-pipeline-check runner, pair-names check, CI workflows.
 - [R5-trust-cache-impl.md](R5-trust-cache-impl.md) — Reference implementation of F4: hash function, cache I/O, `validateAll()` integration, `getTrustState`/`trustApprove` MCP tools, `--no-project-commands` runtime flag routing, `PathEscape` invariant.
 
-## Revision break — post-R contract audit
+## Revision break — post-R contract audit (incl. F4/R5 operational readiness)
 
-The R series is the first time the F-phase contracts and C-phase data models are exercised against real code (the MCP server, installer, CLI, lint). Before Phase 3 begins, every contract spec is re-audited against its implementation to surface gaps the spec missed.
+The R series is the first time the F-phase contracts and C-phase data models are exercised against real code (the MCP server, installer, CLI, lint, trust cache). Before Phase 3 begins, every contract spec is re-audited against its implementation to surface gaps the spec missed.
 
 Specs to revisit, with what to verify:
 
-- **F2** — confirm the function surface and structured-error model match what R1 actually exposes; refine signatures, error codes, and bulk-read shapes if implementation surfaced different patterns.
+- **F2** — confirm the function surface and structured-error model match what R1 actually exposes; refine signatures, error codes, and bulk-read shapes if implementation surfaced different patterns. Includes the F2 capability-binding flag (per F2's "Capability binding" subsection): is any caller surfacing user-influenced strings into `projectRoot`?
 - **F3** — confirm the JSON Schema documents at `schemas/<type>-vN.json` cover everything R1 needs to validate; add fields or invariants the implementation found necessary.
+- **F4 + R5 operational readiness** — exercise the trust prompt against at least three real PRs of varying shape (config-only change; config + script change; new project-tier stack file). Confirm: (a) the `[v]` view-the-diff branch produces output users can actually act on; (b) `getTrustDiff()`'s per-file-hash report is legible; (c) `--no-project-commands` log content names every suppressed surface including custom-stack drop-throughs; (d) `gan trust export`/`import` round-trips cleanly; (e) error texts pass the iOS-on-macOS readability check (no Node/npm leaks). This gate exists because U1 / U2 (Phase 7) are when committed overlays go mainstream — if R5's prompt UX has rough edges discovered late, the user-facing rollout in Phase 7 inherits them.
 - **C1, C2, C3, C4, C5** — confirm the algorithms and merge rules described match what R1's resolver actually does; clarify ambiguities found during implementation.
 
 Like the post-E1 break, this is a checkpoint: specs are revised in place; no new files. No Phase 3 work begins until the audit closes.
@@ -105,6 +106,8 @@ Apply the system to ecosystems beyond the bootstrap set.
 - [S1-android-stack.md](S1-android-stack.md) — Android client stack file.
 - [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
 - [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — iOS Swift / SwiftUI stack.
+
+**Observability carve-out for Phase 5.** Users authoring or debugging stack files in Phase 5 need at least basic observability before O1 lands in Phase 6. R1 ships a **minimum-viable observability surface** as part of its Phase 2 work: the orchestrator startup log line described in [O1's part A](O1-resolution-observability.md) (which files were loaded, which stacks are active, which tier each stack came from) is implemented in R1, not deferred to O1. The richer surfaces (`gan config print`, `--print-config` JSON, `discarded` array reporting) remain Phase 6 work. This split lets an Android dev hitting an S1 detection bug in Phase 5 see "did my detection rule activate at all?" without waiting for the full observability suite.
 
 ## Revision break — post-S schema audit
 

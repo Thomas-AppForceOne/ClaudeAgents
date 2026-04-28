@@ -8,7 +8,9 @@ Once stack dispatch (C2), overlays (C3, C4), and three-tier resolution (C5) are 
 
 Two mechanisms — one automatic, one on demand. Both surface data the Configuration API (F2) already produces; this spec defines how that data reaches the user.
 
-**A. Startup log line (automatic, every run)**
+**Phase carve-out.** Per the roadmap, part A (the startup log line) lands in R1's Phase 2 work as the framework's minimum-viable observability surface — Phase 5 stack authors need at least the "which files were loaded, which stacks are active" view before O1's full suite lands in Phase 6. Part B and the richer surfaces below (`gan config print`, `--print-config` JSON, the `discarded` array, the `replacedWith` field) remain O1 / Phase 6 work. This spec documents both halves; the implementation lands in two stages.
+
+**A. Startup log line (automatic, every run) — lands with R1 in Phase 2**
 
 The skill orchestrator, after `validateAll()` succeeds and before spawning agents, prints a single structured record summarising the resolved config it captured from `getResolvedConfig()`:
 
@@ -25,7 +27,7 @@ Missing sources are listed explicitly (`(none)`), not silently omitted — "noth
 
 The orchestrator owns this line because it owns the snapshot. Spawned agents do not re-emit their own loaded-files line; they consume the snapshot the orchestrator captured (per F2's validation timing).
 
-**B. `gan config print` and the `/gan --print-config` flag**
+**B. `gan config print` and the `/gan --print-config` flag — lands in Phase 6 (this spec's main scope)**
 
 Two equivalent surfaces for the same data:
 

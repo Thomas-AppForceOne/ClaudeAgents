@@ -100,6 +100,14 @@ Published to npm as `@claudeagents/config-server`. R2's installer runs `npm inst
 
 The server logs to a per-run file under `.gan-state/runs/<run-id>/logs/config-server.log` when invoked from a `/gan` run, and to stderr when invoked from the CLI. Logs include every tool call (function name, anonymised arguments, result code) for debugging without sensitive data.
 
+### Minimum-viable observability (Phase 2 carve-out from O1)
+
+Per the roadmap, R1 implements the **orchestrator startup log line** described in [O1's part A](O1-resolution-observability.md) as part of its Phase 2 work — not deferred to Phase 6. The orchestrator (E1's scope) is the consumer; R1 exposes the data via `getResolvedConfig()`.
+
+This minimum surface includes: which stack files were loaded, which tier each came from, which overlay tiers were loaded, which `additionalContext` files resolved, which fields were discarded by `discardInherited`. It is single-line / single-block console output, not the full JSON report.
+
+The richer JSON surface (`gan config print`, `/gan --print-config`, the `discarded` array's `replacedWith` field) remains O1's Phase 6 work. R1 produces the underlying data in `getResolvedConfig()` from day one; only the user-facing presentation is staged.
+
 ## Acceptance criteria
 
 - The server binary starts via `claudeagents-config-server` (the npm bin entry); MCP-handshakes with stdio; advertises the F2 tool set.
