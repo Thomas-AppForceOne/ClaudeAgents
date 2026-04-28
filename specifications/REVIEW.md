@@ -1,6 +1,6 @@
 # Specification review — introduction for the reviewer
 
-> **Status: second pass.** The spec set went through a first review pass (response captured in [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)) and has been substantially revised in 19 commits since. The "What's been addressed" section below summarises what changed; "What I'd most like you to challenge" lists the questions still worth pushing on. If you want to read the original first-pass letter, it's in this file's git history.
+> **Status: third pass (or later).** Two prior review passes closed; responses in [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md) and [REVIEW_RESPONSE_2.md](REVIEW_RESPONSE_2.md). The spec set has been revised in ~25 commits across both passes. The second pass surfaced concrete architectural concerns (hash blast radius, evaluator deterministic-core honesty, projectRoot canonicalisation, snapshot freshness "may"); each is addressed. Open the response files if you want a full audit trail; the "What's been addressed" section below summarises closures since first authoring.
 
 ## What you're looking at
 
@@ -37,38 +37,37 @@ The phase code in each filename is also the implementation order. A spec at posi
 
 ## What I'd most like you to challenge
 
-Highest-value targets for second-pass review, ordered by load-bearing-ness:
+Two prior review passes have closed the architectural questions I most worried about (Configuration API as black-box, F4 trust-cache shape, snapshot-freshness model, E3's deterministic-core honesty, projectRoot canonicalisation, splice-point catalog drift). Open targets for a third-pass reviewer, in declining importance:
 
-1. **Is F4's trust-cache mechanism the right shape?** The threat model is committed-overlay-as-RCE-surface. The fix is a content-hash trust cache plus a `--no-project-commands` flag. Specific things to push on:
-   - Hash covers `.claude/gan/project.md` + `.claude/gan/stacks/*.md` + `.claude/gan/modules/*.yaml`. Should it also cover scripts that those files reference (e.g. a `lintCmd: ./scripts/my-lint.sh`)? Currently no — the script's contents can change without invalidating the trust hash.
-   - Hash is SHA-256 over raw bytes in lex-sorted order, no Unicode normalisation. Reasonable, but a contributor with a different editor encoding could re-hash innocently.
-   - The four-option prompt ([v]/[a]/[r]/[c]) is described in prose; no UX mockup. Ask if the flow makes sense to someone reviewing a PR locally.
-   - `GAN_TRUST` env var has three modes. Is the default-strict the right default for CI? Are the modes named clearly?
+1. **Implementation-imposed corner cases.** The spec set is now reasonably complete on paper, but the post-R, post-E1, post-M, and post-S revision breaks expect that real implementation surfaces gaps. A reviewer reading the spec set as "what would I build to fulfill this?" may catch gaps that paper-review missed. Push hardest where you would actually start writing code.
 
-2. **Is the E3 deterministic-core carve-out architecturally honest?** The new framing assumes the evaluator agent has a separable deterministic pipeline (snapshot → active stacks → security surfaces → commands → keywords) that produces a structured "evaluator plan" before any LLM analysis runs. The harness exercises only that core. Question: is the evaluator's *actual* logic separable that cleanly? E1's per-agent rewrite checklist promises the carve-out lives at `src/agents/evaluator-core/` after E1. If a chunk of "deterministic" decision-making turns out to need LLM analysis, the harness gates a smaller surface than it claims.
+2. **F5 (transitive trust) — is the deferral honest?** F4 explicitly accepts that the trust hash covers config files but not the scripts they invoke (e.g. `lintCmd: ./scripts/my-lint.sh`). The deferred user workflow is "review every PR's script changes manually." Push back if you think this gap leaves a hole users will not realistically notice in practice.
 
-3. **Is F2's `projectRoot` parameter the right design choice?** Per-call explicit `projectRoot` works but is verbose for the orchestrator (every API call carries it). The reviewer first-pass identified three options (per-call parameter, per-project server, session handshake); we picked per-call. Is that the right call given MCP's actual semantics? If MCP gains session-state primitives later, would we regret the per-call choice?
+3. **The new resolution rules from second-pass.** Cross-stack securitySurfaces id namespacing (`<stack>.<id>`), discardInherited+scalar-default fall-back, cacheEnv conflict resolution requiring all-conflicting-stacks-overridden, snapshot freshness as always-after-agent-writes / never-on-user-edits, and project-tier-shadow pairsWith error guidance — these all landed since the second-pass review. Walk a fresh fixture through them; flag any rule that doesn't compose cleanly with another.
 
-4. **Is C3's authoritative splice-point catalog stable enough?** All splice-point definitions, defaults, tier-allowances, and merge rules now live in one C3 table. C4 references it; UX specs cite it abstractly. The reviewer first-pass flagged catalog drift across multiple specs; consolidation closes that. But: does this design hold when adding a splice point with an exotic merge rule (e.g. weighted average, set intersection)? The "common patterns" section in C4 lists the patterns covered today; an unforeseen pattern would need both C3 (table addition) and C4 (narrative addition).
+4. **Phase ordering, fourth-pass version.** Three revision breaks plus one "operational readiness" check inside post-R. O1 part-A carved out into R1's Phase 2 work for early observability. Is the staging right, or is something still mis-phased?
 
-5. **Is the phase ordering with three revision breaks right?** Post-R, post-E1 (where O2 gets first authored), post-M, post-S. Each break gates the next phase. Is anything missing? Is anything excessive? The roadmap claims this is "more discipline than most pre-1.0 redesigns ship with"; second-pass reviewer should push back if the discipline is theatre.
+5. **F4 + F5 trust model in detail.** The trust-cache UX has now been specified concretely (`getTrustDiff` semantics, lock file, mode 600, export/import for CI, error-text discipline). Is any of it still wishful?
 
-6. **Does the runtime boundary still hold under F4?** Maintainer tooling assumes Node 18+; user-facing behaviour is owned by the agent at runtime. F4 introduces `~/.claude/gan/trust-cache.json` and the `gan trust approve` CLI. Is any part of F4's UX accidentally Node-leaking — i.e., does an iOS developer running `/gan` ever see a Node-shaped error?
+6. **Cascade scenarios beyond the eight documented ones.** First pass walked five; second pass walked five more. All addressed. A fresh reviewer may find a tenth.
 
-7. **Cascade-and-merge scenarios beyond the documented ones.** First-pass review walked five scenarios (§9 in REVIEW_RESPONSE.md) and found four that needed clarifications; all are now addressed. A fresh second-pass reviewer may find scenarios I and the first reviewer both missed.
+## What's been addressed across both review passes
 
-## What's been addressed since the first review
+(Skim or skip; pasted here so a third-pass reviewer doesn't re-flag closed items.)
 
-(Skim or skip; pasted here so the second-pass reviewer doesn't re-flag closed items.)
-
-**Architecture:**
-- F4 (Threat model + trust boundaries) added as a new Phase 0 spec. R5 (trust-cache reference impl) added as a new Phase 2 spec.
-- F2 every function takes explicit `projectRoot`. List-shaped writes have dedicated atomic operations (`appendToStackField`, `removeFromStackField`).
-- E3 reframed around the evaluator's deterministic core. Renamed to "evaluator pipeline harness." No LLM in CI. Optional E4 (LLM eval suite) flagged as future, non-gating.
-- Snapshot freshness pinned: frozen for the whole run including across multiple sprints.
-- C3's splice-point catalog made authoritative with merge-rule column. C4 references C3 instead of duplicating.
-- `stack.cacheEnvOverride` splice point added to resolve C1's cacheEnv conflict scenario without C5's wholesale-replacement path.
-- `stack.override` forbidden in user tier (was a footgun: silently disabled auto-detection in every project).
+**Architecture (first pass + second pass):**
+- F4 (Threat model + trust boundaries) added as a Phase 0 spec. R5 (trust-cache reference impl) added as a Phase 2 spec. Second pass tightened: hash blast radius explicitly named as accepted limitation; recommended workflow + future F5; per-file hash storage for `getTrustDiff`; flock-based concurrency; trust manifest export/import for CI.
+- F2 every function takes explicit `projectRoot` with mandatory canonicalisation at the API boundary; capability-binding flagged for post-R audit.
+- List-shaped writes have dedicated atomic operations (`appendToStackField`, `removeFromStackField`).
+- Snapshot freshness pinned: frozen-on-user-edits, always-re-snapshot-after-agent-writes (no "may"). Two-tier deterministic contract.
+- E3 reframed around the evaluator's deterministic core; pre-diff scope explicitly disclosed; `picomatch` pinned for glob determinism; future trigger-types must be pure functions.
+- C3's splice-point catalog is the authoritative single source of truth with merge-rule column; C4 references it; the design assumption "splice points resolve independently" is documented.
+- `stack.cacheEnvOverride` splice point added; conflict resolution requires all conflicting stacks to resolve to the same final value.
+- `stack.override` forbidden in user tier.
+- Cross-stack `securitySurfaces` id collisions resolved via `<stack>.<id>` namespacing.
+- `discardInherited` + scalar-no-replacement falls back to bare default per C3.
+- `pairsWith.consistency` error message names the fix when project-tier shadowing is the cause.
+- F2 makes explicit that modules do not register their own MCP tools.
 
 **UX, errors, observability:**
 - Structured error enum extended: `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`.
@@ -79,33 +78,36 @@ Highest-value targets for second-pass review, ordered by load-bearing-ness:
 
 **Process:**
 - Post-M revision break added (M1+M2 first exercise F2's module surface).
+- Post-R audit explicitly includes F4/R5 operational readiness check.
 - Post-E1 break renamed to acknowledge O2 gets *first prescriptively authored* there, not merely audited.
 - E1 → E3 → E2 implementation order documented (numbering reflects authoring order, not impl order).
 - E2 gains a five-slice bite-size sprint plan; rating bumped from medium to medium-large.
 - Roadmap headline corrected: "Node is required once at install time" (not "never need Node").
+- O1 part A (startup log line) carved out into R1's Phase 2 work so Phase 5 stack authors have minimum-viable observability before the full O1 lands in Phase 6.
 
 **Spec hygiene:**
 - Stack name case-sensitivity rule (`^[a-z][a-z0-9-]*$`) in C1.
 - Path-escape rule (`PathEscape`) in F4 covers `additionalContext` and any future path-bearing splice point.
-- pairsWith on project-tier replacement explicitly documented in C5.
-- `additionalChecks` execution order = merge order, documented in C4.
-- Duplicate-key positioning (lower-tier slot wins) documented in C4.
+- pairsWith on project-tier replacement explicitly documented in C5 with remediation hint in the error message.
+- `additionalChecks` execution order = merge order, documented in C4 with worked example showing in-place override positioning.
+- `gan migrate-overlays` CLI subcommand defined in R3; rationale documented in F3.
 
 ## Known gaps still open
 
-Down to a small set since most first-pass gaps are closed:
+Down to a small set since most prior-pass gaps are closed:
 
-1. **Telemetry / privacy spec.** Still deferred. Will be authored alongside O2's first prescriptive revision in the post-E1 break, since O2 references a telemetry directory and recovery-archive contents are exactly the artifact a user might not want sent anywhere.
-2. **JSON Schema documents at `schemas/<type>-vN.json` are described in prose but not yet committed.** They land alongside R1 implementation; reviewers checking schema correctness can only verify the prose description.
-3. **Worked end-to-end fixture.** The first reviewer suggested one (e.g. polyglot-android-node walked through validateAll → getResolvedConfig → orchestrator startup → first sprint) and noted it would catch cross-spec inconsistency. Not done. A second-pass reviewer may want it.
+1. **Telemetry / privacy spec.** Still deferred. Will be authored alongside O2's first prescriptive revision in the post-E1 break.
+2. **JSON Schema documents at `schemas/<type>-vN.json` are described in prose but not yet committed.** They land alongside R1 implementation.
+3. **Worked end-to-end fixture.** Suggested by both prior reviewers. Not yet done; a polyglot-android-node walk-through would catch cross-spec inconsistency. Worth doing before any new reviewer reads.
 4. **F4's prompt UX is described in prose.** No mockup, no transcript, no per-platform validation (terminal width, colour, accessibility).
+5. **F5 (transitive trust hashing) is named but not specified.** Accepted v1 limitation; future work.
 
 ## Things you don't need to read carefully
 
 - **[O2](O2-recovery.md) — Recovery.** Header note says "descriptive of intent, not prescriptive of mechanism." First prescriptive authoring happens in the post-E1 revision break. Reading the body for *intent* is fair; reading for *implementability* is premature.
 - **JSON Schema documents at `schemas/<type>-vN.json`.** Authored alongside R1 implementation; not yet committed.
 - **Per-stack security surface catalogues** in [S1](S1-android-stack.md), [S3](S3-ios-swift-stack.md). Read for *coverage and shape*, not for "did the author pick the right list of surfaces."
-- **[REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)** — the first-pass reviewer's response, retained as a record. Read for context if you want to know what was challenged before; don't re-litigate the closed items.
+- **[REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)** and **[REVIEW_RESPONSE_2.md](REVIEW_RESPONSE_2.md)** — prior reviewers' responses, retained as records. Read for context if you want to know what was challenged before; don't re-litigate the closed items.
 
 ## What I'm asking for (unchanged from first pass)
 
