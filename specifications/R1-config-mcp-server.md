@@ -102,11 +102,11 @@ The server logs to a per-run file under `.gan-state/runs/<run-id>/logs/config-se
 
 ### Minimum-viable observability (Phase 2 carve-out from O1)
 
-Per the roadmap, R1 implements the **orchestrator startup log line** described in [O1's part A](O1-resolution-observability.md) as part of its Phase 2 work — not deferred to Phase 6. The orchestrator (E1's scope) is the consumer; R1 exposes the data via `getResolvedConfig()`.
+Per the roadmap, R1 implements the **orchestrator startup log line** described in [O1's part A](O1-resolution-observability.md) as part of its Phase 2 work — not deferred to Phase 5. The orchestrator (E1's scope) is the consumer; R1 exposes the data via `getResolvedConfig()`.
 
 This minimum surface includes: which stack files were loaded, which tier each came from, which overlay tiers were loaded, which `additionalContext` files resolved, which fields were discarded by `discardInherited`. It is single-line / single-block console output, not the full JSON report.
 
-The richer JSON surface (`gan config print`, `/gan --print-config`, the `discarded` array's `replacedWith` field) remains O1's Phase 6 work. R1 produces the underlying data in `getResolvedConfig()` from day one; only the user-facing presentation is staged.
+The richer JSON surface (`gan config print`, `/gan --print-config`, the `discarded` array's `replacedWith` field) remains O1's Phase 5 work. R1 produces the underlying data in `getResolvedConfig()` from day one; only the user-facing presentation is staged.
 
 ## Acceptance criteria
 
@@ -116,7 +116,7 @@ The richer JSON surface (`gan config print`, `/gan --print-config`, the `discard
 - `updateStackField()` preserves the stack file's free-form `conventions` markdown verbatim.
 - A pairsWith consistency violation between a fixture's `src/modules/foo/` and `stacks/foo.md` is reported as a single `InvariantViolation` with both file paths cited.
 - Per-tool unit tests cover every F2 function with at least one positive and one negative case.
-- Integration tests cover at least: a clean web-node project, a polyglot Android+Python project, a project with overlays at every tier, a project with a malformed overlay.
+- Integration tests cover at least: a clean web-node project, a polyglot web-node + synthetic-second project (per the multi-stack guard rail in the roadmap's Cross-cutting principles), a project with overlays at every tier, a project with a malformed overlay.
 
 ## Dependencies
 

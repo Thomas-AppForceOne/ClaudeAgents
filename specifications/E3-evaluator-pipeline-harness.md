@@ -7,7 +7,7 @@ The evaluator agent has two separable jobs:
 1. **Deterministic pipeline.** Given a resolved snapshot, a sprint plan, and the worktree state, decide which stacks are active, which `securitySurfaces` fire on which files, which commands to run, which keywords to grep, and what file scope each rule applies to. Pure data flow over typed inputs.
 2. **LLM analysis.** Given those surfaces and that diff, decide whether the change satisfies criterion X.
 
-Job 1 is testable with golden files and produces deterministic outputs. Job 2 is testable only with an LLM; its outputs vary even at fixed temperature. Most regression risk lives in Job 1 — a stack rename drops a surface, scope filtering fires on the wrong files, a polyglot repo cross-contaminates. A "capability harness" that tests *only* Job 1 is honest and high-leverage; a harness that mocks Job 2 and calls itself a capability check is lying about scope.
+Job 1 is testable with golden files and produces deterministic outputs. Job 2 is testable only with an LLM; its outputs vary even at fixed temperature. Most regression risk lives in Job 1 — a stack rename drops a surface, scope filtering fires on the wrong files, a polyglot repo cross-contaminates a sister stack's files. A "capability harness" that tests *only* Job 1 is honest and high-leverage; a harness that mocks Job 2 and calls itself a capability check is lying about scope.
 
 This spec defines the harness for Job 1. Job 2 evaluation (scoring actual LLM outputs against goldens with tolerance) is a separate, optional, low-cadence concern; this spec does not address it.
 
@@ -28,34 +28,34 @@ It produces an **evaluator plan**: a structured JSON document listing every chec
 ```json
 {
   "activeStacks": [
-    {"name": "android", "scope": ["**/AndroidManifest.xml", "**/*.kt", "..."]},
-    {"name": "kotlin",  "scope": ["**/*.kt", "**/*.kts"]}
+    {"name": "web-node",        "scope": ["**/*.js", "**/*.ts", "**/*.tsx", "package.json"]},
+    {"name": "synthetic-second", "scope": ["**/*.synth", "**/synthetic.toml"]}
   ],
   "secretsScans": [
-    {"stack": "kotlin", "extension": "kt", "files": ["app/src/main/kotlin/Foo.kt"]}
+    {"stack": "web-node", "extension": "ts", "files": ["src/handler.ts"]}
   ],
   "auditCommands": [
-    {"stack": "gradle", "command": "./gradlew dependencyCheckAnalyze", "absenceSignal": "blockingConcern"}
+    {"stack": "web-node", "command": "npm audit --audit-level=high", "absenceSignal": "blockingConcern"}
   ],
   "buildTestLint": {
-    "buildCmd": "./gradlew assembleDebug",
-    "testCmd":  "./gradlew testDebugUnitTest",
-    "lintCmd":  "./gradlew lintDebug"
+    "buildCmd": "npm run build",
+    "testCmd":  "npm test",
+    "lintCmd":  "npm run lint"
   },
   "securitySurfacesInstantiated": [
     {
-      "stack": "android",
-      "id": "exported_components",
-      "templateText": "Activities/Services/Providers/Receivers with android:exported=\"true\"...",
+      "stack": "web-node",
+      "id": "express_route_input",
+      "templateText": "Express route handlers must validate untrusted input before passing to query / shell / fs APIs.",
       "triggerEvidence": {
-        "scopeMatched": ["app/src/main/AndroidManifest.xml"],
-        "keywordsHit":  ["android:exported"]
+        "scopeMatched": ["src/handler.ts"],
+        "keywordsHit":  ["app.get(", "req.query"]
       },
-      "appliesToFiles": ["app/src/main/AndroidManifest.xml"]
+      "appliesToFiles": ["src/handler.ts"]
     }
   ],
   "evaluatorAdditionalChecks": [
-    {"command": "./gradlew detekt", "on_failure": "blockingConcern", "tier": "project"}
+    {"command": "npm run typecheck", "on_failure": "blockingConcern", "tier": "project"}
   ]
 }
 ```
@@ -80,13 +80,22 @@ tests/fixtures/stacks/
 ### Bootstrap fixture set
 
 - `js-ts-minimal/` — JS/TS project exercising web-node detection and surfaces.
-- `python-minimal/` — pyproject + one module.
-- `polyglot-android-node/` — cross-contamination check.
+- `synthetic-second/` — fixture-only synthetic stack used as a multi-stack guard rail (per the roadmap's cross-cutting principle). Not a real ecosystem; a minimal stack that exercises every C1 schema field, both detection composites (`allOf` and `anyOf`), the cacheEnv path, the securitySurfaces keyword + scope path, and `lintCmd.absenceSignal`. Lives at `tests/fixtures/stacks/synthetic-second/.claude/gan/stacks/synthetic-second.md`.
+- `polyglot-webnode-synthetic/` — cross-contamination check: a single fixture that activates both `web-node` and `synthetic-second`, with files placed so each stack's surfaces apply only to its own scope. Replaces the earlier polyglot fixture proposed against deferred ecosystems.
 - `node-packaged-non-web/` — tightened web-node detection check (must fall through to generic).
-- `android-minimal/` — Android Gradle project; exercises S1.
 - `generic-fallback/` — repo with no recognised stack; exercises generic.
 
 Each fixture's `expected-evaluator-plan.json` is hand-authored and asserts what the deterministic core *should* produce. Goldens are reviewed like any other artifact.
+
+### Cross-stack capability assertion
+
+The harness explicitly asserts the deterministic core produces correct, ecosystem-agnostic output for `synthetic-second/` side-by-side with `js-ts-minimal/`. This is the third leg of the multi-stack guard rail (alongside R4's `lint-no-stack-leak` and R1's in-tree synthetic stack file): if a framework change preserves correctness for `js-ts-minimal/` but breaks `synthetic-second/`, the harness fails.
+
+Concretely:
+
+- The harness fails if either fixture's output diff is non-empty.
+- The harness fails if a code change deletes `synthetic-second/` or removes its `expected-evaluator-plan.json` without an explicit maintainer override flag (`--allow-guardrail-removal`, refused in CI).
+- The harness fails if `polyglot-webnode-synthetic/`'s output shows surfaces from one stack applied to files in the other's scope. Cross-contamination regressions are caught by this fixture, not by `js-ts-minimal/` alone.
 
 ### Normalisation
 

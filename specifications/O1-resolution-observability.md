@@ -27,7 +27,7 @@ Missing sources are listed explicitly (`(none)`), not silently omitted — "noth
 
 The orchestrator owns this line because it owns the snapshot. Spawned agents do not re-emit their own loaded-files line; they consume the snapshot the orchestrator captured (per F2's validation timing).
 
-**B. `gan config print` and the `/gan --print-config` flag — lands in Phase 6 (this spec's main scope)**
+**B. `gan config print` and the `/gan --print-config` flag — lands in Phase 5 (this spec's main scope)**
 
 Two equivalent surfaces for the same data:
 

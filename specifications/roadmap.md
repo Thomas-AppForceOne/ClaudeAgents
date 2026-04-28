@@ -10,7 +10,9 @@ The phases below trace the implementation path from foundations outward. Each sp
 
 ## How to read the spec set
 
-Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, S = new stacks, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
+Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
+
+The **S = stack-content** code is reserved for real-ecosystem stack files. The active plan ships exactly one real stack (`web-node`) plus a fixture-only synthetic stack used as a multi-stack guard rail (see "Cross-cutting principles" below). Authored-but-deferred S-series specs (Android, KMP, iOS Swift) live under [`specifications/deferred/`](deferred/README.md) until reactivation criteria are met; they are not part of the implementation order below.
 
 ## Phase 0 — Foundations
 
@@ -19,7 +21,7 @@ System contracts that every later spec depends on.
 - [F1-filesystem-layout.md](F1-filesystem-layout.md) — Three project zones (`.claude/gan/`, `.gan-state/`, `.gan-cache/`) with single-owner lifecycles. Retires the old `.gan/` directory.
 - [F2-config-api-contract.md](F2-config-api-contract.md) — Black-box function surface, MCP binding, validation timing, install/restart story, error model.
 - [F3-schema-authority.md](F3-schema-authority.md) — JSON Schema location, `schemaVersion` semantics, lint integration.
-- [F4-threat-model-and-trust.md](F4-threat-model-and-trust.md) — Threat model, trust-cache contract, `UntrustedOverlay` error, `GAN_TRUST` modes, `--no-project-commands` flag, path-escape rules. Lands in Phase 0 because committed overlays + arbitrary commands is a real attack surface that needs closing before user-facing extensibility (Phase 7) opens it up.
+- [F4-threat-model-and-trust.md](F4-threat-model-and-trust.md) — Threat model, trust-cache contract, `UntrustedOverlay` error, `GAN_TRUST` modes, `--no-project-commands` flag, path-escape rules. Lands in Phase 0 because committed overlays + arbitrary commands is a real attack surface that needs closing before user-facing extensibility (Phase 6) opens it up.
 
 ## Phase 1 — Configuration domains
 
@@ -72,7 +74,6 @@ Specs to revisit, with what to verify:
 
 - **O1** — confirm the orchestrator's startup-log shape matches what E1's coordinator actually emits; refine output format if needed.
 - **O2** — full reconception of the recovery flow under F1's zone layout and E1's snapshot model. The current spec is explicitly marked "descriptive of intent, not prescriptive"; this is where it becomes prescriptive. Real authoring work, not editing.
-- **S1, S2** — validate that contract-proposer and evaluator behavior described in acceptance criteria matches what the rewritten agents do; update criteria if E1 surfaced different patterns.
 - **U3** — validate that planner/proposer consumption of `additionalContext` works end-to-end via the snapshot; update the spec if the consumption pattern differs from what's currently described.
 
 Plus a general re-audit of every post-E1 spec for ambiguities E1 implementation may have surfaced.
@@ -99,35 +100,15 @@ Specs to revisit, with what to verify:
 
 Same checkpoint discipline as the other revision breaks: specs revised in place; no Phase 5 work begins until the audit closes.
 
-## Phase 5 — New stacks
+## Phase 5 — Resolution observability
 
-Apply the system to ecosystems beyond the bootstrap set.
-
-- [S1-android-stack.md](S1-android-stack.md) — Android client stack file.
-- [S2-kmp-stack.md](S2-kmp-stack.md) — Kotlin Multiplatform stack file.
-- [S3-ios-swift-stack.md](S3-ios-swift-stack.md) — iOS Swift / SwiftUI stack.
-
-**Observability carve-out for Phase 5.** Users authoring or debugging stack files in Phase 5 need at least basic observability before O1 lands in Phase 6. R1 ships a **minimum-viable observability surface** as part of its Phase 2 work: the orchestrator startup log line described in [O1's part A](O1-resolution-observability.md) (which files were loaded, which stacks are active, which tier each stack came from) is implemented in R1, not deferred to O1. The richer surfaces (`gan config print`, `--print-config` JSON, `discarded` array reporting) remain Phase 6 work. This split lets an Android dev hitting an S1 detection bug in Phase 5 see "did my detection rule activate at all?" without waiting for the full observability suite.
-
-## Revision break — post-S schema audit
-
-Phase 5 lands three concrete, real-world stack files (Android, KMP, iOS) that exercise C1's schema against ecosystems the framework was not initially designed around. If any stack needed a workaround, omitted a useful concept, or stretched a field beyond its intended use, that's a signal that C1's schema needs an extension.
-
-Specs to revisit, with what to verify:
-
-- **C1** — confirm every field used by S1, S2, S3 was usable as designed. If a stack needed a new field shape (composite detection variants, additional securitySurface trigger types, scheme/destination placeholders for iOS), land it here as a schema bump rather than as per-stack workarounds.
-- **C2** — confirm the detection algorithm handles the realistic detection composites the three stacks declare without ambiguity.
-- **F3** — bump `schemas/stack-vN.json` if C1's shape changed.
-
-This is a checkpoint: specs are revised in place; no new files. No Phase 6 work begins until the audit closes.
-
-## Phase 6 — Resolution observability
-
-User-facing extensibility (Phase 7) leans on the provenance reporting added here, so observability lands first.
+User-facing extensibility (Phase 6) leans on the provenance reporting added here, so observability lands first.
 
 - [O1-resolution-observability.md](O1-resolution-observability.md) — Startup log line, `gan config print`, discard reporting.
 
-## Phase 7 — User-facing extensibility
+R1 already ships a minimum-viable observability surface in Phase 2 (the orchestrator startup log line described in [O1's part A](O1-resolution-observability.md): which files were loaded, which stacks are active, which tier each stack came from). Phase 5 adds the richer surfaces (`gan config print`, `--print-config` JSON, `discarded` array reporting). This split lets early users debug overlay and detection issues from Phase 2 onward without waiting for the full observability suite.
+
+## Phase 6 — User-facing extensibility
 
 Hands-on customisation surface.
 
@@ -135,9 +116,19 @@ Hands-on customisation surface.
 - [U2-user-overlay-ux.md](U2-user-overlay-ux.md) — `~/.claude/gan/config.md`, cross-project preferences, auto-memory integration.
 - [U3-additional-context-splice.md](U3-additional-context-splice.md) — `additionalContext` splice points for planner/proposer.
 
-## Phase 8 — Recovery
+## Phase 7 — Recovery
 
 - [O2-recovery.md](O2-recovery.md) — Per-run state archive, `--recover`, `--list-recoverable`. Reconceived for F1 zones and F2 API; lands after E1 so the agent integration pattern is in place.
+
+## Deferred — additional real-ecosystem stacks
+
+Authored, reviewed, and intentionally postponed until the active plan has shipped and seen real use. See [`specifications/deferred/README.md`](deferred/README.md) for reactivation criteria.
+
+- [deferred/S1-android-stack.md](deferred/S1-android-stack.md) — Android client stack file.
+- [deferred/S2-kmp-stack.md](deferred/S2-kmp-stack.md) — Kotlin Multiplatform stack file.
+- [deferred/S3-ios-swift-stack.md](deferred/S3-ios-swift-stack.md) — iOS Swift / SwiftUI stack.
+
+The risk these specs were originally meant to mitigate — that the framework calcifies around web-node — is addressed in the active plan by the multi-stack guard rail principle below: a synthetic fixture-only stack, a `lint-no-stack-leak` script, and a cross-stack capability assertion in E3.
 
 ## Bite-size sizing
 
@@ -148,11 +139,17 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 - **The Configuration API is a black box.** Agents know function names; they do not know storage, schemas, or merge logic. Specs F2 and R1 own the contract.
 - **Maintainer tooling assumes Node 18+.** User-facing behavior is owned by the agent at runtime. iOS, embedded C++, Swift-only developers never need Node to use `/gan`.
 - **Pre-1.0 WIP project.** No backward-compatibility guarantees; any schema change bumps `schemaVersion`. No transitional dual-path windows.
-- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas}.yml`. New categories follow `test-<category>.yml`.
+- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas,test-no-stack-leak}.yml`. New categories follow `test-<category>.yml`.
 - **Module ↔ stack name pairing** is enforced by the Configuration API at registration time. No separate lint subsystem needed.
+- **Multi-stack guard rail.** The active plan ships exactly one real ecosystem stack (`web-node`). To prevent the framework from calcifying around web-node assumptions while only one real stack exists, three mechanisms run together:
+  1. A **synthetic fixture-only stack** (`tests/fixtures/stacks/synthetic-second/.claude/gan/stacks/synthetic-second.md`) lives in-tree from R1's first sprint slice. It is not a real ecosystem; it is a minimal stack that exercises every C1 schema field, both detection composites (`allOf` and `anyOf`), the cacheEnv conflict path, the securitySurfaces keyword + scope path, and `lintCmd.absenceSignal`. It is referenced from no production code path; its sole purpose is to be the "second stack" multi-stack code paths must work for.
+  2. A **`lint-no-stack-leak` script** (R4) forbids web-node-specific identifiers (`package.json`, `node_modules`, `npm`, `pnpm`, `yarn`, `lockfile`, `.nvmrc`, etc. — the full list lives in R4 alongside the script) anywhere outside `stacks/web-node.md`, `tests/fixtures/stacks/js-ts-minimal/`, and explicitly-allowlisted maintainer-tooling files. Hits the script as a CI gate (`test-no-stack-leak.yml`).
+  3. A **cross-stack capability assertion** in E3: the harness runs the synthetic stack's evaluator-plan fixture and asserts the deterministic core produces the expected output for it, side-by-side with `js-ts-minimal/`. Any framework change that breaks multi-stack semantics fails this check.
+
+  The three together make it physically impossible for the framework to regress to single-stack without breaking CI. When a deferred S-series spec is reactivated, the synthetic stack and its supporting machinery stay — they remain a guard rail against a post-1.0 framework drifting toward whichever stacks happen to dominate its real-world use.
 
 ## Out of scope for this roadmap
 
 - Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge.
 - Reading arbitrary repo files (README, ARCHITECTURE, etc.) by auto-discovery. Users opt in explicitly via `additionalContext` (U3).
-- Desktop and embedded stacks beyond what S1–S3 demonstrate. Follow the same template once the pattern is proven.
+- Real-ecosystem stacks beyond `web-node`. The deferred S-series specs (Android, KMP, iOS Swift) capture a starting point; reactivation is gated by the criteria in [`specifications/deferred/README.md`](deferred/README.md). Desktop and embedded stacks follow the same template if and when the pattern is proven on a second real ecosystem.

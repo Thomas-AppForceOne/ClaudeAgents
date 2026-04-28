@@ -48,12 +48,12 @@ No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 
 ## Phase placement and E1 dependency
 
-This spec ships as a single Phase 7 unit per the roadmap. The implementation, however, has natural sub-tasks that the R1 / E1 sprint plans may absorb earlier:
+This spec ships as a single Phase 6 unit per the roadmap. The implementation, however, has natural sub-tasks that the R1 / E1 sprint plans may absorb earlier:
 
 - **API-side splice-point handling and file reading** (the `additionalContext.path_resolves` invariant, cap enforcement, exposure via `getResolvedConfig().additionalContext`) is part of R1's resolver. It can land in Phase 2 as part of R1's sprint slices without authoring U3 first.
 - **Planner / proposer consumption** of the resolved context — making the agents actually read `snapshot.additionalContext.{planner,proposer}` and inject the contents into their working context — depends on E1 (agent prompt rewrite).
 
-U3 is the spec that pulls these threads together and adds the user-facing acceptance criteria. Authoring it in Phase 7 keeps the implementation honest: the user-visible promise ("the files I list show up in the agent's context") is only deliverable once E1 has landed.
+U3 is the spec that pulls these threads together and adds the user-facing acceptance criteria. Authoring it in Phase 6 keeps the implementation honest: the user-visible promise ("the files I list show up in the agent's context") is only deliverable once E1 has landed.
 
 ## Bite-size note
 

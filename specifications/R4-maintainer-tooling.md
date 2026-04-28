@@ -24,6 +24,11 @@ scripts/
     index.js           # standalone pairsWith consistency check
                        # (also runs inside R1 at runtime; this is the
                        # CI-time backstop)
+  lint-no-stack-leak/
+    index.js           # forbids ecosystem-specific identifiers outside
+                       # their owning stack file (multi-stack guard rail)
+    forbidden.json     # the per-stack identifier list
+    allowlist.json     # explicit per-path exceptions
 ```
 
 Every script:
@@ -57,6 +62,45 @@ E3's reference implementation. Runs every fixture under `tests/fixtures/stacks/`
 
 Walks `src/modules/*/` and `stacks/*.md`. For each name appearing in both, checks `pairsWith` consistency. This is also enforced inside R1 at registration time; the CI-time script is a backstop for files that landed via direct edits.
 
+### `lint-no-stack-leak`
+
+Implements the multi-stack guard rail catalogued in the roadmap's Cross-cutting principles. While the active plan ships only one real ecosystem stack (`web-node`), this script ensures the framework's core code never assumes web-node specifics.
+
+**What it checks.** Greps the repository for ecosystem-specific identifiers and fails the build if any appear outside their owning stack file or an explicitly-allowlisted path. The forbidden list lives in `scripts/lint-no-stack-leak/forbidden.json`:
+
+```json
+{
+  "web-node": [
+    "package.json",
+    "package-lock.json",
+    "node_modules",
+    "npm",
+    "pnpm",
+    "yarn",
+    ".nvmrc",
+    "tsconfig.json"
+  ]
+}
+```
+
+**Where they're allowed.**
+
+- `stacks/web-node.md` — the owning stack file.
+- `tests/fixtures/stacks/js-ts-minimal/` — the bootstrap fixture for that stack.
+- `tests/fixtures/stacks/polyglot-webnode-synthetic/` — the cross-contamination fixture.
+- `package.json`, `package-lock.json` at the repo root — the framework itself is npm-distributed (per F2 / R1) and these files are unavoidable.
+- Maintainer-tooling files under `scripts/`, `.github/workflows/`, `install.sh`, R2's installer source, and the `@claudeagents/config-server` `package.json` — these legitimately invoke npm because the framework is distributed via Node.
+- Anything explicitly listed in `scripts/lint-no-stack-leak/allowlist.json`. Adding to the allowlist requires a reviewer-visible diff and a one-line justification in the JSON.
+
+**What it does not check.**
+
+- It does not validate semantic content. A reference to `package.json` inside a code comment that *describes* what the framework does (e.g. discussing detection rules) is a hit, not a pass; rephrase or allowlist the file. The script is intentionally noisy: false positives are a feature when the alternative is a Node assumption smuggled in unnoticed.
+- It does not extend to user projects. The script runs at framework-build time, not against `/gan` consumer repos.
+
+**When the deferred stacks are reactivated.** Each new ecosystem (Android, KMP, iOS Swift, etc.) adds its own `forbidden` list to `forbidden.json` and its own owning-file allowlist. The principle scales: every real stack the framework supports gets an enforced isolation boundary.
+
+**Output.** Hits print as `<file>:<line> <identifier> (owned by <stack>)` followed by either "no allowlist match" or, on intentional failure, the allowlist entry that should have applied but did not.
+
 ### CI workflows
 
 Per the roadmap's locked CI structure:
@@ -68,6 +112,7 @@ Per the roadmap's locked CI structure:
   test-evaluator-pipeline.yml    # runs scripts/evaluator-pipeline-check
   test-stack-lint.yml    # runs scripts/lint-stacks + scripts/pair-names
   test-schemas.yml       # runs scripts/publish-schemas in dry-run mode
+  test-no-stack-leak.yml # runs scripts/lint-no-stack-leak
 ```
 
 Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category may pin its own Node version.
@@ -85,7 +130,8 @@ Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category
 - `node scripts/publish-schemas --dry-run` exits non-zero if the on-disk schemas drift from the authoring source.
 - `node scripts/evaluator-pipeline-check` exits 0 with empty normalised diff for the bootstrap fixture set; exits non-zero with the diff on stderr otherwise.
 - `node scripts/pair-names` exits 0 when every shared name has consistent `pairsWith` declarations; non-zero otherwise.
-- The five CI workflows under `.github/workflows/` run on every push and PR; they all reuse `shared-setup.yml`.
+- `node scripts/lint-no-stack-leak` exits 0 when every forbidden identifier appears only in its owning stack file or an allowlisted path; non-zero with a structured per-hit report otherwise. Adding a new allowlist entry requires a reviewable diff to `scripts/lint-no-stack-leak/allowlist.json` with a justification field.
+- The six CI workflows under `.github/workflows/` run on every push and PR; they all reuse `shared-setup.yml`.
 - No CI workflow pins a Node version independently of `shared-setup.yml`.
 
 ## Dependencies

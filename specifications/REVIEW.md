@@ -23,7 +23,7 @@ Files are named by **phase code**:
 - **U** — User-facing extensibility (overlay UX, additionalContext)
 - **O** — Observability and operations
 
-The phase code in each filename is also the implementation order. A spec at position N never declares a dependency on a spec at position ≥ N — verified by an audit. **Three explicit revision breaks** sit between phases (post-R contracts, post-E1 + O2 first authoring, post-M module surface, plus a post-S schema check) where the spec set is re-checked against the actual implementation before further phases begin.
+The phase code in each filename is also the implementation order. A spec at position N never declares a dependency on a spec at position ≥ N — verified by an audit. **Three explicit revision breaks** sit between phases (post-R contracts, post-E1 + O2 first authoring, post-M module surface) where the spec set is re-checked against the actual implementation before further phases begin. The earlier post-S schema check is no longer in the active plan; the S-series specs are deferred (see below).
 
 ## Suggested reading order
 
@@ -31,15 +31,16 @@ The phase code in each filename is also the implementation order. A spec at posi
 2. **Foundations:** [F1](F1-filesystem-layout.md), [F2](F2-config-api-contract.md), [F3](F3-schema-authority.md), [F4](F4-threat-model-and-trust.md). Challenge the foundations before anything else rests on them. F4 is new since the first review pass.
 3. **Configuration domains:** [C1](C1-stack-plugin-schema.md) through [C5](C5-stack-file-resolution.md). Walk the cascade, the detection-dispatch examples, and the splice-point catalog (now authoritative in C3) critically.
 4. **Reference impl + agent integration:** [R1](R1-config-mcp-server.md) through [R5](R5-trust-cache-impl.md), then [E1](E1-agent-integration.md), [E2](E2-builtin-stack-extraction.md), [E3](E3-evaluator-pipeline-harness.md). E3 is significantly reframed since the first review (deterministic-core, no LLM in CI). R5 is new.
-5. **Modules + stacks:** [M1](M1-modules-architecture.md), [M2](M2-docker-module.md), [S1](S1-android-stack.md), [S2](S2-kmp-stack.md), [S3](S3-ios-swift-stack.md). Spot-check that the schema actually supports what the stacks declare.
+5. **Modules:** [M1](M1-modules-architecture.md), [M2](M2-docker-module.md). Spot-check the module ↔ stack name pairing and the zone boundaries.
 6. **User-facing surfaces:** [U1](U1-project-overlay-ux.md), [U2](U2-user-overlay-ux.md), [U3](U3-additional-context-splice.md), [O1](O1-resolution-observability.md). Read as a user, not a maintainer.
 7. [O2](O2-recovery.md) — read as background only; the post-E1 revision break is where O2 gets first prescriptively written.
+8. [`deferred/`](deferred/README.md) — optional. Three real-ecosystem stack files (Android, KMP, iOS Swift) authored, reviewed, and intentionally postponed. Read the README for the deferral rationale and reactivation criteria; the spec bodies are background only since no Phase 5+ work depends on them in the active plan.
 
 ## What I'd most like you to challenge
 
 Two prior review passes have closed the architectural questions I most worried about (Configuration API as black-box, F4 trust-cache shape, snapshot-freshness model, E3's deterministic-core honesty, projectRoot canonicalisation, splice-point catalog drift). Open targets for a third-pass reviewer, in declining importance:
 
-1. **Implementation-imposed corner cases.** The spec set is now reasonably complete on paper, but the post-R, post-E1, post-M, and post-S revision breaks expect that real implementation surfaces gaps. A reviewer reading the spec set as "what would I build to fulfill this?" may catch gaps that paper-review missed. Push hardest where you would actually start writing code.
+1. **Implementation-imposed corner cases.** The spec set is now reasonably complete on paper, but the post-R, post-E1, and post-M revision breaks expect that real implementation surfaces gaps. A reviewer reading the spec set as "what would I build to fulfill this?" may catch gaps that paper-review missed. Push hardest where you would actually start writing code.
 
 2. **F5 (transitive trust) — is the deferral honest?** F4 explicitly accepts that the trust hash covers config files but not the scripts they invoke (e.g. `lintCmd: ./scripts/my-lint.sh`). The deferred user workflow is "review every PR's script changes manually." Push back if you think this gap leaves a hole users will not realistically notice in practice.
 
@@ -83,7 +84,8 @@ Two prior review passes have closed the architectural questions I most worried a
 - E1 → E3 → E2 implementation order documented (numbering reflects authoring order, not impl order).
 - E2 gains a five-slice bite-size sprint plan; rating bumped from medium to medium-large.
 - Roadmap headline corrected: "Node is required once at install time" (not "never need Node").
-- O1 part A (startup log line) carved out into R1's Phase 2 work so Phase 5 stack authors have minimum-viable observability before the full O1 lands in Phase 6.
+- O1 part A (startup log line) carved out into R1's Phase 2 work so early users have minimum-viable observability before the full O1 lands in Phase 5.
+- Phase 5 (real-ecosystem stack files: Android, KMP, iOS Swift) deferred and the corresponding S-series specs moved to [`specifications/deferred/`](deferred/README.md). Phases 5 / 6 / 7 of the active roadmap are now Resolution observability / User-facing extensibility / Recovery (renumbered down by one). The risk that motivated Phase 5 (framework calcifies around web-node) is now addressed by the **multi-stack guard rail** principle: a fixture-only synthetic stack, an R4 `lint-no-stack-leak` script, and an E3 cross-stack capability assertion. See the roadmap's Cross-cutting principles for the full mechanism.
 
 **Spec hygiene:**
 - Stack name case-sensitivity rule (`^[a-z][a-z0-9-]*$`) in C1.
@@ -98,7 +100,7 @@ Down to a small set since most prior-pass gaps are closed:
 
 1. **Telemetry / privacy spec.** Still deferred. Will be authored alongside O2's first prescriptive revision in the post-E1 break.
 2. **JSON Schema documents at `schemas/<type>-vN.json` are described in prose but not yet committed.** They land alongside R1 implementation.
-3. **Worked end-to-end fixture.** Suggested by both prior reviewers. Not yet done; a polyglot-android-node walk-through would catch cross-spec inconsistency. Worth doing before any new reviewer reads.
+3. **Worked end-to-end fixture.** Suggested by both prior reviewers. Not yet done; a polyglot web-node + synthetic-second walk-through (the bootstrap multi-stack fixture from E3) would catch cross-spec inconsistency. Worth doing before any new reviewer reads.
 4. **F4's prompt UX is described in prose.** No mockup, no transcript, no per-platform validation (terminal width, colour, accessibility).
 5. **F5 (transitive trust hashing) is named but not specified.** Accepted v1 limitation; future work.
 
@@ -106,7 +108,7 @@ Down to a small set since most prior-pass gaps are closed:
 
 - **[O2](O2-recovery.md) — Recovery.** Header note says "descriptive of intent, not prescriptive of mechanism." First prescriptive authoring happens in the post-E1 revision break. Reading the body for *intent* is fair; reading for *implementability* is premature.
 - **JSON Schema documents at `schemas/<type>-vN.json`.** Authored alongside R1 implementation; not yet committed.
-- **Per-stack security surface catalogues** in [S1](S1-android-stack.md), [S3](S3-ios-swift-stack.md). Read for *coverage and shape*, not for "did the author pick the right list of surfaces."
+- **Per-stack security surface catalogues** in [deferred/S1](deferred/S1-android-stack.md), [deferred/S3](deferred/S3-ios-swift-stack.md). Read for *coverage and shape*, not for "did the author pick the right list of surfaces" — and remember these specs are deferred, so any criticism of their content is informational, not gating.
 - **[REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)** and **[REVIEW_RESPONSE_2.md](REVIEW_RESPONSE_2.md)** — prior reviewers' responses, retained as records. Read for context if you want to know what was challenged before; don't re-litigate the closed items.
 
 ## What I'm asking for (unchanged from first pass)

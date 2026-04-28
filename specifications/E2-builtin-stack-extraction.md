@@ -50,5 +50,5 @@ Alternative: collapse E2 into the same coordinated PR as E1 (the agent rewrite).
 
 ## Value / effort
 
-- **Value**: medium-high. Retires the old hardcoded code path and unblocks Phase 5's new stacks (Android, KMP, iOS).
+- **Value**: medium-high. Retires the old hardcoded code path. Also unblocks any future real-ecosystem stack (the Android, KMP, and iOS Swift specs in [`specifications/deferred/`](deferred/README.md), or any new ecosystem authored later) — once stack files exist as data rather than code, adding one is a file drop, not a refactor.
 - **Effort**: medium-large. Mechanical per stack, but eight stacks + the proposer retirement is more sprint slices than its "medium" sibling specs.
