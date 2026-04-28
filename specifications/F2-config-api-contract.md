@@ -99,9 +99,13 @@ The orchestrator's first action on a `/gan` invocation is `validateAll()`. This 
 
 On failure, the run aborts and no state is written; the user sees the structured report. On success, the orchestrator calls `getResolvedConfig()` once, captures the snapshot, and passes it to every spawned agent. Agents do not re-validate.
 
-**Snapshot freshness across sprints.** The captured snapshot is frozen for the entire `/gan` run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are *not* picked up until the next `/gan` invocation. The orchestrator does **not** re-snapshot between sprints.
+**Snapshot freshness across sprints.** The captured snapshot is frozen for the entire `/gan` run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are *not* picked up until the next `/gan` invocation. The orchestrator does **not** re-snapshot between sprints to catch user edits.
 
-This is a deliberate consistency choice: a sprint contract issued in sprint N must remain meaningful when evaluated in sprint N+1. If a user wants config changes to take effect, they abort the run (Ctrl-C or the existing abort path), edit, and start a new `/gan`. Agent-driven mutations through API write functions are the one exception — when an agent writes via the API, the orchestrator may re-snapshot before spawning the next agent.
+This is a deliberate consistency choice: a sprint contract issued in sprint N must remain meaningful when evaluated in sprint N+1. If a user wants config changes to take effect, they abort the run and start a new `/gan`.
+
+**Agent-driven mutations re-snapshot deterministically.** When an agent writes via the API (`updateStackField`, `appendToStackField`, `removeFromStackField`, `setOverlayField`, `setModuleState`, `registerModule`), the orchestrator **always** re-snapshots before spawning the next agent. There is no "may" — re-snapshot-after-agent-write is unconditional. This makes downstream-agent visibility deterministic: an agent that mutates state can rely on the next agent in the sprint sequence seeing the new state. (The agent doing the write also sees the post-write state via the function's return value, but that is local to the call.)
+
+The combination — frozen across user edits, re-snapshotted after agent writes — gives the system a predictable two-tier freshness contract: external state is stable for the run; internal state advances on agent action.
 
 ### Error model
 

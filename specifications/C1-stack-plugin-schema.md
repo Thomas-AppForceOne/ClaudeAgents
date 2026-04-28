@@ -145,10 +145,18 @@ Array of file extensions (no leading dot) the evaluator's secrets grep inspects.
 ### cacheEnv
 Array of `{ envVar, valueTemplate }` objects. The skill orchestrator exports each entry before running any command from this stack, substituting `<worktree>` with the absolute worktree path.
 
-**Conflict resolution (polyglot repos).** When two active stacks declare `cacheEnv` entries with the same `envVar`:
-1. If the `valueTemplate` strings are identical, export once. No conflict.
-2. If they differ, check the project overlay's `stack.cacheEnvOverride` (per C3) for a project-supplied value for that stack/envVar. If present, the override wins and no error is raised.
-3. If no override is supplied, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB>`. The user resolves it by adding a `stack.cacheEnvOverride` entry to `.claude/gan/project.md` for the stack whose value should win (or supplying a third value).
+**Conflict resolution (polyglot repos).** When two or more active stacks declare `cacheEnv` entries with the same `envVar`:
+
+1. If all `valueTemplate` strings are identical, export once. No conflict.
+2. If they differ, the conflict is resolved by `stack.cacheEnvOverride` in the project overlay (per C3) **only if all conflicting stacks resolve to the same final `valueTemplate`** after override application. The check is per-stack: each conflicting stack's `valueTemplate` is the override value (if present in `cacheEnvOverride.<stack-name>.<envVar>`) else its declared value. If all those final values are identical, export once.
+3. If after override resolution two or more stacks still disagree on the same `envVar`, the run halts with a hard error: `cacheEnv conflict: <envVar> declared differently by <stackA> and <stackB> (after override resolution)`. The error names every conflicting stack and the final value each resolved to, so the user knows which stacks need overrides.
+
+The simpler "the override wins and no error is raised" framing in earlier drafts was too generous: an override on stack A doesn't resolve a conflict if stack B still differs. Users with a polyglot conflict must override every conflicting stack to the same value (or accept the error).
+
+Worked example. Stacks A and B both declare `GRADLE_USER_HOME` with different `valueTemplate`. The project overrides `cacheEnvOverride.A.GRADLE_USER_HOME = X`:
+- If `cacheEnvOverride.B.GRADLE_USER_HOME` is not set and B's declared value differs from X → still a conflict, error fires.
+- If `cacheEnvOverride.B.GRADLE_USER_HOME = X` (matching A's override) → resolved, no error.
+- If B's declared value happens to equal X → resolved, no error.
 
 ### auditCmd
 Object with:
@@ -183,6 +191,8 @@ Algorithm, per surface per sprint:
 4. Otherwise, instantiate the `template` string as a contract criterion. The `template` is used verbatim — no interpolation. Variables (file paths, keyword hits) are recorded as *rationale* alongside the criterion, not substituted into it.
 
 Both `triggers.scope` and `triggers.keywords` are optional. A surface with neither is instantiated unconditionally whenever the stack is active and the sprint touches any file in the stack's `scope`.
+
+**Cross-stack id namespace.** A surface's `id` is unique *within* a stack file. Two different stack files may use the same `id` — e.g. `android.exported_components` and `kotlin.exported_components` are distinct surfaces. The contract-proposer keys instantiated criteria by `<stack-name>.<id>` (the fully-qualified form) so cross-stack collisions are addressable. The proposer never deduplicates surfaces by bare `id`; only by the qualified form. If two active stacks happen to declare the same surface for the same threat (rare), they produce two distinct criteria — the maintainer reviewing the contract sees both and can choose to merge them via an overlay or accept the duplication.
 
 The contract-proposer prompt loses its hardcoded security checklist; all security criteria originate from active stacks' `securitySurfaces`. (Retirement of the hardcoded checklist is spec E2's responsibility.)
 

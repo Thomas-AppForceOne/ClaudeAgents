@@ -52,6 +52,8 @@ runner:
 
 This table is the **single source of truth** for every overlay splice point — its shape, its default, its tier-allowance, and its merge rule across the cascade. Other specs (C4 for cascade narrative, O1 for `mergedSplicePoints`, U1 / U2 for UX) reference this catalog rather than restating it. Adding a new splice point means editing this table and (if applicable) C4's narrative — never editing UX prose to keep specs consistent.
 
+**Design assumption: splice points resolve independently.** Each splice point's resolved value is computed from its own per-tier values plus its merge rule. There are no cross-splice-point conditional rules ("use stack X's threshold unless stack Y is also active"). If a future splice point requires that, it would not fit this catalog's shape and would need its own spec section justifying the deviation. Today, all splice points are independent.
+
 | Path | Shape | Default | Allowed in user overlay | Merge rule (default → user → project) |
 |---|---|---|---|---|
 | `stack.override` | list of stack names | `[]` | **No** (per-rationale below) | Project-only; user value rejected at load |

@@ -44,6 +44,47 @@ Consequences:
 - `discardInherited: true` in the **project overlay** at `proposer` block level means "my proposer config replaces the user-resolved view, which already folded in the defaults." Effectively "default and user are both discarded for this block."
 - Field-level `discardInherited` narrows the scope to a single field within the block. A field-level `discardInherited: false` inside a block that declared `discardInherited: true` preserves that one field's merge behavior — more-specific wins.
 
+**Discard-then-empty resolution rule.** When `discardInherited: true` is set at a level and that level provides no replacement value for the field, the field falls back to the **agent's bare default** (i.e. the value declared in C3's catalog as the "default" column). Discarding does not produce an "undefined" or "empty" state for fields whose default is well-defined. Examples:
+
+- Project overlay sets `runner.discardInherited: true` with no `thresholdOverride`. The field falls back to the agent's baked-in threshold (per C3's catalog default), not to "unset."
+- Project overlay sets `proposer.discardInherited: true` with no `additionalCriteria`. The field falls back to `[]` (empty list) per C3.
+
+This rule is what makes `discardInherited` a precise tool: it discards the cascade *contribution* but does not damage the underlying field's default-value contract.
+
+### Worked example: duplicate-key positioning across cascade
+
+User overlay declares:
+
+```yaml
+evaluator:
+  additionalChecks:
+    - command: "./bin/check-A"
+      on_failure: warning
+    - command: "./bin/check-B"
+      on_failure: warning
+    - command: "./bin/check-C"
+      on_failure: warning
+```
+
+Project overlay declares:
+
+```yaml
+evaluator:
+  additionalChecks:
+    - command: "./bin/check-B"        # overrides user's B
+      on_failure: blockingConcern
+    - command: "./bin/check-D"        # appended
+      on_failure: warning
+```
+
+After merge per the rules in C3 and the duplicate-key positioning rule above, the resolved list is:
+
+```
+[A (user, warning), B (project-overridden, blockingConcern), C (user, warning), D (project, warning)]
+```
+
+Note that B's *position* stays where the user declared it (slot 2), but B's *content* is the project's. D appends after C. Execution order is A → B' → C → D — so any check that depended on B running with `warning` semantics now sees `blockingConcern`, and a check that depended on running before B is unaffected by D. **In-place override, not append.** Document this in your overlay if your additionalChecks have order-sensitive dependencies.
+
 ## Acceptance criteria
 
 ### Scalar merge
