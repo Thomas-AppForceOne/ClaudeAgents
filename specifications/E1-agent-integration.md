@@ -14,9 +14,9 @@ A coordinated rewrite of every agent and the skill orchestrator so they consume 
 
 The `/gan` skill is the entry point. Post-E1, its responsibilities are:
 
-1. **Parse arguments.** Recognise the top-level flags defined across O1 (`--print-config`) and O2 (`--recover`, `--list-recoverable`). Maintain a single flag table (per the roadmap rule); this spec does not introduce new flags.
-2. **Validate.** Call `validateAll()` (F2) before anything else. On structured failure, abort the run with the validation report; **never** create a worktree, spawn an agent, or write to zone 2.
-3. **Short-circuit for inspection flags.** For `--print-config`, call `getResolvedConfig()` and emit the result via O1's surface, then exit. For `--recover` / `--list-recoverable`, dispatch to the recovery flow (O2). No sprint work runs in either path.
+1. **Parse arguments.** Recognise the top-level flags defined across O1 (`--print-config`), O2 (`--recover`, `--list-recoverable`), F4 (`--no-project-commands`), and the `--help` flag introduced by this spec. Maintain a single flag table (per the roadmap rule).
+2. **Validate.** Call `validateAll()` (F2) before anything else *except* `--help`. On structured failure, abort the run with the validation report; **never** create a worktree, spawn an agent, or write to zone 2.
+3. **Short-circuit for inspection flags.** For `--help`, print the help text and exit; this short-circuit runs *before* `validateAll()` so a user with a broken config can still discover how to inspect or recover it. For `--print-config`, call `getResolvedConfig()` and emit the result via O1's surface, then exit. For `--recover` / `--list-recoverable`, dispatch to the recovery flow (O2). No sprint work runs in any of these paths.
 4. **Capture the snapshot.** For a regular invocation, after `validateAll()` succeeds call `getResolvedConfig()` once. The returned snapshot is the **single source of truth** for configuration during this run.
 5. **Print the startup log.** Per O1's part A, emit one structured log line summarising the snapshot.
 6. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2; record the run's metadata in `.gan-state/runs/<run-id>/progress.json`.
@@ -127,6 +127,7 @@ Incremental landing is **not** recommended. A half-rewritten agent set leaves th
 - Capability tests (E3) pass for every fixture in `tests/fixtures/stacks/` against the rewritten agents.
 - `/gan --print-config` emits the resolved config and exits without creating a worktree.
 - `/gan --recover` (post O2 revision) restores a run, calling `validateAll()` first, leaving `.gan-state/modules/` untouched.
+- `/gan --help` (and `/gan -h`, `/gan help`) prints the help text and exits without calling `validateAll()`, without creating a worktree, and without spawning any agent. The help text lists every top-level flag (`--help`, `--print-config`, `--recover`, `--list-recoverable`, `--no-project-commands`) with one-line descriptions, points the user at the `gan` CLI for configuration management and at `.claude/gan/project.md` for overlay authoring, and includes at least one realistic invocation example. Help output never references maintainer-only scripts.
 
 ## Dependencies
 
