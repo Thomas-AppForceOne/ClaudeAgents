@@ -86,6 +86,8 @@ The earlier wording "never write at run time" was overstated and contradicted F2
 
 ClaudeAgents is pre-1.0; there is no migration path for stale `.gan/` directories. A pre-existing `.gan/` on first run after this ships is treated as a hard error with instructions to delete it manually. Users wanting to preserve run state from before this spec should archive it themselves.
 
+**Retirement.** F1 introduces the new zones; the actual retirement of orchestrator code that writes to `.gan/` happens at E1 (the agent-rewrite cutover, per the roadmap's Retirement table). When E1 lands, every reference to `.gan/` in the codebase dies in the same PR. F1's contribution to the retirement is the zone contract; E1's contribution is the deletion of the code that violated it.
+
 ## Rules
 
 - A new tool or module that needs persistent per-project data declares a path under `.gan-state/modules/<name>/`. It must not use `.claude/gan/` (that is for user-authored config only) and must not use `.gan-cache/` (contents must be regenerable).

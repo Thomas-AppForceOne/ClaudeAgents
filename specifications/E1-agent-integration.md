@@ -2,7 +2,7 @@
 
 ## Problem
 
-The Configuration API (F2) and its reference implementation (R1) replace direct file reading with named function calls. But the existing agents (`gan-planner`, `gan-contract-proposer`, `gan-generator`, `gan-evaluator`, the recovery flow described in O2, and the `/gan` skill orchestrator in SKILL.md) were authored before the API existed. Their prompts encode file paths, YAML field names, merge logic, and per-stack tooling assumptions.
+The Configuration API (F2) and its reference implementation (R1) replace direct file reading with named function calls. But the existing agents (`gan-planner`, `gan-contract-proposer`, `gan-contract-reviewer`, `gan-generator`, `gan-evaluator`, the recovery flow described in O2, and the `/gan` skill orchestrator in SKILL.md) were authored before the API existed. Their prompts encode file paths, YAML field names, merge logic, and per-stack tooling assumptions.
 
 This spec defines how those prompts and the orchestrator are rewritten to consume the API. Without it, the API can ship perfectly and the agents will still be doing the wrong thing.
 
@@ -65,6 +65,18 @@ The planner produces a sprint spec. Its output shape is unchanged by E1; its inp
 
 The proposer's output (the sprint contract) is unchanged in shape.
 
+#### gan-contract-reviewer
+
+| Currently | After E1 |
+|---|---|
+| Reads `.gan/progress.json`, `.gan/sprint-{N}-contract-draft.json`, `.gan/spec.md`, prior `.gan/sprint-{K}-contract.json` files directly. | Receives the snapshot. Reads the contract draft and prior contracts from `.gan-state/runs/<run-id>/` (run state, not Configuration API territory) per F1's zones. |
+| Generic "criteria must be testable" prose. | Unchanged — the reviewer's audit semantics (specificity, comprehensiveness, scope) are independent of the Configuration API. |
+| No project-level reviewer extension point. | Reads `snapshot.mergedSplicePoints["proposer.additionalCriteria"]` to recognise project-introduced criteria as legitimate (not "duplicating" if they came from the overlay). |
+| Hardcoded knowledge of which file paths exist in the orchestration zone. | All paths come from the orchestrator's spawn context, which sources them from F1's zone 2 layout. |
+| (No config writes.) | (No config writes; produces the verdict JSON the orchestrator consumes.) |
+
+The reviewer's role in the contract-negotiation loop is unchanged: audit the proposed contract before the generator runs, return a verdict. E1 only retires the file-reading and the hardcoded path knowledge.
+
 #### gan-generator
 
 | Currently | After E1 |
@@ -109,17 +121,49 @@ The full reconception of O2 to fit F1 lives in O2's revision (which depends on t
 2. Orchestrator (SKILL.md) rewrite: validateAll → getResolvedConfig → snapshot → spawn. The evaluator-pipeline harness (E3) immediately starts being meaningful.
 3. gan-evaluator rewrite (largest surface, highest test coverage in E3).
 4. gan-contract-proposer rewrite (retires the hardcoded checklist).
-5. gan-generator rewrite (smallest surface change).
-6. gan-planner rewrite.
-7. O2 revision lands separately afterwards (per its header note).
+5. gan-contract-reviewer rewrite (mechanically light; just removes file-system reads and routes through the snapshot).
+6. gan-generator rewrite (smallest surface change).
+7. gan-planner rewrite.
+8. O2 revision lands separately afterwards (per its header note).
 
 The evaluator-pipeline harness (E3) gates the PR: a passing evaluator-pipeline check means each agent's rewrite preserves behavior on every fixture.
 
 Incremental landing is **not** recommended. A half-rewritten agent set leaves the framework in a state where some agents are reading files and others are reading the snapshot, with no guarantee they agree. The risk of subtle bugs outweighs the review-size benefit.
 
+### Retirement of old artifacts
+
+E1 is the cutover spec for the framework's agent layer. When E1 lands, every old artifact in this list must be retired in the same PR. The PR is incomplete if any survive. See the [roadmap's Retirement table](roadmap.md#retirement-table) for the full canonical list; this section names what E1 owns specifically.
+
+**Rewritten in place (`M` entries in the PR diff — same path, full content replacement):**
+
+- `agents/gan-planner.md`
+- `agents/gan-contract-proposer.md`
+- `agents/gan-contract-reviewer.md`
+- `agents/gan-generator.md`
+- `agents/gan-evaluator.md`
+- `skills/gan/SKILL.md`
+
+These six files survive at their existing paths but their old content goes away wholesale. After the PR lands, no piece of the old prompt structure should be reachable: not the `.gan/` file-read steps, not the hardcoded stack-specific tokens, not the bespoke validation flow inside the old SKILL.md. R4's `lint-no-stack-leak` (with agent prompts in scope per slice 4 of the third-pass response) is the permanent backstop catching ecosystem-token regressions in these files.
+
+**Deleted (`D` entries in the PR diff — files go away entirely):**
+
+- `skills/gan/gan` — broken symlink, dead artifact.
+- `skills/gan/schemas/contract.schema.json`
+- `skills/gan/schemas/feedback.schema.json`
+- `skills/gan/schemas/objection.schema.json`
+- `skills/gan/schemas/progress.schema.json`
+- `skills/gan/schemas/review.schema.json`
+- `skills/gan/schemas/telemetry-summary.schema.json`
+
+The six `skills/gan/schemas/*.json` files describe per-run state inside the old orchestrator. The rewritten orchestrator either re-authors them under a new location consistent with F1's zones (e.g. `schemas/run-state/<type>-v1.json` per F3's naming) **or** drops them if the new flow no longer validates against the same shapes. The E1 PR must commit to one of the two paths and execute it; whichever is chosen, the originals are deleted at the old path. Leaving them at the old path implies the old SKILL.md is still loading them.
+
+**Verification.** The PR reviewer cross-checks the diff against this list. Survivors block the merge until retirement is complete. After E1 lands, `find . -path '*/skills/gan/gan' -o -path '*/skills/gan/schemas/contract*'` and similar commands should produce empty output.
+
+**Why this discipline.** Dead prompts are especially dangerous. LLM prompts compose by inclusion (a stale `agents/gan-planner.md` left in place may be picked up by Claude Code's agent discovery, by a `Read` tool invocation, by future authoring confusion, or by a search-and-paste in an unrelated PR). The framework cannot have two definitions of "what gan-planner does" in the working tree. Deletion / replacement is the only safe state.
+
 ## Acceptance criteria
 
-- Each agent prompt (`gan-planner.md`, `gan-contract-proposer.md`, `gan-generator.md`, `gan-evaluator.md`, plus the recovery agent role) contains zero direct file paths to configuration files, zero YAML field names that imply parsing, zero merge or cascade logic.
+- Each agent prompt (`gan-planner.md`, `gan-contract-proposer.md`, `gan-contract-reviewer.md`, `gan-generator.md`, `gan-evaluator.md`, plus the recovery agent role) contains zero direct file paths to configuration files, zero YAML field names that imply parsing, zero merge or cascade logic.
 - `gan-evaluator.md` contains zero references to `kt`, `kts`, `gradle`, `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, or any other tool-specific token. Same for every other agent prompt.
 - `gan-contract-proposer.md` contains zero hardcoded security criteria; every criterion in its output traces to a `securitySurfaces` entry in an active stack or to a `proposer.additionalCriteria` overlay entry.
 - The skill orchestrator's first action on a regular invocation is `validateAll()`. Verified by inspection of SKILL.md.

@@ -8,6 +8,10 @@ ClaudeAgents has many moving parts: agents, skills, the Configuration MCP server
 
 `install.sh` at the repo root. Bash, POSIX-compatible. Idempotent. Reversible via `install.sh --uninstall`.
 
+**Retirement.** The existing 138-line `install.sh` (old `.gan/`-based installer that links agents and skills without an MCP server) is rewritten in place when R2 is implemented. Same path, full content replacement. The implementation PR's diff shows a single `M` (modified) entry on `install.sh`; there is no transition period where both installers exist. See the roadmap's Retirement table.
+
+The rewritten installer makes a particular point of cleanup: any pre-existing `.gan/` directory at the user's project root is named in the post-install message as a hand-delete target (per F1's hard-error policy), and any pre-existing symlinks pointing at the old `agents/*.md` files (which E1 retires) are explicitly verified-and-pruned during install, not silently re-linked.
+
 ### Responsibilities
 
 1. **Prerequisite checks.** Verify Node 18+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.

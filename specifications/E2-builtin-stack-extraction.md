@@ -29,6 +29,13 @@ Correctness of the extraction is gated by the evaluator-pipeline harness (E3) �
 - No agent prompt still contains hardcoded file extensions, audit commands, or stack-specific security criteria. Concretely: `gan-evaluator.md` must contain zero references to `kt`, `kts`, `gradle`, `npm audit`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, or any other tool-specific token. The same applies to every other agent prompt.
 - `gan-contract-proposer.md` (or whichever agent today owns the security checklist) contains zero hardcoded security criteria. Every security criterion in a generated contract traces to a `securitySurfaces` entry in an active stack.
 - `scripts/evaluator-pipeline-check` (E3's reference implementation) produces an empty normalised diff for every fixture in `tests/fixtures/stacks/` when run in CI.
+- The E2 PR's body includes an **extraction audit** listing every stack-specific concept lifted from the old prompts into `stacks/<name>.md` files, plus an explicit "retired, not lifted" subsection enumerating anything dropped (e.g. an audit-command branch deemed obsolete). Concepts that are neither lifted nor explicitly retired block the PR — the discipline is "every old token has a documented destination."
+
+## Retirement coordination with E1
+
+E2's stack-extraction work and E1's agent-rewrite work are tightly coupled: the rewritten prompts (E1) need the stack files (E2) to exist, and the stack files (E2) are sourced from the old prompts that E1 retires. Per the bite-size note below, the recommended path is a single coordinated PR; if instead they land separately, **E2 must precede E1's prompt rewrites** so the old prompts are still present as the content reference during extraction. Once E1 lands, the old prompts are gone and any unlifted concept is unrecoverable except from git history.
+
+E2 does not retire any files itself — it produces new files (`stacks/*.md`) and prepares the content E1's prompt rewrites will reference. The actual deletion / rewrite-in-place happens in E1 per the [roadmap's Retirement table](roadmap.md#retirement-table).
 
 ## Dependencies
 
