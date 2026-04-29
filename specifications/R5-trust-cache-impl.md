@@ -69,7 +69,7 @@ Writes to `~/.claude/gan/trust-cache.json`. v1 file format:
 
 **File mode.** Created with mode `0600` (user read/write only). The `0600` is set at file-creation time (the canonical "establishment" point); on subsequent reads and writes, the cache I/O implementation verifies the mode and refuses to proceed if the file became world-readable or group-readable.
 
-**Path canonicalisation.** `projectRoot` is canonicalised before keying via the canonical rule referenced in F3's "Determinism" section (and implemented in F2's API boundary). Two cache entries can never refer to the same on-disk directory under different keys.
+**Path canonicalisation.** `projectRoot` is canonicalised before keying per F3's canonical determinism pins. Two cache entries can never refer to the same on-disk directory under different keys.
 
 **Concurrency.** Reads/writes are atomic for individual operations (temp-file + rename). v1 does not implement cross-process advisory locks — two terminal windows running `/gan` against two different projects simultaneously may interleave their cache reads/writes; the worst case is one approval briefly being missed and re-prompted on the next run, not corruption. Cross-process locking is one of the deferred bits below; if real users hit the race in practice, that's the trigger to author the follow-up spec.
 

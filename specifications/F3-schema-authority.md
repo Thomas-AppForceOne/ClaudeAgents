@@ -42,6 +42,21 @@ The migration-tooling spec (provisional name `gan migrate-overlays`) is authored
 
 What v1 commits to: when the first schema bump lands, the bumping PR includes both the new schema document (`<type>-v2.json`) and the migration tool. Users get a `gan migrate-overlays --to=2` (or whatever the surface ends up being) at the moment they need it. Out-of-band release-note migrations are not the answer.
 
+### Determinism (canonical)
+
+Several pieces of the framework depend on byte-identical output across machines: schema validation, cross-file invariant checks, the evaluator pipeline harness's golden-file diffs, the trust hash, R4's lint scripts, the resolver cache keying. Each one of those previously documented its own determinism rules; consolidated here so there is one canonical specification and the rest reference it.
+
+The framework pins:
+
+- **Glob matching:** [picomatch](https://github.com/micromatch/picomatch) at a major version pinned in R1's `package.json`. Picomatch is chosen over `minimatch` and `node-glob` for its documented escape and brace-expansion semantics. Any spec that performs glob matching uses this library.
+- **Path canonicalisation:** at every API boundary that takes a path-like argument (F2's `projectRoot`, R5's trust-cache `projectRoot` keying, U3's `additionalContext` resolution, F4's `PathEscape` invariant), paths are canonicalised by: `fs.realpathSync.native(path)` (Node) or its equivalent; trailing slash stripped; case-insensitive filesystem normalisation by canonical-path comparison; missing paths produce `MissingFile` (or the spec-specific equivalent) before any further work. Two semantically-equivalent paths must canonicalise to the same key.
+- **JSON output:** stable formatting with sorted object keys, two-space indent, trailing newline. `JSON.stringify` with a small in-tree sort helper; no external library. This is the format for resolved-config snapshots, evaluator-plan goldens, trust-cache contents, and any other JSON the framework writes for diff or comparison.
+- **File enumeration order:** every input file list (`fs.readdirSync` results, glob expansions, fixture file walks) is sorted by `String.prototype.localeCompare(other, undefined, { sensitivity: 'variant', numeric: false })` before any first-match-wins logic sees it. APFS / ext4 / NTFS readdir orders differ; the sort makes them irrelevant.
+- **Regex engine:** Node's V8-based RegExp. Behavior is stable per Node version. R1's `package.json` pins the Node engine range alongside the picomatch version.
+- **Hash function (R5):** SHA-256 over raw bytes; no normalisation. A single whitespace change invalidates the hash. This is intentional per F4's threat model.
+
+Specs that depend on any of these rules **reference this section** rather than restating. Diverging from any pin in a future revision is a coordinated change across every dependent spec, gated by a re-run of the evaluator pipeline harness's `--update-goldens` flag and a corresponding R5 trust-cache invalidation.
+
 ### Cross-file invariants
 
 Some validation rules span multiple files and cannot be expressed in a single JSON Schema. The API's validation pipeline runs cross-file checks **after** schema validation:
@@ -73,6 +88,8 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 | `stack.no_draft_banner` | R3 | A stack file at any tier whose first non-blank line is the literal `# DRAFT — replace TODOs before committing.` banner emitted by `gan stacks new` (R3) fails with a hard `InvariantViolation` error citing the path. The banner is the scaffold's "you're not done yet" signal; removing it is the user's deliberate "I have replaced the TODOs" act. Catalogued as a cross-file invariant so it fires at *both* runtime via `gan validate` / `validateAll()` *and* at build time via R4's `lint-stacks` — without two separate code paths having to agree on the rule. |
 
 Invariants are implemented in code (R1) but live conceptually here so the catalog is centralised.
+
+**Single point of implementation.** Each invariant has one implementation in R1. R4's lint scripts that need to check invariants at build time **import R1's check function** rather than re-implementing — the same code path, called from a different entry point. This eliminates the drift risk a multi-implementation pattern would introduce: a rule can never silently differ between `gan validate` (runtime) and the maintainer-side lint (build time) because they call the same function. The invariants currently subject to this rule (most prominently `pairsWith.consistency`, `cacheEnv.no_conflict`, and `path.no_escape`, which span multiple consumer specs) all funnel through R1's invariant module; specs that catalogue or motivate a rule (C1, C5, M1, F4) do not duplicate the implementation.
 
 ### Versioning across axes
 

@@ -123,15 +123,7 @@ CI invokes via a workflow named `test-evaluator-pipeline.yml` (replaces `test-ca
 
 ### Determinism prerequisites
 
-"Deterministic" only holds if the implementation pins libraries that exhibit cross-version behavioral drift. Specifically:
-
-- **Glob matching:** the deterministic core uses [picomatch](https://github.com/micromatch/picomatch) with a pinned major version. `picomatch` is chosen over `minimatch` and `node-glob` because it has the most documented escape and brace-expansion semantics. The pinned version is declared in R1's `package.json` and re-verified by R4's lint at publish time.
-- **Regex engine:** Node's V8-based RegExp. Behavior is stable per Node version. R5's `package.json` pins the Node engine range alongside the picomatch version.
-- **JSON output:** `JSON.stringify` with sorted keys via a small helper (no external library) so the harness output is deterministic across Node versions.
-
-Diverging from these choices in any future revision invalidates the goldens and requires a `--update-goldens` pass.
-
-**Input file lists are sorted before being fed to the deterministic core.** `fs.readdirSync` order is OS- and filesystem-dependent: APFS (macOS) returns directory entries differently from ext4 (Linux), and a fixture authored on one host can produce divergent encounter order on another even when the final sorted output matches. The harness sorts every input file list — globbed paths, directory enumerations, fixture file walks — lexicographically before any first-match-wins logic in the core sees them. Pin: the sort uses JavaScript's default `String.prototype.localeCompare` with `{ sensitivity: 'variant', numeric: false }` so locale settings on the build host do not perturb order. Output normalisation is downstream; this rule pins *input* determinism so the core's intermediate decisions (e.g. "first matching detection rule wins") are reproducible across hosts.
+The harness inherits the framework's canonical determinism pins from [F3's "Determinism" section](F3-schema-authority.md): picomatch for glob, sorted-input file enumeration, stable JSON formatting, V8 RegExp. The harness does not introduce its own additional pins. Diverging from any F3 pin in a future revision invalidates the goldens and requires a `--update-goldens` pass; the determinism pins are part of the harness contract via reference.
 
 ### Future-proofing: gate new trigger types
 

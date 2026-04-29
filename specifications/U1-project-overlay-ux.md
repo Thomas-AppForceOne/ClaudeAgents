@@ -99,7 +99,7 @@ These are real, validatable files referenced by the README's mental-model guide.
 - Editing the same file by hand to introduce a typo produces a `gan validate` error citing the line and field with a similar-name suggestion when applicable.
 - The README's overlay guide describes the cascade visually and links to every splice point with a one-line use case.
 - `examples/project-overlay/*` files all validate against `schemas/overlay-vN.json`.
-- The user-facing error and example surface never references a maintainer-only script (lint, publish-schemas, etc.).
+- The user-facing error and example surface follows the roadmap's user-facing-discipline rule (no maintainer-only script names).
 
 ## Dependencies
 

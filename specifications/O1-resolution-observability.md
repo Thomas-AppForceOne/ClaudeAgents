@@ -8,9 +8,7 @@ Once stack dispatch (C2), overlays (C3, C4), and three-tier resolution (C5) are 
 
 Two mechanisms — one automatic, one on demand. Both surface data the Configuration API (F2) already produces; this spec defines how that data reaches the user.
 
-**Phase carve-out.** Per the roadmap, part A (the startup log line) lands in R1's Phase 2 work as the framework's minimum-viable observability surface — Phase 5 stack authors need at least the "which files were loaded, which stacks are active" view before O1's full suite lands in Phase 6. Part B and the richer surfaces below (`gan config print`, `--print-config` JSON, the `discarded` array, the `replacedWith` field) remain O1 / Phase 6 work. This spec documents both halves; the implementation lands in two stages.
-
-**A. Startup log line (automatic, every run) — lands with R1 in Phase 2**
+**A. Startup log line (automatic, every run)**
 
 The skill orchestrator, after `validateAll()` succeeds and before spawning agents, prints a single structured record summarising the resolved config it captured from `getResolvedConfig()`:
 
@@ -27,7 +25,7 @@ Missing sources are listed explicitly (`(none)`), not silently omitted — "noth
 
 The orchestrator owns this line because it owns the snapshot. Spawned agents do not re-emit their own loaded-files line; they consume the snapshot the orchestrator captured (per F2's validation timing).
 
-**B. `gan config print` and the `/gan --print-config` flag — lands in Phase 5 (this spec's main scope)**
+**B. `gan config print` and the `/gan --print-config` flag**
 
 Two equivalent surfaces for the same data:
 
@@ -57,8 +55,8 @@ The output:
     "runner.thresholdOverride": 9
   },
   "discarded": [
-    {"scope": "proposer",                        "byTier": "project", "replacedWith": "2 entries"},
-    {"scope": "generator.additionalRules",       "byTier": "user",    "replacedWith": "empty"}
+    {"scope": "proposer",                        "byTier": "project", "replacedWith": {"kind": "list", "count": 2}},
+    {"scope": "generator.additionalRules",       "byTier": "user",    "replacedWith": {"kind": "absent"}}
   ],
   "additionalContext": {
     "planner":  ["docs/architecture.md"],
@@ -75,7 +73,12 @@ The `discarded` array reports every block or field where `discardInherited: true
 
 - `scope` — the block (e.g. `proposer`) or specific field (e.g. `generator.additionalRules`) that was discarded.
 - `byTier` — the tier that declared the discard (`user` or `project`).
-- `replacedWith` — what the discarding tier provided instead. Either `"empty"` (the tier discarded but provided no replacement, so the field is now empty / at agent default) or `"<N> entries"` for list fields, or `"<value>"` for scalar fields. This makes "why is this value missing?" answerable without further inspection.
+- `replacedWith` — what the discarding tier provided instead. **Discriminated union, single shape:**
+  - `{"kind": "absent"}` — the tier discarded but provided no replacement; the field falls back to the agent's bare default.
+  - `{"kind": "list", "count": <int>}` — the tier provided a replacement list of `<count>` entries.
+  - `{"kind": "scalar", "value": <value>}` — the tier provided a scalar replacement; `<value>` is the literal value as JSON (string, number, boolean).
+
+  The shape is the same regardless of which case applies — every `replacedWith` is an object with a `kind` discriminator. CI scripts diffing this output across runs can always type-check on `kind` first; no per-string parsing.
 
 The combination tells a debugger both *what* was discarded and *what replaced it*.
 
@@ -86,8 +89,8 @@ The combination tells a debugger both *what* was discarded and *what replaced it
 - Running `/gan --print-config` does not create a worktree, spawn sprint agents, or write to zone 2.
 - A missing file in `additionalContext` shows up in both surfaces with a clear "missing" marker.
 - Running `--print-config` on a repo with no overlays produces a valid JSON document with every source marked not-loaded and an empty `discarded` array.
-- A project overlay declaring `proposer.discardInherited: true` plus its own `proposer.additionalCriteria: [a, b]` appears in the `discarded` array as `{"scope": "proposer", "byTier": "project", "replacedWith": "2 entries"}`.
-- A field-level discard like `generator.additionalRules.discardInherited: true` with no replacement appears as `{"scope": "generator.additionalRules", "byTier": "<tier>", "replacedWith": "empty"}`.
+- A project overlay declaring `proposer.discardInherited: true` plus its own `proposer.additionalCriteria: [a, b]` appears in the `discarded` array as `{"scope": "proposer", "byTier": "project", "replacedWith": {"kind": "list", "count": 2}}`.
+- A field-level discard like `generator.additionalRules.discardInherited: true` with no replacement appears as `{"scope": "generator.additionalRules", "byTier": "<tier>", "replacedWith": {"kind": "absent"}}`.
 - Running `/gan --print-config` against a project with a malformed overlay prints both the partial resolved view (under `resolvedConfig`) and the validation errors (under `validationErrors`); exit code is non-zero. (Fail-open behavior, distinct from a regular `/gan` run.)
 
 ## Dependencies

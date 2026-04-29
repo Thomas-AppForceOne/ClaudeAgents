@@ -174,6 +174,9 @@ The module is utilities; the stack file (when authored) is policy.
 - `ContainerNaming.nameForWorktree()` is deterministic for the same input and produces container-name-safe strings.
 - O2's recovery flow against a fixture leaves `port-registry.json` byte-identical before and after.
 - Two concurrent `/gan` runs on the same machine, same project, different worktrees do not collide on ports or container names.
+- A fixture-only paired stack file at `tests/fixtures/stacks/docker-paired/.claude/gan/stacks/docker.md` declares `pairsWith: docker`, exercising the pairsWith resolution path end-to-end. The fixture is **test-only**: there is no shipped `stacks/docker.md` in v1, and no real ecosystem consumes the docker module yet. The fixture exists so M2's API is exercised against an actual paired stack file (rather than only against the unpaired-module path), surfacing pairing-logic gaps before the post-M revision break instead of at it. Same pattern as `synthetic-second/` for the multi-stack guard rail; pairsWith is to M2 what multi-stack is to the framework's stack plurality.
+
+**API provisional until post-M reconciliation.** M2 ships before any real-ecosystem consumer of the docker module exists. Its API surface (`PortRegistry`, `PortDiscovery`, `ContainerHealth`, `PortValidator`, `ContainerNaming`) is **provisional**: the post-M revision break (per roadmap) is the explicit checkpoint at which this surface is reconciled against whatever a future canonical `stacks/docker.md` (if authored) or an actual agent's call-graph requires. Treat M2's API as exercising the module surface, not as locked-in for v1 stability.
 
 ## Dependencies
 

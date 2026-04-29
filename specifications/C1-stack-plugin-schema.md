@@ -210,7 +210,7 @@ ClaudeAgents is a WIP project and does not carry backward-compatibility guarante
 
 The schema in this spec is authoritative and **language-neutral**. It is published as a JSON Schema document at `schemas/stack-vN.json` (per F3) so any runtime (Swift, Rust, Python, shell + a JSON-schema CLI, etc.) can validate `stacks/*.md` against it. ClaudeAgents ships a Node 18+ reference implementation in R1 (the Configuration MCP server) and in R4's lint script, but the reference implementations have no special authority over the JSON Schema.
 
-User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — flows through the Configuration API per F2. Agents call `getStack()` / `getResolvedConfig()`; on validation failure the API returns a structured error with file, line, and field provenance. The agent surfaces that error to the user verbatim. User-facing output must not reference the maintainer-only lint script by name; an iOS or embedded-C++ developer running `/gan` has no reason to have Node installed and must never be told to run a Node command.
+User-facing behavior — reading a stack file when `/gan` runs, reporting a malformed-stack error to the user — flows through the Configuration API per F2. Agents call `getStack()` / `getResolvedConfig()`; on validation failure the API returns a structured error with file, line, and field provenance. The agent surfaces that error to the user verbatim. Error text follows the roadmap's user-facing-discipline rule (no maintainer-only script names in user output).
 
 ## Acceptance criteria
 

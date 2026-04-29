@@ -26,7 +26,7 @@ Semantics:
 - The Configuration API (F2) reads each listed file at `validateAll()` time and includes its contents in the resolved config. Agents receive the contents through `getResolvedConfig()`.
 - Missing files are reported as a **warning** (not a hard failure) — documentation moves around; a stale path should not block a run. The warning surfaces in the validation report and in O1's startup log / `--print-config` output.
 - Files are read once per run. There is no caching across runs — the content may change.
-- The lists are capped: **20 files maximum per splice point, 200 KB total per splice point** (sum of all file sizes for that list). The API's validation pipeline enforces both caps at `validateAll()` time, before any agent runs. Exceeding either cap is a hard error naming the splice point, the file count or byte total, and the offending file (for per-file issues). Agents never see a partial list; either the full list loads or the run halts.
+- The lists are capped: **20 files maximum per splice point, 200 KB total per splice point** (sum of all file sizes for that list). These are sanity caps, not principled limits — picked to catch obvious misuse (someone listing every markdown file in the repo) without burdening realistic projects. Revisit if a real project hits them. The API's validation pipeline enforces both caps at `validateAll()` time, before any agent runs. Exceeding either cap is a hard error naming the splice point, the file count or byte total, and the offending file (for per-file issues). Agents never see a partial list; either the full list loads or the run halts.
 - **Paths must not escape the project root.** Every path is resolved relative to the project root and verified to land inside it. Symlinks pointing outside the root are treated as escapes. Failures produce a `PathEscape` structured error per F4's path-resolution rules.
 
 No auto-discovery. No inference. The user tells `/gan` exactly what to read.
@@ -46,14 +46,9 @@ No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 - F2, R1 (the API reads the files and exposes them via `getResolvedConfig()`)
 - F3 (the `additionalContext.path_resolves` cross-file invariant catalogued there fires for missing files)
 
-## Phase placement and E1 dependency
+## E1 dependency (behaviour)
 
-This spec ships as a single Phase 6 unit per the roadmap. The implementation, however, has natural sub-tasks that the R1 / E1 sprint plans may absorb earlier:
-
-- **API-side splice-point handling and file reading** (the `additionalContext.path_resolves` invariant, cap enforcement, exposure via `getResolvedConfig().additionalContext`) is part of R1's resolver. It can land in Phase 2 as part of R1's sprint slices without authoring U3 first.
-- **Planner / proposer consumption** of the resolved context — making the agents actually read `snapshot.additionalContext.{planner,proposer}` and inject the contents into their working context — depends on E1 (agent prompt rewrite).
-
-U3 is the spec that pulls these threads together and adds the user-facing acceptance criteria. Authoring it in Phase 6 keeps the implementation honest: the user-visible promise ("the files I list show up in the agent's context") is only deliverable once E1 has landed.
+The user-visible promise — "the files I list show up in the agent's context" — is only deliverable once the agents themselves consume `snapshot.additionalContext.{planner,proposer}`. That consumption is E1's scope (the agent prompt rewrite). Phase ordering lives in the roadmap; this note flags only the behavioural dependency: U3's acceptance criteria cannot be exercised end-to-end until E1 has rewired planner and proposer to read from the snapshot.
 
 ## Bite-size note
 
