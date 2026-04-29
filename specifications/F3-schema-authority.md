@@ -53,7 +53,8 @@ The framework pins:
 - **JSON output:** stable formatting with sorted object keys, two-space indent, trailing newline. `JSON.stringify` with a small in-tree sort helper; no external library. This is the format for resolved-config snapshots, evaluator-plan goldens, trust-cache contents, and any other JSON the framework writes for diff or comparison.
 - **File enumeration order:** every input file list (`fs.readdirSync` results, glob expansions, fixture file walks) is sorted by `String.prototype.localeCompare(other, undefined, { sensitivity: 'variant', numeric: false })` before any first-match-wins logic sees it. APFS / ext4 / NTFS readdir orders differ; the sort makes them irrelevant.
 - **Regex engine:** Node's V8-based RegExp. Behavior is stable per Node version. R1's `package.json` pins the Node engine range alongside the picomatch version.
-- **Hash function (R5):** SHA-256 over raw bytes; no normalisation. A single whitespace change invalidates the hash. This is intentional per F4's threat model.
+
+The trust-cache hash is determinism-relevant but implementation-specific to the trust model; its algorithm and "raw bytes, no normalisation" rule live in R5, not here.
 
 Specs that depend on any of these rules **reference this section** rather than restating. Diverging from any pin in a future revision is a coordinated change across every dependent spec, gated by a re-run of the evaluator pipeline harness's `--update-goldens` flag and a corresponding R5 trust-cache invalidation.
 

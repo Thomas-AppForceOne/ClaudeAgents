@@ -76,6 +76,7 @@ The `discarded` array reports every block or field where `discardInherited: true
 - `replacedWith` — what the discarding tier provided instead. **Discriminated union, single shape:**
   - `{"kind": "absent"}` — the tier discarded but provided no replacement; the field falls back to the agent's bare default.
   - `{"kind": "list", "count": <int>}` — the tier provided a replacement list of `<count>` entries.
+  - `{"kind": "map", "entries": <int>}` — the tier provided a replacement map (e.g. `stack.cacheEnvOverride`) with `<entries>` top-level keys.
   - `{"kind": "scalar", "value": <value>}` — the tier provided a scalar replacement; `<value>` is the literal value as JSON (string, number, boolean).
 
   The shape is the same regardless of which case applies — every `replacedWith` is an object with a `kind` discriminator. CI scripts diffing this output across runs can always type-check on `kind` first; no per-string parsing.
