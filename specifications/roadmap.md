@@ -234,9 +234,21 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 | `[r]` | Run with `--no-project-commands` (skip project-defined commands); does not write to cache. | F4 |
 | `[c]` | Cancel; abort the run. | F4 |
 
-### Counts
+### Surface-count rule and inventory
 
-Inventory size (post-trim target):
-- 3 commands, 15 subcommands, 11 flags (5 `/gan` + 3 `install.sh` + 5 `gan` distinct sigils incl. `--help`), 2 env-var-values, 4 prompt-branches = 35 surfaces.
+**Rule.** Each unique `(surface-type, name)` pair counts once. Surface-type ∈ {command, subcommand, flag, env-var-value, prompt-branch}. Multi-word subcommands count as one (`gan trust approve` = one entry). Flags count by sigil string, deduplicated globally — `--help` appears under three commands but counts once. Aliases of the same flag (`--help` / `-h` / `help`) count as one surface, not three. Prompt branches count per unique action key, not per render variant.
+
+**Post-trim inventory (current):**
+
+| Surface-type | Count | Members |
+|---|---|---|
+| command | 3 | `/gan`, `gan`, `install.sh` |
+| subcommand | 15 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
+| flag | 11 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--no-project-commands`, `--uninstall`, `--no-claude-code`, `--json`, `--project-root`, `--tier`, `--note` |
+| env-var-value | 2 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all` |
+| prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
+| **total** | **35** | |
+
+Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
 
 When this table grows, the surface count grows with it. New knobs require explicit roadmap-table editing as part of the PR; specs do not own surfaces independently.
