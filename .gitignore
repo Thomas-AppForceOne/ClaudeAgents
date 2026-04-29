@@ -1,1 +1,6 @@
 .DS_Store
+
+# Review correspondence is local-only — kept out of git history
+# so iteration drafts don't pollute the spec set.
+specifications/REVIEW.md
+specifications/REVIEW_RESPONSE*.md
