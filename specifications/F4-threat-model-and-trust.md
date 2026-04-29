@@ -81,23 +81,46 @@ Validation does not pass-through to a resolved config when this error fires. The
 
 ### Interactive trust prompt
 
-When the `/gan` skill encounters `UntrustedOverlay` from `validateAll()`, it presents a UI flow:
+When the `/gan` skill encounters `UntrustedOverlay` from `validateAll()`, it presents one of two UI flows.
+
+**Subsequent-change prompt** (a previous approval exists for this `(project-root, …)`):
 
 ```
 Project config has changed since you last approved it.
   Affected: 2 evaluator.additionalChecks (1 added, 1 modified)
             1 project-tier stack file with auditCmd override
+  Approval gates these config files only — the 3 in-repo scripts they
+  invoke are NOT in the hash. Review those in git as part of your PR.
 
   [v] view the diff
   [a] approve and run
   [r] run with --no-project-commands (skip project-defined commands)
+      Recommended when reviewing someone else's branch.
   [c] cancel
 ```
+
+**Initial-introduction prompt** (no previous approval; this is the first time the project's committed files contain command-declaring fields, or the first time `/gan` runs against this project root at all):
+
+```
+This project's config declares commands /gan would run on your behalf.
+  Found: 2 evaluator.additionalChecks
+         1 project-tier stack file with lintCmd override
+  Approval gates these config files only — the 2 in-repo scripts they
+  invoke are NOT in the hash. Review those in git as part of your PR.
+
+  [v] view the declared commands
+  [a] approve and run
+  [r] run with --no-project-commands (skip project-defined commands)
+      Recommended when running an unfamiliar project for the first time.
+  [c] cancel
+```
+
+The two prompts differ only in their lead-in (no "since you last approved" framing for the initial-introduction case, since there's nothing to diff against) and the `[v]` action's content (a list of the declared commands rather than a diff). Both prompts include the same script-blind-spot disclosure and the same `[r]` recommendation hint. The skill picks the prompt at render time based on whether `getTrustState(projectRoot)` reports a prior approval.
 
 - **`[a]` approve** writes the new `(project-root, content-hash)` to the trust cache and re-runs `validateAll()`. The cache write is the one-time cost; subsequent runs skip the prompt.
 - **`[r]` run with --no-project-commands** sets the runtime mode and continues without writing to the cache.
 - **`[c]` cancel** aborts the run.
-- **`[v]` view** shows the diff between the previous approved content and the current content for the affected files, then re-prompts.
+- **`[v]` view** — for the subsequent-change prompt, shows the diff between the previous approved content and the current content for the affected files, then re-prompts. For the initial-introduction prompt, shows the literal command strings declared in each command-declaring field, then re-prompts.
 
 The CLI (R3) gets equivalent surfaces: `gan validate` prints the structured error; `gan trust approve` writes to the cache; `gan trust list` and `gan trust revoke` manage entries.
 

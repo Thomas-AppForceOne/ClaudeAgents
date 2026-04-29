@@ -68,6 +68,17 @@ Returns a structured report. The report is the same shape whether `validateAll()
 
 The resolved view is a JSON document with stable shape; consumers can diff it across runs (this is what spec O1's `--print-config` exposes).
 
+#### Resolver cache scope
+
+The validation-pipeline cache is per-process and pinned by the following rules:
+
+- **Cache key:** the canonical `projectRoot` (per F2's path-canonicalisation rule). Two MCP clients connected to the same long-lived server but operating on different projects each get their own cache entry; case-insensitive-filesystem aliasing collapses to one key.
+- **Lifetime:** the lifetime of the MCP server process. There is no TTL. The server holds the cache until it exits.
+- **Invalidation triggers:** any successful write through this server's API (any of the F2 write functions returning `mutated: true`) invalidates the cache entry for that `projectRoot`. **User-side file edits do not invalidate.** This is by design — F2's snapshot freshness rule says external state is stable for the run; if a user edits an overlay file mid-run and that edit invalidated the cache, the snapshot frozen-across-user-edits guarantee breaks. Users picking up edits is achieved by aborting the run and starting a new `/gan` (which spawns a new orchestrator session, calls `validateAll()` afresh, and produces a new snapshot).
+- **Idempotency:** repeated `getResolvedConfig(projectRoot)` calls between writes return byte-identical JSON. Test fixtures rely on this.
+
+Multi-client / multi-project servers (per F2) work correctly because cache entries are keyed per canonical projectRoot and writes invalidate only the affected entry.
+
 ### Writes
 
 Every write function:

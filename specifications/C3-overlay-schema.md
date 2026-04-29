@@ -59,6 +59,7 @@ This table is the **single source of truth** for every overlay splice point — 
 | `stack.override` | list of stack names | `[]` | **No** (per-rationale below) | Project-only; user value rejected at load |
 | `stack.cacheEnvOverride` | map `<stack-name> → <envVar> → <valueTemplate>` | `{}` | Yes | Deep merge; project key wins on duplicate. Lets a project override one envVar of one stack without replacing the whole stack file. Resolves the cacheEnv conflict scenario in C1. |
 | `proposer.additionalCriteria` | list of `{name, description, threshold}` | `[]` | Yes | Union, keyed by `name`. Higher tier wins on duplicate. |
+| `proposer.suppressSurfaces` | list of `<stack>.<surface-id>` strings | `[]` | Yes | Union, dedup by exact string. A surface listed here is dropped from `proposer.additionalCriteria`'s effective output even if its stack is active. Lets a project mute one auto-instantiated surface without forking the entire stack file. |
 | `proposer.additionalContext` | list of file paths (per U3) | `[]` | **No** (paths are project-relative) | Project-only |
 | `planner.additionalContext` | list of file paths (per U3) | `[]` | **No** (paths are project-relative) | Project-only |
 | `generator.additionalRules` | list of strings | `[]` | Yes | Union, dedup by exact string |
