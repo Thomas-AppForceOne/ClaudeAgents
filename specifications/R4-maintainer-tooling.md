@@ -45,6 +45,7 @@ Validates `stacks/*.md`:
 1. Parses the markdown body block.
 2. Validates against `schemas/stack-vN.json` (where `N` matches the file's `schemaVersion`).
 3. Runs the subset of F3's cross-file invariants that are decidable at build time without project context: `pairsWith.consistency` (against `src/modules/*/`), schema-version consistency.
+4. **Rejects scaffold-banner files.** Any stack file (at any tier) containing the literal line `# DRAFT — replace TODOs before committing.` fails with a `ScaffoldBannerPresent` error citing the path. This makes the `gan stacks new` (R3) scaffold's "you're not done yet" signal a CI hard error rather than a social problem. Removing the banner is the user's deliberate "I have replaced the TODOs" act.
 
 Prints a summary: count of files checked, count of failures, structured error per failure.
 

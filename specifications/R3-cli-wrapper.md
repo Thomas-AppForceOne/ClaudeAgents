@@ -28,6 +28,8 @@ gan config get <path> [--json]          Print one resolved value.
 gan config set <path> <value> [--tier=project|user]
                                         Update a single splice point.
 gan stacks list                         List active stacks with tier provenance.
+gan stacks new <name> [--tier=project|repo]
+                                        Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs before committing` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
 gan stack show <name>                   Print one stack's full data.
 gan stack update <name> <field> <value>
                                         Update one field of a stack file.
@@ -60,6 +62,57 @@ Every user-facing entry point exposes help on demand.
 - Help output goes to stdout (so `gan --help | less` works) and exits 0.
 
 The help surface is the user's first contact with the tool when something goes wrong; it is part of the contract, not a nice-to-have. Tests assert non-empty content, the presence of every documented subcommand and flag, and that exit codes are 0 for help requests and 64 for malformed argument errors.
+
+### Scaffold contract (`gan stacks new`)
+
+The scaffold's job is to give a non-Node user a discoverable, low-friction starting point for authoring a stack file — without ever producing a stack that *looks* finished when it isn't. The friction of replacing the placeholders is the value: it's also the discoverable "you're not done yet."
+
+Concrete scaffold output for `gan stacks new ios`:
+
+```markdown
+# DRAFT — replace TODOs and remove this banner before committing.
+# `gan validate` and CI's lint-stacks will fail while this banner is present.
+---
+schemaVersion: 1
+name: ios
+detection:
+  # TODO: replace with a detection composite that uniquely identifies this ecosystem.
+  # See specifications/C1-stack-plugin-schema.md and existing stack files for examples.
+  anyOf:
+    - file: TODO-replace-with-marker-file
+scope:
+  # TODO: globs describing files this stack owns (used for cross-contamination filtering).
+  - "**/*"
+secretsGlob:
+  # TODO: globs of files to scan for secrets.
+  - "**/*"
+auditCmd:
+  command: "false  # TODO: replace before committing — your audit command, or remove this field"
+  absenceSignal: warning
+buildCmd: "false  # TODO: replace with the build command users on this stack run"
+testCmd:  "false  # TODO: replace with the test command"
+lintCmd:
+  command: "false  # TODO: replace with the lint command, or remove this field"
+  absenceSignal: warning
+securitySurfaces: []
+  # TODO: see the authoring guide in the project README for surface authoring.
+  # An empty list is a valid stack (it just means /gan applies no client-side
+  # security checks for this ecosystem).
+---
+
+## Conventions
+
+<!-- TODO: free-form prose describing the ecosystem's conventions, idioms,
+     and anything an agent should know when working in this stack. -->
+```
+
+Discipline rules:
+
+- **No plausible-looking defaults.** Strings that would parse as "valid but empty" (`auditCmd: "true"`, empty `securitySurfaces`, blank `buildCmd`) are forbidden; placeholders are explicitly stub strings (`"false  # TODO: replace..."`) that fail at runtime if not replaced.
+- **The banner is enforcement, not decoration.** R4's `lint-stacks` fails on any stack file containing the `# DRAFT` banner. This makes "user committed a half-baked stack" a CI hard error, not a social problem.
+- **The scaffold writes to `.claude/gan/stacks/<name>.md` by default** (project tier per C5). `--tier=repo` writes to `stacks/<name>.md` and is intended for maintainer use when authoring a new canonical template; user projects almost never need it.
+- **No detection inference.** The scaffold does not inspect the user's repo to guess detection rules; it produces a TODO placeholder. Detection is too easy to get subtly wrong; better to make the user think about it explicitly than to ship a "smart" guess that misfires.
+- **Refuses to overwrite.** If the target file exists, `gan stacks new` errors with a clear message. The user has to delete it first.
 
 ### Output format
 
@@ -111,6 +164,9 @@ Comes with the npm package R2 already installs. No additional install step. Afte
 - `gan --help`, `gan -h`, `gan help`, and bare `gan` (no arguments) all print the top-level help to stdout and exit 0. Help text lists every subcommand from the surface table.
 - `gan <subcommand> --help` and `gan <subcommand> -h` print the subcommand's usage, flags, at least one example, and applicable exit codes; exits 0.
 - Unknown subcommands and unknown flags exit 64 with a one-line error and a pointer to `--help`.
+- `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs before committing` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
+- Running `gan validate` or `lint-stacks` against the unmodified scaffold fails with a clear error citing the unremoved DRAFT banner.
+- `gan stacks new <name>` against an existing file at the target path exits non-zero without overwriting; the error names the conflicting path.
 
 ## Dependencies
 
