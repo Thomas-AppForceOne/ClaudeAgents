@@ -14,6 +14,12 @@
 **Replacement scheduled at:** post-E1 revision break (per roadmap).
 **Skeleton retained for:** intent + acceptance-criteria reference; the new revision will reuse the user-facing acceptance criteria where they still apply.
 
+**Decisions deferred to the post-E1 revision (must resolve, not skip):**
+
+- The recovery agent's placement: today E1's per-agent table includes `gan-recover` as a role, but `agents/gan-recover.md` does not exist as a file. The post-E1 revision specifies whether the role becomes a real prompt file under `agents/` or stays orchestrator-internal as part of the rewritten `SKILL.md`. Whichever path is chosen, the [roadmap's Retirement table](roadmap.md#retirement-table) is amended in the same revision PR with the resulting state (new `M` row if a file lands, no row if it stays orchestrator-internal).
+- The archive-on-abort mechanism under F1's zone-2 layout (per the body's alignment note above).
+- Validation-first ordering integrated with F2's `validateAll()` non-aborting mode for `--recover` (per the same alignment note).
+
 ---
 
 ## Problem

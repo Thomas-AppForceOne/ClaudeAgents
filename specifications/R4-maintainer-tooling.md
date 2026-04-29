@@ -100,6 +100,23 @@ Implements the multi-stack guard rail catalogued in the roadmap's Cross-cutting 
 
 **When the deferred stacks are reactivated.** Each new ecosystem (Android, KMP, iOS Swift, etc.) adds its own `forbidden` list to `forbidden.json` and its own owning-file allowlist. The principle scales: every real stack the framework supports gets an enforced isolation boundary.
 
+**Transitional allowlist for the pre-E1 mid-state.** R4 lands in Phase 2 (per the roadmap), but the existing agent prompts under `agents/*.md` and the existing `skills/gan/SKILL.md` carry stack-specific tokens — those tokens are exactly what E1 retires in Phase 3. To prevent R4's CI from failing every Phase 2 commit on the feature branch, the allowlist ships with explicit transitional entries:
+
+```json
+{
+  "transitional": {
+    "agents/gan-evaluator.md":           "remove when E1 lands",
+    "agents/gan-contract-proposer.md":   "remove when E1 lands",
+    "agents/gan-contract-reviewer.md":   "remove when E1 lands",
+    "agents/gan-generator.md":           "remove when E1 lands",
+    "agents/gan-planner.md":             "remove when E1 lands",
+    "skills/gan/SKILL.md":               "remove when E1 lands"
+  }
+}
+```
+
+These entries grant temporary immunity to the named files. The E1 retirement PR removes both the entries and the underlying file content in the same commit set — once the prompts are rewritten and the stack tokens lifted into `stacks/*.md`, the transitional allowlist is empty and gets deleted. Surviving transitional entries after E1 are themselves a CI failure (a separate pre-merge check verifies the `transitional` block is empty post-E1).
+
 **Output.** Hits print as `<file>:<line> <identifier> (owned by <stack>)` followed by either "no allowlist match" or, on intentional failure, the allowlist entry that should have applied but did not.
 
 ### `lint-error-text`

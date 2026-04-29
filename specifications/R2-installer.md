@@ -12,6 +12,8 @@ ClaudeAgents has many moving parts: agents, skills, the Configuration MCP server
 
 The rewritten installer makes a particular point of cleanup: any pre-existing `.gan/` directory at the user's project root is named in the post-install message as a hand-delete target (per F1's hard-error policy), and any pre-existing symlinks pointing at the old `agents/*.md` files (which E1 retires) are explicitly verified-and-pruned during install, not silently re-linked.
 
+**Feature-branch mid-state is non-functional by design.** R2 lands in Phase 2; E1's prompt rewrites land in Phase 3. A developer checking out `feature/stack-plugin-rfc` between R2's land and E1's land and running `./install.sh` would symlink agent prompts that are about to be rewritten — the resulting install would mix the new MCP-server-aware orchestrator with the old hardcoded prompts. **This is not a supported state.** Production use stays on `main`, which carries the pre-pivot architecture intact until the post-E1 break merges Phase 3 to main as a unit. Internal feature-branch developers running `./install.sh` mid-Phase-2 should expect a half-system; the branch is for spec implementation, not daily use.
+
 ### Responsibilities
 
 1. **Prerequisite checks.** Verify Node 18+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.

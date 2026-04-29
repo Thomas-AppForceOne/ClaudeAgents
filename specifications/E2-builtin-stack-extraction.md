@@ -33,9 +33,16 @@ Correctness of the extraction is gated by the evaluator-pipeline harness (E3) �
 
 ## Retirement coordination with E1
 
-E2's stack-extraction work and E1's agent-rewrite work are tightly coupled: the rewritten prompts (E1) need the stack files (E2) to exist, and the stack files (E2) are sourced from the old prompts that E1 retires. Per the bite-size note below, the recommended path is a single coordinated PR; if instead they land separately, **E2 must precede E1's prompt rewrites** so the old prompts are still present as the content reference during extraction. Once E1 lands, the old prompts are gone and any unlifted concept is unrecoverable except from git history.
+E2's stack-extraction work and E1's agent-rewrite work are tightly coupled: the rewritten prompts (E1) need the stack files (E2) to exist, and the stack files (E2) are sourced from the old prompts that E1 retires.
 
-E2 does not retire any files itself — it produces new files (`stacks/*.md`) and prepares the content E1's prompt rewrites will reference. The actual deletion / rewrite-in-place happens in E1 per the [roadmap's Retirement table](roadmap.md#retirement-table).
+Per the [roadmap's resolution of spec-completion order vs commit order](roadmap.md#phase-3--agent-integration), Phase 3 is a single coordinated PR with two ordering layers:
+
+- **Spec-completion order: E1 → E3 → E2.** E1's contract is what E2 and E3 consume; E1 must be authoritatively complete first. The roadmap's stated implementation order describes this layer.
+- **Commit order inside the PR: E2's content-lifting commits before E1's prompt-rewrite-in-place commits.** The old prompts are the source material for E2's stack-extraction work; once E1's commits rewrite `agents/*.md`, the source is gone and any concept not yet lifted is unrecoverable except from git history.
+
+The two orderings compose: E1 specifies *what* the rewrite produces; E2 commits the new stack content while the source still exists; E1 commits the rewrite-in-place that finally retires the old content. A reviewer looking at the merged PR sees stacks added before agents change — exactly what extraction-then-replace should look like.
+
+E2 does not delete any files itself — it produces new files (`stacks/*.md`) and prepares the content E1's prompt rewrites will reference. The actual `M` rewrite-in-place on agent prompts happens in E1 per the [roadmap's Retirement table](roadmap.md#retirement-table).
 
 ## Dependencies
 
