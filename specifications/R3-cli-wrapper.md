@@ -77,7 +77,7 @@ schemaVersion: 1
 name: ios
 detection:
   # TODO: replace with a detection composite that uniquely identifies this ecosystem.
-  # See specifications/C1-stack-plugin-schema.md and existing stack files for examples.
+  # See C1's schema spec and existing stacks/*.md files for examples.
   anyOf:
     - file: TODO-replace-with-marker-file
 scope:
@@ -95,9 +95,9 @@ lintCmd:
   command: "false  # TODO: replace with the lint command, or remove this field"
   absenceSignal: warning
 securitySurfaces: []
-  # TODO: see the authoring guide in the project README for surface authoring.
-  # An empty list is a valid stack (it just means /gan applies no client-side
-  # security checks for this ecosystem).
+  # TODO: see C1's schema spec and existing stacks/*.md files for surface
+  # authoring patterns. An empty list is a valid stack (it just means /gan
+  # applies no client-side security checks for this ecosystem).
 ---
 
 ## Conventions

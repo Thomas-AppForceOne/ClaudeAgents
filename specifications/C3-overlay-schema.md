@@ -86,6 +86,13 @@ This lets a polyglot project resolve a `cacheEnv` collision (per C1's "Conflict 
 
 **Inactive-stack overrides are warned on, not silently dropped.** A `cacheEnvOverride.<stack>` keyed at a stack that is not active in this project (no detection match and not in `stack.override`) is a configuration bug: the user typed a key that has no effect. Validation reports a structured warning naming the stack and the keys, surfaced in O1's startup log and `gan config print`. The run does not abort — typos are common and the user may have intentionally left a future-stack override in place — but the noise makes the dead config discoverable.
 
+**The same warning rule applies to `proposer.suppressSurfaces`.** A `<stack>.<surface-id>` entry is warned on (not silently dropped) in two cases:
+
+- The named stack is not active in this project. Same logic as `cacheEnvOverride`.
+- The named stack *is* active but does not declare a `securitySurfaces` entry with the named id. Catches typos like `web-node.express_route_inputs` (plural) when the stack defines `express_route_input`.
+
+Both warning subclasses share the same structured shape and surface through O1; both are non-aborting. Any future stack-keyed splice point added to this catalog inherits the same rule by reference: keys that point at non-existent stacks or non-existent sub-fields warn, do not abort, and are surfaced in observability output.
+
 ## `discardInherited`
 
 Either overlay may declare `discardInherited: true` to discard upstream values before applying its own.

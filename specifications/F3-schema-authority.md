@@ -73,6 +73,7 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 | `overlay.tier_apiVersion` | C3 | Each overlay tier's `schemaVersion` matches the API's known overlay schema version. |
 | `stack.tier_apiVersion` | C1 | Each active stack file's `schemaVersion` matches the API's known stack schema version. |
 | `detection.tier3_only` | C5 | A `detection` block is permitted only in tier-3 (canonical / repo) stack files. A tier-1 (project) or tier-2 (user) stack file containing a `detection` block fails with a hard `InvariantViolation` error. Silent-drop is rejected: a project-tier file's "detection" reading as docs but never activating would be a footgun. C1's schema additionally forbids `detection` outside tier 3 at parse time; this cross-file invariant is the authoritative gate. |
+| `stack.no_draft_banner` | R3 | A stack file at any tier whose first non-blank line is the literal `# DRAFT — replace TODOs before committing.` banner emitted by `gan stacks new` (R3) fails with a hard `InvariantViolation` error citing the path. The banner is the scaffold's "you're not done yet" signal; removing it is the user's deliberate "I have replaced the TODOs" act. Catalogued as a cross-file invariant so it fires at *both* runtime via `gan validate` / `validateAll()` *and* at build time via R4's `lint-stacks` — without two separate code paths having to agree on the rule. |
 
 Invariants are implemented in code (R1) but live conceptually here so the catalog is centralised.
 

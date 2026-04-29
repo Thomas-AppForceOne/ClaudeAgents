@@ -44,12 +44,19 @@ Three zones per project, modelled on the Linux filesystem hierarchy. Each zone h
 ### Zone 1: `.claude/gan/` — config
 
 - **Owner:** the user (human or another Claude agent authoring files).
-- **Authorship:** hand-edited or generated once; `/gan` and its modules **never write** to this zone at run time.
+- **Authorship:** hand-edited primarily. Programmatic writes are permitted **only** through the channels enumerated below; no other code path may mutate this zone.
 - **Lifecycle:** persists forever. **Committed to the repo.**
 - **Git:** tracked.
 - **Contents:** `project.md`, `stacks/<name>.md`, `modules/<module>.yaml` (e.g. `modules/docker.yaml` declaring `containerPattern`, `fallbackPort`).
 
-**Sanctioned one-shot writes.** Two user-invoked commands are permitted to write into zone 1: `gan stacks new <name>` (R3) creates a new stack file, and `gan migrate-overlays --to=<schemaVersion>` (R3) rewrites overlay files during a schema upgrade and leaves backups under `.claude/gan/.migration-backup-<timestamp>/`. Both are deliberate user actions, not runtime behaviour, and both are scoped to a single invocation. The "never write at run time" rule above still holds: no agent, orchestrator, or module touches zone 1 during a `/gan` sprint.
+**Sanctioned write channels.** Zone 1 is mutable through two and only two paths:
+
+1. **Configuration API write functions** (per F2): `setOverlayField`, `updateStackField`, `appendToStackField`, `removeFromStackField`, `registerModule` (which updates module manifest entries the API tracks). Agents and the CLI both reach these through R1's MCP server. Every such write is validated against schemas + cross-file invariants before persisting; failures return structured errors and persist nothing. Writes are atomic (temp-file + rename) and the API is the single writer for its own files.
+2. **User-invoked CLI commands** (per R3): `gan stacks new <name>`, `gan stack update <name> <field> <value>`, `gan config set <path> <value>`, `gan migrate-overlays --to=<schemaVersion>`. These are deliberate, terminal-initiated user actions. Some (like `gan stack update`) route internally through the API write functions above; others (like `gan migrate-overlays`, which leaves a `.claude/gan/.migration-backup-<timestamp>/`) are bespoke. Both subgroups land here.
+
+What is **forbidden**: silent / background / automatic writes. No agent, orchestrator, or module may write to zone 1 outside of the two channels above. In particular, no module's runtime hook may decide to "improve" a user's stack file or overlay; if a module wants to suggest a config change, the agent surfaces it as a recommendation and the user invokes a CLI command to apply.
+
+The earlier wording "never write at run time" was overstated and contradicted F2's runtime API writes. The actual invariant is: zone 1 mutations happen only through validated, sanctioned channels — never opaquely.
 
 ### Zone 2: `.gan-state/` — durable state
 
