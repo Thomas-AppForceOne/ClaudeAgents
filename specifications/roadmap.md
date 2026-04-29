@@ -188,6 +188,8 @@ Two retirement mechanisms appear in the table:
 
 **Branch strategy.** Build on `feature/stack-plugin-rfc` through at least Phase 3 (the cutover). Don't merge to main mid-pivot — main on the old branch is functional, mid-pivot main would carry both architectures simultaneously. Merge to main when Phase 3 closes (the post-E1 revision break is the natural gate). At that point the old artifacts are gone from the working tree; git history retains them for archeological reference.
 
+**O2's prescriptive revision rides the same merge.** The post-E1 revision break opens after E1's implementation lands on the feature branch and closes before Phase 3 merges to main. O2's first prescriptive authoring happens *inside* that break, not after it — so the merge to main carries both E1's cutover and O2's revised recovery flow as a unit. There is no transitional state where E1 is merged but O2 is still descriptive-only; the break does not close until O2's prescriptive revision lands.
+
 ## Out of scope for this roadmap
 
 - Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge.

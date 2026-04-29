@@ -117,6 +117,8 @@ Implements the multi-stack guard rail catalogued in the roadmap's Cross-cutting 
 
 These entries grant temporary immunity to the named files. The E1 retirement PR removes both the entries and the underlying file content in the same commit set — once the prompts are rewritten and the stack tokens lifted into `stacks/*.md`, the transitional allowlist is empty and gets deleted. Surviving transitional entries after E1 are themselves a CI failure (a separate pre-merge check verifies the `transitional` block is empty post-E1).
 
+**The post-E1 check is internal-consistency, not temporal.** The pre-merge check does not know "is E1 merged?" — there is no state machine tracking phase progress. It runs every time and verifies a single mechanical predicate: each path in the `transitional` block must still contain at least one of `forbidden.json`'s tokens. Once an E1-target file is rewritten and clean, its allowlist entry has nothing to grant immunity to — it's an empty exception, and the check fails until the entry is removed. The CI maintainer implementing this script writes a pure file-scan, not a phase tracker.
+
 **Output.** Hits print as `<file>:<line> <identifier> (owned by <stack>)` followed by either "no allowlist match" or, on intentional failure, the allowlist entry that should have applied but did not.
 
 ### `lint-error-text`
