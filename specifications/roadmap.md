@@ -159,6 +159,8 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 
 Single inventory of every flag, env-var value, and prompt branch a user can hit at runtime. Authoritative — individual specs reference this table rather than restating their own surfaces. New knobs land here in the same PR that adds them.
 
+**On flag duplication.** `--help` appears in the surface table for `/gan` (E1), `install.sh` (R2), and `gan` (R3). The sigil is shared; the implementation is per-spec. There is no single authoritative `--help` — each command surface owns its own help text and exit-code contract, by design (different commands have different things to say). Where this table counts surfaces, `--help` is counted once by sigil per the surface-count rule documented at the bottom of this section.
+
 ### Top-level commands
 
 | Surface | Owning spec | Effect |

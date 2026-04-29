@@ -45,9 +45,9 @@ The honest rule, future-proof against C3's catalog growing:
 
 The dominant case for forking is exactly the first bucket — changing detection or scope to fit a project the framework's canonical stack file doesn't quite match. The dominant case for *not* forking is "I want one extra surface" or "I want to suppress one surface" — both of which have splice points and should never require touching a stack file.
 
-### Worked example — "I want one extra surface"
+### Worked example — "I want one extra criterion"
 
-A team using `stacks/web-node.md` wants an additional security check: every PR introducing a new GraphQL resolver must declare its rate-limit budget. The wrong path:
+A team using `stacks/web-node.md` wants an additional proposer criterion: every PR introducing a new GraphQL resolver must declare its rate-limit budget. The wrong path:
 
 ```yaml
 # .claude/gan/stacks/web-node.md  ← DO NOT do this

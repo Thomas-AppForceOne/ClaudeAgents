@@ -124,21 +124,21 @@ The two prompts differ only in their lead-in (no "since you last approved" frami
 - **`[a]` approve** writes the new `(project-root, content-hash)` to the trust cache and re-runs `validateAll()`. The cache write is the one-time cost; subsequent runs skip the prompt.
 - **`[r]` run with --no-project-commands** sets the runtime mode and continues without writing to the cache.
 - **`[c]` cancel** aborts the run.
-- **`[v]` view** — for the subsequent-change prompt, shows the diff between the previous approved content and the current content for the affected files, then re-prompts. For the initial-introduction prompt, shows the literal command strings declared in each command-declaring field, then re-prompts.
+- **`[v]` view** — prints a high-level summary of what changed (counts of `additionalChecks` entries, command-overrides, etc.) plus a one-line follow-up: *"To inspect content, run `git diff <approvedCommit>..HEAD -- .claude/gan/` (when an approved commit was captured) or `git log -- .claude/gan/` and pick the commit you trust. Scripts these commands invoke are not in the trust hash; review them in the same diff."* For the initial-introduction prompt, shows the literal command strings declared in each command-declaring field instead of the change summary, then offers the same git-pointer follow-up. R5 (v1) deliberately does not build a structured per-file diff; users always have git, the cost of building one is significant (per-file hash storage in the cache), and `git diff` is what reviewers actually use for content review anyway. The richer structured-diff path is one of R5's deferred bits.
 
 The CLI (R3) gets equivalent surfaces: `gan validate` prints the structured error; `gan trust approve` writes to the cache; `gan trust list` and `gan trust revoke` manage entries.
 
 ### CI mode
 
-Interactive prompts are not viable in CI. The trust mechanism reads an environment variable `GAN_TRUST` with three values:
+Interactive prompts are not viable in CI. The trust mechanism reads an environment variable `GAN_TRUST` with two v1 values plus the unset default:
 
 | `GAN_TRUST` value | Behavior |
 |---|---|
-| `strict` (default) | Refuse to run any project-defined command. `validateAll()` succeeds for read-only purposes (e.g. `gan validate`) but `/gan` runs error-out at the trust check on any unapproved hash. |
-| `approved-hashes-only` | Read the trust cache as-is (must be present in the CI runner's filesystem). Never prompt. Fail closed if the hash isn't approved. |
+| (unset) | Interactive prompt on `UntrustedOverlay`. Default for terminal sessions. |
+| `strict` | Refuse to run any project-defined command. `validateAll()` succeeds for read-only purposes (e.g. `gan validate`) but `/gan` runs error-out at the trust check on any unapproved hash. **Recommended CI setting** — every CI run validates against committed config. |
 | `unsafe-trust-all` | Skip the trust check entirely. For self-hosted CI on a trusted branch only. Logged loudly. |
 
-CI users opt in deliberately. Default-deny preserves safety for one-off CI configurations.
+The pre-1.0 CI pattern is `GAN_TRUST=strict`; every run validates against committed config, no manifest infrastructure needed. A richer mode (`approved-hashes-only`) backed by an export/import manifest is a deferred R5 bit — authored when concrete CI workflows hit a case where strict-mode is impractical.
 
 ### `--no-project-commands` runtime flag
 

@@ -1,10 +1,10 @@
-# R5 — Trust-cache reference implementation
+# R5 — Trust-cache reference implementation (v1)
 
 ## Problem
 
 F4 specifies the trust-cache contract: hash format, cache location and shape, `UntrustedOverlay` error code, interactive prompt behavior, `GAN_TRUST` env var, `--no-project-commands` runtime flag. Something has to actually implement those — compute hashes, persist the cache, integrate with `validateAll()`, drive the prompt UX, and route the runtime flag through to the per-tier command-execution paths.
 
-R5 is that reference implementation.
+R5 is that reference implementation. The v1 scope is **deliberately narrow**: aggregate hash + approve/cancel + interactive prompt + two `GAN_TRUST` modes + `--no-project-commands` + `PathEscape`. Anything richer (per-file hash diff, CI manifest export/import, cross-process locking, an `approved-hashes-only` mode that needs the manifest) is deferred to a follow-up trust-UX spec authored when concrete CI use exposes the gap.
 
 ## Proposed change
 
@@ -29,10 +29,10 @@ skills/gan/
 
 `src/config-server/tools/writes.js` gains four new MCP tools (per F2 versioning):
 
-- `trustApprove(projectRoot, contentHash, note?)` → writes a record to the cache.
-- `trustList()` → returns all current trust records.
-- `trustRevoke(projectRoot)` → removes records for a project.
-- `getTrustState(projectRoot)` → returns whether the current `(projectRoot, current-hash)` is approved, with diff details if not.
+- `trustApprove(projectRoot, contentHash, note?)` → writes a record to the cache. Returns `{ mutated: true, ... }` per F2.
+- `trustRevoke(projectRoot)` → removes records for a project. Returns `{ mutated, ... }` per F2.
+- `trustList()` → returns all current trust records (read-only).
+- `getTrustState(projectRoot)` → returns whether the current `(projectRoot, current-hash)` is approved, plus a high-level "what kind of change" summary if not (counts of `additionalChecks` entries, command-overrides, etc.). Does **not** return a per-file diff in v1; users reading the change inspect it via git.
 
 ### Hash computation
 
@@ -48,7 +48,7 @@ The hash function is exposed as `trust/hash.js` so the lint script (R4) and any 
 
 ### Cache I/O
 
-Writes to `~/.claude/gan/trust-cache.json`. File format:
+Writes to `~/.claude/gan/trust-cache.json`. v1 file format:
 
 ```json
 {
@@ -57,10 +57,6 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
     {
       "projectRoot": "/Users/thak/projects/example",
       "aggregateHash": "sha256:abc123...",
-      "perFileHashes": {
-        ".claude/gan/project.md": "sha256:def456...",
-        ".claude/gan/stacks/android.md": "sha256:ghi789..."
-      },
       "approvedAt": "2026-04-25T14:33:21Z",
       "approvedCommit": "a1b2c3d4e5f6...",
       "note": "ok, reviewed PR #142"
@@ -69,28 +65,15 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
 }
 ```
 
-Per-file hashes are stored alongside the aggregate so `getTrustDiff()` can report exactly which files changed since approval — without storing previous file *contents* (which would balloon the cache and create a target for attackers).
+`approvedCommit` records the git HEAD SHA at approval time (resolved via `git rev-parse HEAD` inside `projectRoot`; absent if `projectRoot` is not a git working tree). Stored so the trust prompt's `[v]` follow-up can suggest a precise `git diff <approvedCommit>..HEAD -- .claude/gan/` instead of the looser "find the commit that contains the previous content" fallback. Optional field: an entry without `approvedCommit` is still valid; the follow-up suggestion drops down to the looser form.
 
-`approvedCommit` records the git HEAD SHA at approval time (resolved via `git rev-parse HEAD` inside `projectRoot`; absent if `projectRoot` is not a git working tree). Stored so the trust prompt's `[v]` follow-up can suggest a precise `git diff <approvedCommit>..HEAD -- <changed-paths>` instead of the looser `git log` it would otherwise have to fall back to. Optional field: an entry without `approvedCommit` is still valid; the follow-up suggestion drops down to "find the commit that contains the previous content."
+**File mode.** Created with mode `0600` (user read/write only). The `0600` is set at file-creation time (the canonical "establishment" point); on subsequent reads and writes, the cache I/O implementation verifies the mode and refuses to proceed if the file became world-readable or group-readable.
 
-**File mode.** Created with mode `0600` (user read/write only). The `0600` is set at file-creation time (the canonical "verification" point); on subsequent reads and writes, the cache I/O implementation verifies the mode and refuses to proceed if the file became world-readable or group-readable. The first-ever write is therefore the *establishment* of the bit, not a check against an existing one — there is no file to verify yet. Documented so the spec is honest about which call enforces the mode.
+**Path canonicalisation.** `projectRoot` is canonicalised before keying via the canonical rule referenced in F3's "Determinism" section (and implemented in F2's API boundary). Two cache entries can never refer to the same on-disk directory under different keys.
 
-**Path canonicalisation.** `projectRoot` is canonicalised before keying via `fs.realpathSync.native(projectRoot)` (Node) or its equivalent. Trailing slashes are removed, symlinks are resolved, and case-insensitive filesystems are normalised by canonical-path comparison. Two cache entries can never refer to the same on-disk directory under different keys.
+**Concurrency.** Reads/writes are atomic for individual operations (temp-file + rename). v1 does not implement cross-process advisory locks — two terminal windows running `/gan` against two different projects simultaneously may interleave their cache reads/writes; the worst case is one approval briefly being missed and re-prompted on the next run, not corruption. Cross-process locking is one of the deferred bits below; if real users hit the race in practice, that's the trigger to author the follow-up spec.
 
-**Concurrency.** Reads/writes are atomic (temp-file + rename) for individual operations. Cross-process concurrency is handled with an OS-level advisory lock (`flock` on POSIX; equivalent on Windows): the writer acquires an exclusive lock on `~/.claude/gan/.trust-cache.lock` for the read-modify-write cycle. Two terminal windows running `/gan` against two different projects simultaneously serialise on the lock; neither loses an update. The lock file's existence does not interfere with the cache; only the lock state matters.
-
-**Corruption handling.** The file is created on first write. Missing file is equivalent to "no approvals." A malformed file is **not** silently regenerated — it's a `TrustCacheCorrupt` structured error with shell remediation: `rm ~/.claude/gan/trust-cache.json` (or instruct the user to inspect first). Per F4's user-facing error text discipline, the message refers to "the trust cache file," not "the npm package" or "the Node MCP server."
-
-### CI onboarding: trust manifest export/import
-
-`approved-hashes-only` mode requires the cache to be present in the CI runner's filesystem. F4 said this without specifying how. R5 ships:
-
-- `gan trust export [--out=trust-manifest.json]` — writes the current trust cache (or a project-scoped slice if `--project-root` is set) to a JSON file in the same shape as the cache.
-- `gan trust import <trust-manifest.json>` — reads the file and merges its approvals into the local cache. Each imported approval is logged with provenance ("imported from trust-manifest.json on 2026-04-27").
-
-**Recommended CI pattern:** the repo commits a `.claude/gan/trust-manifest.json` (or stores it as a CI secret if the org prefers). The CI runner's `install.sh --no-claude-code` step calls `gan trust import .claude/gan/trust-manifest.json`. `GAN_TRUST=approved-hashes-only` then operates against the imported approvals.
-
-The manifest format is identical to the cache so users do not learn two formats. Committing the manifest exposes the maintainer's approvals (timestamps, notes) but not any secret material; if `notes` are sensitive, omit them via `gan trust export --no-notes`.
+**Corruption handling.** The file is created on first write. Missing file is equivalent to "no approvals." A malformed file is **not** silently regenerated — it's a `TrustCacheCorrupt` structured error with shell remediation: `rm ~/.claude/gan/trust-cache.json` (or instruct the user to inspect first). Per F4's user-facing error text discipline, the message refers to "the trust cache file."
 
 ### Integration with `validateAll()`
 
@@ -113,19 +96,19 @@ The trust check:
 
 ### Interactive prompt
 
-The `/gan` skill orchestrator (E1's scope) presents the prompt when `validateAll()` returns `UntrustedOverlay`. Implementation:
+The `/gan` skill orchestrator (E1's scope) presents the prompt when `validateAll()` returns `UntrustedOverlay`. v1 implementation:
 
 - The skill reads the user's choice from stdin.
-- On `[v]` (view diff): the skill calls a new `getTrustDiff(projectRoot)` MCP tool that returns a structured diff against the previous approval, including the approved commit SHA if one was captured. Because the cache stores **per-file hashes**, not per-file contents, the diff reports *which* files changed (compared to the approved per-file hash map) but not the actual content delta. The skill then offers the user a one-line follow-up suggestion: when `approvedCommit` is present, `run git diff <approvedCommit>..HEAD -- <changed-paths>`; when absent (e.g. project not under git, or older approval predating the field), `run git log -- <changed-paths>` and pick the commit you trust. The user is expected to use git for content review; the trust prompt reports *that* something changed and *which files*, not *what* changed.
+- On `[v]` (view): the skill calls `getTrustState(projectRoot)` and prints the high-level summary (counts of `additionalChecks`, command-overrides, etc.) plus a one-line follow-up suggestion: *"To inspect what changed, run `git diff <approvedCommit>..HEAD -- .claude/gan/` (when an approved commit was captured) or `git log -- .claude/gan/` (otherwise) and read the diff. The trust hash also does not transitively cover scripts these commands invoke — review those in the same diff as part of your PR."* Re-prompts after the suggestion. v1 deliberately points at git rather than building a structured per-file diff in the prompt itself; users always have git, the cost of the structured diff is per-file hash storage + a richer MCP tool, and the gain is small (git diff is what reviewers actually use anyway).
 - On `[a]` (approve): calls `trustApprove(projectRoot, currentHash)` and re-runs `validateAll()`.
-- On `[r]` (--no-project-commands): sets the runtime flag and continues without writing to the cache.
+- On `[r]` (`--no-project-commands`): sets the runtime flag and continues without writing to the cache.
 - On `[c]` (cancel): returns control to the user.
 
 The prompt text itself lives in `skills/gan/trust-prompt.md` so it can be edited without touching code.
 
 ### `GAN_TRUST` environment variable handling
 
-Read once at server startup, cached for the session. Logged in the startup banner:
+Two values in v1: unset (interactive prompt; default), `strict` (fail closed; CI default), `unsafe-trust-all` (bypass; development only). Read once at server startup, cached for the session. Logged in the startup banner:
 
 ```
 [gan-config-server] starting; trust mode: strict
@@ -180,24 +163,50 @@ Resolve relative to the project root, follow symlinks for existence, and verify 
 
 Every trust-cache mutation is logged to `.gan-state/runs/<run-id>/logs/trust.log` (when in a `/gan` run) or stderr (CLI). Log entries include the timestamp, the project root, the hash, and the action (approve / revoke / check).
 
+### `gan` CLI surfaces
+
+R5 owns the `gan trust *` CLI subcommands (relocated from R3 so the trust UX lives next to its implementation). v1 surfaces:
+
+| Subcommand | Effect |
+|---|---|
+| `gan trust info [--project-root=<path>]` | Show approval status, command-paths the approved overlay invokes, and a reminder that the trust hash does not cover those targets transitively. |
+| `gan trust approve --project-root=<path> [--note=<text>]` | Approve the current content hash for the named project. Trust-mutating; `--project-root` is REQUIRED (no cwd default), to prevent approving the wrong project from the wrong directory. |
+| `gan trust revoke --project-root=<path>` | Remove approval. Trust-mutating; `--project-root` is REQUIRED. |
+| `gan trust list` | List all current approvals. |
+
+`--help` / `-h` on each subcommand follows the contract in R3 (usage, flags, examples, exit codes). Help output never references maintainer-only scripts.
+
+## Deferred to a follow-up spec
+
+The following are intentionally absent from v1; the follow-up trust-UX spec is authored when CI use, multi-process workflows, or richer review UX exposes the gap:
+
+- **Per-file hashes in the cache.** Precondition for a structured per-file diff in the `[v]` branch. v1 instead points at `git diff`; this is sufficient for individual users.
+- **`getTrustDiff()` MCP tool.** A structured diff against the previous approval. v1 provides only the high-level summary via `getTrustState`.
+- **`gan trust export` / `gan trust import` manifest.** A JSON file format for shipping approvals into CI. Without this, `GAN_TRUST=approved-hashes-only` (also deferred) cannot be plumbed into a CI runner.
+- **`GAN_TRUST=approved-hashes-only` mode.** A CI mode that uses an imported manifest as the trust source. Pre-1.0, the recommended CI pattern is `GAN_TRUST=strict` — every CI run validates against committed config — which avoids needing a separate manifest at all. If real CI workflows hit a case where strict-mode is impractical, that's the trigger.
+- **Cross-process advisory locks** (`flock` on the trust-cache file). Two-terminal-windows races are tolerable in v1 (worst case: one approval briefly missed, re-prompted next run). If practitioners hit the race in practice, this is the trigger.
+
+The deferred bits don't require any new contract surface — adding them later is additive (new fields in the cache schema, new MCP tools, new env var values, new CLI commands). v1's `schemaVersion: 1` is forward-compatible with the v2 cache schema in the standard schemaVersion-bump-then-update-readers way.
+
 ## Acceptance criteria
 
 - `~/.claude/gan/trust-cache.json` is created on first `trustApprove` call; subsequent calls update it atomically without truncating.
 - A corrupted trust cache produces `TrustCacheCorrupt` instead of being silently regenerated.
 - `validateAll()` returns `UntrustedOverlay` for a project whose committed files contain `evaluator.additionalChecks` and whose current hash is not approved.
 - After `[a]` approval, the same project on subsequent runs does not re-prompt — until any byte of a hashed file changes.
-- `GAN_TRUST=strict` (default) causes CI runs to fail closed with `UntrustedOverlay` for any unapproved hash.
+- `GAN_TRUST=strict` causes CI runs to fail closed with `UntrustedOverlay` for any unapproved hash.
 - `GAN_TRUST=unsafe-trust-all` skips the trust check; the startup banner logs a warning every run.
 - `/gan --no-project-commands` against a project with `evaluator.additionalChecks` skips those checks; the run's startup log lists every skipped command and every tier-1/2-to-tier-3 fallback.
 - `planner.additionalContext: ["../../etc/passwd"]` produces a `PathEscape` error.
 - A symlink under `.claude/gan/` whose target resolves outside the project root produces a `PathEscape` error.
 - The hash function is deterministic across machines (same files → same hash on macOS, Linux, Windows).
+- `gan trust approve` / `revoke` / `list` / `info` all run from the CLI, exit 0 on success, and surface structured errors verbatim on failure. `approve` and `revoke` refuse to run without an explicit `--project-root`.
 
 ## Dependencies
 
 - F1 (filesystem layout — cache lives in user-scope zone 1)
 - F2 (the API the trust check extends; the new error code lands in F2's enum)
-- F3 (the `additionalContext.path_resolves` invariant catalog gains the `PathEscape` rule)
+- F3 (the `additionalContext.path_resolves` invariant catalog gains the `PathEscape` rule; F3's Determinism section pins path-canonicalisation)
 - F4 (the contract this implements)
 - R1 (the server this code runs inside)
 
@@ -205,13 +214,13 @@ Every trust-cache mutation is logged to `.gan-state/runs/<run-id>/logs/trust.log
 
 Sprint slices, in order:
 
-1. `trust/hash.js` + tests — deterministic hash function. No integration; just the math. Can land before any other R5 work.
-2. `trust/cache-io.js` + tests — read/write the cache file with atomicity and `TrustCacheCorrupt` handling.
+1. `trust/hash.js` + tests — deterministic SHA-256 aggregate. No integration; just the math. Can land before any other R5 work.
+2. `trust/cache-io.js` + tests — read/write the cache file with atomicity, `0600` mode establishment + verification, `TrustCacheCorrupt` handling.
 3. `validateAll()` integration — `UntrustedOverlay` return path; `GAN_TRUST` env handling.
-4. `getTrustState()` and `getTrustDiff()` MCP tools.
-5. `trustApprove`, `trustList`, `trustRevoke` MCP tools.
-6. Interactive prompt in `skills/gan/trust-prompt.md` (E1 sprint slice; coordinates with R5).
-7. `--no-project-commands` runtime flag routing through the orchestrator and evaluator.
-8. `path-escape.js` invariant.
+4. `getTrustState`, `trustApprove`, `trustList`, `trustRevoke` MCP tools.
+5. Interactive prompt in `skills/gan/trust-prompt.md` (E1 sprint slice; coordinates with R5).
+6. `--no-project-commands` runtime flag routing through the orchestrator and evaluator.
+7. `path-escape.js` invariant.
+8. `gan trust *` CLI subcommands (R3 plumbing; trivial — pass-through to MCP tools above).
 
-Slices 1–3 are the minimum viable trust check. Slice 6 is in E1's territory but documented here so the cross-team coordination is visible.
+Slices 1–3 are the minimum viable trust check. Slice 5 is in E1's territory but documented here so the cross-team coordination is visible.
