@@ -84,6 +84,8 @@ stack:
 
 This lets a polyglot project resolve a `cacheEnv` collision (per C1's "Conflict resolution" rule) by overriding one envVar's `valueTemplate` without copying an entire stack file into `.claude/gan/stacks/`. The final `cacheEnv` for each stack is computed by deep-merging the override into the stack file's declared `cacheEnv`.
 
+**Inactive-stack overrides are warned on, not silently dropped.** A `cacheEnvOverride.<stack>` keyed at a stack that is not active in this project (no detection match and not in `stack.override`) is a configuration bug: the user typed a key that has no effect. Validation reports a structured warning naming the stack and the keys, surfaced in O1's startup log and `gan config print`. The run does not abort — typos are common and the user may have intentionally left a future-stack override in place — but the noise makes the dead config discoverable.
+
 ## `discardInherited`
 
 Either overlay may declare `discardInherited: true` to discard upstream values before applying its own.

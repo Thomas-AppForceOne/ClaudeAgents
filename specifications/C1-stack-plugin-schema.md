@@ -95,6 +95,8 @@ This rule prevents case-sensitivity collisions across macOS / Linux / Windows fi
 ### detection
 Array of patterns that activate this stack. The top-level array is OR-semantics: the stack activates if **any** entry matches.
 
+**Permitted in tier-3 (canonical / repo) files only.** A tier-1 (project) or tier-2 (user) stack file containing a `detection` block fails parse with a structured error citing the file and the disallowed field. Detection rules need to be auditable as a closed set; allowing project-tier shadow files to introduce new detection patterns would mean a committed project file could silently activate stacks across someone else's checkout. Project tiers shadow stack contents (per C5) but do not introduce new activation rules — to activate a custom stack, declare it via `stack.override` in the project overlay. F3's `detection.tier3_only` cross-file invariant is the authoritative gate; this schema-level rejection is the first line that catches the mistake at parse time.
+
 An entry is one of:
 
 - **String glob** — matched against repo paths. Matches if any repo path matches the glob.

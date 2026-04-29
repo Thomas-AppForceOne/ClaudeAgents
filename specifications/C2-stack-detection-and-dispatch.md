@@ -36,6 +36,8 @@ Absent errors: stacks whose `auditCmd` tool is not installed do not fail dispatc
 
 When an overlay declares `stack.override`, it **replaces** the detection result — auto-detection is skipped and the active set is exactly the named stacks. This is the only way for users to activate a stack whose detection rules do not match the repo (spec C5 restricts detection declarations to tier 3).
 
+**Empty `stack.override` after cascade resolution = run auto-detection.** If after the C4 cascade `stack.override` is `[]` — for any reason: never declared, declared empty, declared `discardInherited: true` with no replacement, etc. — the orchestrator runs auto-detection as if `stack.override` were unset. It does **not** treat the empty list as "force the active set to be empty" (which would always activate `stacks/generic.md` only and is rarely the user's intent). The `discardInherited`-without-replacement case in particular plausibly means "ignore upstream override; let auto-detection do its job"; this rule honours that intent.
+
 Worked example:
 
 ```

@@ -67,7 +67,7 @@ Walks `src/modules/*/` and `stacks/*.md`. For each name appearing in both, check
 
 Implements the multi-stack guard rail catalogued in the roadmap's Cross-cutting principles. While the active plan ships only one real ecosystem stack (`web-node`), this script ensures the framework's core code never assumes web-node specifics.
 
-**What it checks.** Greps the repository for ecosystem-specific identifiers and fails the build if any appear outside their owning stack file or an explicitly-allowlisted path. The forbidden list lives in `scripts/lint-no-stack-leak/forbidden.json`:
+**What it checks.** Greps the repository for ecosystem-specific identifiers and fails the build if any appear outside their owning stack file or an explicitly-allowlisted path. The scan covers framework code (`src/config-server/`, `src/agents/`) **and agent prompt files** (`agents/*.md`, the orchestrator `skills/gan/SKILL.md`). E1 promises agent prompts contain zero references to `kt`, `kts`, `gradle`, `npm audit`, etc.; this lint enforces the promise rather than relying on review discipline. The forbidden list lives in `scripts/lint-no-stack-leak/forbidden.json`:
 
 ```json
 {
@@ -102,6 +102,16 @@ Implements the multi-stack guard rail catalogued in the roadmap's Cross-cutting 
 
 **Output.** Hits print as `<file>:<line> <identifier> (owned by <stack>)` followed by either "no allowlist match" or, on intentional failure, the allowlist entry that should have applied but did not.
 
+### `lint-error-text`
+
+Enforces the roadmap's user-facing error-text discipline rule: error messages and remediation hints emitted by the framework must not reference maintainer-only tooling (`npm`, `Node`, `tsc`, `package.json` as a fix instruction, etc.). Today this rule is policy; without a CI check, a future contributor adding text like *"run `npm run repair` to fix"* slips through.
+
+**What it checks.** Greps `src/config-server/` and `src/agents/` for string literals that contain the same forbidden tokens `lint-no-stack-leak` defines, but only when the literal appears inside structures the framework uses for user-facing output: error-object `message` and `remediation` fields, agent-prompt error templates, log-line strings tagged as user-visible. The script's heuristic looks for the literal patterns that emit user text (`message:`, `remediation:`, `console.error(`, `userOutput(`); allowlists the same paths `lint-no-stack-leak` allowlists.
+
+**What it does not check.** Internal log lines (those tagged maintainer-only or routed to `.gan-state/runs/<run-id>/logs/`) are exempt. The bar is "would a `/gan` user see this string?" — anything visible to a user is in scope; anything for maintainer / debugging eyes only is not. Heuristic is intentionally noisy: false positives go in an allowlist with a justification.
+
+The script lives at `scripts/lint-error-text/index.js`; CI workflow `test-error-text.yml` invokes it.
+
 ### CI workflows
 
 Per the roadmap's locked CI structure:
@@ -114,6 +124,7 @@ Per the roadmap's locked CI structure:
   test-stack-lint.yml    # runs scripts/lint-stacks + scripts/pair-names
   test-schemas.yml       # runs scripts/publish-schemas in dry-run mode
   test-no-stack-leak.yml # runs scripts/lint-no-stack-leak
+  test-error-text.yml    # runs scripts/lint-error-text
 ```
 
 Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category may pin its own Node version.
@@ -132,7 +143,8 @@ Each category workflow `uses: ./.github/workflows/shared-setup.yml`. No category
 - `node scripts/evaluator-pipeline-check` exits 0 with empty normalised diff for the bootstrap fixture set; exits non-zero with the diff on stderr otherwise.
 - `node scripts/pair-names` exits 0 when every shared name has consistent `pairsWith` declarations; non-zero otherwise.
 - `node scripts/lint-no-stack-leak` exits 0 when every forbidden identifier appears only in its owning stack file or an allowlisted path; non-zero with a structured per-hit report otherwise. Adding a new allowlist entry requires a reviewable diff to `scripts/lint-no-stack-leak/allowlist.json` with a justification field.
-- The six CI workflows under `.github/workflows/` run on every push and PR; they all reuse `shared-setup.yml`.
+- `node scripts/lint-error-text` exits 0 when no forbidden token appears in user-facing error or remediation text; non-zero with structured per-hit report otherwise.
+- The seven CI workflows under `.github/workflows/` run on every push and PR; they all reuse `shared-setup.yml`.
 - No CI workflow pins a Node version independently of `shared-setup.yml`.
 
 ## Dependencies

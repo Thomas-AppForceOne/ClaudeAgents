@@ -72,6 +72,7 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 | `trust.approved` | F4 | If any committed file contains a command-declaring field and the project's content hash is not in the trust cache, validation fails with `UntrustedOverlay`. `GAN_TRUST=unsafe-trust-all` opts out. |
 | `overlay.tier_apiVersion` | C3 | Each overlay tier's `schemaVersion` matches the API's known overlay schema version. |
 | `stack.tier_apiVersion` | C1 | Each active stack file's `schemaVersion` matches the API's known stack schema version. |
+| `detection.tier3_only` | C5 | A `detection` block is permitted only in tier-3 (canonical / repo) stack files. A tier-1 (project) or tier-2 (user) stack file containing a `detection` block fails with a hard `InvariantViolation` error. Silent-drop is rejected: a project-tier file's "detection" reading as docs but never activating would be a footgun. C1's schema additionally forbids `detection` outside tier 3 at parse time; this cross-file invariant is the authoritative gate. |
 
 Invariants are implemented in code (R1) but live conceptually here so the catalog is centralised.
 

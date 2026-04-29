@@ -40,6 +40,8 @@ A function called with a `projectRoot` that does not contain the framework's exp
 
 **Capability binding is out of scope for v1.** Any caller can pass any `projectRoot`. The trust model assumes orchestrator-controlled values: the orchestrator is the only direct caller in a `/gan` run, and it captures `projectRoot` from the host environment. If a future feature surfaces a user-influenced string into a `projectRoot` argument (e.g. "operate on this subtree" or any tool-injection vector), the API will dutifully resolve and may approve where it should not. There is no signed token. This is **acceptable for pre-1.0 and explicitly flagged for the post-R audit** so it is reviewed once R1's caller graph is concrete.
 
+**Monorepos: each `.claude/gan/` is an independent project.** A repo with `apps/foo/.claude/gan/` and `apps/bar/.claude/gan/` is two projects from the API's perspective. Trust cache entries key per canonical projectRoot, so each sub-project is approved independently. Resolved configs do not bleed across sub-projects. Users who think of the whole monorepo as one trust unit are surprised — but the alternative (auto-detect "the monorepo root" and treat children as one project) requires a heuristic the framework deliberately does not have. Documented here so the choice is visible. F4's trust prompt will appear once per sub-project on first use.
+
 ### Function surface
 
 Function names are camelCase with a verb prefix. Every function takes `projectRoot` as its first argument; the tables below omit it for readability but it is required.
@@ -57,7 +59,8 @@ Function names are camelCase with a verb prefix. Every function takes `projectRo
 | `getModuleState(moduleName, key)` | Durable state value for a module from F1 zone 2. |
 | `listModules()` | Registered modules with `pairsWith` status. |
 | `getApiVersion()` | API contract version this server implements. |
-| `getTrustState()` | Whether the current `(projectRoot, content-hash)` is approved per F4; diff details if not. |
+| `getTrustState()` | Whether the current `(projectRoot, content-hash)` is approved per F4; high-level summary if not. |
+| `getTrustDiff()` | Per-file hash diff between the current content hash and the previous approved hash for this project. Reports *which* files changed since approval, not *what* changed (the cache stores per-file hashes, not contents). Returns the approved commit SHA if R5 captured one, so the caller can suggest a `git diff` invocation. |
 
 **Writes:**
 
@@ -132,6 +135,17 @@ All errors are structured objects:
 ```
 
 Error messages never reference maintainer-only scripts (per the roadmap's user-facing discipline rule).
+
+**`remediation` field carries actionable snippets where possible.** For errors that beginners frequently hit, the `remediation` field contains a copy-paste-ready hint, not just prose. The clearest example is `cacheEnv` conflicts (per C1's "Conflict resolution" rule): the error's `remediation` field contains a one-line YAML fragment showing the `stack.cacheEnvOverride` shape the user must add to `.claude/gan/project.md` — e.g.
+
+```yaml
+stack:
+  cacheEnvOverride:
+    <stack-name>:
+      <ENV_VAR>: "<your chosen valueTemplate>"
+```
+
+…with the actual stack name and env var substituted in. Other error classes follow the same pattern when a single-line snippet is precise enough to be more useful than prose. When no snippet is precise enough, the field is null (or short prose) and the user follows the documented authoring guide.
 
 ### Markdown body split
 

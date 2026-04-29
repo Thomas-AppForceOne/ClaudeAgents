@@ -131,6 +131,8 @@ CI invokes via a workflow named `test-evaluator-pipeline.yml` (replaces `test-ca
 
 Diverging from these choices in any future revision invalidates the goldens and requires a `--update-goldens` pass.
 
+**Input file lists are sorted before being fed to the deterministic core.** `fs.readdirSync` order is OS- and filesystem-dependent: APFS (macOS) returns directory entries differently from ext4 (Linux), and a fixture authored on one host can produce divergent encounter order on another even when the final sorted output matches. The harness sorts every input file list — globbed paths, directory enumerations, fixture file walks — lexicographically before any first-match-wins logic in the core sees them. Pin: the sort uses JavaScript's default `String.prototype.localeCompare` with `{ sensitivity: 'variant', numeric: false }` so locale settings on the build host do not perturb order. Output normalisation is downstream; this rule pins *input* determinism so the core's intermediate decisions (e.g. "first matching detection rule wins") are reproducible across hosts.
+
 ### Future-proofing: gate new trigger types
 
 Today every `securitySurfaces` decision is keyword + glob — both expressible as pure functions. A future surface that needs LLM-aided semantic detection ("this diff introduces *intent* to expose data") cannot live in the deterministic core; if added, it would silently shrink the harness's coverage of "the deterministic pipeline" without anyone noticing.

@@ -32,6 +32,13 @@ The rules in C3 apply at both user ⊕ default and project ⊕ user-resolved ste
 
 **Duplicate-key positioning.** When a higher-tier entry overrides a lower-tier entry by key (e.g. same `name` in `additionalCriteria`, same `command` in `additionalChecks`), the overriding entry takes the **lower-tier slot's position** — not the appended position. This avoids surprise reordering when a higher tier merely refines an existing entry. The lower-tier entry is removed; the higher-tier entry is inserted at the lower-tier's index.
 
+**Mixed overrides + new entries: source-order is preserved among new entries.** When the higher tier declares a list with both overriding entries (matching a lower-tier key) and new entries (introducing keys not in the lower tier), the rule is:
+
+1. Each overriding entry replaces its lower-tier counterpart in place (per the duplicate-key rule above).
+2. New entries are appended to the resolved list **in their source order within the higher tier's declaration** — not reordered by name, key, or any other criterion.
+
+Worked example. Lower tier: `[A, B, C]`. Higher tier: `[X, B', Y]` (X new, B' overrides B, Y new). Resolved: `[A, B', C, X, Y]`. B' takes B's slot 1; X and Y are appended after C in the order the higher tier declared them, not interleaved with the lower tier's positions and not sorted. This makes ordering predictable for execution-order-sensitive lists like `evaluator.additionalChecks`, where a user authoring three new checks knows they will run in the order written.
+
 **Execution-order semantics.** For lists of commands (`evaluator.additionalChecks`), merge order *is* execution order: lower-tier entries run before higher-tier entries appended after them. Consumers may rely on this ordering. A user-tier check that must run before a project-tier check is a legitimate use case; a project-tier check that depends on a user-tier check having already run is also legitimate.
 
 ## `discardInherited` interaction

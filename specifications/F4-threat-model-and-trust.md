@@ -54,6 +54,10 @@ The recommended user workflow under this limitation:
 
 A future spec (placeholder **F5 — Transitive trust**) may extend the hash to cover referenced scripts. Out of scope for v1.
 
+### Threat scope: shared-repo files only
+
+The trust hash covers **committed (zone 1) files that ship in the repo with the project**: `.claude/gan/project.md`, `.claude/gan/stacks/*.md`, `.claude/gan/modules/*.yaml`. It does **not** cover the user's own `~/.claude/gan/stacks/*.md` (tier 2). The threat model's scenario is "I cloned someone else's repo and ran `/gan` against it"; user-tier files are by definition authored by the user themselves on their own machine, so they fall outside the threat model. Treating them as out-of-hash is a deliberate choice, not an oversight. Documented here so a reader does not mistake it for a bug.
+
 ### User-facing error text discipline
 
 Every error text path in F4's mechanism — `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`, the trust prompt, the `--no-project-commands` log lines — is owned by the agent or the CLI, not by `package.json`-coupled tooling. User-facing messages must:

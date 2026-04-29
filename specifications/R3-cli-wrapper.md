@@ -41,7 +41,7 @@ gan trust revoke --project-root=<path>  Remove approval. Trust-mutating; --proje
 gan trust list                          List all current approvals.
 gan trust export [--out=<path>] [--no-notes] [--project-root=<path>]
                                         Write the trust cache (or a project slice) to a JSON manifest for CI consumption. --no-notes drops the `note` field for repos where notes contain sensitive context.
-gan trust import <path>                 Merge a trust manifest into the local cache. Logs each imported approval with provenance.
+gan trust import <path>                 Merge a trust manifest into the local cache. Logs each imported approval with provenance. Help text warns: only import manifests you trust as much as the project itself — an unvetted manifest can pre-approve hashes that would otherwise prompt.
 gan migrate-overlays --to=<schemaVersion>
                                         Best-effort upgrade of overlay files in the current project to the named schema version. Refuses on any non-additive bump unless `--force`. Backs up originals to `.claude/gan/.migration-backup-<timestamp>/` before writing.
 gan version                             Print API version, server version, schemas in use.
@@ -55,7 +55,7 @@ gan <subcommand> --help                 Per-subcommand help.
 
 Every user-facing entry point exposes help on demand.
 
-- `gan --help` (and `gan -h`, `gan help`) prints a top-level summary: one-line description of `gan`, the subcommand list with one-line descriptions, the global flags (`--json`, `--project-root`), the exit-code table, and a pointer to per-subcommand help.
+- `gan --help` (and `gan -h`, `gan help`) prints a top-level summary: one-line description of `gan`, **a one-line note distinguishing the CLI from the skill** (`Note: to run a sprint, use the /gan skill in Claude Code; this CLI manages configuration only.`), the subcommand list with one-line descriptions, the global flags (`--json`, `--project-root`), the exit-code table, and a pointer to per-subcommand help.
 - `gan <subcommand> --help` (and `gan <subcommand> -h`) prints the subcommand's full surface: usage line, every flag and positional argument with type and default, at least one realistic invocation example, and the subset of exit codes that subcommand can produce. Trust-mutating commands additionally print the explicit `--project-root` requirement and the "approved the wrong project from the wrong terminal" rationale.
 - `gan` invoked with no subcommand prints the same content as `gan --help` and exits 0 (not 64) — bare invocation is treated as a help request, not a malformed command.
 - Unknown subcommands and unknown flags exit 64 (bad CLI arguments) with a one-line error pointing at `--help`. Help text never references maintainer-only scripts (per the roadmap's user-facing discipline rule).

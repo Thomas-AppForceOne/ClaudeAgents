@@ -96,7 +96,7 @@ Specs to revisit, with what to verify:
 - **F2** — confirm the module-state functions handle the project-rooting story correctly (see post-R audit) and that registration timing is unambiguous.
 - **F3** — confirm `module-manifest-v1.json` and any module-config schemas (e.g. `module-config-docker-v1.json`) cover what M2 actually needs.
 - **R1** — confirm the `pairsWith` invariant catches the failure modes M2 surfaces; confirm `registerModule` lifecycle (when it runs, idempotency, error handling) matches what M1 needs.
-- **M1** — refine the lifecycle prose if M2 implementation surfaced timing/sequencing details the architecture spec missed.
+- **M1** — refine the lifecycle prose if M2 implementation surfaced timing/sequencing details the architecture spec missed. Specifically address whether barrel-runs-prerequisites-at-import scales — at two shipped modules it is fine, but the cost grows linearly in shipped-module count and is paid even when the paired stack is inactive. Audit whether prerequisites should move to lazy / paired-stack-gated execution before more modules ship.
 
 Same checkpoint discipline as the other revision breaks: specs revised in place; no Phase 5 work begins until the audit closes.
 
@@ -139,7 +139,7 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 - **The Configuration API is a black box.** Agents know function names; they do not know storage, schemas, or merge logic. Specs F2 and R1 own the contract.
 - **Maintainer tooling assumes Node 18+.** User-facing behavior is owned by the agent at runtime. iOS, embedded C++, Swift-only developers never need Node to use `/gan`.
 - **Pre-1.0 WIP project.** No backward-compatibility guarantees; any schema change bumps `schemaVersion`. No transitional dual-path windows.
-- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas,test-no-stack-leak}.yml`. New categories follow `test-<category>.yml`.
+- **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas,test-no-stack-leak,test-error-text}.yml`. New categories follow `test-<category>.yml`.
 - **Module ↔ stack name pairing** is enforced by the Configuration API at registration time. No separate lint subsystem needed.
 - **Single-canonical stacks at the repo, plural at the project.** The repo promotes exactly one stack file per ecosystem. Users who want to diverge fork the file into their project tier (`.claude/gan/stacks/<name>.md`); C5's three-tier resolution makes that a one-line operation. There is no central N-versions registry, no curation queue, no community-vote process — PRs against the canonical file are the curation pipeline. This applies to the bootstrap stacks (`web-node`, plus the synthetic guard-rail fixture) and to any future ecosystem reactivated from `specifications/deferred/`. The scaffold (`gan stacks new`) is for users authoring project-tier customisations or contributing back upstream; both paths land in the same single-canonical model.
 - **Multi-stack guard rail.** The active plan ships exactly one real ecosystem stack (`web-node`). To prevent the framework from calcifying around web-node assumptions while only one real stack exists, three mechanisms run together:

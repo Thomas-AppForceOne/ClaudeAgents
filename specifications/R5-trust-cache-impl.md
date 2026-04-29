@@ -62,6 +62,7 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
         ".claude/gan/stacks/android.md": "sha256:ghi789..."
       },
       "approvedAt": "2026-04-25T14:33:21Z",
+      "approvedCommit": "a1b2c3d4e5f6...",
       "note": "ok, reviewed PR #142"
     }
   ]
@@ -70,7 +71,9 @@ Writes to `~/.claude/gan/trust-cache.json`. File format:
 
 Per-file hashes are stored alongside the aggregate so `getTrustDiff()` can report exactly which files changed since approval — without storing previous file *contents* (which would balloon the cache and create a target for attackers).
 
-**File mode.** Created with mode `0600` (user read/write only). On every read/write, the cache I/O implementation verifies the mode and refuses to proceed if the file is world-readable or group-readable; users who paste secrets into the `note` field should not have them silently exposed by an installer mishap.
+`approvedCommit` records the git HEAD SHA at approval time (resolved via `git rev-parse HEAD` inside `projectRoot`; absent if `projectRoot` is not a git working tree). Stored so the trust prompt's `[v]` follow-up can suggest a precise `git diff <approvedCommit>..HEAD -- <changed-paths>` instead of the looser `git log` it would otherwise have to fall back to. Optional field: an entry without `approvedCommit` is still valid; the follow-up suggestion drops down to "find the commit that contains the previous content."
+
+**File mode.** Created with mode `0600` (user read/write only). The `0600` is set at file-creation time (the canonical "verification" point); on subsequent reads and writes, the cache I/O implementation verifies the mode and refuses to proceed if the file became world-readable or group-readable. The first-ever write is therefore the *establishment* of the bit, not a check against an existing one — there is no file to verify yet. Documented so the spec is honest about which call enforces the mode.
 
 **Path canonicalisation.** `projectRoot` is canonicalised before keying via `fs.realpathSync.native(projectRoot)` (Node) or its equivalent. Trailing slashes are removed, symlinks are resolved, and case-insensitive filesystems are normalised by canonical-path comparison. Two cache entries can never refer to the same on-disk directory under different keys.
 
@@ -113,7 +116,7 @@ The trust check:
 The `/gan` skill orchestrator (E1's scope) presents the prompt when `validateAll()` returns `UntrustedOverlay`. Implementation:
 
 - The skill reads the user's choice from stdin.
-- On `[v]` (view diff): the skill calls a new `getTrustDiff(projectRoot)` MCP tool that returns a structured diff against the previous approval. Because the cache stores **per-file hashes**, not per-file contents, the diff reports *which* files changed (compared to the approved per-file hash map) but not the actual content delta. The skill then offers the user a one-line follow-up suggestion: "run `git diff <approved-commit>..HEAD -- <changed-paths>` for content." If the user has not committed the cache's previous approval-time content, the skill cannot reconstruct the delta — that's the price of not storing prior content blobs in the cache (size cost; security posture). The user is expected to use git for content review; the trust prompt reports *that* something changed and *which files*, not *what* changed.
+- On `[v]` (view diff): the skill calls a new `getTrustDiff(projectRoot)` MCP tool that returns a structured diff against the previous approval, including the approved commit SHA if one was captured. Because the cache stores **per-file hashes**, not per-file contents, the diff reports *which* files changed (compared to the approved per-file hash map) but not the actual content delta. The skill then offers the user a one-line follow-up suggestion: when `approvedCommit` is present, `run git diff <approvedCommit>..HEAD -- <changed-paths>`; when absent (e.g. project not under git, or older approval predating the field), `run git log -- <changed-paths>` and pick the commit you trust. The user is expected to use git for content review; the trust prompt reports *that* something changed and *which files*, not *what* changed.
 - On `[a]` (approve): calls `trustApprove(projectRoot, currentHash)` and re-runs `validateAll()`.
 - On `[r]` (--no-project-commands): sets the runtime flag and continues without writing to the cache.
 - On `[c]` (cancel): returns control to the user.

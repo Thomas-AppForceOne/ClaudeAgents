@@ -49,6 +49,8 @@ Three zones per project, modelled on the Linux filesystem hierarchy. Each zone h
 - **Git:** tracked.
 - **Contents:** `project.md`, `stacks/<name>.md`, `modules/<module>.yaml` (e.g. `modules/docker.yaml` declaring `containerPattern`, `fallbackPort`).
 
+**Sanctioned one-shot writes.** Two user-invoked commands are permitted to write into zone 1: `gan stacks new <name>` (R3) creates a new stack file, and `gan migrate-overlays --to=<schemaVersion>` (R3) rewrites overlay files during a schema upgrade and leaves backups under `.claude/gan/.migration-backup-<timestamp>/`. Both are deliberate user actions, not runtime behaviour, and both are scoped to a single invocation. The "never write at run time" rule above still holds: no agent, orchestrator, or module touches zone 1 during a `/gan` sprint.
+
 ### Zone 2: `.gan-state/` — durable state
 
 - **Owner:** `/gan` skill and individual modules.
