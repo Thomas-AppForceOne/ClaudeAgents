@@ -34,16 +34,13 @@ Every config file declares `schemaVersion` in its frontmatter. The API enforces:
 
 The API knows which versions it can read; this is part of its compiled-in metadata. An R1 instance built against `schemas/stack-v1.json` reads stack files with `schemaVersion: 1` and rejects any other version with a `SchemaMismatch` error.
 
-### Migration tooling
+### Migration tooling — deferred to first schema bump
 
-Exact-match-required + frequent version bumps = real friction for users whose committed `.claude/gan/project.md` and `.claude/gan/stacks/*.md` files break on every framework update. The mitigation is a CLI subcommand: **`gan migrate-overlays --to=<schemaVersion>`** (per R3) does best-effort upgrades of overlay files in the current project to the named schema version.
+Exact-match-required + frequent version bumps = real friction for users whose committed `.claude/gan/project.md` and `.claude/gan/stacks/*.md` files break on every framework update. v1 ships only `schemaVersion: 1` for every file type — there is no v0 to migrate from, so a migration tool would have nothing to do.
 
-- Backs up originals to `.claude/gan/.migration-backup-<timestamp>/` before writing.
-- Refuses on any non-additive bump unless `--force`.
-- Logs every transformation (renamed field, restructured value, etc.) so the user can review what changed.
-- Returns non-zero on any file the tool cannot migrate; the user must hand-edit those.
+The migration-tooling spec (provisional name `gan migrate-overlays`) is authored **at the same time as the first schema bump**, not before. Authoring it now would mean encoding assumptions about how schemas evolve (renamed fields, restructured values, additive vs. non-additive bumps) before any real evolution has happened. Better to write the tool against a concrete v1 → v2 transition where the actual transformation is known.
 
-The maintainer cost of writing a migration per schema bump is low while there are few schemaVersions, and the user-facing pain of "your overlay broke and you have to read release notes" deferred until later would be much worse. Bake migration tooling now, not when the framework has thousands of users.
+What v1 commits to: when the first schema bump lands, the bumping PR includes both the new schema document (`<type>-v2.json`) and the migration tool. Users get a `gan migrate-overlays --to=2` (or whatever the surface ends up being) at the moment they need it. Out-of-band release-note migrations are not the answer.
 
 ### Cross-file invariants
 
