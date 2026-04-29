@@ -1,8 +1,24 @@
-# /gan Recovery — Spec
+# O2 — Recovery
 
-**Status:** Specification (ready for implementation)
-**Scope:** `skills/gan/SKILL.md` in this repo
-**Target repo:** ClaudeAgents (this repo). No dependencies on any external consumer repo.
+> ## DO NOT IMPLEMENT FROM THIS DOCUMENT
+>
+> The body below was authored before F1 (filesystem layout), F2 (Configuration API), E1 (agent prompt rewrite), and the phase-coded restructure. Its mechanism assumes the retired `.gan/` directory and an external archive layout that no longer exists in the architecture. The **intent** is correct (a way to resume a previously-aborted run); the **mechanism** is not.
+>
+> A first prescriptive revision is scheduled for the post-E1 revision break (per the roadmap). Until that revision lands, the body below is descriptive of intent only and **must not be implemented**. An implementer who treats it as prescriptive will write code against retired path conventions, miss F2's validateAll-first ordering, and violate F1's zone-2 module-state ownership.
+>
+> Read the Problem and Solution-summary sections for the design target. Skip everything below "Detailed design" — those steps are slated for replacement, not refinement.
+
+---
+
+**Authored before:** F1, F2, E1, phase-coded restructure.
+**Replacement scheduled at:** post-E1 revision break (per roadmap).
+**Skeleton retained for:** intent + acceptance-criteria reference; the new revision will reuse the user-facing acceptance criteria where they still apply.
+
+**Decisions deferred to the post-E1 revision (must resolve, not skip):**
+
+- The recovery agent's placement: today E1's per-agent table includes `gan-recover` as a role, but `agents/gan-recover.md` does not exist as a file. The post-E1 revision specifies whether the role becomes a real prompt file under `agents/` or stays orchestrator-internal as part of the rewritten `SKILL.md`. Whichever path is chosen, the [roadmap's Retirement table](roadmap.md#retirement-table) is amended in the same revision PR with the resulting state (new `M` row if a file lands, no row if it stays orchestrator-internal).
+- The archive-on-abort mechanism under F1's zone-2 layout (per the body's alignment note above).
+- Validation-first ordering integrated with F2's `validateAll()` non-aborting mode for `--recover` (per the same alignment note).
 
 ---
 
