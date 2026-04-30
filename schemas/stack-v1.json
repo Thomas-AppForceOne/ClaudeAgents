@@ -1,0 +1,216 @@
+{
+  "$id": "https://claudeagents.dev/schemas/stack-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "detectionEntry": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contains": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "contains"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allOf": {
+              "items": {
+                "$ref": "#/definitions/detectionEntry"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "allOf"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "anyOf": {
+              "items": {
+                "$ref": "#/definitions/detectionEntry"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "anyOf"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "JSON Schema (draft-07) for the body-YAML of ClaudeAgents stack files. Per F3, this document is immutable; future changes bump to v2.",
+  "properties": {
+    "auditCmd": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "absenceMessage": {
+              "type": "string"
+            },
+            "absenceSignal": {
+              "const": "silent",
+              "type": "string"
+            },
+            "command": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "fallback": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "absenceSignal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "absenceMessage": {
+              "type": "string"
+            },
+            "absenceSignal": {
+              "enum": [
+                "blockingConcern",
+                "warning"
+              ],
+              "type": "string"
+            },
+            "command": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "fallback": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "absenceSignal",
+            "absenceMessage"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "buildCmd": {
+      "type": "string"
+    },
+    "cacheEnv": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "envVar": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "valueTemplate": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "envVar",
+          "valueTemplate"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "detection": {
+      "items": {
+        "$ref": "#/definitions/detectionEntry"
+      },
+      "type": "array"
+    },
+    "lintCmd": {
+      "type": "string"
+    },
+    "scope": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "secretsGlob": {
+      "items": {
+        "minLength": 1,
+        "pattern": "^[^.]",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "securitySurfaces": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "template": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "triggers": {
+            "additionalProperties": false,
+            "properties": {
+              "keywords": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "template"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "testCmd": {
+      "type": "string"
+    }
+  },
+  "title": "ClaudeAgents stack file body schema, v1",
+  "type": "object"
+}
