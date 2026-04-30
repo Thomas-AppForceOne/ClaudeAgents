@@ -1,0 +1,355 @@
+{
+  "$id": "https://claudeagents.dev/schemas/overlay-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "additionalChecksBare": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "on_failure": {
+            "enum": [
+              "blockingConcern",
+              "warning",
+              "silent"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "on_failure"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "additionalCriteriaBare": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "threshold": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "threshold"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "additionalRulesBare": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "cacheEnvOverrideBare": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "contextStringsBare": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "stackOverrideBare": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "suppressSurfacesBare": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "thresholdOverrideBare": {
+      "type": "integer"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the body-YAML of ClaudeAgents overlay files. Per F3, this document is immutable; future changes bump to v2.",
+  "properties": {
+    "evaluator": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalChecks": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/additionalChecksBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/additionalChecksBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "discardInherited": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "generator": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalRules": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/additionalRulesBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/additionalRulesBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "discardInherited": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "planner": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/contextStringsBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/contextStringsBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "discardInherited": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "proposer": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/contextStringsBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/contextStringsBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "additionalCriteria": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/additionalCriteriaBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/additionalCriteriaBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "discardInherited": {
+          "type": "boolean"
+        },
+        "suppressSurfaces": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/suppressSurfacesBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/suppressSurfacesBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "runner": {
+      "additionalProperties": false,
+      "properties": {
+        "discardInherited": {
+          "type": "boolean"
+        },
+        "thresholdOverride": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/thresholdOverrideBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/thresholdOverrideBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "stack": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheEnvOverride": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/cacheEnvOverrideBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/cacheEnvOverrideBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "discardInherited": {
+          "type": "boolean"
+        },
+        "override": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/stackOverrideBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/stackOverrideBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "ClaudeAgents overlay file body schema, v1",
+  "type": "object"
+}
