@@ -100,7 +100,7 @@ ClaudeAgents is pre-1.0; there is no migration path for stale `.gan/` directorie
 - `/gan` on a project with a pre-existing top-level `.gan/` halts with a hard error instructing the user to delete or rename the directory before re-running. No auto-migration.
 - A Docker module writing `.gan-state/modules/docker/port-registry.json` is never touched by `gan-recover`'s archive or delete steps — verified by a regression test that runs the recovery flow on a project with an active registry and asserts the registry file is unchanged.
 - `O2-recovery.md`'s archive step only ever sees paths under `.gan-state/runs/<run-id>/`.
-- `scripts/parity-check.sh` normalisation (spec E2) is updated to strip `.gan-state/runs/<run-id>/` and `.gan-cache/<worktree-id>/` path prefixes.
+- E3's normalisation rules (`tests/fixtures/normalise-rules.json`, consumed by `scripts/evaluator-pipeline-check/`) include path-prefix stripping for `.gan-state/runs/<run-id>/` and `.gan-cache/<worktree-id>/`. F1's contribution is the zone names; the normalisation rule itself lands in E3 and is verified when E3 ships.
 - A project without any of the three zones on disk behaves correctly: zones are created lazily by their owners at first write.
 - `.gitignore` templates in fixture projects (`tests/fixtures/stacks/*/`) list `.gan-state/` and `.gan-cache/` but not `.claude/gan/`.
 
