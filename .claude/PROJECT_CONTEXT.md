@@ -1,6 +1,6 @@
 # Project context
 
-_Last verified: 2026-04-30 by spec-validator_
+_Last verified: 2026-04-30 by spec-validator (F4 user-facing-error-text discipline captured)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
@@ -9,7 +9,7 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
 - **Spec authoring:** Markdown only. Specs live under `specifications/` with phase-coded filenames (F/C/R/E/M/U/O + S deferred).
 - **Future runtime tooling:** Node 18+ (R1 MCP server, R3 CLI wrapper, R4 maintainer scripts). Distributed via npm. No package manifest yet.
 - **Future installer:** Bash (`install.sh`). The current 138-line `.gan/`-based installer is legacy and will be rewritten in place by R2.
-- **Future schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). None on disk yet.
+- **Future schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). None on disk yet. F3 is meta-only; concrete schemas are authored by their owning domain spec — `stack-v1.json` by C1, `overlay-v1.json` by C3, `module-manifest-v1.json` by M1. The `schemas/` directory is created when its first occupant lands.
 - **Branch strategy:** Build on `feature/stack-plugin-rfc` through at least Phase 3. Do not merge to `main` mid-pivot. Merge gate is the post-E1 revision break (which also carries O2's prescriptive revision).
 
 ## Architecture
@@ -84,9 +84,14 @@ CI workflow inventory is locked (see Testing).
 - Honor the **black-box API rule**: agents call functions, never parse files. New code paths that read `.claude/gan/` directly from agent prompts are a regression.
 - Honor the **single-writer rule** for `.claude/PROJECT_CONTEXT.md`: only spec-validator writes; other agents read.
 - Use **Node 18+ for maintainer tooling only**. End-user experience on non-Node ecosystems must never require Node at runtime.
+- Honor the **user-facing error-text discipline** (per F4): every user-visible string from the agent, CLI, prompts, or error paths must (a) use shell remediation (`rm <path>`) not Node remediation (`npm run …`), (b) refer to "the framework" or "ClaudeAgents" — never "the Node MCP server" or "the npm package", and (c) pass an iOS-developer-on-macOS readability check (a Swift dev who only ran `install.sh` should understand every word). `test-error-text.yml` is the CI backstop; reviewers flag leaks in PRs that touch user-visible output.
 
 **Don't:**
 - Don't introduce backward-compatibility shims or transitional dual-path windows. Pre-1.0; schema changes bump `schemaVersion` and break.
+- Don't accept `schemaVersion` ranges, graceful-downgrade reads, or forward-compat reads anywhere. F3's rule is **exact match**; mismatches return `SchemaMismatch`. Any additive change still bumps the version pre-1.0.
+- Don't mutate a published schema document. Schemas are **immutable once published**; bumping means writing `<type>-v<N+1>.json` and updating consumers in lockstep. The bumping PR also lands the migration tool (`gan migrate-overlays --to=N+1`) — migration tooling is deferred to the first bump, not authored speculatively.
+- Don't re-implement a cross-file invariant check in R4 lint or any other build-time path. **Single point of implementation:** R1 owns the check function; every other caller imports it. The invariant catalog in F3 is the authoritative list (currently 9 invariants spanning C1, C3, C5, U3, F4, M1, R3).
+- Don't diverge from F3's determinism pins ad hoc. Glob = picomatch (pinned in R1's `package.json`); paths canonicalised via `fs.realpathSync.native` + trailing-slash strip + case-insensitive comparison; JSON output = sorted keys, two-space indent, trailing newline; file enumeration sorted via `localeCompare(other, undefined, { sensitivity: 'variant', numeric: false })`; regex = Node's V8 RegExp with Node engine pinned. Changing any pin is a coordinated edit across every dependent spec, plus `--update-goldens` and an R5 trust-cache invalidation.
 - Don't write to zone 1 (`.claude/gan/`) outside the F2 sanctioned write channels.
 - Don't let `/gan` per-run state bleed into `.claude/gan/` or `.gan-cache/`.
 - Don't merge to `main` mid-pivot (before the post-E1 revision break closes).
