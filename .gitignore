@@ -4,3 +4,6 @@
 # so iteration drafts don't pollute the spec set.
 specifications/REVIEW.md
 specifications/REVIEW_RESPONSE*.md
+
+# Personal Claude Code overrides — never committed.
+.claude/settings.local.json
