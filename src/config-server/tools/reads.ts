@@ -1,19 +1,16 @@
 /**
- * R1 sprint 2 — read tool implementations.
+ * R1 sprint 2 + sprint 5 — read tool implementations.
  *
  * Direct library entry points for all 11 F2 read tools. The MCP wrapper in
  * `index.ts` delegates here; tests and downstream library callers may also
  * import these functions directly (per the dual-callable surface rule).
  *
- * Coverage in S2:
+ * S2 coverage:
  *  - `getApiVersion` — real (delegated to `index.ts`'s implementation; the
  *    real handler lives there for bootstrap reasons and is re-exported in
  *    the public index).
- *  - `getStack` / `getActiveStacks` / `getOverlay` / `getStackResolution` —
- *    real reads via the storage + resolution layers.
- *  - `getResolvedConfig` / `getMergedSplicePoints` — **partial**. Each
- *    returns the data S2 can compute today; the full cascade lands in S5.
- *    The partial shape is documented in the function JSDoc.
+ *  - `getStack` / `getOverlay` / `getStackResolution` — real reads via the
+ *    storage + resolution layers.
  *  - `getTrustState` / `getTrustDiff` — loud-stub. Return the locked OQ1
  *    shape (`approved: true, reason: "trust-not-yet-implemented"`) and log
  *    a warning per call. Real trust ships with R5.
@@ -21,14 +18,23 @@
  *  - `getStackConventions` / `getOverlayField` are NOT in this sprint's
  *    scope — they remain `NotImplemented` stubs in `index.ts`.
  *
+ * S5 upgrades:
+ *  - `getResolvedConfig` — full F2 stable shape via `composeResolvedConfig`.
+ *    Cached per canonical project root by the cache singleton; consecutive
+ *    calls return byte-identical JSON.
+ *  - `getActiveStacks` — derived from the resolved config (active set).
+ *  - `getMergedSplicePoints` — derived from the resolved config (the
+ *    cascaded overlay with `stack` block stripped, since it is observed
+ *    via `getActiveStacks` instead).
+ *
  * Determinism:
  *  - Any string sort goes through `localeSort`.
  *  - `projectRoot` is canonicalised via `canonicalizePath` before downstream
  *    use so callers cannot smuggle distinct casings.
- *  - No glob calls in S2 (detection runs in S5).
+ *  - Glob match (detection) goes through `determinism.glob` (picomatch v4).
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +53,11 @@ import {
   type ResolveStackOptions,
   type StackResolution,
 } from '../resolution/stack-resolution.js';
+import {
+  composeResolvedConfig,
+  composeResolvedConfigSync,
+  type ResolvedConfig,
+} from '../resolution/resolved-config.js';
 
 /** Common options passed to every read tool. */
 export interface ReadToolContext {
@@ -62,13 +73,13 @@ interface PackageMeta {
 
 let cachedMeta: PackageMeta | null = null;
 
-async function readPackageMeta(): Promise<PackageMeta> {
+function readPackageMetaSync(): PackageMeta {
   if (cachedMeta) return cachedMeta;
   const here = fileURLToPath(import.meta.url);
   // From `dist/config-server/tools/reads.js` (or `src/.../reads.ts`) we walk
   // three levels up to reach `<package>/package.json`.
   const pkgPath = path.resolve(path.dirname(here), '..', '..', '..', 'package.json');
-  const raw = await readFile(pkgPath, 'utf8');
+  const raw = readFileSync(pkgPath, 'utf8');
   const parsed = JSON.parse(raw) as { version: string };
   cachedMeta = { version: parsed.version };
   return cachedMeta;
@@ -104,16 +115,20 @@ export interface GetActiveStacksInput {
 }
 
 /**
- * **Partial in S2.** Returns an empty active set; full dispatch (detection
- * + cascade + override) lands in S5. Callers may inspect the returned shape
- * but must not rely on the empty set as a signal — it currently always
- * returns `[]`.
+ * Return the active stack set per C2 dispatch. Derived from the cached
+ * resolved config (so the dispatch math runs once per project root per
+ * server-process lifetime).
  */
 export function getActiveStacks(
-  _input: GetActiveStacksInput,
-  _ctx: ReadToolContext = {},
+  input: GetActiveStacksInput,
+  ctx: ReadToolContext = {},
 ): { active: string[] } {
-  return { active: [] };
+  const root = canonicalizePath(input.projectRoot);
+  const apiVersion = readPackageMetaSync().version;
+  const resolved = composeResolvedConfigSync(root, apiVersion, {
+    userHome: ctx.userHome,
+  });
+  return { active: resolved.stacks.active.slice() };
 }
 
 export interface GetOverlayInput {
@@ -148,30 +163,22 @@ export interface GetMergedSplicePointsInput {
 }
 
 /**
- * **Partial in S2.** Returns the project-tier overlay's splice points
- * verbatim, without the C4 cascade across default/user/project tiers. Full
- * cascade resolution lands in S5.
- *
- * The returned shape mirrors what S5 will return — a bare object whose
- * keys are agent role names (`planner`, `proposer`, `evaluator`, etc.) and
- * whose values are the splice-point payloads as defined in C3 — so that
- * downstream callers can already write against the API.
+ * Return the cascaded overlay (the merged splice-point view) per C4.
+ * The returned shape mirrors C3's splice-point catalog: keys are agent
+ * role names (`planner`, `proposer`, `evaluator`, etc.) and values are
+ * the splice-point payloads. The `stack` block is included so consumers
+ * can read the resolved `override` / `cacheEnvOverride`.
  */
 export function getMergedSplicePoints(
   input: GetMergedSplicePointsInput,
-  _ctx: ReadToolContext = {},
+  ctx: ReadToolContext = {},
 ): { mergedSplicePoints: Record<string, unknown> } {
   const root = canonicalizePath(input.projectRoot);
-  const project = loadOverlay('project', root);
-  if (!project || !isObject(project.data)) {
-    return { mergedSplicePoints: {} };
-  }
-  const out: Record<string, unknown> = {};
-  for (const k of Object.keys(project.data)) {
-    if (k === 'schemaVersion') continue;
-    out[k] = (project.data as Record<string, unknown>)[k];
-  }
-  return { mergedSplicePoints: out };
+  const apiVersion = readPackageMetaSync().version;
+  const resolved = composeResolvedConfigSync(root, apiVersion, {
+    userHome: ctx.userHome,
+  });
+  return { mergedSplicePoints: resolved.overlay };
 }
 
 export interface GetTrustStateInput {
@@ -255,54 +262,29 @@ export interface GetResolvedConfigInput {
 }
 
 /**
- * **Partial in S2.** Returns:
+ * Return the F2 stable-shape resolved config. Cached per canonical project
+ * root by the `cache.ts` singleton; consecutive calls return byte-identical
+ * JSON (per F2's snapshot freshness rule).
+ *
+ * The returned shape:
  *
  *  - `apiVersion` — package semver.
- *  - `schemaVersions` — `{ stack: 1, overlay: 1 }` (the only schemas shipped
- *    so far per F3 / C1 / C3).
- *  - `stackResolution` — `{ active: [...], byName: {...} }`. In S2 `active`
- *    is empty and `byName` is also empty (no scanning yet); S5 fills both.
- *  - `overlays` — `{ default, user, project }`, each either the loaded
- *    overlay (`{ data, path }`) or `null`. No cascade merge in S2.
- *
- * The full cascade — including resolved splice points, active stack
- * dispatch, trust-gating, and the merged config payload — lands in S5.
- * Callers that need any of those should call the focused tool instead
- * (`getOverlay`, `getStack`, `getMergedSplicePoints`, `getActiveStacks`).
+ *  - `schemaVersions` — `{ stack: 1, overlay: 1 }`.
+ *  - `stacks: { active, byName }` — active set + per-stack metadata
+ *    (tier, path, schemaVersion).
+ *  - `overlay` — cascaded overlay (the merged splice-point view).
+ *  - `discarded` — list of `<block>.<field>` paths whose upstream
+ *    contribution was discarded by `discardInherited` somewhere in the
+ *    cascade.
+ *  - `additionalContext` — path-resolution status for `planner` and
+ *    `proposer` additionalContext entries.
+ *  - `issues` — sorted list of every validation/cascade/detection issue.
  */
-export interface ResolvedConfigPartial {
-  apiVersion: string;
-  schemaVersions: { stack: number; overlay: number };
-  stackResolution: { active: string[]; byName: Record<string, StackResolution> };
-  overlays: {
-    default: { data: unknown; path: string } | null;
-    user: { data: unknown; path: string } | null;
-    project: { data: unknown; path: string } | null;
-  };
-}
-
 export async function getResolvedConfig(
   input: GetResolvedConfigInput,
   ctx: ReadToolContext = {},
-): Promise<ResolvedConfigPartial> {
-  const root = canonicalizePath(input.projectRoot);
-  const meta = await readPackageMeta();
-
-  const overlayOpts = { userHome: ctx.userHome };
-  const def = loadOverlay('default', root, overlayOpts);
-  const user = loadOverlay('user', root, overlayOpts);
-  const proj = loadOverlay('project', root, overlayOpts);
-
-  return {
-    apiVersion: meta.version,
-    schemaVersions: { stack: 1, overlay: 1 },
-    stackResolution: { active: [], byName: {} },
-    overlays: {
-      default: def ? { data: def.data, path: def.path } : null,
-      user: user ? { data: user.data, path: user.path } : null,
-      project: proj ? { data: proj.data, path: proj.path } : null,
-    },
-  };
+): Promise<ResolvedConfig> {
+  return composeResolvedConfig(input.projectRoot, { userHome: ctx.userHome });
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

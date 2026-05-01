@@ -44,13 +44,26 @@ describe('S2 read tools (one positive test per tool)', () => {
     expect(result.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it('getResolvedConfig returns the partial S2 shape', async () => {
+  it('getResolvedConfig returns the full F2 shape', async () => {
+    // Reset the cache to make this test order-independent.
+    const { clearResolvedConfigCache } =
+      await import('../../../src/config-server/resolution/cache.js');
+    clearResolvedConfigCache();
     const result = await getResolvedConfig({ projectRoot: jsTsMinimal });
     expect(result.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(result.schemaVersions).toEqual({ stack: 1, overlay: 1 });
-    expect(result.stackResolution).toEqual({ active: [], byName: {} });
-    expect(result.overlays.project).not.toBeNull();
-    expect(result.overlays.default).toBeNull();
+    // js-ts-minimal has no package.json/tsconfig.json on disk, so detection
+    // produces an empty active set (no `generic` stack ships either).
+    expect(result.stacks.active).toEqual([]);
+    expect(result.stacks.byName).toEqual({});
+    // Overlay is the cascaded view; js-ts-minimal's project overlay only
+    // declares schemaVersion (which is filtered out), so the merged
+    // overlay is empty.
+    expect(result.overlay).toEqual({});
+    expect(result.discarded).toEqual([]);
+    expect(result.additionalContext.planner).toEqual([]);
+    expect(result.additionalContext.proposer).toEqual([]);
+    expect(result.issues).toEqual([]);
   });
 
   it('getStack loads a stack with tier provenance', () => {
@@ -60,7 +73,11 @@ describe('S2 read tools (one positive test per tool)', () => {
     expect(data.name).toBe('web-node');
   });
 
-  it('getActiveStacks returns the partial S2 empty active set', () => {
+  it('getActiveStacks returns the detected active set (empty for js-ts-minimal)', async () => {
+    const { clearResolvedConfigCache } =
+      await import('../../../src/config-server/resolution/cache.js');
+    clearResolvedConfigCache();
+    // js-ts-minimal has no package.json on disk; detection returns empty.
     const result = getActiveStacks({ projectRoot: jsTsMinimal });
     expect(result.active).toEqual([]);
   });
@@ -73,10 +90,13 @@ describe('S2 read tools (one positive test per tool)', () => {
     expect(def).toBeNull();
   });
 
-  it('getMergedSplicePoints returns the project-tier overlay (S2 partial)', () => {
+  it('getMergedSplicePoints returns the cascaded overlay (S5 full)', async () => {
+    const { clearResolvedConfigCache } =
+      await import('../../../src/config-server/resolution/cache.js');
+    clearResolvedConfigCache();
     const result = getMergedSplicePoints({ projectRoot: jsTsMinimal });
     // The js-ts-minimal fixture's project overlay has only schemaVersion;
-    // splice-point keys must be empty (schemaVersion is filtered out).
+    // the cascade therefore returns an empty merged view.
     expect(result.mergedSplicePoints).toEqual({});
   });
 
