@@ -108,6 +108,33 @@ function buildBrokenDist(): string {
     'export function getApiVersion(): Promise<{apiVersion:string}>;\n',
   );
 
+  // Stand-in for `dist/index.js` (the package main re-export point that
+  // S2's read commands import from). Every exported read function throws
+  // a plain `Error`; the CLI's `errorResult` helper treats anything other
+  // than a `ConfigServerError` as the framework library being unreachable
+  // and surfaces exit 5 with the F4-discipline remediation text.
+  const distIndex = path.join(tmp, 'dist', 'index.js');
+  writeFileSync(
+    distIndex,
+    [
+      'function unreachable() {',
+      "  throw new Error('framework library missing (test stub)');",
+      '}',
+      'export const getResolvedConfig = unreachable;',
+      'export const getActiveStacks = unreachable;',
+      'export const getStack = unreachable;',
+      'export const listModules = unreachable;',
+      'export const getOverlay = unreachable;',
+      'export const getStackResolution = unreachable;',
+      'export const getMergedSplicePoints = unreachable;',
+      'export const getModuleState = unreachable;',
+      'export const getTrustState = unreachable;',
+      'export const getTrustDiff = unreachable;',
+      'export { getApiVersion } from "./config-server/index.js";',
+      '',
+    ].join('\n'),
+  );
+
   return path.join(tmp, 'dist', 'cli', 'index.js');
 }
 
@@ -143,6 +170,85 @@ describe('gan: framework library unreachable', () => {
     // Must reference the framework, not the runtime.
     expect(r.stderr).toMatch(/framework/i);
   });
+
+  // S2 extension: every read subcommand surfaces exit 5 when the
+  // framework library is unreachable. We use a real fixture path so the
+  // command's resolveProjectRoot succeeds — the failure must come from
+  // the library call itself.
+  const READ_COMMANDS: Array<{ name: string; argv: string[] }> = [
+    {
+      name: 'config print',
+      argv: [
+        'config',
+        'print',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    {
+      name: 'config get',
+      argv: [
+        'config',
+        'get',
+        'apiVersion',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    {
+      name: 'stacks list',
+      argv: [
+        'stacks',
+        'list',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    {
+      name: 'stack show',
+      argv: [
+        'stack',
+        'show',
+        'web-node',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    {
+      name: 'modules list',
+      argv: [
+        'modules',
+        'list',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+  ];
+
+  for (const c of READ_COMMANDS) {
+    it(`F-AC6: \`gan ${c.name}\` exits 5 under unreachable framework library`, async () => {
+      const brokenEntry = buildBrokenDist();
+      const r = await runGan(c.argv, { entryOverride: brokenEntry });
+      expect(r.exitCode).toBe(5);
+      // Stderr surface (no `--json`) carries the human remediation text.
+      expect(r.stderr).toContain("cannot reach the framework's library");
+      expect(r.stderr).toContain('install.sh');
+      // Stdout stays empty on the human path.
+      expect(r.stdout).toBe('');
+    });
+
+    it(`F-AC6: \`gan ${c.name} --json\` exits 5 with structured error on stdout`, async () => {
+      const brokenEntry = buildBrokenDist();
+      const r = await runGan([...c.argv, '--json'], { entryOverride: brokenEntry });
+      expect(r.exitCode).toBe(5);
+      // Under --json, the structured F2 error lands on stdout so
+      // `gan ... --json | jq` parses cleanly even on the unreachable path.
+      expect(r.stderr).toBe('');
+      const parsed = JSON.parse(r.stdout) as { code: string; message: string };
+      expect(parsed.code).toBe('ApiUnreachable');
+      expect(parsed.message).toContain("cannot reach the framework's library");
+    });
+  }
 
   // Touch the readFileSync import so eslint doesn't complain about an unused.
   it('sanity: the test fixture references real paths', () => {

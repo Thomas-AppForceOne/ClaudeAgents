@@ -25,6 +25,11 @@
 
 import * as helpCmd from './commands/help.js';
 import * as versionCmd from './commands/version.js';
+import * as configPrintCmd from './commands/config-print.js';
+import * as configGetCmd from './commands/config-get.js';
+import * as stacksListCmd from './commands/stacks-list.js';
+import * as stackShowCmd from './commands/stack-show.js';
+import * as modulesListCmd from './commands/modules-list.js';
 import { makeNotYetStub, trustStub } from './commands/_stubs.js';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type ParsedArgs } from './lib/args.js';
 import { renderTopLevelHelp } from './lib/help.js';
@@ -40,9 +45,128 @@ interface CommandResult {
 type Subcommand = (parsed: ParsedArgs) => Promise<CommandResult>;
 
 /**
+ * Inner dispatch for `gan config <print|get|set>`. The S2 read arms are
+ * real; `set` remains a stub until S3.
+ */
+async function configDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'print':
+      return configPrintCmd.run(tail);
+    case 'get':
+      return configGetCmd.run(tail);
+    case 'set':
+      return makeNotYetStub('gan config set')(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr:
+          'Error: gan config requires a subcommand (`print`, `get`, or `set`). Run `gan config --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan config ${inner}'. Run \`gan config --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/** Inner dispatch for `gan stacks <list|new>`. `new` ships in S4. */
+async function stacksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'list':
+      return stacksListCmd.run(tail);
+    case 'new':
+      return makeNotYetStub('gan stacks new')(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr:
+          'Error: gan stacks requires a subcommand (`list` or `new`). Run `gan stacks --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan stacks ${inner}'. Run \`gan stacks --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/** Inner dispatch for `gan stack <show|update> <name>`. `update` ships in S3. */
+async function stackDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'show':
+      return stackShowCmd.run(tail);
+    case 'update':
+      return makeNotYetStub('gan stack update')(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr:
+          'Error: gan stack requires a subcommand (`show` or `update`). Run `gan stack --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan stack ${inner}'. Run \`gan stack --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/** Inner dispatch for `gan modules list`. The only S2 arm. */
+async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'list':
+      return modulesListCmd.run(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr: 'Error: gan modules requires a subcommand (`list`). Run `gan modules --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan modules ${inner}'. Run \`gan modules --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/**
  * Top-level subcommand registry. Subcommands that themselves dispatch on
- * a second positional (e.g. `gan config print|get|set`) keep the inner
- * dispatch in their own module — for S1 they all map to a single stub.
+ * a second positional (`gan config print|get|set`, etc.) keep the inner
+ * dispatch in a `*Dispatch` helper above so this table stays a single
+ * lookup of name → handler.
  *
  * Keys are the canonical subcommand names from the R3 spec's surface
  * table. The dispatcher hands the parsed args to the matched function;
@@ -53,10 +177,10 @@ const SUBCOMMANDS: Readonly<Record<string, Subcommand>> = Object.freeze({
   version: versionCmd.run,
   help: helpCmd.run,
   validate: makeNotYetStub('gan validate'),
-  config: makeNotYetStub('gan config'),
-  stacks: makeNotYetStub('gan stacks'),
-  stack: makeNotYetStub('gan stack'),
-  modules: makeNotYetStub('gan modules'),
+  config: configDispatch,
+  stacks: stacksDispatch,
+  stack: stackDispatch,
+  modules: modulesDispatch,
   trust: trustStub,
 });
 

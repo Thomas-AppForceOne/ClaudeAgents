@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
+import { stackFixturePath } from './helpers/fixtures.js';
 
 const PROSE_TOKEN = /(?<!`)\b(npm|node|Node|MCP server)\b(?!`)/g;
 
@@ -106,6 +107,76 @@ describe('CLI prose discipline (F4 backstop)', () => {
       expect(r.stdout).not.toMatch(/\bnpm run\b/);
       expect(r.stdout).not.toMatch(/the npm package/i);
       expect(r.stdout).not.toMatch(/the Node MCP server/i);
+    }
+  });
+
+  // S2 extension: renderer-owned success surfaces (no fixture data
+  // mixed in) obey the F4 prose discipline. We deliberately skip
+  // `stack show` here because the stack file's data block contains
+  // legitimate ecosystem-specific tokens (`npm run build`, etc.) that
+  // are user-provided content, not renderer prose. The other read
+  // subcommands print only renderer-owned text on the human path.
+  it('S2 success renderer prose obeys discipline (config print, stacks list, modules list)', async () => {
+    const fixture = stackFixturePath('js-ts-minimal');
+    const cases: string[][] = [
+      ['config', 'print', '--project-root', fixture],
+      ['stacks', 'list', '--project-root', fixture],
+      ['modules', 'list', '--project-root', fixture],
+    ];
+    for (const argv of cases) {
+      const r = await runGan(argv);
+      const violations = findViolations(r.stdout + r.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in success surface for argv=${JSON.stringify(argv)}:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+  });
+
+  it('S2 error surfaces obey prose discipline', async () => {
+    const fixture = stackFixturePath('js-ts-minimal');
+    const cases: Array<{ argv: string[] }> = [
+      // Missing key.
+      { argv: ['config', 'get', 'no.such.path', '--project-root', fixture] },
+      { argv: ['config', 'get', 'no.such.path', '--project-root', fixture, '--json'] },
+      // Missing arg.
+      { argv: ['config', 'get', '--project-root', fixture] },
+      { argv: ['stack', 'show', '--project-root', fixture] },
+      // Unknown stack — surfaces F2 MissingFile.
+      { argv: ['stack', 'show', 'definitely-not-a-stack', '--project-root', fixture] },
+      // Bad project root.
+      { argv: ['config', 'print', '--project-root', '/definitely/not/a/dir'] },
+    ];
+    for (const c of cases) {
+      const r = await runGan(c.argv);
+      const violations = findViolations(r.stdout + r.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in error surface for argv=${JSON.stringify(c.argv)}:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+  });
+
+  it('S2 inner-dispatch error surfaces obey prose discipline', async () => {
+    // Unknown inner subcommand under each parent (e.g. `gan config nope`).
+    const cases = [
+      ['config'],
+      ['config', 'nope'],
+      ['stacks'],
+      ['stacks', 'nope'],
+      ['stack'],
+      ['stack', 'nope'],
+      ['modules'],
+      ['modules', 'nope'],
+    ];
+    for (const argv of cases) {
+      const r = await runGan(argv);
+      const violations = findViolations(r.stdout + r.stderr);
+      expect(violations, `argv=${JSON.stringify(argv)}`).toHaveLength(0);
     }
   });
 });
