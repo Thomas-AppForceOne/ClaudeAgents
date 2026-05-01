@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# ClaudeAgents installer — R2 sprints 1 + 2.
+# ClaudeAgents installer — R2 sprints 1 + 2 + 3.
 #
 # S1 landed the side-effect-free outer shell: argv parsing, help text, and
 # prerequisite checks. S2 lands the happy-path install body: symlinks,
 # `npm install -g .`, `~/.claude.json` registration, zone preparation,
-# and a best-effort post-install validate. Rollback machinery and the
-# `--uninstall` body land in S3.
+# and a best-effort post-install validate. S3 lands rollback on partial
+# failure, the `--uninstall` mode, and the feature-branch mid-pivot
+# warning.
 
 set -euo pipefail
 
@@ -17,14 +18,27 @@ MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 MAX_NODE_MAJOR=22
 
-# STATE_LOG — append-only audit trail of state-creating steps. S3 will
-# consume this for rollback; S2 only writes to it. Each entry is a single
-# line of the form `<kind>:<absolute-path>` so a future rollback can scan
-# it without parsing structured data.
+# STATE_LOG — append-only audit trail of state-creating steps. S3 consumes
+# this in `rollback()`. Each entry is a single line `<kind>:<payload>`:
+#   symlink:<absolute-path>
+#   claude-json-edited:NEW
+#   claude-json-edited:<preedit-path>
+#   zone-created:<absolute-path>
+#   gitignore-line-added:<gitignore-path>:<line>
+#   npm-installed
 STATE_LOG=()
 
 # Flag set by detect_preexisting_gan_dir; consumed by print_final_status.
 PREEXISTING_GAN_DIR=""
+
+# Set by feature_branch_warning when on the mid-pivot branch; consumed by
+# print_final_status.
+MIDPIVOT_WARNING_FIRED=0
+
+# Per-run pre-edit copy of `~/.claude.json` (if any). The install branch
+# of `main()` cleans this up after every other step succeeds; rollback
+# uses it to restore the file on failure.
+PREEDIT_CLAUDE_JSON=""
 
 log_info() {
   printf '%s\n' "$*"
@@ -232,7 +246,7 @@ install_mcp_server() {
     log_error "ClaudeAgents installer: failed to install the framework's config server."
     die "Re-run \`npm install -g .\` from $REPO_ROOT to see the underlying error."
   fi
-  STATE_LOG+=("npm-installed:$REPO_ROOT")
+  STATE_LOG+=("npm-installed")
 }
 
 # backup_claude_json_once
@@ -267,7 +281,22 @@ backup_claude_json_once() {
 # writes the result to a `*.tmp.$$` sibling with sorted keys +
 # 2-space indent + trailing newline, then `mv`s atomically into place.
 # Idempotent on re-run.
+#
+# Before the first byte of the JSON edit is written, this function makes
+# a per-run pre-edit copy of `~/.claude.json` to
+# `~/.claude.json.preedit-$$` and records its location (or the literal
+# `NEW`, if the file did not exist) in STATE_LOG. The install branch of
+# `main()` removes the per-run copy after every other install step
+# succeeds; on failure, `rollback()` restores the file from it.
 register_mcp_in_claude_json() {
+  PREEDIT_CLAUDE_JSON="$HOME/.claude.json.preedit-$$"
+  if [ -f "$CLAUDE_CONFIG_JSON" ]; then
+    cp "$CLAUDE_CONFIG_JSON" "$PREEDIT_CLAUDE_JSON"
+    STATE_LOG+=("claude-json-edited:$PREEDIT_CLAUDE_JSON")
+  else
+    STATE_LOG+=("claude-json-edited:NEW")
+  fi
+
   local tmp="$CLAUDE_CONFIG_JSON.tmp.$$"
   CLAUDE_CONFIG_JSON_PATH="$CLAUDE_CONFIG_JSON" \
   CLAUDE_CONFIG_TMP_PATH="$tmp" \
@@ -315,7 +344,6 @@ register_mcp_in_claude_json() {
     fs.writeFileSync(dst, out, "utf8");
   '
   mv "$tmp" "$CLAUDE_CONFIG_JSON"
-  STATE_LOG+=("claude-json:$CLAUDE_CONFIG_JSON")
 }
 
 # detect_preexisting_gan_dir
@@ -344,9 +372,13 @@ prepare_zones() {
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [ -n "$top" ] || return 0
 
-  mkdir -p "$top/.gan-state" "$top/.gan-cache"
-  STATE_LOG+=("zone-dir:$top/.gan-state")
-  STATE_LOG+=("zone-dir:$top/.gan-cache")
+  local zone
+  for zone in "$top/.gan-state" "$top/.gan-cache"; do
+    if [ ! -d "$zone" ]; then
+      mkdir -p "$zone"
+      STATE_LOG+=("zone-created:$zone")
+    fi
+  done
 
   local gi="$top/.gitignore"
   # Ensure file exists so `grep -Fxq` has something to read; the grep
@@ -357,7 +389,7 @@ prepare_zones() {
   for entry in ".gan-state/" ".gan-cache/"; do
     if ! grep -Fxq "$entry" "$gi"; then
       printf '%s\n' "$entry" >>"$gi"
-      STATE_LOG+=("gitignore-entry:$gi:$entry")
+      STATE_LOG+=("gitignore-line-added:$gi:$entry")
     fi
   done
 }
@@ -386,9 +418,9 @@ run_validate_all_best_effort() {
 # print_final_status
 #
 # Emits the post-install status block. Names the zones, mentions the
-# `~/.claude.json` registration, and (when detected) flags a
-# pre-existing `.gan/` directory as a hand-delete target. Feature-branch
-# warning lives in S3.
+# `~/.claude.json` registration, flags a pre-existing `.gan/` directory
+# as a hand-delete target when detected, and surfaces the feature-branch
+# mid-pivot warning when triggered.
 print_final_status() {
   log_info ""
   log_info "ClaudeAgents installer: install complete."
@@ -402,8 +434,259 @@ print_final_status() {
     log_info "Delete it by hand once you have copied anything you still need: \`rm -rf $PREEXISTING_GAN_DIR\`."
   fi
 
+  if [ "$MIDPIVOT_WARNING_FIRED" -eq 1 ]; then
+    log_info ""
+    log_info "Heads up: you are installing from the \`feature/stack-plugin-rfc\` branch."
+    log_info "This branch is the mid-pivot RFC work for ClaudeAgents and is not functional end-to-end yet."
+    log_info "Switch to the \`main\` branch once the pivot lands if you want a working install."
+  fi
+
   log_info ""
   log_info "Restart Claude Code to pick up the new agents, skills, and config server."
+}
+
+# ---------------------------------------------------------------------------
+# S3 — rollback, error trap, feature-branch warning, uninstall
+# ---------------------------------------------------------------------------
+
+# rollback
+#
+# Walks STATE_LOG in reverse and undoes each side-effect in turn. Best
+# effort: each individual reversal is wrapped so a failure on one entry
+# (e.g. a symlink the user already removed) does not prevent the rest
+# of the log from being processed. Emits a brief stderr summary using
+# framework prose; never re-uninstalls the framework's globally
+# installed config server (per F4 — the user runs the named shell
+# command in backticks instead).
+rollback() {
+  local mentioned_npm=0
+  local i entry kind payload
+
+  log_warn "ClaudeAgents installer: install failed; rolling back partial state."
+
+  for (( i=${#STATE_LOG[@]}-1; i>=0; i-- )); do
+    entry="${STATE_LOG[$i]}"
+    kind="${entry%%:*}"
+    payload="${entry#*:}"
+    if [ "$kind" = "$entry" ]; then
+      # No colon in entry (e.g. `npm-installed`); payload is empty.
+      payload=""
+    fi
+
+    case "$kind" in
+      symlink)
+        # Remove the symlink only if it still exists as a symlink. We do
+        # not chase the target; a target swap by a third party would be
+        # undone by deleting the link, which is what we want.
+        if [ -L "$payload" ]; then
+          rm -f "$payload" 2>/dev/null || true
+        fi
+        ;;
+      claude-json-edited)
+        if [ "$payload" = "NEW" ]; then
+          # We created the file; remove it.
+          rm -f "$CLAUDE_CONFIG_JSON" 2>/dev/null || true
+        else
+          # Restore from the per-run preedit copy.
+          if [ -f "$payload" ]; then
+            mv "$payload" "$CLAUDE_CONFIG_JSON" 2>/dev/null || true
+          fi
+        fi
+        ;;
+      zone-created)
+        # Only remove if empty — never blow away user data that landed
+        # inside the zone after the installer created it.
+        if [ -d "$payload" ]; then
+          rmdir "$payload" 2>/dev/null || true
+        fi
+        ;;
+      gitignore-line-added)
+        # Payload is `<gitignore-path>:<line>`.
+        local gi_file gi_line
+        gi_file="${payload%%:*}"
+        gi_line="${payload#*:}"
+        if [ -f "$gi_file" ] && [ -n "$gi_line" ]; then
+          # Remove the exact line. Use a temp file + atomic rename so a
+          # crash mid-write cannot leave the .gitignore truncated.
+          local gi_tmp="$gi_file.rollback-tmp.$$"
+          grep -Fxv "$gi_line" "$gi_file" >"$gi_tmp" 2>/dev/null || true
+          if [ -f "$gi_tmp" ]; then
+            mv "$gi_tmp" "$gi_file" 2>/dev/null || true
+          fi
+        fi
+        ;;
+      npm-installed)
+        # Intentional no-op: removing a globally installed Node package
+        # mid-rollback is risky (other tools may depend on it). The user
+        # runs the named shell command if they want to undo it.
+        mentioned_npm=1
+        ;;
+      backup|pruned-symlink)
+        # The once-per-machine backup is intentionally retained on
+        # rollback — it is the user's safety net across runs, not a
+        # per-run artifact. Pre-prune broken symlinks were already
+        # broken; we do not resurrect them.
+        :
+        ;;
+      *)
+        # Unknown kind; ignore defensively.
+        :
+        ;;
+    esac
+  done
+
+  # Clean up the per-run preedit copy if it survived (e.g. the JSON edit
+  # succeeded but a later step failed and rollback restored it via mv).
+  if [ -n "$PREEDIT_CLAUDE_JSON" ] && [ -f "$PREEDIT_CLAUDE_JSON" ]; then
+    rm -f "$PREEDIT_CLAUDE_JSON" 2>/dev/null || true
+  fi
+
+  if [ "$mentioned_npm" -eq 1 ]; then
+    log_warn "ClaudeAgents installer: the framework's config server remains globally installed; run \`npm uninstall -g @claudeagents/config-server\` to remove."
+  fi
+
+  log_warn "ClaudeAgents installer: rollback complete."
+}
+
+# on_error
+#
+# ERR-trap handler for the install branch of `main()`. Captures the
+# original exit code, runs `rollback`, then re-exits with the captured
+# code so the surrounding pipeline (and tests) see the original failure.
+on_error() {
+  local rc=$?
+  # Disarm the trap so a failure inside `rollback` (best-effort itself)
+  # does not recurse.
+  trap - ERR
+  rollback
+  exit "$rc"
+}
+
+# feature_branch_warning
+#
+# Sets `MIDPIVOT_WARNING_FIRED=1` when the install is being run from a
+# clone whose current branch is the literal string
+# `feature/stack-plugin-rfc`. The trigger is hardcoded; there is no
+# environment-variable override. The check is removed at the post-E1
+# merge to `main` (per the R2-locked feature-branch warning lifecycle in
+# `PROJECT_CONTEXT.md`).
+feature_branch_warning() {
+  MIDPIVOT_WARNING_FIRED=0
+  local branch
+  branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ "$branch" = "feature/stack-plugin-rfc" ]; then
+    MIDPIVOT_WARNING_FIRED=1
+  fi
+}
+
+# uninstall_main
+#
+# Implements `--uninstall`:
+#   - Removes symlinks under `~/.claude/agents/` whose targets resolve
+#     into `$REPO_ROOT/agents/`.
+#   - Removes symlinks under `~/.claude/skills/` whose targets resolve
+#     into `$REPO_ROOT/skills/`.
+#   - Removes the `mcpServers.claudeagents-config` entry from
+#     `~/.claude.json` via `node -e`, atomic temp+rename, sorted keys.
+#     Leaves `mcpServers` as an empty object if no other entries remain.
+#   - Leaves `.gan-state/`, `.gan-cache/`, `.claude/gan/`, the
+#     once-per-machine backup, and the globally installed framework
+#     package alone. Prints follow-up commands in backticks so the
+#     user can clean those up by hand.
+# Idempotent: a second invocation against an already-uninstalled HOME
+# exits 0 with the same follow-up hints.
+uninstall_main() {
+  log_info "ClaudeAgents installer: uninstalling."
+
+  local removed_links=0
+  local agents_root="$REPO_ROOT/agents"
+  local skills_root="$REPO_ROOT/skills"
+
+  # Walk `~/.claude/agents/` and remove any symlink whose target lives
+  # inside `$REPO_ROOT/agents/`. We compare by string prefix on the
+  # symlink's target value — `readlink` returns the literal target the
+  # link was created with, which (per `link_agents_and_skills`) is the
+  # absolute path under `$REPO_ROOT`.
+  local dir entry target
+  for dir in "$CLAUDE_HOME/agents:$agents_root" "$CLAUDE_HOME/skills:$skills_root"; do
+    local d="${dir%%:*}"
+    local r="${dir#*:}"
+    [ -d "$d" ] || continue
+    shopt -s nullglob dotglob
+    for entry in "$d"/*; do
+      if [ -L "$entry" ]; then
+        target="$(readlink "$entry" 2>/dev/null || true)"
+        case "$target" in
+          "$r"/*|"$r")
+            rm -f "$entry"
+            removed_links=$(( removed_links + 1 ))
+            ;;
+        esac
+      fi
+    done
+    shopt -u nullglob dotglob
+  done
+
+  # Strip `mcpServers.claudeagents-config` from `~/.claude.json` if it
+  # is present. Atomic temp+rename, sorted keys. If the file does not
+  # exist, this is a no-op (nothing to clean).
+  if [ -f "$CLAUDE_CONFIG_JSON" ]; then
+    local tmp="$CLAUDE_CONFIG_JSON.tmp.$$"
+    CLAUDE_CONFIG_JSON_PATH="$CLAUDE_CONFIG_JSON" \
+    CLAUDE_CONFIG_TMP_PATH="$tmp" \
+    node -e '
+      const fs = require("fs");
+      const src = process.env.CLAUDE_CONFIG_JSON_PATH;
+      const dst = process.env.CLAUDE_CONFIG_TMP_PATH;
+      let data = {};
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+      if (
+        data &&
+        typeof data.mcpServers === "object" &&
+        data.mcpServers !== null &&
+        !Array.isArray(data.mcpServers)
+      ) {
+        delete data.mcpServers["claudeagents-config"];
+      }
+      function sortedStringify(value, indent) {
+        const sortKeys = (v) => {
+          if (Array.isArray(v)) return v.map(sortKeys);
+          if (v && typeof v === "object") {
+            const out = {};
+            for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+            return out;
+          }
+          return v;
+        };
+        return JSON.stringify(sortKeys(value), null, indent);
+      }
+      const out = sortedStringify(data, 2) + "\n";
+      fs.writeFileSync(dst, out, "utf8");
+    '
+    mv "$tmp" "$CLAUDE_CONFIG_JSON"
+  fi
+
+  log_info ""
+  log_info "ClaudeAgents installer: uninstall complete."
+  log_info "  - Removed $removed_links framework symlink(s) from $CLAUDE_HOME/."
+  log_info "  - Cleared the framework entry from $CLAUDE_CONFIG_JSON (when present)."
+  log_info ""
+  log_info "Left in place (clean up by hand if you want them gone):"
+  log_info "  - The framework's globally installed package: \`npm uninstall -g @claudeagents/config-server\`."
+  log_info "  - Per-project zones: \`rm -rf .gan-state .gan-cache\` (run from each repo)."
+  log_info "  - Project overlays under \`.claude/gan/\` and the once-per-machine \`~/.claude.json\` backup are untouched."
 }
 
 main() {
@@ -432,9 +715,17 @@ main() {
   done
 
   if [ "$mode" = "uninstall" ]; then
-    log_info "uninstall lands in S3; no filesystem changes were made."
+    uninstall_main
     exit 0
   fi
+
+  # Inherit the ERR trap into shell functions and subshells. Combined
+  # with `set -e`, this means any unhandled non-zero exit anywhere in
+  # the install branch routes through `on_error` -> `rollback`.
+  set -E
+  trap on_error ERR
+
+  feature_branch_warning
 
   check_node
   check_git
@@ -465,6 +756,14 @@ main() {
   detect_preexisting_gan_dir
   prepare_zones
   run_validate_all_best_effort
+
+  # Every state-creating step has succeeded — disarm the rollback trap
+  # and remove the per-run preedit copy of `~/.claude.json` (if any).
+  trap - ERR
+  if [ -n "$PREEDIT_CLAUDE_JSON" ] && [ -f "$PREEDIT_CLAUDE_JSON" ]; then
+    rm -f "$PREEDIT_CLAUDE_JSON"
+  fi
+
   print_final_status
   exit 0
 }

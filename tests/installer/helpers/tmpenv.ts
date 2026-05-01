@@ -140,6 +140,16 @@ export function makeTmpHome(options: MakeTmpHomeOptions = {}): TmpHome {
  */
 export function writeStubBin(bin: string, name: string, body: string): string {
   const target = path.join(bin, name);
+  // If a previous entry (e.g. the symlink seeded for safe system
+  // utilities) exists at this path, remove it first. `writeFileSync`
+  // refuses to overwrite a symlink that points at a read-only system
+  // file like `/bin/mkdir`; an unconditional unlink lets us replace
+  // any prior entry with the new stub.
+  try {
+    rmSync(target, { force: true });
+  } catch {
+    // best effort
+  }
   const script = `#!/bin/bash\n${body}\n`;
   writeFileSync(target, script);
   chmodSync(target, 0o755);

@@ -29,6 +29,11 @@ export interface FakeNpmOptions {
  * Writes a stub `npm` into `bin/`. Records each invocation to
  * `options.invocationLog` (one line per call, argv joined by single
  * spaces).
+ *
+ * Honours `$CAS_FAIL_NPM_INSTALL=1` from the environment: when set, an
+ * `install`-flavoured invocation exits 1 with a synthetic stderr line
+ * regardless of the configured `exitCode`. Used by R2 S3 rollback
+ * tests via `injectFailureAt(env, 'npm-install')`.
  */
 export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
   const exitCode = options.exitCode ?? 0;
@@ -37,8 +42,19 @@ export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
   const escapedStderr = JSON.stringify(stderrLine);
 
   // The body appends `$*` (joined argv) plus a newline to the log file
-  // every call, then optionally prints a stderr line, then exits.
-  const body = `printf '%s\\n' "$*" >> ${escapedLog}\nif [ -n ${escapedStderr} ]; then\n  printf '%s\\n' ${escapedStderr} >&2\nfi\nexit ${exitCode}\n`;
+  // every call, optionally prints a stderr line, honours the failure
+  // injection env var, then exits.
+  const body = [
+    `printf '%s\\n' "$*" >> ${escapedLog}`,
+    `if [ -n ${escapedStderr} ]; then`,
+    `  printf '%s\\n' ${escapedStderr} >&2`,
+    `fi`,
+    `if [ "\${CAS_FAIL_NPM_INSTALL:-0}" = "1" ] && [ "$1" = "install" ]; then`,
+    `  printf '%s\\n' "npm ERR! injected failure" >&2`,
+    `  exit 1`,
+    `fi`,
+    `exit ${exitCode}`,
+  ].join('\n');
   return writeStubBin(bin, 'npm', body);
 }
 
