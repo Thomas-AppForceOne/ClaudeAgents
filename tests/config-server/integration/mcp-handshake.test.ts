@@ -1,0 +1,267 @@
+/**
+ * R1 sprint 7 integration test — full MCP handshake against the built
+ * server binary.
+ *
+ *   1. Spawn `node ./dist/config-server/index.js` as a subprocess with
+ *      `GAN_RUN_ID` set so logs route to the per-run log file under the
+ *      project root.
+ *   2. Send `initialize` (MCP), then `tools/list`. Assert every F2 tool
+ *      name appears in the response.
+ *   3. Call a representative read tool (`getResolvedConfig` against the
+ *      `js-ts-minimal` fixture) and a representative write tool
+ *      (`setOverlayField` against a temp-dir copy of the same fixture).
+ *      Both must succeed with structured payloads.
+ *   4. Assert the per-run log file exists with at least one entry per
+ *      tool call, and that overlay values + trust hashes never appear in
+ *      the log (anonymisation contract).
+ *   5. Close stdin and verify the subprocess exits cleanly within the
+ *      timeout window.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { F2_TOOL_NAMES } from '../../../src/config-server/index.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..', '..');
+const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
+const jsTsMinimal = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'js-ts-minimal');
+
+const tmpDirs: string[] = [];
+const liveChildren: ChildProcessWithoutNullStreams[] = [];
+
+afterEach(() => {
+  for (const c of liveChildren.splice(0)) {
+    try {
+      c.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+  for (const d of tmpDirs.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+});
+
+interface JsonRpcResponse {
+  jsonrpc?: string;
+  id?: number | string;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+interface PendingDispatcher {
+  send(payload: Record<string, unknown>): void;
+  awaitId(id: number, timeoutMs?: number): Promise<JsonRpcResponse>;
+}
+
+/**
+ * Wire a JSON-RPC dispatcher around a child process's stdio. Lines on
+ * stdout are parsed as JSON-RPC responses; awaiters keyed by request id
+ * resolve when their matching response arrives.
+ */
+function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher {
+  const waiters = new Map<number, (r: JsonRpcResponse) => void>();
+  const buffered: JsonRpcResponse[] = [];
+  let buffer = '';
+  child.stdout.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString('utf8');
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as JsonRpcResponse;
+        const rid = typeof parsed.id === 'number' ? parsed.id : null;
+        if (rid !== null && waiters.has(rid)) {
+          waiters.get(rid)!(parsed);
+          waiters.delete(rid);
+        } else {
+          buffered.push(parsed);
+        }
+      } catch {
+        // skip non-JSON lines
+      }
+    }
+  });
+
+  return {
+    send(payload) {
+      child.stdin.write(JSON.stringify(payload) + '\n');
+    },
+    awaitId(id, timeoutMs = 10_000) {
+      // Drain buffered responses for late-bound waiters.
+      const buffered_match = buffered.findIndex((r) => r.id === id);
+      if (buffered_match >= 0) {
+        const r = buffered.splice(buffered_match, 1)[0];
+        return Promise.resolve(r);
+      }
+      return new Promise<JsonRpcResponse>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          waiters.delete(id);
+          reject(new Error(`timeout awaiting id=${id}`));
+        }, timeoutMs);
+        waiters.set(id, (r) => {
+          clearTimeout(timer);
+          resolve(r);
+        });
+      });
+    },
+  };
+}
+
+describe('integration: MCP handshake (subprocess)', () => {
+  it('handles initialize → tools/list → tool calls and exits cleanly on stdin close', async () => {
+    if (!existsSync(distEntry)) {
+      throw new Error(`Build artefact not found at ${distEntry}; run npm run build first.`);
+    }
+
+    // Build a temp project so writes don't pollute the committed fixture.
+    const projectRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-'));
+    cpSync(jsTsMinimal, projectRoot, { recursive: true });
+    tmpDirs.push(projectRoot);
+
+    const runId = 'mcp-handshake-test';
+    const child = spawn(process.execPath, [distEntry], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        GAN_RUN_ID: runId,
+      },
+      cwd: projectRoot,
+    });
+    liveChildren.push(child);
+
+    const stderrChunks: string[] = [];
+    child.stderr.on('data', (c: Buffer) => stderrChunks.push(c.toString('utf8')));
+
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.on('exit', (code, signal) => resolve({ code, signal }));
+      },
+    );
+
+    const rpc = dispatcherFor(child);
+
+    // 1. initialize
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        clientInfo: { name: 'mcp-handshake-test', version: '0.0.1' },
+        capabilities: {},
+      },
+    });
+    const init = await rpc.awaitId(1);
+    expect(init.error).toBeUndefined();
+
+    // 2. tools/list — assert every F2 tool name present.
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    });
+    const list = (await rpc.awaitId(2)) as JsonRpcResponse & {
+      result: { tools: Array<{ name: string; inputSchema: unknown }> };
+    };
+    const names = list.result.tools.map((t) => t.name).sort();
+    expect(names).toEqual([...F2_TOOL_NAMES].sort());
+
+    // 3a. Representative read tool: getResolvedConfig.
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: {
+        name: 'getResolvedConfig',
+        arguments: { projectRoot },
+      },
+    });
+    const readResp = (await rpc.awaitId(3)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(readResp.error).toBeUndefined();
+    expect(readResp.result.isError).toBeFalsy();
+    const readPayload = JSON.parse(readResp.result.content[0].text) as Record<string, unknown>;
+    expect(readPayload.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
+    expect(readPayload.schemaVersions).toEqual({ stack: 1, overlay: 1 });
+
+    // 3b. Representative write tool: setOverlayField against the temp fixture.
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: {
+        name: 'setOverlayField',
+        arguments: {
+          projectRoot,
+          tier: 'project',
+          fieldPath: 'planner.additionalContext',
+          value: ['docs/notes.md'],
+        },
+      },
+    });
+    const writeResp = (await rpc.awaitId(4)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(writeResp.result.isError).toBeFalsy();
+    const writePayload = JSON.parse(writeResp.result.content[0].text) as Record<string, unknown>;
+    expect(writePayload.mutated).toBe(true);
+    expect(typeof writePayload.path).toBe('string');
+
+    // 4. Per-run log file present and well-formed.
+    const expectedLogPath = path.join(
+      projectRoot,
+      '.gan-state',
+      'runs',
+      runId,
+      'logs',
+      'config-server.log',
+    );
+    expect(existsSync(expectedLogPath)).toBe(true);
+    const logText = readFileSync(expectedLogPath, 'utf8');
+    // Every dispatched tool emitted at least one log line referencing it.
+    expect(logText).toContain('"tool": "getResolvedConfig"');
+    expect(logText).toContain('"tool": "setOverlayField"');
+    // Anonymisation contract: the overlay value we sent must never
+    // appear verbatim in the log (the dispatcher echoes only the
+    // anonymised arg shape).
+    expect(logText).not.toContain('docs/notes.md');
+    expect(logText).not.toContain('"value"'); // forbidden meta key
+    expect(logText).not.toContain('"trustHash"');
+
+    // 5. Close stdin → subprocess exits cleanly.
+    child.stdin.end();
+    const exitInfo = await Promise.race([
+      exitPromise,
+      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+        setTimeout(() => resolve({ code: -1, signal: 'TIMEOUT' as NodeJS.Signals }), 5_000),
+      ),
+    ]);
+    if (exitInfo.signal === ('TIMEOUT' as NodeJS.Signals)) {
+      // Failsafe: kill the child so the test cleanup doesn't leak. Then
+      // surface a clear failure.
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+      throw new Error(
+        `subprocess did not exit within 5s of stdin close; stderr: ${stderrChunks.join('')}`,
+      );
+    }
+    expect(exitInfo.code === 0 || exitInfo.signal !== null).toBe(true);
+  }, 30_000);
+});

@@ -184,14 +184,18 @@ export async function createMcpServer(): Promise<Server> {
 
     try {
       const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      logger.info('tools/call: start', {
+        tool: toolName,
+        anonymisedArgs: anonymiseToolArgs(args),
+      });
       const result = await dispatchRead(toolName, args, logger);
       if (result !== UNHANDLED) {
         logger.info('tools/call: ok', { tool: toolName, code: 'OK' });
         return successResponse(result);
       }
 
-      // Tools not yet wired (writes, getStackConventions, getOverlayField)
-      // remain `NotImplemented` until their owning sprints land.
+      // Tools not yet wired (getStackConventions, getOverlayField) remain
+      // `NotImplemented` until their owning sprints land.
       throw createError('NotImplemented', { tool: toolName });
     } catch (e) {
       const err =
@@ -232,11 +236,12 @@ const UNHANDLED = Symbol('unhandled');
 type Unhandled = typeof UNHANDLED;
 
 /**
- * Dispatch the S2 read surface plus the S3 validate surface. Returns the
- * tool result, or the `UNHANDLED` sentinel for tool names this sprint
- * hasn't wired (writes, plus `getStackConventions` / `getOverlayField`
- * deferred past S2). Input validation throws via `createError(
- * 'MalformedInput', …)` and is caught upstream.
+ * Dispatch every wired F2 tool — reads (S2 + S5), writes (S6), and the
+ * three validate paths (S3 + S4). Returns the tool result, or the
+ * `UNHANDLED` sentinel for the two reads still deferred past S2
+ * (`getStackConventions` / `getOverlayField`); the caller turns
+ * `UNHANDLED` into a `NotImplemented` error. Input validation throws via
+ * `createError('MalformedInput', …)` and is caught upstream.
  */
 async function dispatchRead(
   toolName: string,
@@ -402,6 +407,58 @@ function requireFieldPath(args: Record<string, unknown>, tool: string): string {
 
 function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
   return args[key];
+}
+
+/**
+ * Build an anonymised view of the tool's input arguments suitable for the
+ * per-call start log. Per F4 + the centralised log-routing rule, we never
+ * echo `value` payloads, overlay contents, trust hashes, or `manifest`
+ * blobs. We log only field *names* (the safe metadata) plus identifiers
+ * the user already shares (`projectRoot`, `name`, `tier`, `fieldPath`).
+ *
+ * The forbidden-key set in `logger.sanitiseMeta` only strips *top-level*
+ * meta keys (e.g. a stray `value` passed alongside `tool`), so we
+ * deliberately rebrand the anonymised slots here: the redacted
+ * description is keyed under `valueShape` / `manifestShape` / etc., never
+ * `value` / `manifest` / `state` / `trustHash` / `contentHash`. This way
+ * even if a downstream consumer flattens the anonymisedArgs dict, the
+ * redacted entries cannot collide with the forbidden top-level names.
+ */
+function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(args)) {
+    if (k === 'value') {
+      out['valueShape'] = describeRedactedShape(args[k]);
+      continue;
+    }
+    if (k === 'state') {
+      out['stateShape'] = describeRedactedShape(args[k]);
+      continue;
+    }
+    if (k === 'manifest') {
+      out['manifestShape'] = describeRedactedShape(args[k]);
+      continue;
+    }
+    if (k === 'contentHash' || k === 'trustHash' || k === 'hash') {
+      out['hashPresent'] = typeof args[k] === 'string';
+      continue;
+    }
+    if (k === 'projectRoot' || k === 'name' || k === 'tier' || k === 'fieldPath') {
+      out[k] = args[k];
+      continue;
+    }
+    // Unknown keys: echo presence only, never the raw value. Rename to
+    // `<key>Shape` so this branch can never resurrect a forbidden name.
+    out[`${k}Shape`] = describeRedactedShape(args[k]);
+  }
+  return out;
+}
+
+function describeRedactedShape(v: unknown): string {
+  if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
+  if (Array.isArray(v)) return `array(len=${v.length})`;
+  return typeof v;
 }
 
 function optionalContentHash(args: Record<string, unknown>): string | undefined {

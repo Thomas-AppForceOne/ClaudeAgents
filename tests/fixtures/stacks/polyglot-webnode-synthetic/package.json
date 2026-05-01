@@ -1,0 +1,10 @@
+{
+  "name": "polyglot-webnode-synthetic-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo build",
+    "start": "echo start",
+    "dev": "echo dev"
+  }
+}
