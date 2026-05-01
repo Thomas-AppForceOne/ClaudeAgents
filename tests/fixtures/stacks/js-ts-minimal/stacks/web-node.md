@@ -2,9 +2,9 @@
 name: web-node
 schemaVersion: 1
 detection:
-  anyOf:
-    - package.json
-    - tsconfig.json
+  - anyOf:
+      - package.json
+      - tsconfig.json
 scope:
   - "**/*.ts"
   - "**/*.tsx"

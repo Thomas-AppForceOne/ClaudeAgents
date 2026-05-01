@@ -3,12 +3,14 @@
  * @claudeagents/config-server — MCP server bootstrap.
  *
  * Registers handlers for every F2 tool name. Reads are wired in S2 — see
- * `tools/reads.ts` for direct-library entry points. Writes, `validateAll`,
- * and the two reads deferred past S2 (`getStackConventions`,
- * `getOverlayField`) still throw `NotImplemented` via the central error
- * factory. Trust reads ship as loud-stubs (R5 lands real trust); module
- * reads are no-ops (M1 lands real modules). Real cascade and dispatch
- * lands in S5; invariants in S4; writes in S3.
+ * `tools/reads.ts` for direct-library entry points. The three validate
+ * tools (`validateAll`, `validateStack`, `validateOverlay`) are wired in
+ * S3 — see `tools/validate.ts`. Writes and the two reads deferred past
+ * S2 (`getStackConventions`, `getOverlayField`) still throw
+ * `NotImplemented` via the central error factory. Trust reads ship as
+ * loud-stubs (R5 lands real trust); module reads are no-ops (M1 lands
+ * real modules). Real cascade and dispatch lands in S5; cross-file
+ * invariants (validateAll's phase 3) in S4; writes in S6.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -37,6 +39,11 @@ import {
   requireOverlayTier,
   requireProjectRoot,
 } from './tools/reads.js';
+import {
+  validateAll as runValidateAll,
+  validateOverlay as runValidateOverlay,
+  validateStack as runValidateStack,
+} from './tools/validate.js';
 
 /** F2 tool names. The list is deliberately exhaustive; see `apiToolsV1`. */
 export const F2_TOOL_NAMES: readonly string[] = [
@@ -169,8 +176,8 @@ export async function createMcpServer(): Promise<Server> {
         return successResponse(result);
       }
 
-      // Tools not yet wired in S2 (writes, validate, getStackConventions,
-      // getOverlayField) remain `NotImplemented`.
+      // Tools not yet wired (writes, getStackConventions, getOverlayField)
+      // remain `NotImplemented` until their owning sprints land.
       throw createError('NotImplemented', { tool: toolName });
     } catch (e) {
       const err =
@@ -211,10 +218,11 @@ const UNHANDLED = Symbol('unhandled');
 type Unhandled = typeof UNHANDLED;
 
 /**
- * Dispatch the S2 read surface. Returns the tool result, or the `UNHANDLED`
- * sentinel for tool names this sprint hasn't wired (writes, validate, and
- * the two read tools deferred past S2). Input validation throws via
- * `createError('MalformedInput', …)` and is caught upstream.
+ * Dispatch the S2 read surface plus the S3 validate surface. Returns the
+ * tool result, or the `UNHANDLED` sentinel for tool names this sprint
+ * hasn't wired (writes, plus `getStackConventions` / `getOverlayField`
+ * deferred past S2). Input validation throws via `createError(
+ * 'MalformedInput', …)` and is caught upstream.
  */
 async function dispatchRead(
   toolName: string,
@@ -268,6 +276,20 @@ async function dispatchRead(
     case 'listModules': {
       const projectRoot = requireProjectRoot(args, toolName);
       return readListModules({ projectRoot });
+    }
+    case 'validateAll': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return runValidateAll({ projectRoot });
+    }
+    case 'validateStack': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      return runValidateStack({ projectRoot, name });
+    }
+    case 'validateOverlay': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const tier = requireOverlayTier(args, toolName);
+      return runValidateOverlay({ projectRoot, tier });
     }
     default:
       return UNHANDLED;
