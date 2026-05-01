@@ -3,14 +3,14 @@
  * @claudeagents/config-server — MCP server bootstrap.
  *
  * Registers handlers for every F2 tool name. Reads are wired in S2 — see
- * `tools/reads.ts` for direct-library entry points. The three validate
- * tools (`validateAll`, `validateStack`, `validateOverlay`) are wired in
- * S3 — see `tools/validate.ts`. Writes and the two reads deferred past
- * S2 (`getStackConventions`, `getOverlayField`) still throw
- * `NotImplemented` via the central error factory. Trust reads ship as
- * loud-stubs (R5 lands real trust); module reads are no-ops (M1 lands
- * real modules). Real cascade and dispatch lands in S5; cross-file
- * invariants (validateAll's phase 3) in S4; writes in S6.
+ * `tools/reads.ts`. The three validate tools (`validateAll`,
+ * `validateStack`, `validateOverlay`) were wired in S3 — see
+ * `tools/validate.ts`. Writes are wired in S6 — see `tools/writes.ts`.
+ * The two reads deferred past S2 (`getStackConventions`,
+ * `getOverlayField`) still throw `NotImplemented` via the central error
+ * factory; they ship in a later sprint. Trust writes ship as OQ1
+ * loud-stubs (R5 lands real trust); module writes are no-ops (M1 lands
+ * real modules).
  */
 
 import { readFile } from 'node:fs/promises';
@@ -44,6 +44,20 @@ import {
   validateOverlay as runValidateOverlay,
   validateStack as runValidateStack,
 } from './tools/validate.js';
+import {
+  appendToModuleState as runAppendToModuleState,
+  appendToOverlayField as runAppendToOverlayField,
+  appendToStackField as runAppendToStackField,
+  registerModule as runRegisterModule,
+  removeFromModuleState as runRemoveFromModuleState,
+  removeFromOverlayField as runRemoveFromOverlayField,
+  removeFromStackField as runRemoveFromStackField,
+  setModuleState as runSetModuleState,
+  setOverlayField as runSetOverlayField,
+  trustApprove as runTrustApprove,
+  trustRevoke as runTrustRevoke,
+  updateStackField as runUpdateStackField,
+} from './tools/writes.js';
 
 /** F2 tool names. The list is deliberately exhaustive; see `apiToolsV1`. */
 export const F2_TOOL_NAMES: readonly string[] = [
@@ -291,9 +305,108 @@ async function dispatchRead(
       const tier = requireOverlayTier(args, toolName);
       return runValidateOverlay({ projectRoot, tier });
     }
+    case 'setOverlayField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const tier = requireOverlayTier(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runSetOverlayField({ projectRoot, tier, fieldPath, value });
+    }
+    case 'appendToOverlayField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const tier = requireOverlayTier(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runAppendToOverlayField({ projectRoot, tier, fieldPath, value });
+    }
+    case 'removeFromOverlayField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const tier = requireOverlayTier(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runRemoveFromOverlayField({ projectRoot, tier, fieldPath, value });
+    }
+    case 'updateStackField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runUpdateStackField({ projectRoot, name, fieldPath, value });
+    }
+    case 'appendToStackField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runAppendToStackField({ projectRoot, name, fieldPath, value });
+    }
+    case 'removeFromStackField': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runRemoveFromStackField({ projectRoot, name, fieldPath, value });
+    }
+    case 'trustApprove': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const contentHash = optionalContentHash(args);
+      return runTrustApprove({ projectRoot, contentHash }, { logger });
+    }
+    case 'trustRevoke': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const contentHash = optionalContentHash(args);
+      return runTrustRevoke({ projectRoot, contentHash }, { logger });
+    }
+    case 'setModuleState': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const state = readValue(args, 'state');
+      return runSetModuleState({ projectRoot, name, state });
+    }
+    case 'appendToModuleState': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runAppendToModuleState({ projectRoot, name, fieldPath, value });
+    }
+    case 'removeFromModuleState': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const fieldPath = requireFieldPath(args, toolName);
+      const value = readValue(args);
+      return runRemoveFromModuleState({ projectRoot, name, fieldPath, value });
+    }
+    case 'registerModule': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      const manifest = readValue(args, 'manifest');
+      return runRegisterModule({ projectRoot, name, manifest });
+    }
     default:
       return UNHANDLED;
   }
+}
+
+/** Validate that `fieldPath` is a non-empty string; throw `MalformedInput` otherwise. */
+function requireFieldPath(args: Record<string, unknown>, tool: string): string {
+  const fp = args['fieldPath'];
+  if (typeof fp !== 'string' || fp.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      message: `Tool '${tool}' requires a non-empty 'fieldPath' string in its input.`,
+    });
+  }
+  return fp;
+}
+
+function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
+  return args[key];
+}
+
+function optionalContentHash(args: Record<string, unknown>): string | undefined {
+  const v = args['contentHash'];
+  return typeof v === 'string' ? v : undefined;
 }
 
 /** Run the server over stdio. Resolves when stdin closes. */
