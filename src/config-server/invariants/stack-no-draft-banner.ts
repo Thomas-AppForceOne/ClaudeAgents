@@ -18,10 +18,9 @@
  */
 
 import { createError } from '../errors.js';
+import { DRAFT_BANNER } from '../scaffold-banner.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
-
-const DRAFT_BANNER = '# DRAFT — replace TODOs before committing.';
 
 export function checkStackNoDraftBanner(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];

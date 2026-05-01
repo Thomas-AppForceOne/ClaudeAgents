@@ -29,10 +29,12 @@ import * as configPrintCmd from './commands/config-print.js';
 import * as configGetCmd from './commands/config-get.js';
 import * as configSetCmd from './commands/config-set.js';
 import * as stacksListCmd from './commands/stacks-list.js';
+import * as stacksNewCmd from './commands/stacks-new.js';
 import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
-import { makeNotYetStub, trustStub } from './commands/_stubs.js';
+import * as validateCmd from './commands/validate.js';
+import { trustStub } from './commands/_stubs.js';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type ParsedArgs } from './lib/args.js';
 import { renderTopLevelHelp } from './lib/help.js';
 import { writeErr, writeOut } from './lib/output.js';
@@ -92,7 +94,7 @@ async function stacksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
     case 'list':
       return stacksListCmd.run(tail);
     case 'new':
-      return makeNotYetStub('gan stacks new')(tail);
+      return stacksNewCmd.run(tail);
     case undefined:
       return {
         stdout: '',
@@ -178,7 +180,7 @@ async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
 const SUBCOMMANDS: Readonly<Record<string, Subcommand>> = Object.freeze({
   version: versionCmd.run,
   help: helpCmd.run,
-  validate: makeNotYetStub('gan validate'),
+  validate: validateCmd.run,
   config: configDispatch,
   stacks: stacksDispatch,
   stack: stackDispatch,

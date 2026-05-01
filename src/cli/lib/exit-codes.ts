@@ -55,3 +55,44 @@ export function exitCodeFor(errorCode: string | undefined): number {
   }
   return EXIT_GENERIC;
 }
+
+/**
+ * F2-shaped issue, narrowed to the fields this module needs. We re-declare
+ * the interface here (rather than importing from `validation/schema-check`)
+ * so this file stays a leaf module: it owns the exit-code table without
+ * pulling in any validation runtime.
+ */
+export interface IssueLike {
+  code: string;
+  severity?: 'error' | 'warning';
+}
+
+/**
+ * Map a list of issues from `validateAll()` to a single CLI exit code.
+ *
+ * The rules below match the contract for `gan validate`:
+ *
+ *   - empty list                  → `EXIT_OK` (0)
+ *   - any `InvariantViolation`    → `EXIT_INVARIANT_VIOLATION` (4)
+ *   - any other issue (incl. SchemaMismatch) → `EXIT_VALIDATION` (2)
+ *
+ * `InvariantViolation` wins because invariant failures are a strict
+ * superset of "this project will not work" — a project that violates an
+ * invariant always has a more important problem than one that merely has
+ * a schema mismatch in one file.
+ *
+ * Note: `EXIT_SCHEMA_MISMATCH` (3) is reserved for non-issue paths — e.g.
+ * a `schemaVersion` mismatch surfacing as a `ConfigServerError` from the
+ * library. Per-file `SchemaMismatch` issues from `validateAll()` flow
+ * through the validation bucket because the report on stdout already
+ * names the offending file and field.
+ *
+ * Issues with `severity === 'warning'` are ignored for exit-code purposes:
+ * warnings are advisory (per C2's empty-scope rule, dispatch invariants).
+ */
+export function exitCodeForIssues(issues: readonly IssueLike[]): number {
+  const errors = issues.filter((i) => (i.severity ?? 'error') === 'error');
+  if (errors.length === 0) return EXIT_OK;
+  if (errors.some((i) => i.code === 'InvariantViolation')) return EXIT_INVARIANT_VIOLATION;
+  return EXIT_VALIDATION;
+}

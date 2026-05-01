@@ -16,7 +16,15 @@
  * fixture script that does exactly that and feed it through `runGan`'s
  * `entryOverride`.
  */
-import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +116,32 @@ function buildBrokenDist(): string {
     'export function getApiVersion(): Promise<{apiVersion:string}>;\n',
   );
 
+  // S4 introduces `gan stacks new`, which imports `atomicWriteFile` from
+  // `../../config-server/storage/atomic-write.js` directly (the writer is
+  // not re-exported from the package main). Provide a stand-in so the
+  // dispatcher's static import graph resolves; the function throws on
+  // call so `gan stacks new` surfaces exit 5 under the unreachable path.
+  const csStorageDir = path.join(csDir, 'storage');
+  mkdirSync(csStorageDir, { recursive: true });
+  writeFileSync(
+    path.join(csStorageDir, 'atomic-write.js'),
+    `export function atomicWriteFile() { throw new Error('framework library missing (test stub)'); }\n`,
+  );
+  writeFileSync(
+    path.join(csStorageDir, 'atomic-write.d.ts'),
+    'export function atomicWriteFile(target: string, content: string): void;\n',
+  );
+  // The S4 scaffold helper re-exports `DRAFT_BANNER` from R1's canonical
+  // single-source module. Stub it so `dist/cli/lib/scaffold.js` loads.
+  writeFileSync(
+    path.join(csDir, 'scaffold-banner.js'),
+    `export const DRAFT_BANNER = '# DRAFT (test-stub)';\n`,
+  );
+  writeFileSync(
+    path.join(csDir, 'scaffold-banner.d.ts'),
+    'export const DRAFT_BANNER: string;\n',
+  );
+
   // Stand-in for `dist/index.js` (the package main re-export point that
   // S2's read commands import from). Every exported read function throws
   // a plain `Error`; the CLI's `errorResult` helper treats anything other
@@ -134,6 +168,8 @@ function buildBrokenDist(): string {
       // commands surface exit 5 when the framework library is missing.
       'export const setOverlayField = unreachable;',
       'export const updateStackField = unreachable;',
+      // S4: `gan validate` imports `validateAll` from the package main.
+      'export const validateAll = unreachable;',
       'export { getApiVersion } from "./config-server/index.js";',
       '',
     ].join('\n'),
