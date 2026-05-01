@@ -130,6 +130,10 @@ function buildBrokenDist(): string {
       'export const getModuleState = unreachable;',
       'export const getTrustState = unreachable;',
       'export const getTrustDiff = unreachable;',
+      // S3 write entry points: same unreachable shape so the CLI's write
+      // commands surface exit 5 when the framework library is missing.
+      'export const setOverlayField = unreachable;',
+      'export const updateStackField = unreachable;',
       'export { getApiVersion } from "./config-server/index.js";',
       '',
     ].join('\n'),
@@ -219,6 +223,31 @@ describe('gan: framework library unreachable', () => {
       argv: [
         'modules',
         'list',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    // S3 write subcommands surface the same exit-5 / install.sh hint
+    // when the framework library is unreachable.
+    {
+      name: 'config set',
+      argv: [
+        'config',
+        'set',
+        'runner.thresholdOverride',
+        '8',
+        '--project-root',
+        path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
+      ],
+    },
+    {
+      name: 'stack update',
+      argv: [
+        'stack',
+        'update',
+        'web-node',
+        'lintCmd',
+        'whatever',
         '--project-root',
         path.join(repoRoot, 'tests/fixtures/stacks/js-ts-minimal'),
       ],

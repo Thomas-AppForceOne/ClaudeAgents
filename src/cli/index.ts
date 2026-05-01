@@ -27,8 +27,10 @@ import * as helpCmd from './commands/help.js';
 import * as versionCmd from './commands/version.js';
 import * as configPrintCmd from './commands/config-print.js';
 import * as configGetCmd from './commands/config-get.js';
+import * as configSetCmd from './commands/config-set.js';
 import * as stacksListCmd from './commands/stacks-list.js';
 import * as stackShowCmd from './commands/stack-show.js';
+import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
 import { makeNotYetStub, trustStub } from './commands/_stubs.js';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type ParsedArgs } from './lib/args.js';
@@ -45,8 +47,8 @@ interface CommandResult {
 type Subcommand = (parsed: ParsedArgs) => Promise<CommandResult>;
 
 /**
- * Inner dispatch for `gan config <print|get|set>`. The S2 read arms are
- * real; `set` remains a stub until S3.
+ * Inner dispatch for `gan config <print|get|set>`. All three arms are real
+ * after S3.
  */
 async function configDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   const inner = parsed._[0];
@@ -61,7 +63,7 @@ async function configDispatch(parsed: ParsedArgs): Promise<CommandResult> {
     case 'get':
       return configGetCmd.run(tail);
     case 'set':
-      return makeNotYetStub('gan config set')(tail);
+      return configSetCmd.run(tail);
     case undefined:
       return {
         stdout: '',
@@ -107,7 +109,7 @@ async function stacksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   }
 }
 
-/** Inner dispatch for `gan stack <show|update> <name>`. `update` ships in S3. */
+/** Inner dispatch for `gan stack <show|update> <name>`. Both arms are real after S3. */
 async function stackDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   const inner = parsed._[0];
   const tail: ParsedArgs = {
@@ -119,7 +121,7 @@ async function stackDispatch(parsed: ParsedArgs): Promise<CommandResult> {
     case 'show':
       return stackShowCmd.run(tail);
     case 'update':
-      return makeNotYetStub('gan stack update')(tail);
+      return stackUpdateCmd.run(tail);
     case undefined:
       return {
         stdout: '',

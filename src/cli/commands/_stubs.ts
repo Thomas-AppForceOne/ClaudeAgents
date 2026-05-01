@@ -1,18 +1,19 @@
 /**
  * R3 sprint 1 — placeholder dispatcher arms for subcommands that ship in
- * S3-S4 (and the trust subcommand surface that ships with R5).
+ * a later sprint (and the trust subcommand surface that ships with R5).
  *
- * S2 (read subcommands) replaced these stub arms with real handlers:
- *   - `gan config print`, `gan config get`
+ * S2 (read subcommands) and S3 (write subcommands) replaced their stub
+ * arms with real handlers:
+ *   - `gan config print`, `gan config get`, `gan config set`
  *   - `gan stacks list`
- *   - `gan stack show`
+ *   - `gan stack show`, `gan stack update`
  *   - `gan modules list`
  *
- * The remaining stubs surface the writes (`config set`, `stack update`)
- * and the not-yet-implemented `stacks new` (S4) and `validate` (S4)
- * arms — plus R5's `trust` surface. Each stub prints a short stderr
- * message and exits 1. The trust stub names R5 explicitly; the S3-S4
- * stubs use the canonical "not yet implemented in this sprint" wording.
+ * The remaining stubs surface the not-yet-implemented `stacks new` (S4)
+ * and `validate` (S4) arms — plus R5's `trust` surface. Each stub prints
+ * a short stderr message and exits 1. The trust stub names R5 explicitly;
+ * the S4 stubs use the canonical "not yet implemented in this sprint"
+ * wording.
  */
 
 import { EXIT_GENERIC } from '../lib/exit-codes.js';

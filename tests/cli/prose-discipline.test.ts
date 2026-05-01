@@ -14,7 +14,10 @@
  * the source so help text generated dynamically (e.g. interpolated
  * subcommand names) is also checked.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
 
@@ -155,6 +158,127 @@ describe('CLI prose discipline (F4 backstop)', () => {
       if (violations.length > 0) {
         throw new Error(
           `F4 prose violations in error surface for argv=${JSON.stringify(c.argv)}:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+  });
+
+  // S3 extension — write subcommands' renderer prose obeys discipline.
+  // We use a tmp project (write commands must not mutate the in-tree
+  // fixture). The success surface ("Updated <path> to <value> in <tier>
+  // overlay.") quotes user input in backticks so even if a user wrote a
+  // literal `npm` the backtick-wrap defuses the regex; the renderer
+  // prose itself contains no banned tokens.
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs.splice(0)) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  function makeTmpProject(): string {
+    const fixture = stackFixturePath('js-ts-minimal');
+    const dir = mkdtempSync(path.join(tmpdir(), 'gan-cli-prose-'));
+    cpSync(fixture, dir, { recursive: true });
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it('S3 write success-surface prose obeys discipline', async () => {
+    const proj = makeTmpProject();
+    // config set success.
+    const setR = await runGan([
+      'config',
+      'set',
+      'runner.thresholdOverride',
+      '8',
+      '--project-root',
+      proj,
+    ]);
+    {
+      const violations = findViolations(setR.stdout + setR.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in config-set success surface:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+    // stack update success — use a value the backtick wrap will neutralise
+    // any banned tokens in (`vitest run` is fine on its own).
+    const updR = await runGan([
+      'stack',
+      'update',
+      'web-node',
+      'lintCmd',
+      'vitest run',
+      '--project-root',
+      proj,
+    ]);
+    {
+      const violations = findViolations(updR.stdout + updR.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in stack-update success surface:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+  });
+
+  it('S3 write error surfaces obey prose discipline', async () => {
+    const proj = makeTmpProject();
+    const cases: Array<{ argv: string[] }> = [
+      // Missing args.
+      { argv: ['config', 'set', '--project-root', proj] },
+      { argv: ['config', 'set', 'runner.thresholdOverride', '--project-root', proj] },
+      { argv: ['stack', 'update', '--project-root', proj] },
+      { argv: ['stack', 'update', 'web-node', '--project-root', proj] },
+      // Invalid --tier values.
+      {
+        argv: [
+          'config',
+          'set',
+          'runner.thresholdOverride',
+          '8',
+          '--tier=repo',
+          '--project-root',
+          proj,
+        ],
+      },
+      {
+        argv: [
+          'config',
+          'set',
+          'runner.thresholdOverride',
+          '8',
+          '--tier=default',
+          '--project-root',
+          proj,
+        ],
+      },
+      // Schema-violating writes for overlay → renderer prose only (no
+      // stack-file path leaks). The stack-update path embeds the stack
+      // file's absolute path in error output (e.g. `…/stacks/web-node.md`)
+      // which contains user-provided ecosystem tokens; we skip those for
+      // the same reason `stack show` is skipped above (user content, not
+      // renderer prose).
+      {
+        argv: ['config', 'set', 'unknownTopLevelKey', '"bogus"', '--project-root', proj],
+      },
+    ];
+    for (const c of cases) {
+      const r = await runGan(c.argv);
+      const violations = findViolations(r.stdout + r.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in S3 error surface for argv=${JSON.stringify(c.argv)}:\n` +
             violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
         );
       }
