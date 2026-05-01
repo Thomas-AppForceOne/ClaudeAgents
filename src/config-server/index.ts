@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * @claudeagents/config-server — MCP server bootstrap (R1 sprint 1 skeleton).
+ * @claudeagents/config-server — MCP server bootstrap.
  *
- * Registers a stub handler for every F2 tool name. Only `getApiVersion`
- * returns real data (the package's semver, read from `package.json`); every
- * other tool throws `NotImplemented` via the central error factory. Real
- * read paths land in S2; trust + module surfaces ship as loud-stubs in S2;
- * write paths land in S3+; invariants in S4; resolution in S5+.
+ * Registers handlers for every F2 tool name. Reads are wired in S2 — see
+ * `tools/reads.ts` for direct-library entry points. Writes, `validateAll`,
+ * and the two reads deferred past S2 (`getStackConventions`,
+ * `getOverlayField`) still throw `NotImplemented` via the central error
+ * factory. Trust reads ship as loud-stubs (R5 lands real trust); module
+ * reads are no-ops (M1 lands real modules). Real cascade and dispatch
+ * lands in S5; invariants in S4; writes in S3.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -20,6 +22,21 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { createError, ConfigServerError } from './errors.js';
 import { getLogger } from './logging/logger.js';
 import { apiToolsV1 } from './schemas-bundled.js';
+import {
+  getActiveStacks as readGetActiveStacks,
+  getMergedSplicePoints as readGetMergedSplicePoints,
+  getModuleState as readGetModuleState,
+  getOverlay as readGetOverlay,
+  getResolvedConfig as readGetResolvedConfig,
+  getStack as readGetStack,
+  getStackResolution as readGetStackResolution,
+  getTrustDiff as readGetTrustDiff,
+  getTrustState as readGetTrustState,
+  listModules as readListModules,
+  requireName,
+  requireOverlayTier,
+  requireProjectRoot,
+} from './tools/reads.js';
 
 /** F2 tool names. The list is deliberately exhaustive; see `apiToolsV1`. */
 export const F2_TOOL_NAMES: readonly string[] = [
@@ -145,13 +162,15 @@ export async function createMcpServer(): Promise<Server> {
     }
 
     try {
-      if (toolName === 'getApiVersion') {
-        const result = await getApiVersion();
+      const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      const result = await dispatchRead(toolName, args, logger);
+      if (result !== UNHANDLED) {
         logger.info('tools/call: ok', { tool: toolName, code: 'OK' });
         return successResponse(result);
       }
 
-      // Every other tool is a sprint-1 stub.
+      // Tools not yet wired in S2 (writes, validate, getStackConventions,
+      // getOverlayField) remain `NotImplemented`.
       throw createError('NotImplemented', { tool: toolName });
     } catch (e) {
       const err =
@@ -185,6 +204,74 @@ function errorResponse(err: ConfigServerError): {
     content: [{ type: 'text', text: JSON.stringify(err.toJSON()) }],
     isError: true,
   };
+}
+
+/** Sentinel returned by `dispatchRead` when the named tool is not handled. */
+const UNHANDLED = Symbol('unhandled');
+type Unhandled = typeof UNHANDLED;
+
+/**
+ * Dispatch the S2 read surface. Returns the tool result, or the `UNHANDLED`
+ * sentinel for tool names this sprint hasn't wired (writes, validate, and
+ * the two read tools deferred past S2). Input validation throws via
+ * `createError('MalformedInput', …)` and is caught upstream.
+ */
+async function dispatchRead(
+  toolName: string,
+  args: Record<string, unknown>,
+  logger: ReturnType<typeof getLogger>,
+): Promise<unknown | Unhandled> {
+  switch (toolName) {
+    case 'getApiVersion': {
+      return getApiVersion();
+    }
+    case 'getResolvedConfig': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readGetResolvedConfig({ projectRoot });
+    }
+    case 'getStack': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      return readGetStack({ projectRoot, name });
+    }
+    case 'getActiveStacks': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readGetActiveStacks({ projectRoot });
+    }
+    case 'getOverlay': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const tier = requireOverlayTier(args, toolName);
+      return readGetOverlay({ projectRoot, tier });
+    }
+    case 'getMergedSplicePoints': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readGetMergedSplicePoints({ projectRoot });
+    }
+    case 'getStackResolution': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      return readGetStackResolution({ projectRoot, name });
+    }
+    case 'getTrustState': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readGetTrustState({ projectRoot }, { logger });
+    }
+    case 'getTrustDiff': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readGetTrustDiff({ projectRoot }, { logger });
+    }
+    case 'getModuleState': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      const name = requireName(args, toolName);
+      return readGetModuleState({ projectRoot, name });
+    }
+    case 'listModules': {
+      const projectRoot = requireProjectRoot(args, toolName);
+      return readListModules({ projectRoot });
+    }
+    default:
+      return UNHANDLED;
+  }
 }
 
 /** Run the server over stdio. Resolves when stdin closes. */
