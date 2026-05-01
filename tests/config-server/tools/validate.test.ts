@@ -21,6 +21,7 @@ const invalidSchemaMismatch = path.join(fixturesRoot, 'invalid-schema-mismatch')
 const invalidMalformedYaml = path.join(fixturesRoot, 'invalid-malformed-yaml');
 const invalidMissingFile = path.join(fixturesRoot, 'invalid-missing-file');
 const invalidStackResolution = path.join(fixturesRoot, 'invalid-stack-resolution');
+const invariantMultiViolation = path.join(fixturesRoot, 'invariant-multi-violation');
 
 function findIssue(issues: Issue[], predicate: (i: Issue) => boolean): Issue | undefined {
   return issues.find(predicate);
@@ -96,6 +97,29 @@ describe('validateAll', () => {
     // The invalid-schema-mismatch fixture has only one stack file; no overlay.
     // Sanity check that the pipeline returns issues without throwing.
     expect(() => validateAll({ projectRoot: invalidSchemaMismatch })).not.toThrow();
+  });
+
+  it('surfaces both invariants in one run for the invariant-multi-violation fixture', () => {
+    // The fixture combines two invariants:
+    //  - cacheEnv.no_conflict (NODE_VERSION 20 vs 22 across two built-in stacks)
+    //  - path.no_escape (proposer.additionalContext: ../../etc/passwd)
+    // Both must surface in a single validateAll() pass — phase 3 runs every
+    // invariant without short-circuit.
+    const result = validateAll({ projectRoot: invariantMultiViolation });
+    const cacheEnvFired = result.issues.find(
+      (i) =>
+        i.code === 'InvariantViolation' &&
+        (i.field ?? '') === '/cacheEnv' &&
+        i.message.includes('NODE_VERSION'),
+    );
+    const pathEscapeFired = result.issues.find(
+      (i) =>
+        i.code === 'InvariantViolation' &&
+        (i.field ?? '') === '/proposer/additionalContext' &&
+        i.message.includes('outside the project root'),
+    );
+    expect(cacheEnvFired).toBeTruthy();
+    expect(pathEscapeFired).toBeTruthy();
   });
 });
 

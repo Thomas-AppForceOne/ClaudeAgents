@@ -1,5 +1,5 @@
 /**
- * R1 sprint 3 — validation pipeline (phases 1 + 2; phase 3 stub).
+ * R1 sprint 4 — full validation pipeline (phases 1 + 2 + 3).
  *
  * Direct library entry points for the three F2 validation tools:
  *
@@ -12,8 +12,11 @@
  *         against `stackV1` / `overlayV1` via ajv. Multiple violations in
  *         one file are reported as multiple issues; a bad file does not
  *         halt the pipeline.
- *       phase 3 (cross-file invariants) → STUB. Returns `[]`. S4 will plug
- *         in `runAllInvariants(snapshot)` here without re-architecting.
+ *       phase 3 (cross-file invariants) → runs every R1-owned invariant
+ *         from `src/config-server/invariants/` via `runAllInvariants`.
+ *         Each invariant returns 0+ issues; all are collected (no
+ *         short-circuit). Order is the registry's deterministic order
+ *         (alphabetical by id).
  *
  *   - `validateStack({ projectRoot, name })` — single-stack equivalent:
  *       loads the named stack via the C5 three-tier resolver, runs phase 2
@@ -36,6 +39,7 @@ import path from 'node:path';
 
 import { canonicalizePath, localeSort } from '../determinism/index.js';
 import { ConfigServerError } from '../errors.js';
+import { runAllInvariants } from '../invariants/index.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import {
@@ -123,7 +127,7 @@ export function validateAll(
   const snapshot = createSnapshot(input.projectRoot);
   runPhase1Discovery(snapshot, ctx);
   runPhase2SchemaValidation(snapshot);
-  runPhase3InvariantsStub(snapshot);
+  runPhase3Invariants(snapshot);
   return { issues: snapshot.issues };
 }
 
@@ -422,23 +426,29 @@ function validateStackFileFromDisk(
   validateStackBodyAgainstSchema(filePath, data, issues);
 }
 
-// ---- phase 3: cross-file invariants (STUB) -------------------------------
+// ---- phase 3: cross-file invariants ---------------------------------------
 
 /**
- * Phase 3 — cross-file invariants. STUB.
+ * Phase 3 — cross-file invariants.
  *
- * TODO(R1-S4): implement `runAllInvariants(snapshot)` against the
- * F3-cataloged invariants (`pairs-with.consistency`, `cacheEnv.no_conflict`,
- * `additionalContext.path_resolves`, `path.no_escape`,
- * `overlay.tier_apiVersion`, `stack.tier_apiVersion`,
- * `detection.tier3_only`, `stack.no_draft_banner`). The shape of the
- * snapshot is fixed by S3 so S4 only needs to add the invariant call site
- * here without re-architecting the pipeline. Per the R1 single-
- * implementation rule, each invariant lives at exactly one path under
- * `src/config-server/invariants/<invariant-name>.ts`.
+ * Delegates to the registry under `src/config-server/invariants/` (per
+ * R1's single-implementation rule). Each invariant runs against the
+ * snapshot built by phases 1 + 2 and returns 0+ issues; the registry
+ * concatenates without short-circuit so a violating invariant does not
+ * mask later checks. Issues are merged into the snapshot's issue list
+ * after phase-2 issues so callers see a stable phase-1 → phase-2 →
+ * phase-3 ordering.
+ *
+ * The 8 R1-owned F3 invariants are: `pairsWith.consistency`,
+ * `cacheEnv.no_conflict`, `additionalContext.path_resolves`,
+ * `path.no_escape`, `overlay.tier_apiVersion`, `stack.tier_apiVersion`,
+ * `detection.tier3_only`, `stack.no_draft_banner`. The 9th catalogued
+ * invariant (`trust.approved`) is owned by R5 and is omitted until R5
+ * ships.
  */
-function runPhase3InvariantsStub(_snapshot: ValidationSnapshot): void {
-  // Intentionally empty until S4. See JSDoc above.
+function runPhase3Invariants(snapshot: ValidationSnapshot): void {
+  const produced = runAllInvariants(snapshot);
+  if (produced.length > 0) snapshot.issues.push(...produced);
 }
 
 // ---- helpers --------------------------------------------------------------
