@@ -19,6 +19,6 @@
     "allowImportingTsExtensions": false,
     "verbatimModuleSyntax": false
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": ["src/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "scripts"]
 }

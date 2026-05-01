@@ -18,11 +18,12 @@
     "schemas"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.scripts.json",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint-stacks": "node dist/scripts/lint-stacks/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
