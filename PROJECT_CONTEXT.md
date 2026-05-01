@@ -1,15 +1,27 @@
 # Project context
 
-_Last verified: 2026-04-30 by spec-validator (C5 stack-file-resolution contract validation; no implementation)_
+_Last verified: 2026-04-30 by spec-validator (R1 config-server tooling decisions persisted; OQ1–OQ10 locked)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
 ## Tech stack
 
 - **Spec authoring:** Markdown only. Specs live under `specifications/` with phase-coded filenames (F/C/R/E/M/U/O + S deferred).
-- **Future runtime tooling:** Node 18+ (R1 MCP server, R3 CLI wrapper, R4 maintainer scripts). Distributed via npm. No package manifest yet.
+- **Runtime tooling (R1-locked):**
+  - **Node engine:** `>=20.10.0 <23` (Node 20 LTS + Node 22 LTS; Node 18 EOL'd 2025-04).
+  - **Language:** TypeScript with real build step (`tsc -> dist/`); the published package is consumed by E1 / R3 / R4.
+  - **Module system:** ESM (`"type": "module"`).
+  - **Test runner:** vitest (ESM-first, fast, modern).
+  - **Linter:** eslint + `@typescript-eslint`.
+  - **Formatter:** prettier.
+  - **Type-checker:** `tsc --noEmit` in CI.
+  - **Pinned majors:** `@modelcontextprotocol/sdk@^1.29.0`, `picomatch@^4`, `ajv@^8`.
+  - Distributed via npm. R3 CLI wrapper and R4 maintainer scripts share this toolchain.
+- **Package identifiers (R1-locked):**
+  - Package name: `@claudeagents/config-server`.
+  - Bin name: `claudeagents-config-server`.
 - **Future installer:** Bash (`install.sh`). The current 138-line `.gan/`-based installer is legacy and will be rewritten in place by R2.
-- **Future schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). None on disk yet. F3 is meta-only; concrete schemas are authored by their owning domain spec — `stack-v1.json` by C1, `overlay-v1.json` by C3, `module-manifest-v1.json` by M1. The `schemas/` directory is created when its first occupant lands.
+- **Schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` (M1) lands when M1 ships. F3 is meta-only; concrete schemas are authored by their owning domain spec.
 - **Branch strategy:** Build on `feature/stack-plugin-rfc` through at least Phase 3. Do not merge to `main` mid-pivot. Merge gate is the post-E1 revision break (which also carries O2's prescriptive revision).
 
 ## Architecture
@@ -36,14 +48,25 @@ Current working tree (legacy, mostly slated for retirement):
 - `specifications/` — the spec set. Authoritative. Phase-coded filenames give natural execution order.
 - `specifications/deferred/` — authored-but-deferred S-series stack specs (Android, KMP, iOS Swift). Reactivation gated by criteria in `deferred/README.md`.
 
-End-state directories (not yet created):
+End-state directories (R1 introduces `src/config-server/` and `tests/`; others not yet created):
 
-- `src/config-server/` — R1 MCP server.
+- `src/config-server/` — R1 MCP server. Internal layout (R1-locked):
+  - `src/config-server/tools/` — MCP tool wrappers (one file per public API function).
+  - `src/config-server/storage/` — zone 1/2/3 file I/O.
+  - `src/config-server/resolution/` — overlay cascade (C4) and stack file resolution (C5).
+  - `src/config-server/invariants/` — one file per F3-cataloged cross-file invariant; single point of implementation (R4 imports, never re-implements).
+  - `src/config-server/determinism/` — centralized determinism pins (picomatch glob, `realpathSync.native` canonicalisation, sorted-key JSON, locale-sensitive sort). No duplicate implementations elsewhere.
+  - `src/config-server/logging/` — per-run log routing (`GAN_RUN_ID` env var routes to `.gan-state/runs/<id>/logs/config-server.log`; otherwise stderr).
+  - `src/config-server/errors.ts` — error factory; every error code from F2's enum is built here, no inline error construction.
 - `src/modules/<name>/` — runtime utility libraries (M1, M2).
 - `stacks/<name>.md` — repo-tier stack files (created by E2: `web-node` + `generic`).
 - `schemas/<type>-vN.json` — published JSON Schemas (F3, populated by R4's `publish-schemas`).
 - `scripts/{lint-stacks,publish-schemas,evaluator-pipeline-check,pair-names,lint-no-stack-leak}/` — R4 maintainer tooling.
-- `tests/fixtures/stacks/` — fixtures including the synthetic-second multi-stack guard rail (R1 first slice).
+- `tests/config-server/{tools,resolution,invariants,integration}/` — R1 test layout (vitest).
+- `tests/fixtures/stacks/` — fixtures. Bootstrap set (R1 first slice):
+  - `tests/fixtures/stacks/js-ts-minimal/` — clean web-node.
+  - `tests/fixtures/stacks/synthetic-second/.claude/gan/stacks/synthetic-second.md` — synthetic alone (multi-stack guard rail seed).
+  - `tests/fixtures/stacks/polyglot-webnode-synthetic/` — polyglot multi-stack (web-node + synthetic-second).
 - `.github/workflows/` — seven workflow files locked by the roadmap (see "Tooling").
 
 ## Testing
@@ -62,7 +85,13 @@ New test categories follow `test-<category>.yml`. The set is locked by the roadm
 
 ## Tooling
 
-Linter / formatter / type-checker choices are not yet picked — no Node code exists. R1 (Phase 2) is the first place this becomes a real decision; until then, defer.
+R1-locked toolchain for the `@claudeagents/config-server` package (and shared with R3/R4):
+
+- **Linter:** eslint + `@typescript-eslint`.
+- **Formatter:** prettier.
+- **Type-checker:** `tsc --noEmit` (run in CI).
+- **Test runner:** vitest.
+- **Build:** `tsc -> dist/` (real build step; published package consumed by E1 / R3 / R4).
 
 CI workflow inventory is locked (see Testing).
 
@@ -93,6 +122,21 @@ CI workflow inventory is locked (see Testing).
 - Honor the **stack-file-resolution invariants** (per C5): (a) **three tiers, highest wins** — `.claude/gan/stacks/<name>.md` (project) > `~/.claude/gan/stacks/<name>.md` (user) > `<repo>/stacks/<name>.md` (built-in). Same priority direction as C4's overlay cascade, but a different artifact set; (b) **wholesale replacement, never merge** — a higher-tier stack file replaces the lower-tier file in full; omitted fields are *dropped*, not inherited. Users who want additive behavior must use overlays (C3), not shadow stacks; (c) **detection lives only in tier 3** — project and user tiers can override a stack's contents but cannot introduce new detection patterns. New stacks ship via project-tier file + `stack.override` in the project overlay (per C3); enforced by F3's `detection.tier3_only` invariant; (d) **resolution runs inside R1's stack loader**, never in agent code — agents call `getStack()` / `getActiveStacks()` and receive the resolved file's data. Tier provenance is recorded per active stack and exposed via `getResolvedConfig()` for O1's observability surface; (e) **`schemaVersion` mismatch is fatal** at the resolved (highest-priority) file, not silently downgraded. Consistent with F3's exact-match rule.
 - Honor the **stack-vs-overlay asymmetry** (per C5): **stack files replace, overlays merge.** The asymmetry is load-bearing — stack files are structurally rich (composite detection trees, scope globs, surface arrays with keyword + glob triggers) where any merge semantics would be ambiguous; overlays are deliberately narrow splice points with documented merge rules per C3's catalog. The boundary rule for users: use an overlay splice point if one exists for the change you want; fork the stack file wholesale only when no splice point covers your need (always true for `detection`, `scope`, and structural command fields like `buildCmd`/`testCmd`/`lintCmd`). C3's catalog growing automatically narrows the must-fork surface — UX docs should reference C3's catalog rather than restating which changes need forking.
 - Honor the **`pairs-with.consistency` shadowed-default error wording** (per C5): when a project-tier stack file shadows a canonical repo-tier file that the corresponding module's manifest pairs with, but the project-tier file omits `pairsWith`, the `pairs-with.js` invariant must emit the verbatim remediation hint specified in C5 (names the offending file, names the expected `pairsWith` value, offers two fixes: re-declare `pairsWith` *or* rename the file and force activation via `stack.override`). The general `pairs-with` invariant is owned by M1; this specific message string is owned by C5 and must be reproduced verbatim by R1's loader. Other `pairs-with` failure modes use M1's wording.
+- Honor the **single-implementation rule for cross-file invariants** (R1-locked): every cross-file invariant has exactly one implementation under `src/config-server/invariants/` (one file per F3-cataloged invariant). R4 lint, build-time scripts, and any other caller import from there — never re-implement. R1 owns 8 of the 9 F3-cataloged invariants (all except `trust.approved`, which R5 owns):
+  1. `pairs-with-consistency.ts` (M1 owns most wording; C5 owns the shadowed-default verbatim string).
+  2. `cache-env-no-conflict.ts`.
+  3. `additional-context-path-resolves.ts`.
+  4. `path-no-escape.ts`.
+  5. `overlay-tier-api-version.ts`.
+  6. `stack-tier-api-version.ts`.
+  7. `detection-tier3-only.ts`.
+  8. `stack-no-draft-banner.ts` (testable via fixtures even before R3's `gan stacks new` exists).
+- Honor the **error factory rule** (R1-locked): every error code from F2's enum is built via `src/config-server/errors.ts`. No inline error construction anywhere in the codebase.
+- Honor the **dual-callable surface rule** (R1-locked): every public API function is callable both via the MCP tool wrapper (`src/config-server/tools/`) and via direct library import — same underlying function, never two implementations.
+- Honor the **centralized determinism rule** (R1-locked): F3's determinism pins live in `src/config-server/determinism/` (picomatch glob, `realpathSync.native` path canonicalisation, sorted-key JSON, locale-sensitive sort). No duplicate implementations elsewhere. Changing a pin is still a coordinated edit across every dependent spec (see existing Don't on F3 pins).
+- Honor the **trust loud-stub contract** (R1-locked, OQ1): until R5 ships, `getTrustState`/`getTrustDiff` return `{approved: true, reason: "trust-not-yet-implemented"}` and log a warning per call; `trustApprove`/`trustRevoke` return `{mutated: false}` no-op + warning. The `trust.approved` invariant is omitted from `validateAll` until R5. Do not implement real trust logic in R1.
+- Honor the **module surface no-op contract** (R1-locked, OQ4): `registerModule`/`getModuleState`/`setModuleState`/`appendToModuleState`/`removeFromModuleState`/`listModules` are registered in R1; module discovery is a no-op (zero modules) until M1 ships `module-manifest-v1.json`. The surface exists so E1/R3/R4 can be authored against it; behavior arrives with M1.
+- Honor the **per-run log routing rule** (R1-locked): when `GAN_RUN_ID` is set, the config server routes logs to `.gan-state/runs/<id>/logs/config-server.log`; otherwise it logs to stderr. Implementation lives in `src/config-server/logging/`.
 
 **Don't:**
 - Don't introduce backward-compatibility shims or transitional dual-path windows. Pre-1.0; schema changes bump `schemaVersion` and break.
@@ -109,9 +153,12 @@ CI workflow inventory is locked (see Testing).
 
 ## Known gaps
 
-- No `package.json`, no Node code, no schemas on disk yet. R1 (Phase 2) introduces them.
+- No `package.json` and no Node code on disk yet. R1 (Phase 2) introduces them; tooling and engine are locked (see Tech stack / Tooling).
+- Schemas: `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` lands when M1 ships.
 - No CI workflows on disk yet. R4 introduces them.
-- No tests, no fixtures, no synthetic-second stack on disk yet. R1's first sprint slice introduces fixtures.
+- No tests, no fixtures, no synthetic-second stack on disk yet. R1's first sprint slice introduces the bootstrap fixture set (`js-ts-minimal`, `synthetic-second`, `polyglot-webnode-synthetic`).
 - No `stacks/` directory yet. E2 introduces `web-node` + `generic`.
-- No linter, formatter, or type-checker chosen. Decision deferred to R1.
+- **R5 (trust) not yet implemented** — R1 ships loud-stubs for `getTrustState`/`getTrustDiff`/`trustApprove`/`trustRevoke`; `trust.approved` invariant is omitted from `validateAll` until R5.
+- **M1 (modules) not yet implemented** — R1 ships the module surface as a no-op (zero modules); behavior arrives with M1.
+- **R3 (CLI wrapper) not yet implemented** — R1 ships only the config server + library API; CLI surface arrives with R3.
 - README still describes the legacy `.gan/`-based architecture. E1 rewrites it; do not touch it before then.

@@ -12,3 +12,9 @@ specifications/REVIEW_RESPONSE*.md
 # Zone 1 (.claude/gan/) is config and stays tracked; do not add it here.
 .gan-state/
 .gan-cache/
+
+# R1 toolchain artifacts.
+dist/
+node_modules/
+coverage/
+*.tsbuildinfo
