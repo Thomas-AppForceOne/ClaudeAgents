@@ -16,7 +16,7 @@ The rewritten installer makes a particular point of cleanup: any pre-existing `.
 
 ### Responsibilities
 
-1. **Prerequisite checks.** Verify Node 18+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
+1. **Prerequisite checks.** Verify Node 20.10+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
 2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
 3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant).
 4. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
@@ -50,7 +50,7 @@ Running `install.sh` twice in a row is safe. The second run:
 - One-line description of what the installer does.
 - The flag list with one-line descriptions: `--uninstall`, `--no-claude-code`, `--help`.
 - A summary of what the installer creates and where (symlinks, MCP config entry, project filesystem zones).
-- Prerequisites the installer expects (Node 18+, git; Claude Code unless `--no-claude-code`).
+- Prerequisites the installer expects (Node 20.10+, git; Claude Code unless `--no-claude-code`).
 - The exit-code convention (0 success, non-zero on any failure with a named cause).
 - A pointer to the project README for fuller documentation.
 

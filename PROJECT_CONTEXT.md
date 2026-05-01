@@ -1,6 +1,6 @@
 # Project context
 
-_Last verified: 2026-04-30 by spec-validator (R1 config-server tooling decisions persisted; OQ1–OQ10 locked)_
+_Last verified: 2026-05-01 by spec-validator (R2 installer decisions persisted; OQ-R2-1..8 locked)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
@@ -20,7 +20,14 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
 - **Package identifiers (R1-locked):**
   - Package name: `@claudeagents/config-server`.
   - Bin name: `claudeagents-config-server`.
-- **Future installer:** Bash (`install.sh`). The current 138-line `.gan/`-based installer is legacy and will be rewritten in place by R2.
+- **Installer (R2-locked):** Bash (`install.sh`). The current 138-line `.gan/`-based installer is legacy and is rewritten in place by R2.
+  - **Install pattern:** local-install-only until the package is published — `npm install -g .` from the repo root (or `npm pack && npm install -g <tgz>`). Outside-repo registry fallback is a future task.
+  - **`MCP_SERVER_VERSION` source of truth:** `install.sh` reads `package.json` at runtime via `node -p` (no hardcoded constant). A maintainer lint that pins the version-source pattern is an R4 follow-up.
+  - **`~/.claude.json` write rules:** single backup to `~/.claude.json.backup-<timestamp>` before the first edit on a given machine (not per run); JSON manipulation via `node -e` (no `jq` dependency); atomic temp-file + rename. No detection of running Claude Code instances — restart-once already covers post-install.
+  - **Idempotency check pattern:** version-probe first (`claudeagents-config-server --version`); only run `npm install -g .` if the binary is missing or the version mismatches `package.json`.
+  - **Zones created by installer:** `.gan-state/` and `.gan-cache/` only. Zone 1 (`.claude/gan/`) is left alone (created lazily on first overlay authoring).
+  - **Feature-branch warning:** while on `feature/stack-plugin-rfc`, `install.sh` prints a "non-functional mid-pivot" warning. Trigger is hardcoded against `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc`; the check is removed at the post-E1 merge to main.
+- **Bash testing pattern (R2-locked):** vitest + `child_process.spawn` shelling out to `install.sh`. Tests live under `tests/installer/`. No new CI workflow file (the installer rides the existing test harness).
 - **Schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` (M1) lands when M1 ships. F3 is meta-only; concrete schemas are authored by their owning domain spec.
 - **Branch strategy:** Build on `feature/stack-plugin-rfc` through at least Phase 3. Do not merge to `main` mid-pivot. Merge gate is the post-E1 revision break (which also carries O2's prescriptive revision).
 
@@ -112,7 +119,7 @@ CI workflow inventory is locked (see Testing).
 - Honor the **multi-stack guard rail**: synthetic-second fixture stack + `lint-no-stack-leak` + cross-stack capability assertion in E3 must all stay green.
 - Honor the **black-box API rule**: agents call functions, never parse files. New code paths that read `.claude/gan/` directly from agent prompts are a regression.
 - Honor the **single-writer rule** for `PROJECT_CONTEXT.md` (project root): only spec-validator writes; other agents read.
-- Use **Node 18+ for maintainer tooling only**. End-user experience on non-Node ecosystems must never require Node at runtime.
+- Use **Node 20.10+ for maintainer tooling and the installer prereq check** (matches `package.json` engines). End-user experience on non-Node ecosystems must never require Node at runtime.
 - Honor the **user-facing error-text discipline** (per F4): every user-visible string from the agent, CLI, prompts, or error paths must (a) use shell remediation (`rm <path>`) not Node remediation (`npm run …`), (b) refer to "the framework" or "ClaudeAgents" — never "the Node MCP server" or "the npm package", and (c) pass an iOS-developer-on-macOS readability check (a Swift dev who only ran `install.sh` should understand every word). `test-error-text.yml` is the CI backstop; reviewers flag leaks in PRs that touch user-visible output.
 - Honor the **overlay catalog rule** (per C3): C3's splice-point table is the single source of truth for every overlay splice point — its shape, default, tier-allowance, and merge rule. C4 (cascade narrative), O1 (`mergedSplicePoints`), and U1 / U2 (UX) reference C3's catalog rather than restating fields. Adding a new splice point means editing C3's table (and C4's narrative if needed) — never editing UX prose to keep specs consistent. The catalog assumes splice points resolve **independently** (no cross-splice-point conditional rules); a future splice point requiring such coupling needs its own spec section justifying the deviation.
 - Honor the **`discardInherited` two-form rule** (per C3): the flag accepts two encodings — block-level (`{block}.discardInherited: true` sibling to splice points; drops every upstream value in that block) and field-level (`{field}: { discardInherited: true, value: <original-value> }`; drops upstream for that single field only). `discardInherited: false` is valid and equivalent to omission. Field-level wins over block-level when both are set (more-specific wins). `discardInherited: true` without a `value` resets the field to its default. An unknown `{discardInherited, value}` wrapper on a field that doesn't accept the structured form is a hard error. This applies uniformly to project and user overlays; only the merge target differs (per C4).
@@ -137,6 +144,13 @@ CI workflow inventory is locked (see Testing).
 - Honor the **trust loud-stub contract** (R1-locked, OQ1): until R5 ships, `getTrustState`/`getTrustDiff` return `{approved: true, reason: "trust-not-yet-implemented"}` and log a warning per call; `trustApprove`/`trustRevoke` return `{mutated: false}` no-op + warning. The `trust.approved` invariant is omitted from `validateAll` until R5. Do not implement real trust logic in R1.
 - Honor the **module surface no-op contract** (R1-locked, OQ4): `registerModule`/`getModuleState`/`setModuleState`/`appendToModuleState`/`removeFromModuleState`/`listModules` are registered in R1; module discovery is a no-op (zero modules) until M1 ships `module-manifest-v1.json`. The surface exists so E1/R3/R4 can be authored against it; behavior arrives with M1.
 - Honor the **per-run log routing rule** (R1-locked): when `GAN_RUN_ID` is set, the config server routes logs to `.gan-state/runs/<id>/logs/config-server.log`; otherwise it logs to stderr. Implementation lives in `src/config-server/logging/`.
+- Honor the **local-install-only rule** (R2-locked): until `@claudeagents/config-server` is published to npm, the installer uses `npm install -g .` from the repo root. Specs and docs do not promise a published-registry install path; the registry fallback is a future task.
+- Honor the **version-pin source-of-truth rule** (R2-locked): `install.sh` reads `MCP_SERVER_VERSION` from `package.json` at runtime via `node -p`. No hardcoded version constant in the installer. R3/R4 maintainer scripts that need the version follow the same pattern; an R4 lint will enforce the source-of-truth pattern.
+- Honor the **`~/.claude.json` safety rules** (R2-locked): (a) one backup per machine to `~/.claude.json.backup-<timestamp>` before the first edit, never per-run; (b) JSON manipulation via `node -e` only — no `jq` dependency; (c) atomic temp-file + rename for every write; (d) no Claude-running detection (restart-once is the contract).
+- Honor the **JSON-manipulation pattern** (R2-locked, applies to R3/R4 too): shell scripts that read or write JSON use `node -e`. `jq` is not a dependency.
+- Honor the **idempotency-via-version-probe rule** (R2-locked): before invoking `npm install -g .`, the installer probes `claudeagents-config-server --version` and only installs if the binary is missing or its version mismatches `package.json`. Re-running `install.sh` on an up-to-date machine is a no-op for npm.
+- Honor the **bash-test pattern** (R2-locked): `install.sh` is tested via vitest + `child_process.spawn`. Tests live under `tests/installer/`. No new CI workflow file — the installer rides the existing test harness.
+- Honor the **feature-branch warning lifecycle** (R2-locked): the installer's mid-pivot warning is triggered by a hardcoded `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc` check. The check ships in R2 and is removed in the post-E1 merge to main. Generalising the trigger is out of scope.
 
 **Don't:**
 - Don't introduce backward-compatibility shims or transitional dual-path windows. Pre-1.0; schema changes bump `schemaVersion` and break.
