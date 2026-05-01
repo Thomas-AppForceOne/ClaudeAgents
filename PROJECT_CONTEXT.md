@@ -1,6 +1,6 @@
 # Project context
 
-_Last verified: 2026-05-01 by spec-validator (R2 installer decisions persisted; OQ-R2-1..8 locked)_
+_Last verified: 2026-05-01 by spec-validator (R3 CLI wrapper decisions persisted; OQ-R3-1..6 locked)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
@@ -28,6 +28,18 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
   - **Zones created by installer:** `.gan-state/` and `.gan-cache/` only. Zone 1 (`.claude/gan/`) is left alone (created lazily on first overlay authoring).
   - **Feature-branch warning:** while on `feature/stack-plugin-rfc`, `install.sh` prints a "non-functional mid-pivot" warning. Trigger is hardcoded against `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc`; the check is removed at the post-E1 merge to main.
 - **Bash testing pattern (R2-locked):** vitest + `child_process.spawn` shelling out to `install.sh`. Tests live under `tests/installer/`. No new CI workflow file (the installer rides the existing test harness).
+- **CLI wrapper (R3-locked):**
+  - **Bin name:** `gan` (registered in the existing `@claudeagents/config-server` package's `bin` map, alongside the existing `claudeagents-config-server`).
+  - **Source:** `src/cli/` — entry at `src/cli/index.ts`, subcommand modules under `src/cli/commands/`, shared helpers (arg parser, JSON output, exit-code map, scaffold builder) under `src/cli/lib/`.
+  - **Tests:** `tests/cli/` — vitest + `child_process.spawn` shelling out to the built `dist/cli/index.js` (same harness shape as `tests/installer/`). Unit tests for pure helpers (arg parser, scaffold builder) sit alongside under `tests/cli/lib/`.
+  - **Backend integration:** R3 imports R1's library functions directly (per the dual-callable-surface rule). It does **not** spawn the MCP server as a subprocess — F2's contract treats the API as a function surface, and R1 already exports every read/write/validate function. The R3 spec's "Spawns the R1 server in CLI mode" wording is satisfied by the in-process library import: same code, different transport.
+  - **Exit-code map** (locked, per R3 spec): `0` success / `1` generic failure / `2` validation failure (config issues with structured report on stdout) / `3` schema mismatch / `4` invariant violation / `5` API/server unreachable (R1 dependency missing) / `64` bad CLI arguments. Mapping from F2 structured-error `code` to exit code lives in one place (`src/cli/lib/exit-codes.ts`).
+  - **`--json` semantics:** `--json` on a read subcommand emits the raw API response JSON (sorted keys, two-space indent, trailing newline per F3 determinism rule). On error, `--json` emits the F2 structured error object as JSON to stdout and exits with the mapped exit code; without `--json`, errors render as human-readable text on stderr. Help text is **always** human-readable; `gan --help --json` ignores `--json`.
+  - **`--project-root` default:** the canonical form (per F2 path canonicalisation) of `process.cwd()`. Trust-mutating subcommands (R5) require `--project-root` explicitly — R3 surfaces the flag globally; the R5 commands enforce explicitness.
+  - **Help-output rule:** all help (top-level + per-subcommand + bare `gan`) goes to stdout and exits 0; help text never references maintainer-only scripts (per the user-facing-error-text discipline).
+  - **Scaffold owner:** `gan stacks new` builds the DRAFT-bannered scaffold via a single helper (`src/cli/lib/scaffold.ts`); the verbatim banner string and the per-field placeholder strings live there. R4's `lint-stacks` reads the same banner constant when implemented.
+  - **No new CI workflow file:** R3 rides the existing test harness (same pattern R2 set).
+  - **R3 does NOT own the trust subcommands:** `gan trust info|approve|revoke|list` are R5's territory (per the roadmap's Runtime knobs table). R3 ships the bin and the dispatcher; R5 adds the trust subcommands as additional dispatch arms.
 - **Schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` (M1) lands when M1 ships. F3 is meta-only; concrete schemas are authored by their owning domain spec.
 - **Branch strategy:** Build on `feature/stack-plugin-rfc` through at least Phase 3. Do not merge to `main` mid-pivot. Merge gate is the post-E1 revision break (which also carries O2's prescriptive revision).
 
@@ -151,6 +163,12 @@ CI workflow inventory is locked (see Testing).
 - Honor the **idempotency-via-version-probe rule** (R2-locked): before invoking `npm install -g .`, the installer probes `claudeagents-config-server --version` and only installs if the binary is missing or its version mismatches `package.json`. Re-running `install.sh` on an up-to-date machine is a no-op for npm.
 - Honor the **bash-test pattern** (R2-locked): `install.sh` is tested via vitest + `child_process.spawn`. Tests live under `tests/installer/`. No new CI workflow file — the installer rides the existing test harness.
 - Honor the **feature-branch warning lifecycle** (R2-locked): the installer's mid-pivot warning is triggered by a hardcoded `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc` check. The check ships in R2 and is removed in the post-E1 merge to main. Generalising the trigger is out of scope.
+- Honor the **CLI-imports-library rule** (R3-locked): `gan` calls R1's library functions in-process via the package's main entry. It does not spawn `claudeagents-config-server` as a subprocess. R3's `bin` lives next to R1's bin in the same `package.json`; both are produced by the same `tsc` build.
+- Honor the **CLI exit-code map** (R3-locked): every user-visible exit code maps from an F2 structured-error `code` (or "no error → 0") through one table in `src/cli/lib/exit-codes.ts`. New error codes added in F2 require a same-PR addition to the table; the default for unmapped error codes is `1` (generic failure) so new codes never accidentally surface as `0`.
+- Honor the **CLI `--json` round-trip rule** (R3-locked): on read subcommands, `gan <cmd> --json` emits a single JSON document on stdout — sorted keys, two-space indent, trailing newline (per F3 determinism). On error, `--json` emits the F2 structured-error object as JSON on stdout (so `gan ... --json | jq` works in both success and failure paths). Without `--json`, success renders human-readable on stdout, errors render on stderr.
+- Honor the **scaffold-banner verbatim rule** (R3-locked): the DRAFT banner emitted by `gan stacks new` is a single canonical constant at `src/cli/lib/scaffold.ts`. R1's `stack-no-draft-banner` invariant and R4's `lint-stacks` both import the same constant; nobody hand-types the banner string. Its format: `# DRAFT — replace TODOs and remove this banner before committing.` followed by the explanatory line shown in R3's spec body. Any text change is a coordinated edit across R1 + R3 + R4 (and the existing `tests/fixtures/stacks/invariant-stack-draft-banner/` fixture).
+- Honor the **no-detection-inference rule** (R3-locked): `gan stacks new` does not inspect the host repo to guess `detection`, `scope`, or any other ecosystem-specific field. It writes TODO placeholders only. "Smart" inference is explicitly out of scope (per R3's scaffold-contract discipline).
+- Honor the **scaffold-no-overwrite rule** (R3-locked): `gan stacks new <name>` exits non-zero with a clear message if the target file already exists. The user must delete it first; the CLI does not expose a `--force` flag in v1.
 
 **Don't:**
 - Don't introduce backward-compatibility shims or transitional dual-path windows. Pre-1.0; schema changes bump `schemaVersion` and break.
@@ -174,5 +192,5 @@ CI workflow inventory is locked (see Testing).
 - No `stacks/` directory yet. E2 introduces `web-node` + `generic`.
 - **R5 (trust) not yet implemented** — R1 ships loud-stubs for `getTrustState`/`getTrustDiff`/`trustApprove`/`trustRevoke`; `trust.approved` invariant is omitted from `validateAll` until R5.
 - **M1 (modules) not yet implemented** — R1 ships the module surface as a no-op (zero modules); behavior arrives with M1.
-- **R3 (CLI wrapper) not yet implemented** — R1 ships only the config server + library API; CLI surface arrives with R3.
+- **R3 (CLI wrapper) — implementation in progress.** Skeleton + bin entry + arg parser + help and read subcommands land first; writes and `gan stacks new` follow. R5's trust subcommands (`gan trust *`) are NOT R3's territory; they ship with R5.
 - README still describes the legacy `.gan/`-based architecture. E1 rewrites it; do not touch it before then.

@@ -8,7 +8,8 @@
     "node": ">=20.10.0 <23"
   },
   "bin": {
-    "claudeagents-config-server": "./dist/config-server/index.js"
+    "claudeagents-config-server": "./dist/config-server/index.js",
+    "gan": "./dist/cli/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
