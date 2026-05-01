@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# ClaudeAgents installer — R2 sprint 1 skeleton.
+# ClaudeAgents installer — R2 sprints 1 + 2.
 #
-# This sprint lands the side-effect-free outer shell: argv parsing, help
-# text, and prerequisite checks. The install body (symlinks, npm install,
-# `~/.claude.json` registration, zone preparation) lands in S2; the
-# uninstall body and rollback lands in S3.
-#
-# Re-running this skeleton makes no filesystem changes.
+# S1 landed the side-effect-free outer shell: argv parsing, help text, and
+# prerequisite checks. S2 lands the happy-path install body: symlinks,
+# `npm install -g .`, `~/.claude.json` registration, zone preparation,
+# and a best-effort post-install validate. Rollback machinery and the
+# `--uninstall` body land in S3.
 
 set -euo pipefail
 
@@ -17,6 +16,15 @@ CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 MAX_NODE_MAJOR=22
+
+# STATE_LOG — append-only audit trail of state-creating steps. S3 will
+# consume this for rollback; S2 only writes to it. Each entry is a single
+# line of the form `<kind>:<absolute-path>` so a future rollback can scan
+# it without parsing structured data.
+STATE_LOG=()
+
+# Flag set by detect_preexisting_gan_dir; consumed by print_final_status.
+PREEXISTING_GAN_DIR=""
 
 log_info() {
   printf '%s\n' "$*"
@@ -131,6 +139,273 @@ read_mcp_server_version() {
   node -p "require('$REPO_ROOT/package.json').version"
 }
 
+# ---------------------------------------------------------------------------
+# S2 — happy-path install
+# ---------------------------------------------------------------------------
+
+# prune_stale_agent_symlinks
+#
+# Walks `$CLAUDE_HOME/agents/` and `$CLAUDE_HOME/skills/` only. Removes
+# any symlink whose target no longer exists (broken / dangling).
+# Idempotent on a clean machine — the loops simply find nothing to do.
+# Strictly scoped to `$CLAUDE_HOME` (= `$HOME/.claude`); the repo's own
+# `skills/` directory is never touched here, even if it contains a
+# broken symlink (e.g. the legacy `skills/gan/gan` leftover, which is an
+# E1 retirement target, not an installer responsibility).
+prune_stale_agent_symlinks() {
+  local dir entry
+  for dir in "$CLAUDE_HOME/agents" "$CLAUDE_HOME/skills"; do
+    [ -d "$dir" ] || continue
+    # Use a glob that includes hidden entries; `nullglob` keeps the loop
+    # silent when the directory is empty.
+    shopt -s nullglob dotglob
+    for entry in "$dir"/*; do
+      if [ -L "$entry" ] && [ ! -e "$entry" ]; then
+        rm -f "$entry"
+        STATE_LOG+=("pruned-symlink:$entry")
+      fi
+    done
+    shopt -u nullglob dotglob
+  done
+}
+
+# link_agents_and_skills
+#
+# Creates `$CLAUDE_HOME/agents/<name>.md` symlinks pointing at
+# `$REPO_ROOT/agents/<name>.md`, and a single `$CLAUDE_HOME/skills/gan`
+# symlink pointing at `$REPO_ROOT/skills/gan`. Uses `ln -sfn` so a
+# re-run replaces the link in place (idempotent).
+link_agents_and_skills() {
+  mkdir -p "$CLAUDE_HOME/agents"
+  mkdir -p "$CLAUDE_HOME/skills"
+
+  local f name target
+  shopt -s nullglob
+  for f in "$REPO_ROOT/agents/"*.md; do
+    name="$(basename "$f")"
+    target="$CLAUDE_HOME/agents/$name"
+    ln -sfn "$f" "$target"
+    STATE_LOG+=("symlink:$target")
+  done
+  shopt -u nullglob
+
+  if [ -d "$REPO_ROOT/skills/gan" ]; then
+    target="$CLAUDE_HOME/skills/gan"
+    ln -sfn "$REPO_ROOT/skills/gan" "$target"
+    STATE_LOG+=("symlink:$target")
+  fi
+}
+
+# version_probe_mcp
+#
+# Prints the installed config-server's reported version (without leading
+# `v`) on stdout, or empty if the binary is missing or fails. Never
+# exits non-zero; callers compare the result against the package.json
+# version to decide whether to (re)install.
+version_probe_mcp() {
+  if ! command -v claudeagents-config-server >/dev/null 2>&1; then
+    printf ''
+    return 0
+  fi
+  local out
+  out="$(claudeagents-config-server --version 2>/dev/null || true)"
+  # Strip trailing newline / whitespace and a leading `v` if present.
+  out="${out%%$'\n'*}"
+  out="${out## }"
+  out="${out%% }"
+  printf '%s' "${out#v}"
+}
+
+# install_mcp_server
+#
+# Runs `npm install -g .` from `$REPO_ROOT`. Captures combined output to
+# a discardable variable; on failure dies with framework prose
+# (CC-PROSE compliant) and the literal retry command in backticks. The
+# captured package-manager output is *not* echoed back to the user
+# because raw package-manager prose can leak prohibited prose tokens
+# through the F4 boundary (the user re-runs the retry command in
+# backticks to see the real underlying error).
+install_mcp_server() {
+  local out
+  if ! out="$(cd "$REPO_ROOT" && npm install -g . 2>&1)"; then
+    : "captured but suppressed: $out"
+    log_error "ClaudeAgents installer: failed to install the framework's config server."
+    die "Re-run \`npm install -g .\` from $REPO_ROOT to see the underlying error."
+  fi
+  STATE_LOG+=("npm-installed:$REPO_ROOT")
+}
+
+# backup_claude_json_once
+#
+# Copies `$CLAUDE_CONFIG_JSON` to `~/.claude.json.backup-<timestamp>`
+# the first time `install.sh` is run on this machine. A subsequent run
+# detects an existing backup via a glob test and is a no-op. Single
+# backup per machine, never per run.
+backup_claude_json_once() {
+  [ -f "$CLAUDE_CONFIG_JSON" ] || return 0
+
+  local existing
+  shopt -s nullglob
+  existing=("$HOME"/.claude.json.backup-*)
+  shopt -u nullglob
+  if [ "${#existing[@]}" -gt 0 ]; then
+    return 0
+  fi
+
+  local stamp dest
+  stamp="$(date +%Y%m%d%H%M%S)"
+  dest="$HOME/.claude.json.backup-$stamp"
+  cp "$CLAUDE_CONFIG_JSON" "$dest"
+  STATE_LOG+=("backup:$dest")
+}
+
+# register_mcp_in_claude_json
+#
+# Sets `mcpServers.claudeagents-config = {command, args, env}` on
+# `~/.claude.json`. Reads the existing JSON (or starts from `{}` when
+# the file is absent), edits via `node -e` (no JSON-CLI dependency),
+# writes the result to a `*.tmp.$$` sibling with sorted keys +
+# 2-space indent + trailing newline, then `mv`s atomically into place.
+# Idempotent on re-run.
+register_mcp_in_claude_json() {
+  local tmp="$CLAUDE_CONFIG_JSON.tmp.$$"
+  CLAUDE_CONFIG_JSON_PATH="$CLAUDE_CONFIG_JSON" \
+  CLAUDE_CONFIG_TMP_PATH="$tmp" \
+  node -e '
+    const fs = require("fs");
+    const src = process.env.CLAUDE_CONFIG_JSON_PATH;
+    const dst = process.env.CLAUDE_CONFIG_TMP_PATH;
+    let data = {};
+    if (fs.existsSync(src)) {
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+    }
+    if (typeof data.mcpServers !== "object" || data.mcpServers === null || Array.isArray(data.mcpServers)) {
+      data.mcpServers = {};
+    }
+    data.mcpServers["claudeagents-config"] = {
+      command: "claudeagents-config-server",
+      args: [],
+      env: {},
+    };
+    function sortedStringify(value, indent) {
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === "object") {
+          const out = {};
+          for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return JSON.stringify(sortKeys(value), null, indent);
+    }
+    const out = sortedStringify(data, 2) + "\n";
+    fs.writeFileSync(dst, out, "utf8");
+  '
+  mv "$tmp" "$CLAUDE_CONFIG_JSON"
+  STATE_LOG+=("claude-json:$CLAUDE_CONFIG_JSON")
+}
+
+# detect_preexisting_gan_dir
+#
+# When the cwd is a git repo and `<repo-top>/.gan/` exists, set
+# PREEXISTING_GAN_DIR so the final-status block can name it as a
+# hand-delete target. Not a hard abort.
+detect_preexisting_gan_dir() {
+  PREEXISTING_GAN_DIR=""
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] || return 0
+  if [ -d "$top/.gan" ]; then
+    PREEXISTING_GAN_DIR="$top/.gan"
+  fi
+}
+
+# prepare_zones
+#
+# Inside a git repo only: creates zone-2 (`.gan-state/`) and zone-3
+# (`.gan-cache/`) directories at the repo top, and appends them to
+# `.gitignore` if not already listed. Zone 1 (`.claude/gan/`) is left
+# alone (created lazily on first overlay authoring).
+prepare_zones() {
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] || return 0
+
+  mkdir -p "$top/.gan-state" "$top/.gan-cache"
+  STATE_LOG+=("zone-dir:$top/.gan-state")
+  STATE_LOG+=("zone-dir:$top/.gan-cache")
+
+  local gi="$top/.gitignore"
+  # Ensure file exists so `grep -Fxq` has something to read; the grep
+  # itself succeeds against a missing file with `|| true`, but creating
+  # the file once keeps the append idempotent in either case.
+  [ -f "$gi" ] || : >"$gi"
+  local entry
+  for entry in ".gan-state/" ".gan-cache/"; do
+    if ! grep -Fxq "$entry" "$gi"; then
+      printf '%s\n' "$entry" >>"$gi"
+      STATE_LOG+=("gitignore-entry:$gi:$entry")
+    fi
+  done
+}
+
+# run_validate_all_best_effort
+#
+# Inside a git repo only: invokes the framework's validate path. On any
+# nonzero exit, logs a warning and returns 0 — validate is not a gate
+# for the install, just a heads-up that overlays / stack files have
+# pre-existing issues. Skipped entirely when not in a git repo.
+run_validate_all_best_effort() {
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] || return 0
+
+  if ! command -v claudeagents-config-server >/dev/null 2>&1; then
+    log_warn "ClaudeAgents installer: skipping post-install validate (the framework's config server is not on PATH)."
+    return 0
+  fi
+
+  if ! claudeagents-config-server --validate-all >/dev/null 2>&1; then
+    log_warn "ClaudeAgents installer: post-install validate reported issues. Run \`claudeagents-config-server --validate-all\` for details."
+  fi
+}
+
+# print_final_status
+#
+# Emits the post-install status block. Names the zones, mentions the
+# `~/.claude.json` registration, and (when detected) flags a
+# pre-existing `.gan/` directory as a hand-delete target. Feature-branch
+# warning lives in S3.
+print_final_status() {
+  log_info ""
+  log_info "ClaudeAgents installer: install complete."
+  log_info "  - Agent and skill links written under $CLAUDE_HOME/."
+  log_info "  - Claude Code registration written to $CLAUDE_CONFIG_JSON (skipped under --no-claude-code)."
+  log_info "  - Repository zones \`.gan-state/\` and \`.gan-cache/\` prepared (when run inside a git repo)."
+
+  if [ -n "$PREEXISTING_GAN_DIR" ]; then
+    log_info ""
+    log_info "Heads up: a legacy \`.gan/\` directory exists at $PREEXISTING_GAN_DIR."
+    log_info "Delete it by hand once you have copied anything you still need: \`rm -rf $PREEXISTING_GAN_DIR\`."
+  fi
+
+  log_info ""
+  log_info "Restart Claude Code to pick up the new agents, skills, and config server."
+}
+
 main() {
   local mode="install"
   local skip_claude_code=0
@@ -168,7 +443,29 @@ main() {
   fi
 
   log_info "ClaudeAgents installer: prerequisites verified."
-  log_info "skeleton-only (install path lands in S2); no filesystem changes were made."
+
+  # Read the package.json version once; the version-probe compares
+  # against this when deciding whether to run `npm install -g .`.
+  local package_version probe_version
+  package_version="$(read_mcp_server_version)"
+
+  prune_stale_agent_symlinks
+  link_agents_and_skills
+
+  probe_version="$(version_probe_mcp)"
+  if [ -z "$probe_version" ] || [ "$probe_version" != "$package_version" ]; then
+    install_mcp_server
+  fi
+
+  if [ "$skip_claude_code" -eq 0 ]; then
+    backup_claude_json_once
+    register_mcp_in_claude_json
+  fi
+
+  detect_preexisting_gan_dir
+  prepare_zones
+  run_validate_all_best_effort
+  print_final_status
   exit 0
 }
 

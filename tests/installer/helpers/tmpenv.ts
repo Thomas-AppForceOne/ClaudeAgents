@@ -50,16 +50,32 @@ export interface MakeTmpHomeOptions {
  * absolute paths so `command -v <util>` finds them via the stub bin.
  *
  * `node`, `git`, and `claude` are deliberately NOT in this list — those
- * are the prerequisites under test and live exclusively as stubs.
+ * are the prerequisites under test and live exclusively as stubs. Same
+ * for `npm` and `claudeagents-config-server`, which the S2 install path
+ * depends on but tests stub explicitly.
  */
 const SYSTEM_UTILITIES = [
   '/bin/cat',
   '/bin/sh',
+  '/bin/cp',
+  '/bin/mv',
+  '/bin/rm',
+  '/bin/ln',
+  '/bin/mkdir',
+  '/bin/chmod',
+  '/bin/date',
   '/usr/bin/dirname',
   '/usr/bin/uname',
   '/usr/bin/env',
   '/usr/bin/basename',
   '/usr/bin/tr',
+  '/usr/bin/grep',
+  '/usr/bin/touch',
+  '/usr/bin/readlink',
+  '/usr/bin/find',
+  '/usr/bin/head',
+  '/usr/bin/tail',
+  '/usr/bin/sed',
 ];
 
 /**
