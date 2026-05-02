@@ -8,7 +8,13 @@
  * load-bearing.
  */
 export { formatReport, formatReportJson } from './report.js';
-export type { FormattedReport, LintStacksReport, ReportFailure, ScriptReport } from './report.js';
+export type {
+  FormattedReport,
+  LintStacksReport,
+  PairNamesReport,
+  ReportFailure,
+  ScriptReport,
+} from './report.js';
 export { parseArgs } from './args.js';
 export type { ArgsSpec, ParsedScriptArgs } from './args.js';
 export { SCRIPT_EXIT } from './exit-codes.js';

@@ -28,6 +28,12 @@ export interface ReportFailure {
   code: string;
   /** Human-readable description; F4 prose discipline applies. */
   message: string;
+  /**
+   * Optional structured field path (e.g. `/pairsWith`). Surfaced by
+   * invariant-driven scripts whose underlying `Issue` carries a `field`;
+   * omitted by checks that only have a file-level scope.
+   */
+  field?: string;
 }
 
 export interface LintStacksReport {
@@ -39,10 +45,24 @@ export interface LintStacksReport {
 }
 
 /**
+ * Report shape for `scripts/pair-names/`. Mirrors `LintStacksReport` —
+ * the failure-counting rule (`failed` = unique-file count among
+ * `failures`) is shared so the summary line stays consistent across
+ * maintainer scripts.
+ */
+export interface PairNamesReport {
+  kind: 'pair-names';
+  /** Number of stack files inspected (every row in the snapshot). */
+  checked: number;
+  /** Subset of inspected files that produced at least one invariant failure. */
+  failures: ReportFailure[];
+}
+
+/**
  * Discriminated union of every per-script report shape. New scripts add
  * their own `kind` arm and `formatReport` grows a new branch.
  */
-export type ScriptReport = LintStacksReport;
+export type ScriptReport = LintStacksReport | PairNamesReport;
 
 export interface FormattedReport {
   stdout: string;
@@ -58,13 +78,27 @@ export function formatReport(input: ScriptReport): FormattedReport {
   if (input.kind === 'lint-stacks') {
     return formatLintStacks(input);
   }
+  if (input.kind === 'pair-names') {
+    return formatPairNames(input);
+  }
   // Exhaustiveness guard. The `never` assignment forces a compile error
   // if a new `kind` is added without a matching branch above.
-  const _exhaustive: never = input.kind;
+  const _exhaustive: never = input;
   return _exhaustive;
 }
 
 function formatLintStacks(input: LintStacksReport): FormattedReport {
+  const failedCount = countFailedFiles(input.failures);
+  const stdout = `${input.checked} stacks checked, ${failedCount} failed\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
+function formatPairNames(input: PairNamesReport): FormattedReport {
   const failedCount = countFailedFiles(input.failures);
   const stdout = `${input.checked} stacks checked, ${failedCount} failed\n`;
   if (input.failures.length === 0) {
@@ -88,15 +122,34 @@ function countFailedFiles(failures: readonly ReportFailure[]): number {
  * newline. Used by `--json` paths in maintainer scripts.
  */
 export function formatReportJson(input: ScriptReport): string {
+  if (input.kind === 'lint-stacks') {
+    return renderJson(input);
+  }
+  if (input.kind === 'pair-names') {
+    return renderJson(input);
+  }
+  // Exhaustiveness guard for the JSON path. Mirrors `formatReport` so
+  // adding a new `kind` flags both functions at once.
+  const _exhaustive: never = input;
+  return _exhaustive;
+}
+
+function renderJson(input: ScriptReport): string {
   const failedCount = countFailedFiles(input.failures);
   const payload = {
     checked: input.checked,
     failed: failedCount,
-    failures: input.failures.map((f) => ({
-      code: f.code,
-      message: f.message,
-      path: f.path,
-    })),
+    failures: input.failures.map((f) => {
+      const entry: Record<string, string> = {
+        code: f.code,
+        message: f.message,
+        path: f.path,
+      };
+      if (typeof f.field === 'string') {
+        entry['field'] = f.field;
+      }
+      return entry;
+    }),
   };
   return stableStringify(payload);
 }

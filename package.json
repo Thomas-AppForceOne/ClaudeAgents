@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",
     "format:check": "prettier --check .",
-    "lint-stacks": "node dist/scripts/lint-stacks/index.js"
+    "lint-stacks": "node dist/scripts/lint-stacks/index.js",
+    "pair-names": "node dist/scripts/pair-names/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
