@@ -25,7 +25,6 @@ import {
   getResolvedConfigCache,
   cacheKeyForProjectRoot,
 } from '../../../src/config-server/resolution/cache.js';
-import type { Logger } from '../../../src/config-server/logging/logger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -42,23 +41,6 @@ function makeTmpProject(): string {
 
 function fileHash(p: string): string {
   return createHash('sha256').update(readFileSync(p)).digest('hex');
-}
-
-interface RecordedEntry {
-  level: 'info' | 'warn' | 'error';
-  msg: string;
-  meta?: Record<string, unknown>;
-}
-
-function makeSpyLogger(): { logger: Logger; entries: RecordedEntry[] } {
-  const entries: RecordedEntry[] = [];
-  const logger: Logger = {
-    info: (msg, meta) => entries.push({ level: 'info', msg, meta }),
-    warn: (msg, meta) => entries.push({ level: 'warn', msg, meta }),
-    error: (msg, meta) => entries.push({ level: 'error', msg, meta }),
-    sink: () => 'spy',
-  };
-  return { logger, entries };
 }
 
 beforeEach(() => {
@@ -314,31 +296,25 @@ describe('appendToOverlayField + removeFromOverlayField', () => {
   });
 });
 
-describe('trust loud-stubs', () => {
-  it('trustApprove returns the loud-stub shape and logs a warning', () => {
+describe('trust writes (R5 S4)', () => {
+  it('trustApprove writes a record to the trust cache (mutated: true)', () => {
     const proj = makeTmpProject();
-    const { logger, entries } = makeSpyLogger();
-    const result = trustApprove({ projectRoot: proj, contentHash: 'deadbeef' }, { logger });
-    expect(result).toEqual({
-      mutated: false,
-      reason: 'trust-not-yet-implemented',
-    });
-    const warns = entries.filter((e) => e.level === 'warn');
-    expect(warns).toHaveLength(1);
-    expect(warns[0].meta).toEqual({ tool: 'trustApprove' });
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'cas-writes-trust-home-'));
+    tmpDirs.push(tmpHome);
+    const result = trustApprove({ projectRoot: proj }, { homeDir: tmpHome });
+    expect(result.mutated).toBe(true);
+    expect(typeof result.record.aggregateHash).toBe('string');
+    expect(result.record.aggregateHash.startsWith('sha256:')).toBe(true);
+    expect(typeof result.record.approvedAt).toBe('string');
+    expect(result.record.projectRoot.length).toBeGreaterThan(0);
   });
 
-  it('trustRevoke returns the loud-stub shape and logs a warning', () => {
+  it('trustRevoke is a no-op when no approval exists (mutated: false)', () => {
     const proj = makeTmpProject();
-    const { logger, entries } = makeSpyLogger();
-    const result = trustRevoke({ projectRoot: proj, contentHash: 'deadbeef' }, { logger });
-    expect(result).toEqual({
-      mutated: false,
-      reason: 'trust-not-yet-implemented',
-    });
-    const warns = entries.filter((e) => e.level === 'warn');
-    expect(warns).toHaveLength(1);
-    expect(warns[0].meta).toEqual({ tool: 'trustRevoke' });
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'cas-writes-trust-home-'));
+    tmpDirs.push(tmpHome);
+    const result = trustRevoke({ projectRoot: proj }, { homeDir: tmpHome });
+    expect(result.mutated).toBe(false);
   });
 });
 

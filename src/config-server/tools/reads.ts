@@ -11,9 +11,12 @@
  *    the public index).
  *  - `getStack` / `getOverlay` / `getStackResolution` — real reads via the
  *    storage + resolution layers.
- *  - `getTrustState` / `getTrustDiff` — loud-stub. Return the locked OQ1
- *    shape (`approved: true, reason: "trust-not-yet-implemented"`) and log
- *    a warning per call. Real trust ships with R5.
+ *  - `getTrustState` — real (R5 S4): recomputes the project's aggregate
+ *    trust hash, looks it up in the user-tier trust cache, and reports
+ *    the approval state. `getTrustDiff` remains the deferred stub (the
+ *    structured per-file diff is not in v1's scope).
+ *  - `trustList` — real (R5 S4): lists every approval recorded in the
+ *    cache.
  *  - `getModuleState` / `listModules` — no-op (zero modules) per OQ4.
  *  - `getStackConventions` / `getOverlayField` are NOT in this sprint's
  *    scope — they remain `NotImplemented` stubs in `index.ts`.
@@ -35,6 +38,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -58,6 +62,9 @@ import {
   composeResolvedConfigSync,
   type ResolvedConfig,
 } from '../resolution/resolved-config.js';
+import { computeTrustHash } from '../trust/hash.js';
+import { readCache, type TrustApproval } from '../trust/cache-io.js';
+import { _runPhase1ForTests } from './validate.js';
 
 /** Common options passed to every read tool. */
 export interface ReadToolContext {
@@ -185,35 +192,155 @@ export interface GetTrustStateInput {
   projectRoot: string;
 }
 
+export interface GetTrustStateSummary {
+  additionalChecksCount: number;
+  perStackOverridesCount: number;
+}
+
+export interface GetTrustStateResult {
+  approved: boolean;
+  currentHash: string;
+  approvedHash?: string;
+  approvedAt?: string;
+  approvedCommit?: string;
+  summary?: GetTrustStateSummary;
+}
+
 /**
- * Loud-stub per OQ1. Returns the canonical shape and emits a warning per
- * call. Real implementation arrives with R5.
+ * Real implementation (R5 S4). Recomputes the project's aggregate trust
+ * hash, looks it up in the user-tier trust cache (`~/.claude/gan/trust-
+ * cache.json`), and returns the approval state.
+ *
+ *  - Approved: matching `(canonical projectRoot, aggregateHash)` pair
+ *    found in the cache. The result echoes the stored `approvedAt` and,
+ *    when present, the `approvedCommit` SHA captured at approve time.
+ *  - Not approved: no match. The result includes a small summary derived
+ *    from the project-tier overlay (today: count of
+ *    `evaluator.additionalChecks` entries) so callers can present the
+ *    user with a concrete description of what would be approved.
+ *
+ * Pure read: never mutates the cache and never logs. Path comparisons go
+ * through `canonicalizePath` (per F3 determinism); hash recomputation
+ * routes through `computeTrustHash` (per the single-implementation rule).
  */
 export function getTrustState(
-  _input: GetTrustStateInput,
-  ctx: ReadToolContext = {},
-): { approved: true; reason: 'trust-not-yet-implemented' } {
-  const logger = ctx.logger ?? getLogger();
-  logger.warn('trust subsystem not implemented; treating as approved', {
-    tool: 'getTrustState',
-  });
-  return { approved: true, reason: 'trust-not-yet-implemented' };
+  input: GetTrustStateInput,
+  ctx: ReadToolContext & { homeDir?: string } = {},
+): GetTrustStateResult {
+  const { aggregateHash: currentHash } = computeTrustHash(input.projectRoot);
+  const homeDir = ctx.homeDir ?? os.homedir();
+  const canonRoot = canonicalizePath(input.projectRoot);
+
+  const cache = readCache(homeDir);
+  const found = cache.approvals.find(
+    (a) => a.projectRoot === canonRoot && a.aggregateHash === currentHash,
+  );
+
+  if (found !== undefined) {
+    const result: GetTrustStateResult = {
+      approved: true,
+      currentHash,
+      approvedHash: found.aggregateHash,
+      approvedAt: found.approvedAt,
+    };
+    if (found.approvedCommit !== undefined) {
+      result.approvedCommit = found.approvedCommit;
+    }
+    return result;
+  }
+
+  // Unapproved: derive a small summary so the caller (the trust prompt)
+  // can describe what it would be approving. We re-use the phase-1
+  // discovery snapshot helper to load the project-tier overlay without
+  // duplicating the loader pipeline here.
+  const summary = computeProjectSummary(input.projectRoot, ctx);
+  return {
+    approved: false,
+    currentHash,
+    summary,
+  };
 }
 
 export interface GetTrustDiffInput {
   projectRoot: string;
 }
 
-/** Loud-stub per OQ1. */
+/**
+ * Deferred per R5 S4 — the structured per-file trust diff is a future
+ * task (the prompt's `[v]` flow today suggests a `git diff` invocation
+ * instead). The stub returns the same shape it has shipped since R1 so
+ * existing consumers continue to compile.
+ */
 export function getTrustDiff(
   _input: GetTrustDiffInput,
   ctx: ReadToolContext = {},
 ): { diff: never[]; reason: 'trust-not-yet-implemented' } {
   const logger = ctx.logger ?? getLogger();
-  logger.warn('trust subsystem not implemented; treating as approved', {
+  logger.warn('trust diff is deferred; getTrustDiff returns an empty diff', {
     tool: 'getTrustDiff',
   });
   return { diff: [], reason: 'trust-not-yet-implemented' };
+}
+
+/**
+ * Reserved for future filtering knobs (e.g. by host or by recency). v1
+ * takes no input — see `trustList` below. Kept as a type alias rather
+ * than an interface so the empty shape does not trip
+ * `no-empty-object-type` lint.
+ */
+export type TrustListInput = Record<string, never>;
+
+export interface TrustListResult {
+  approvals: TrustApproval[];
+}
+
+/**
+ * List every approval in the user-tier trust cache. Pure read: never
+ * mutates the cache. Output preserves the cache's on-disk order (already
+ * locale-sorted by `<projectRoot><aggregateHash>` per `cache-io.ts`).
+ */
+export function trustList(
+  _input: TrustListInput = {},
+  ctx: ReadToolContext & { homeDir?: string } = {},
+): TrustListResult {
+  const cache = readCache(ctx.homeDir ?? os.homedir());
+  return { approvals: cache.approvals };
+}
+
+/**
+ * Build the trust-state summary for the unapproved branch. Counts
+ * command-declaring fields in the project-tier overlay only — user-tier
+ * and default-tier overlays are not part of the trust gate today (per
+ * `trust/integration.ts`). The two counted shapes are the bare list form
+ * (`evaluator.additionalChecks: [...]`) and the structured wrapper form
+ * (`evaluator.additionalChecks: { discardInherited, value: [...] }`),
+ * matching the predicate in `trust/integration.projectDeclaresCommands`.
+ *
+ * `perStackOverridesCount` is reserved for the per-stack
+ * `auditCmd`/`buildCmd`/`testCmd`/`lintCmd` override count — that surface
+ * is post-E1 work (per the TODO in `trust/integration.ts`), so v1 returns
+ * `0` here.
+ */
+function computeProjectSummary(
+  projectRoot: string,
+  ctx: ReadToolContext = {},
+): GetTrustStateSummary {
+  const phase1Ctx = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const snapshot = _runPhase1ForTests(projectRoot, phase1Ctx);
+  const projectRow = snapshot.overlays.project;
+  let additionalChecksCount = 0;
+  if (projectRow && isObject(projectRow.data)) {
+    const evaluator = projectRow.data['evaluator'];
+    if (isObject(evaluator)) {
+      const checks = evaluator['additionalChecks'];
+      if (Array.isArray(checks)) {
+        additionalChecksCount = checks.length;
+      } else if (isObject(checks) && Array.isArray(checks['value'])) {
+        additionalChecksCount = (checks['value'] as unknown[]).length;
+      }
+    }
+  }
+  return { additionalChecksCount, perStackOverridesCount: 0 };
 }
 
 export interface GetModuleStateInput {

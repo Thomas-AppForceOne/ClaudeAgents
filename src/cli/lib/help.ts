@@ -42,7 +42,7 @@ const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   stacks: 'List active stacks or scaffold a new stack file.',
   stack: 'Show or update a single stack file.',
   modules: 'List registered modules with pairing status.',
-  trust: 'Manage the project trust cache (ships with R5).',
+  trust: 'Approve, revoke, or inspect project trust-cache approvals.',
   help: 'Show help for a subcommand.',
 });
 
@@ -191,12 +191,71 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
     exitCodes: ['  0   Success', '  5   Framework library unreachable'],
   },
   trust: {
-    usage: 'gan trust <info|approve|revoke|list> [args]',
+    usage: 'gan trust <info|approve|revoke|list> [args] [--json]',
     description:
-      'Manage the project trust cache. The trust subcommand surface ships\n' +
-      'with R5; running it today exits 1 with a pointer to the R5 spec.',
-    examples: ['  gan trust info', '  gan trust list'],
-    exitCodes: ['  1   Not yet implemented (ships with R5)'],
+      'Manage the project trust cache.\n' +
+      '  gan trust info    [--project-root DIR]   Show approval state for a project.\n' +
+      '  gan trust approve  --project-root DIR    Approve current overlay contents.\n' +
+      '  gan trust revoke   --project-root DIR    Revoke approvals for a project.\n' +
+      '  gan trust list                           List every recorded approval.',
+    flags: ['      --note TEXT   Optional note attached to an approve record.'],
+    examples: [
+      '  gan trust info --project-root /path/to/project',
+      '  gan trust approve --project-root /path/to/project --note "reviewed in PR #42"',
+      '  gan trust list --json',
+      '  gan trust revoke --project-root /path/to/project',
+    ],
+    exitCodes: [
+      '  0   Success',
+      '  1   Generic failure (e.g. trust-cache file unreadable)',
+      '  64  Bad CLI arguments (missing --project-root for approve/revoke)',
+    ],
+  },
+  'trust info': {
+    usage: 'gan trust info [--project-root DIR] [--json]',
+    description:
+      'Show whether the current project overlay contents are approved in\n' +
+      'the user-tier trust cache. Defaults --project-root to the canonical\n' +
+      'form of the current working directory.',
+    examples: [
+      '  gan trust info',
+      '  gan trust info --project-root /path/to/project',
+      '  gan trust info --json',
+    ],
+    exitCodes: ['  0   Success', '  1   Generic failure'],
+  },
+  'trust approve': {
+    usage: 'gan trust approve --project-root DIR [--note TEXT] [--json]',
+    description:
+      'Approve the current overlay contents for the named project. The\n' +
+      'aggregate hash is recomputed from disk; the supplied --note is\n' +
+      'stored verbatim alongside the approval record.',
+    flags: ['      --note TEXT   Optional note stored alongside the record.'],
+    examples: [
+      '  gan trust approve --project-root /path/to/project',
+      '  gan trust approve --project-root /path/to/project --note "PR #42"',
+    ],
+    exitCodes: [
+      '  0   Success',
+      '  1   Generic failure',
+      '  64  Bad CLI arguments (missing --project-root)',
+    ],
+  },
+  'trust revoke': {
+    usage: 'gan trust revoke --project-root DIR [--json]',
+    description: 'Remove every approval for the named project from the user-tier trust cache.',
+    examples: ['  gan trust revoke --project-root /path/to/project'],
+    exitCodes: [
+      '  0   Success',
+      '  1   Generic failure',
+      '  64  Bad CLI arguments (missing --project-root)',
+    ],
+  },
+  'trust list': {
+    usage: 'gan trust list [--json]',
+    description: 'List every approval recorded in the user-tier trust cache.',
+    examples: ['  gan trust list', '  gan trust list --json'],
+    exitCodes: ['  0   Success', '  1   Generic failure'],
   },
   help: {
     usage: 'gan help [<subcommand>]',

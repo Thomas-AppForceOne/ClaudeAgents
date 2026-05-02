@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -26,7 +26,7 @@ describe('logging/trust-log', () => {
     rmSync(tmpCwd, { recursive: true, force: true });
   });
 
-  it('writes to stderr when GAN_RUN_ID is unset', () => {
+  it('is silent when GAN_RUN_ID is unset (no stderr, no file)', () => {
     delete process.env.GAN_RUN_ID;
     const writes: string[] = [];
     const spy = vi
@@ -44,13 +44,20 @@ describe('logging/trust-log', () => {
     } finally {
       spy.mockRestore();
     }
-    expect(writes.length).toBe(1);
-    expect(writes[0]).toContain('"action": "check"');
-    expect(writes[0]).toContain('"projectRoot": "/abs/proj"');
-    expect(writes[0]).toContain('"result": "approved"');
-    // Single-line: exactly one trailing newline; no newlines anywhere else.
-    expect(writes[0].endsWith('\n')).toBe(true);
-    expect(writes[0].slice(0, -1).includes('\n')).toBe(false);
+    // No stderr writes — outside a /gan run, the trust event stream is
+    // suppressed entirely so CLI output / test stderr stay clean.
+    expect(writes.length).toBe(0);
+    // No file written either: `.gan-state/` should not have been
+    // created under tmpCwd.
+    const stateDir = path.join(tmpCwd, '.gan-state');
+    if (existsSync(stateDir)) {
+      // If the dir exists for some unrelated reason, it must be empty
+      // of trust-log artifacts.
+      const entries = readdirSync(stateDir);
+      expect(entries).toEqual([]);
+    } else {
+      expect(existsSync(stateDir)).toBe(false);
+    }
   });
 
   it('writes to <cwd>/.gan-state/runs/<runId>/logs/trust.log when GAN_RUN_ID is set', () => {

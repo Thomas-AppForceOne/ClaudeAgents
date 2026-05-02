@@ -167,6 +167,14 @@ function buildBrokenDist(): string {
       'export const updateStackField = unreachable;',
       // S4: `gan validate` imports `validateAll` from the package main.
       'export const validateAll = unreachable;',
+      // R5 S4 trust-mutating CLI subcommands import these from the
+      // package main. Without explicit exports here, ESM's strict
+      // named-import resolution fails at module instantiation time
+      // (before `main()` runs) and the CLI dies with a `SyntaxError`
+      // and exit 1 instead of the F-AC6 exit-5 / install.sh path.
+      'export const trustApprove = unreachable;',
+      'export const trustRevoke = unreachable;',
+      'export const trustList = unreachable;',
       'export { getApiVersion } from "./config-server/index.js";',
       '',
     ].join('\n'),

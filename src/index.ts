@@ -32,6 +32,7 @@ export {
   getTrustDiff,
   getTrustState,
   listModules,
+  trustList,
 } from './config-server/tools/reads.js';
 
 // ---- write tools ---------------------------------------------------------

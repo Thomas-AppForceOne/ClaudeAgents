@@ -29,10 +29,13 @@
  *       5. On success: write via `yaml-block-writer` + `atomicWriteFile`,
  *          invalidate the cache, return `{ mutated: true, path, ... }`.
  *
- *  2. Trust loud-stubs (OQ1):
- *     - `trustApprove` / `trustRevoke` return `{ mutated: false, reason:
- *       'trust-not-yet-implemented' }` and emit a warning per call. Real
- *       trust ships with R5.
+ *  2. Trust writes (R5 S4):
+ *     - `trustApprove` recomputes the project's aggregate hash, persists
+ *       a record into the user-tier trust cache (`~/.claude/gan/trust-
+ *       cache.json` via `cache-io.writeCache`), and emits an
+ *       `action: 'approve'` audit-log line via `logTrustEvent`.
+ *     - `trustRevoke` removes every approval for the project from the
+ *       cache and emits an `action: 'revoke'` audit-log line.
  *
  *  3. Module no-ops (OQ4):
  *     - `setModuleState` / `appendToModuleState` / `removeFromModuleState`
@@ -40,12 +43,15 @@
  *       module discovery ships with M1.
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { canonicalizePath } from '../determinism/index.js';
 import { ConfigServerError, createError } from '../errors.js';
-import { getLogger, type Logger } from '../logging/logger.js';
+import { type Logger } from '../logging/logger.js';
+import { logTrustEvent } from '../logging/trust-log.js';
 import { getResolvedConfigCache, cacheKeyForProjectRoot } from '../resolution/cache.js';
 import { resolveStackFile, type ResolveStackOptions } from '../resolution/stack-resolution.js';
 import {
@@ -55,6 +61,14 @@ import {
 } from '../storage/yaml-block-parser.js';
 import { writeYamlBlock } from '../storage/yaml-block-writer.js';
 import { atomicWriteFile } from '../storage/atomic-write.js';
+import {
+  readCache,
+  removeApprovals,
+  upsertApproval,
+  writeCache,
+  type TrustApproval,
+} from '../trust/cache-io.js';
+import { computeTrustHash } from '../trust/hash.js';
 import {
   validateOverlayBodyAgainstSchema,
   validateStackBodyAgainstSchema,
@@ -258,38 +272,135 @@ export function removeFromStackField(
   });
 }
 
-// ---- trust loud-stubs (OQ1) ----------------------------------------------
+// ---- trust writes (R5 S4) -----------------------------------------------
 
 export interface TrustApproveInput {
   projectRoot: string;
+  /**
+   * Reserved for future client-supplied verification. v1 ignores any
+   * value supplied here and recomputes the aggregate hash from disk so
+   * the persisted approval cannot disagree with what the user is
+   * actually approving.
+   */
   contentHash?: string;
+  /** Optional free-form note. Stored verbatim alongside the record. */
+  note?: string;
 }
 
+export interface TrustApproveResult {
+  mutated: true;
+  record: TrustApproval;
+}
+
+/**
+ * Approve the project's current overlay contents. The aggregate hash is
+ * recomputed from disk via `computeTrustHash` (the supplied
+ * `contentHash` argument is ignored in v1 — see the field doc).
+ *
+ * The approved record stores:
+ *   - `projectRoot` — canonicalised via `canonicalizePath` (per F3).
+ *   - `aggregateHash` — recomputed from disk.
+ *   - `approvedAt` — ISO-8601 timestamp captured at approval time.
+ *   - `approvedCommit` — git HEAD SHA of `projectRoot` when the project
+ *     is a git working tree; omitted otherwise. The capture goes
+ *     through `child_process.execFileSync('git', …)` and falls through
+ *     silently on any failure (no git binary, not a git tree, detached
+ *     state with no rev, etc.).
+ *   - `note` — supplied verbatim if non-empty.
+ *
+ * Persists via `upsertApproval` + `writeCache` (no direct file IO).
+ * Logs one `action: 'approve'` event via `logTrustEvent` so the audit
+ * log captures every approval.
+ */
 export function trustApprove(
-  _input: TrustApproveInput,
-  ctx: WriteToolContext = {},
-): { mutated: false; reason: 'trust-not-yet-implemented' } {
-  const logger = ctx.logger ?? getLogger();
-  logger.warn('trust subsystem not implemented; trustApprove is a no-op until R5', {
-    tool: 'trustApprove',
+  input: TrustApproveInput,
+  ctx: WriteToolContext & { homeDir?: string } = {},
+): TrustApproveResult {
+  const { aggregateHash: currentHash } = computeTrustHash(input.projectRoot);
+  const homeDir = ctx.homeDir ?? os.homedir();
+  const canonRoot = canonicalizePath(input.projectRoot);
+
+  const approvedAt = new Date().toISOString();
+  const approvedCommit = captureGitHead(input.projectRoot);
+
+  const record: TrustApproval = {
+    projectRoot: canonRoot,
+    aggregateHash: currentHash,
+    approvedAt,
+    ...(approvedCommit !== undefined ? { approvedCommit } : {}),
+    ...(input.note !== undefined && input.note.length > 0 ? { note: input.note } : {}),
+  };
+
+  const cache = readCache(homeDir);
+  const newCache = upsertApproval(cache, record);
+  writeCache(homeDir, newCache);
+
+  logTrustEvent({
+    action: 'approve',
+    projectRoot: input.projectRoot,
+    hash: currentHash,
+    result: 'approved',
   });
-  return { mutated: false, reason: 'trust-not-yet-implemented' };
+
+  return { mutated: true, record };
 }
 
 export interface TrustRevokeInput {
   projectRoot: string;
-  contentHash?: string;
 }
 
+export interface TrustRevokeResult {
+  mutated: boolean;
+}
+
+/**
+ * Revoke every approval for `projectRoot` from the user-tier trust
+ * cache. `mutated` reflects whether at least one approval was actually
+ * removed; revoking a project with no recorded approvals is a no-op
+ * that returns `{ mutated: false }`.
+ *
+ * Always rewrites the cache file (even on the no-op branch) so the
+ * file's existence reflects "we made a decision here". Logs one
+ * `action: 'revoke'` event via `logTrustEvent`.
+ */
 export function trustRevoke(
-  _input: TrustRevokeInput,
-  ctx: WriteToolContext = {},
-): { mutated: false; reason: 'trust-not-yet-implemented' } {
-  const logger = ctx.logger ?? getLogger();
-  logger.warn('trust subsystem not implemented; trustRevoke is a no-op until R5', {
-    tool: 'trustRevoke',
+  input: TrustRevokeInput,
+  ctx: WriteToolContext & { homeDir?: string } = {},
+): TrustRevokeResult {
+  const homeDir = ctx.homeDir ?? os.homedir();
+
+  const cache = readCache(homeDir);
+  const beforeLength = cache.approvals.length;
+  const newCache = removeApprovals(cache, input.projectRoot);
+  writeCache(homeDir, newCache);
+  const mutated = newCache.approvals.length !== beforeLength;
+
+  logTrustEvent({
+    action: 'revoke',
+    projectRoot: input.projectRoot,
+    result: mutated ? 'revoked' : 'no-op',
   });
-  return { mutated: false, reason: 'trust-not-yet-implemented' };
+
+  return { mutated };
+}
+
+/**
+ * Capture `git rev-parse HEAD` for `projectRoot`. Returns `undefined`
+ * on any failure: missing git binary, non-git tree, detached/empty
+ * repo, etc. The trust path must never abort because of git
+ * environmental issues — `approvedCommit` is metadata, not
+ * load-bearing.
+ */
+function captureGitHead(projectRoot: string): string | undefined {
+  try {
+    const out = execFileSync('git', ['-C', projectRoot, 'rev-parse', 'HEAD'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString();
+    const sha = out.trim();
+    return sha.length > 0 ? sha : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---- module no-ops (OQ4) -------------------------------------------------

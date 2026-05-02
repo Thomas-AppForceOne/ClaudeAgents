@@ -100,23 +100,29 @@ describe('S2 read tools (one positive test per tool)', () => {
     expect(result.mergedSplicePoints).toEqual({});
   });
 
-  it('getTrustState returns the loud-stub shape and logs a warning', () => {
-    const { logger, entries } = makeSpyLogger();
-    const result = getTrustState({ projectRoot: jsTsMinimal }, { logger });
-    expect(result).toEqual({ approved: true, reason: 'trust-not-yet-implemented' });
-    const warns = entries.filter((e) => e.level === 'warn');
-    expect(warns).toHaveLength(1);
-    expect(warns[0].msg).toContain('trust subsystem not implemented');
-    expect(warns[0].meta).toEqual({ tool: 'getTrustState' });
+  it('getTrustState (R5 S4) reports approved: false with a current hash and a summary', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'cas-trust-state-home-'));
+    try {
+      const result = getTrustState({ projectRoot: jsTsMinimal }, { homeDir: tmpHome });
+      expect(result.approved).toBe(false);
+      expect(typeof result.currentHash).toBe('string');
+      expect(result.currentHash.startsWith('sha256:')).toBe(true);
+      expect(result.summary).toBeDefined();
+      expect(typeof result.summary?.additionalChecksCount).toBe('number');
+      expect(result.summary?.perStackOverridesCount).toBe(0);
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
-  it('getTrustDiff returns the loud-stub shape and logs a warning', () => {
+  it('getTrustDiff returns the deferred stub shape and logs a warning', () => {
     const { logger, entries } = makeSpyLogger();
     const result = getTrustDiff({ projectRoot: jsTsMinimal }, { logger });
     expect(result).toEqual({ diff: [], reason: 'trust-not-yet-implemented' });
     const warns = entries.filter((e) => e.level === 'warn');
     expect(warns).toHaveLength(1);
-    expect(warns[0].msg).toContain('trust subsystem not implemented');
     expect(warns[0].meta).toEqual({ tool: 'getTrustDiff' });
   });
 

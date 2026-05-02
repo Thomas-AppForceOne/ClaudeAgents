@@ -34,7 +34,10 @@ import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
 import * as validateCmd from './commands/validate.js';
-import { trustStub } from './commands/_stubs.js';
+import * as trustInfoCmd from './commands/trust-info.js';
+import * as trustApproveCmd from './commands/trust-approve.js';
+import * as trustRevokeCmd from './commands/trust-revoke.js';
+import * as trustListCmd from './commands/trust-list.js';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec, type ParsedArgs } from './lib/args.js';
 import { renderTopLevelHelp } from './lib/help.js';
 import { writeErr, writeOut } from './lib/output.js';
@@ -167,6 +170,45 @@ async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
 }
 
 /**
+ * Inner dispatch for `gan trust <info|approve|revoke|list>`. All four
+ * arms ship in R5 S4 (the final R-series sprint). Trust-mutating
+ * subcommands (`approve`, `revoke`) require an explicit `--project-root`
+ * — the per-command handler enforces that and returns exit 64 if
+ * absent.
+ */
+async function trustDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'info':
+      return trustInfoCmd.run(tail);
+    case 'approve':
+      return trustApproveCmd.run(tail);
+    case 'revoke':
+      return trustRevokeCmd.run(tail);
+    case 'list':
+      return trustListCmd.run(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr:
+          'Error: gan trust requires a subcommand (`info`, `approve`, `revoke`, or `list`). Run `gan trust --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan trust ${inner}'. Run \`gan trust --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/**
  * Top-level subcommand registry. Subcommands that themselves dispatch on
  * a second positional (`gan config print|get|set`, etc.) keep the inner
  * dispatch in a `*Dispatch` helper above so this table stays a single
@@ -185,7 +227,7 @@ const SUBCOMMANDS: Readonly<Record<string, Subcommand>> = Object.freeze({
   stacks: stacksDispatch,
   stack: stackDispatch,
   modules: modulesDispatch,
-  trust: trustStub,
+  trust: trustDispatch,
 });
 
 /**
@@ -208,6 +250,10 @@ const TOP_LEVEL_SPEC: CommandSpec = {
     // those are stubs in S1. We surface it here so it doesn't trigger
     // unknown-flag errors when callers run `gan stacks new ios --tier=project`.
     { long: '--tier', type: 'string' },
+    // `--note` is referenced by `gan trust approve` (R5 S4). Surfaced at
+    // the top level so the dispatcher's parse does not reject it before
+    // the trust subcommand sees it.
+    { long: '--note', type: 'string' },
   ],
   allowUnknownFlags: false,
 };

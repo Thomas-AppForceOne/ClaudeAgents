@@ -38,6 +38,7 @@ import {
   requireName,
   requireOverlayTier,
   requireProjectRoot,
+  trustList as readTrustList,
 } from './tools/reads.js';
 import {
   validateAll as runValidateAll,
@@ -93,6 +94,19 @@ export const F2_TOOL_NAMES: readonly string[] = [
   'validateStack',
   'validateOverlay',
 ] as const;
+
+/**
+ * R5 sprint 4 dispatch additions. `trustList` is a new MCP tool that
+ * post-dates F2's tool-list freeze; it is dispatched but not part of
+ * the F2 schema (which the JSON schema document at `schemas/api-tools-
+ * v1.json` codifies). Keeping the two lists separate preserves the
+ * F2-schema-vs-MCP-dispatch invariant while still routing `trustList`
+ * through the wrapper.
+ */
+export const R5_TOOL_NAMES: readonly string[] = ['trustList'] as const;
+
+/** Union of every dispatchable tool name (F2 + R5 additions). */
+export const DISPATCH_TOOL_NAMES: readonly string[] = [...F2_TOOL_NAMES, ...R5_TOOL_NAMES];
 
 interface PackageMeta {
   name: string;
@@ -173,7 +187,7 @@ export async function createMcpServer(): Promise<Server> {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
 
-    if (!F2_TOOL_NAMES.includes(toolName)) {
+    if (!DISPATCH_TOOL_NAMES.includes(toolName)) {
       const err = createError('MalformedInput', {
         tool: toolName,
         message: `Unknown tool '${toolName}'.`,
@@ -287,6 +301,9 @@ async function dispatchRead(
       const projectRoot = requireProjectRoot(args, toolName);
       return readGetTrustDiff({ projectRoot }, { logger });
     }
+    case 'trustList': {
+      return readTrustList({}, { logger });
+    }
     case 'getModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
       const name = requireName(args, toolName);
@@ -355,12 +372,12 @@ async function dispatchRead(
     case 'trustApprove': {
       const projectRoot = requireProjectRoot(args, toolName);
       const contentHash = optionalContentHash(args);
-      return runTrustApprove({ projectRoot, contentHash }, { logger });
+      const note = optionalNote(args);
+      return runTrustApprove({ projectRoot, contentHash, note }, { logger });
     }
     case 'trustRevoke': {
       const projectRoot = requireProjectRoot(args, toolName);
-      const contentHash = optionalContentHash(args);
-      return runTrustRevoke({ projectRoot, contentHash }, { logger });
+      return runTrustRevoke({ projectRoot }, { logger });
     }
     case 'setModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
@@ -464,6 +481,11 @@ function describeRedactedShape(v: unknown): string {
 function optionalContentHash(args: Record<string, unknown>): string | undefined {
   const v = args['contentHash'];
   return typeof v === 'string' ? v : undefined;
+}
+
+function optionalNote(args: Record<string, unknown>): string | undefined {
+  const v = args['note'];
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
 /** Run the server over stdio. Resolves when stdin closes. */

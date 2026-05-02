@@ -1,13 +1,18 @@
 /**
  * Trust-event log sink for the config server (R5 sprint 3).
  *
- * Mirrors the routing rule used by `logging/logger.ts`: when `GAN_RUN_ID`
- * is set, trust events are appended to
- * `<cwd>/.gan-state/runs/<id>/logs/trust.log`; otherwise the line is
- * written to stderr. Each call writes exactly one line. Lines are
- * serialised through `stableStringify` (per F3's determinism pin) and
- * collapsed onto a single line so each `trust.log` entry is grep-able as
- * one record.
+ * Routing rule: when `GAN_RUN_ID` is set, trust events are appended to
+ * `<cwd>/.gan-state/runs/<id>/logs/trust.log`. When `GAN_RUN_ID` is
+ * unset/empty (CLI mode, lint scripts, tests, ad-hoc invocations), the
+ * function is a no-op — no stderr write, no file write. Trust mutations
+ * surface their outcome through return values (`trustApprove` /
+ * `trustRevoke`), so silencing logging outside a /gan run does not lose
+ * user-visible information; it only suppresses the structured event
+ * stream that exists for /gan-run forensics.
+ *
+ * Each in-run call writes exactly one line. Lines are serialised through
+ * `stableStringify` (per F3's determinism pin) and collapsed onto a
+ * single line so each `trust.log` entry is grep-able as one record.
  *
  * Anonymisation: trust hashes and project roots are *not* user-secret —
  * the trust check exposes both in user-visible error messages — so the
@@ -37,18 +42,24 @@ export interface TrustLogEvent {
 }
 
 /**
- * Append one trust event to the active trust log sink.
+ * Append one trust event to the active trust log sink, or no-op.
  *
- * The sink is selected per call (no module-level state): when the
- * `GAN_RUN_ID` env var is non-empty, the line is appended to
+ * When `GAN_RUN_ID` is non-empty, the line is appended to
  * `<cwd>/.gan-state/runs/<id>/logs/trust.log` (parent dir created
- * recursively); otherwise the line is written to `process.stderr`.
- * Errors writing to the file sink fall through silently — a logging
- * failure must never abort a trust check.
+ * recursively). File-write errors are swallowed — a logging failure must
+ * never abort a trust check.
+ *
+ * When `GAN_RUN_ID` is unset or empty, the function returns immediately
+ * without writing anywhere. This keeps CLI output, lint scripts, and
+ * test stderr free of structured trust JSON; the trust event stream is
+ * a forensic record for /gan runs only.
  */
 export function logTrustEvent(event: TrustLogEvent): void {
   const runId = process.env.GAN_RUN_ID;
-  const useFile = typeof runId === 'string' && runId.length > 0;
+  if (typeof runId !== 'string' || runId.length === 0) {
+    // Outside a /gan run: silent. No stderr, no file.
+    return;
+  }
 
   const payload: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
@@ -65,27 +76,15 @@ export function logTrustEvent(event: TrustLogEvent): void {
   const multiline = stableStringify(payload);
   const line = collapseToOneLine(multiline);
 
-  if (useFile) {
-    const file = path.join(
-      process.cwd(),
-      '.gan-state',
-      'runs',
-      runId as string,
-      'logs',
-      'trust.log',
-    );
-    try {
-      mkdirSync(path.dirname(file), { recursive: true });
-      appendFileSync(file, line, { encoding: 'utf8' });
-    } catch {
-      // Logging is best-effort; fall back to stderr so the line is not
-      // lost.
-      process.stderr.write(line);
-    }
-    return;
+  const file = path.join(process.cwd(), '.gan-state', 'runs', runId, 'logs', 'trust.log');
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    appendFileSync(file, line, { encoding: 'utf8' });
+  } catch {
+    // Logging is best-effort. Inside a /gan run the file sink is the
+    // only sink; if it fails the event is dropped rather than leaked to
+    // stderr (which would re-introduce the test-pollution regression).
   }
-
-  process.stderr.write(line);
 }
 
 /**
