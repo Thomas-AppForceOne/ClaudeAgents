@@ -1,0 +1,9 @@
+name: test-error-text
+on:
+  push:
+  pull_request:
+jobs:
+  run:
+    uses: ./.github/workflows/shared-setup.yml
+    with:
+      run: npm run lint-error-text
