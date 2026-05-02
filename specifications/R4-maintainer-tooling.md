@@ -51,9 +51,11 @@ Prints a summary: count of files checked, count of failures, structured error pe
 
 ### `publish-schemas`
 
-The schemas in `schemas/<type>-vN.json` are authored as JSON Schema documents in the spec. `publish-schemas` re-extracts and writes them to ensure the on-disk copy matches the authoring source. CI runs this in dry-run mode and fails the PR if the on-disk schemas drift from the spec source.
+The schemas in `schemas/<type>-vN.json` are authored as JSON Schema documents in the spec. `publish-schemas` validates the on-disk copy against the spec source and exits non-zero on drift; CI runs it in dry-run mode and fails the PR if the on-disk schemas have drifted from the source. The check is a drift-detection / consistency gate.
 
 This script exists so spec content remains the single source of truth even though the schemas are physical files for runtime use.
+
+The full **spec-extraction** path — programmatically extracting fenced JSON Schema blocks from the domain specs and writing them to `schemas/<type>-vN.json` — is a `TODO(future)` in the implementation: the v1 script does drift detection only, and the on-disk schemas are hand-authored alongside the spec text. Spec-extraction lights up when the domain specs adopt fenced JSON Schema annotations as a structured authoring format; until then, the maintainer hand-edits both the spec and the on-disk schema and `publish-schemas --dry-run` catches any divergence.
 
 ### `evaluator-pipeline-check`
 

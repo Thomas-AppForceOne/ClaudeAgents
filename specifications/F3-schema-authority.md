@@ -17,12 +17,15 @@ schemas/
   stack-v1.json
   overlay-v1.json
   module-manifest-v1.json
+  api-tools-v1.json
   …
 ```
 
 Naming: `<file-type>-v<N>.json`, where `<file-type>` is the kind of config file and `<N>` is the schemaVersion the document describes.
 
 Each domain spec authors the JSON Schema for its file type as part of its content (C1 owns `stack-v1.json`, C3 owns `overlay-v1.json`, M1 owns `module-manifest-v1.json`). The schema document is the authoritative declarative description; English prose in the spec is illustrative only.
+
+`api-tools-v1.json` is the parameter-shape schema for every MCP tool the reference server exposes (per F2's function surface and R1's MCP tool registration); it is owned by R1 because tool parameter shapes track the implementation surface, not a content-file format. Listed here for completeness so the on-disk schema set is enumerated in one place.
 
 ### `schemaVersion` semantics
 

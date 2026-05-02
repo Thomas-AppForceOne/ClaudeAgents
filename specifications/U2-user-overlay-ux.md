@@ -2,7 +2,7 @@
 
 ## Problem
 
-C4 defines the three-tier cascade and the user overlay's *schema* role within it. U2 covers the human side: what does it feel like to maintain `~/.claude/gan/config.md` over time across many projects?
+C4 defines the three-tier cascade and the user overlay's *schema* role within it. U2 covers the human side: what does it feel like to maintain `~/.claude/gan/user.md` over time across many projects?
 
 User overlays differ from project overlays in audience: they are personal, not shared. The UX must:
 
@@ -14,7 +14,7 @@ User overlays differ from project overlays in audience: they are personal, not s
 
 ### Bootstrapping
 
-The user overlay is `~/.claude/gan/config.md`. Same parse contract as the project overlay (per C3). Missing file is a no-op; defaults apply.
+The user overlay is `~/.claude/gan/user.md`. Same parse contract as the project overlay (per C3). Missing file is a no-op; defaults apply.
 
 A first-time user invokes `gan config set --tier=user runner.thresholdOverride 8`. R3 creates the file if absent. The resulting content:
 
@@ -84,7 +84,7 @@ Conversely, if a user's overlay is being overridden by every project anyway, tha
 
 ## Acceptance criteria
 
-- `gan config set --tier=user runner.thresholdOverride 8` creates `~/.claude/gan/config.md` if absent; subsequent `gan config print` from any project shows the user-tier value contributing.
+- `gan config set --tier=user runner.thresholdOverride 8` creates `~/.claude/gan/user.md` if absent; subsequent `gan config print` from any project shows the user-tier value contributing.
 - A user overlay declaring `additionalContext` produces a structured load-time error per C3.
 - `gan config print` output distinguishes user-tier and project-tier provenance for every splice point.
 - `gan config set --tier=user generator.additionalRules ...` from a script outside `/gan` writes the file successfully (auto-memory integration path works).

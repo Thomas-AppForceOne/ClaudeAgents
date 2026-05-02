@@ -6,11 +6,11 @@ Even with the stack plugin system (C1/C2) and overlays (C3/C4), a user may need 
 
 ## Proposed change
 
-Extend stack-file resolution to three tiers, highest priority first:
+Extend stack-file resolution to three tiers, highest priority first. The tier labels (`project`, `user`, `builtin`) are the canonical names used in code, in `getStackResolution()` output, and in CLI-visible provenance. Earlier drafts of this spec used "tier 1/2/3" or "project/user/repo"; those forms are retired in favour of the consistent set below.
 
-1. `.claude/gan/stacks/<name>.md` — project-specific. Zone 1 (config) per [spec F1](F1-filesystem-layout.md); user-authored and committed.
-2. `~/.claude/gan/stacks/<name>.md` — user-personal.
-3. `<repo>/stacks/<name>.md` — built-in defaults shipped with ClaudeAgents.
+1. **`project` tier** — `<projectRoot>/.claude/gan/stacks/<name>.md`. Zone 1 (config) per [spec F1](F1-filesystem-layout.md); user-authored and committed.
+2. **`user` tier** — `~/.claude/gan/stacks/<name>.md`. User-personal; outside any project.
+3. **`builtin` tier** — `<repo>/stacks/<name>.md`. Built-in defaults shipped with ClaudeAgents. (The exact path the resolver uses to find these files is the subject of a downstream revision documented in C5's "Built-in tier path resolution" section, which lands with the resolver-change sprint; the three-tier mechanics in the rest of this spec are agnostic to that path.)
 
 The resolution runs **inside the Configuration API** (F2) — specifically inside R1's stack loader. Agents call `getStack()` / `getActiveStacks()` and receive the resolved file's data; they never enumerate tiers themselves.
 
@@ -26,7 +26,7 @@ The user should not need to learn the `pairsWith` mechanism to shadow a stack fi
 - `schemaVersion` in the stack file frontmatter must exactly match the API's known stack schema version; mismatch is a hard `SchemaMismatch` error.
 - The API records which tier each active stack came from and exposes it via `getResolvedConfig()` for O1's observability surface.
 
-Detection rules live only in tier 3 (built-in) for v1 — project tiers can override a stack's contents but not introduce new detection patterns. This keeps the detection surface auditable. If a user needs a completely new stack, they put a file in a project tier and force it via `stack.override` (from spec C3).
+Detection rules live only in the `builtin` tier for v1 — `project` and `user` tiers can override a stack's contents but not introduce new detection patterns. This keeps the detection surface auditable. If a user needs a completely new stack, they put a file in a customisation tier (`project` or `user`) and force it via `stack.override` (from spec C3).
 
 ## Why wholesale replacement (and how to avoid forking)
 

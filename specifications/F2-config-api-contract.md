@@ -54,13 +54,16 @@ Function names are camelCase with a verb prefix. Every function takes `projectRo
 | `getActiveStacks()` | List of `{name, tier, schemaVersion}` for every active stack. |
 | `getStack(name)` | Full structured stack data (detection, scope, secretsGlob, cacheEnv, auditCmd, buildCmd, testCmd, lintCmd, securitySurfaces, schemaVersion). |
 | `getStackConventions(name)` | Free-form markdown text from the stack file's conventions section, or null. |
+| `getStackResolution(name)` | Structured access to the resolver's intermediate output for a single stack: which tier was chosen, which tiers were considered, the resolved file path. Used by the CLI's `gan stacks where` and by debugging surfaces; agents normally consume the higher-level `getStack()`/`getResolvedConfig()` instead. |
 | `getOverlay()` | Resolved overlay view across default → user → project (per C4). |
 | `getOverlayField(path)` | Single resolved value at a dotted path (e.g. `"runner.thresholdOverride"`). |
+| `getMergedSplicePoints()` | Resolved view of every overlay splice point with per-tier provenance — which tier contributed each list entry / scalar value, and which tiers were discarded by `discardInherited`. The structured "show your work" surface backing O1's observability output. |
 | `getModuleState(moduleName, key)` | Durable state value for a module from F1 zone 2. |
 | `listModules()` | Registered modules with `pairsWith` status. |
 | `getApiVersion()` | API contract version this server implements. |
 | `getTrustState()` | Whether the current `(projectRoot, content-hash)` is approved per F4; high-level summary if not. |
 | `getTrustDiff()` | Per-file hash diff between the current content hash and the previous approved hash for this project. Reports *which* files changed since approval, not *what* changed (the cache stores per-file hashes, not contents). Returns the approved commit SHA if R5 captured one, so the caller can suggest a `git diff` invocation. |
+| `trustList()` | All current trust-cache entries (approved `{projectRoot, aggregateHash, approvedAt, approvedCommit?, note?}` records). Per F4 / R5; backs the `gan trust list` CLI surface. |
 
 **Writes:**
 
@@ -70,11 +73,13 @@ Function names are camelCase with a verb prefix. Every function takes `projectRo
 | `appendToStackField(name, field, value)` | Atomic append for list-shaped fields. Reads the current list, appends `value` (with a duplicate-policy parameter: `error` / `skip` / `allow`), validates, persists. Avoids the read-modify-write race that bare `updateStackField` would expose. |
 | `removeFromStackField(name, field, key)` | Atomic remove for keyed-list-shaped fields (`securitySurfaces` by `id`, etc.). |
 | `setOverlayField(path, value, tier="project")` | Updates a single splice point at the named tier. Tier defaults to project. |
+| `appendToOverlayField(path, value, tier="project", duplicatePolicy="error")` | Atomic append for list-shaped overlay splice points (`generator.additionalRules`, `evaluator.additionalChecks`, `proposer.additionalCriteria`, `proposer.suppressSurfaces`, `planner.additionalContext`, `proposer.additionalContext`). Same R-M-W-race avoidance as `appendToStackField`; tier-aware so a project-tier append does not silently drop user-tier entries. |
+| `removeFromOverlayField(path, key, tier="project")` | Atomic remove for keyed-list-shaped overlay splice points; symmetric with `appendToOverlayField`. |
 | `setModuleState(moduleName, key, value)` | Writes a durable module-state value to zone 2. Whole-value replacement; prefer `appendToModuleState` / `removeFromModuleState` for list- or map-shaped state. |
 | `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` | Atomic append for list- or map-shaped module-state values. Same R-M-W-race avoidance as `appendToStackField`. Required for shapes like M2's `PortRegistry` where two concurrent `/gan` runs may both register a port. |
 | `removeFromModuleState(moduleName, key, entryKey)` | Atomic remove for keyed list- or map-shaped module-state values. |
 | `registerModule(moduleName, manifest)` | Records a module's `pairsWith` and capabilities. Refuses inconsistent pairing. |
-| `trustApprove(contentHash, note?)` | Records approval of the current content hash for this project. Per F4. |
+| `trustApprove(note?)` | Records approval of the current content hash for this project. Per F4. The server computes the hash from the current state of the committed files; the caller passes only the optional approval note. (Earlier drafts of this spec required the caller to pass `contentHash`; that signature was rejected because it allowed caller-server hash mismatch and split the source-of-truth across two places.) |
 | `trustRevoke()` | Removes any trust approval for this project. Per F4. |
 
 **Concurrency.** The MCP server is the sole writer to all framework files. Within a single `/gan` run, agents execute serially under orchestrator control; no two agents in one run modify the same field. The R-M-W race that would arise from concurrent `getStack()` + `updateStackField()` calls is **not** exposed by the framework's normal use pattern. For exotic external callers (e.g. a script using R3 in a multi-process setup), the dedicated `appendToStackField` / `removeFromStackField` / `appendToModuleState` / `removeFromModuleState` operations preserve atomicity.
@@ -124,7 +129,7 @@ All errors are structured objects:
 
 ```json
 {
-  "code": "SchemaMismatch | InvalidYAML | MissingFile | UnknownStack | UnknownSplicePoint | InvariantViolation | ValidationFailed | UnknownApiVersion | UntrustedOverlay | TrustCacheCorrupt | PathEscape",
+  "code": "SchemaMismatch | InvalidYAML | MissingFile | UnknownStack | UnknownSplicePoint | InvariantViolation | ValidationFailed | UnknownApiVersion | UntrustedOverlay | TrustCacheCorrupt | PathEscape | NotImplemented | MalformedInput | CacheEnvConflict",
   "file": "<path or null>",
   "field": "<dotted-path or null>",
   "line": "<int or null>",
@@ -135,6 +140,12 @@ All errors are structured objects:
 ```
 
 Error messages never reference maintainer-only scripts (per the roadmap's user-facing discipline rule).
+
+The error-code set covers three families:
+
+- **File-shape errors:** `InvalidYAML`, `SchemaMismatch`, `MissingFile`.
+- **Semantic errors:** `UnknownStack`, `UnknownSplicePoint`, `InvariantViolation`, `ValidationFailed`, `UnknownApiVersion`, `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`, `CacheEnvConflict` (a specialised invariant violation for the C1 "Conflict resolution" rule — every active stack's `cacheEnv` for a given `envVar` must agree after override resolution; surfaced as its own code so CLI exit-code mappings and IDE integrations can target it without parsing prose).
+- **Caller / state errors:** `MalformedInput` (any tool argument that fails its `api-tools-v1.json` shape check or fails the server's pre-call validation — wrong type, missing required field, malformed dotted path), `NotImplemented` (a tool present in the surface but whose implementation is deferred to a downstream spec; the loud-stub return path).
 
 **`remediation` field carries actionable snippets where possible.** For errors that beginners frequently hit, the `remediation` field contains a copy-paste-ready hint, not just prose. The clearest example is `cacheEnv` conflicts (per C1's "Conflict resolution" rule): the error's `remediation` field contains a one-line YAML fragment showing the `stack.cacheEnvOverride` shape the user must add to `.claude/gan/project.md` — e.g.
 

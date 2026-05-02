@@ -4,6 +4,13 @@ _Last verified: 2026-05-01 by spec-validator (R3 CLI wrapper decisions persisted
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
+## Platform priority
+
+- **v1 target platform: macOS.** UX, error-text discipline, and bash compatibility (3.2 floor) all assume macOS as the primary user environment. Release-gating tests run on macOS.
+- **Linux:** supported best-effort. Failures are bugs to fix when reported but do not gate releases. Most code paths (POSIX file modes, symlinks, `realpathSync.native`, sync IO, bash 3.2-compatible scripts) work identically on modern Linux; macOS-specific bash 3.2 constraints are a strict superset of what Linux bash handles.
+- **Windows:** explicitly out-of-scope for v1. Symlink permissions, path-separator differences, file-mode semantics, and bash availability all diverge enough that committing to Windows would multiply v1 surface area substantially without clear demand. The framework may happen to function on Windows in some configurations but that is not a property the project commits to or tests for.
+- **Macos-coupled UX rules are load-bearing and stay:** the iOS-developer-on-macOS readability check for user-facing error text, the no-`npm`/`Node` discipline in user-facing strings, and the bash-3.2 floor in `install.sh` follow from this priority and do not change.
+
 ## Tech stack
 
 - **Spec authoring:** Markdown only. Specs live under `specifications/` with phase-coded filenames (F/C/R/E/M/U/O + S deferred).

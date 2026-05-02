@@ -13,7 +13,7 @@ As we add more stateful tools (Python venv tracking, DB seed registries, Terrafo
 
 ## Proposed change
 
-Three zones per project, modelled on the Linux filesystem hierarchy. Each zone has a **single owner lifecycle**; no zone is shared between opposing lifecycles.
+Three zones per project, following standard POSIX filesystem conventions. Each zone has a **single owner lifecycle**; no zone is shared between opposing lifecycles. (The framework's v1 platform priority — macOS primary, Linux best-effort, Windows out-of-scope — is documented under "Platform priority" in `PROJECT_CONTEXT.md`; the zone layout below is portable across both supported platforms.)
 
 ```
 <project>/

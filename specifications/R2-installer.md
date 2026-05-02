@@ -6,7 +6,9 @@ ClaudeAgents has many moving parts: agents, skills, the Configuration MCP server
 
 ## Proposed change
 
-`install.sh` at the repo root. Bash, POSIX-compatible. Idempotent. Reversible via `install.sh --uninstall`.
+`install.sh` at the repo root. Bash 3.2-compatible (the macOS system default; avoids bash-4 features like associative arrays, `mapfile`, and `${var,,}`/`${var^^}` case-folding parameter expansion). POSIX-compatible. Idempotent. Reversible via `install.sh --uninstall`.
+
+The bash-3.2 floor follows the v1 platform priority documented in `PROJECT_CONTEXT.md` ("Platform priority"): macOS is the v1 release-gate platform, so the system bash version on stock macOS is the binding floor. Modern Linux bash is a strict superset and runs the script unchanged; Windows is explicitly out-of-scope for v1. The existing `install.sh` already conforms to the bash-3.2 floor — calling it out here is documentation discipline, not a code change.
 
 **Retirement.** The existing 138-line `install.sh` (old `.gan/`-based installer that links agents and skills without an MCP server) is rewritten in place when R2 is implemented. Same path, full content replacement. The implementation PR's diff shows a single `M` (modified) entry on `install.sh`; there is no transition period where both installers exist. See the roadmap's Retirement table.
 
@@ -18,7 +20,7 @@ The rewritten installer makes a particular point of cleanup: any pre-existing `.
 
 1. **Prerequisite checks.** Verify Node 20.10+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
 2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
-3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant).
+3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant). Until `@claudeagents/config-server` is published to a public registry, `install.sh` instead runs `npm install -g .` from the repo root (the **local-install-only rule** documented in `PROJECT_CONTEXT.md`); the published-registry path lights up automatically once the package is released.
 4. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
 5. **Prepare filesystem zones for the current project (if `install.sh` is run inside a git repo).** Create `.gan-state/` and `.gan-cache/` and add them to `.gitignore` if not already present. `.claude/gan/` is left alone (created lazily when the user first authors an overlay).
 6. **Run `validateAll()` against the current project.** A first sanity check; reports any pre-existing config issues. A failure here is a warning, not an installer abort, since the project may legitimately have no overlays yet.

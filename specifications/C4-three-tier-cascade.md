@@ -9,7 +9,7 @@ Configuration values flow through three tiers (default, user, project), each pot
 Three levels, from most general to most specific:
 
 1. **Defaults** — baked into the agent. Always present. Per-field default values listed in spec C3's splice-point table.
-2. **User overlay** (`~/.claude/gan/config.md`) — personal preferences, cross-project. Optional. UX in U2.
+2. **User overlay** (`~/.claude/gan/user.md`) — personal preferences, cross-project. Optional. UX in U2.
 3. **Project overlay** (`.claude/gan/project.md`) — per-project adjustments. Optional. UX in U1.
 
 Each level merges into the resolved view from the level above, producing a cumulative resolved config. The project overlay is the leaf and is authoritative on conflict. `discardInherited` at any level resets the relevant scope to "nothing" before that level's own values are applied (per C3).
@@ -104,8 +104,8 @@ Note that B's *position* stays where the user declared it (slot 2), but B's *con
 
 - With a user overlay adding criterion `A` and a project overlay adding criterion `B`, every contract contains both (order: user first, project second).
 - With a user overlay adding criterion named `X` (threshold 8) and a project overlay adding criterion named `X` (threshold 9), contracts contain only the project entry with threshold 9.
-- With a user overlay declaring `stack.override: [foo]` and a project overlay declaring `stack.override: [bar]`, the active set contains both `foo` and `bar`.
-- With a user overlay declaring `stack.override: [foo]` and a project overlay declaring `stack.discardInherited: true` plus `stack.override: [bar]`, the active set is exactly `[bar]`.
+- With a user overlay declaring `runner.thresholdOverride: 8` and a project overlay declaring `runner.thresholdOverride: 9`, the project value of 9 wins (covered above; included here as the canonical example of higher-tier-wins on a non-project-only field).
+- A user overlay declaring `stack.override` is rejected at load time per C3's "User-overlay forbidden fields" rule (this AC is the cascade-side restatement of that rule); the field never enters the merge step. Earlier drafts of this AC list described a union-merge between user-tier and project-tier `stack.override` lists; that AC was removed because it contradicted C3 line 61 and C4's "Project-only" merge column — `stack.override` cannot legally appear at user tier, so a cascade outcome for it cannot be described.
 - With a user overlay declaring `evaluator.additionalChecks: [{command: "X", on_failure: warning}]` and a project overlay declaring the same command with `on_failure: blockingConcern`, the project entry wins.
 
 ### Block-level and field-level discard

@@ -83,9 +83,7 @@ auditCmd:
   absenceSignal: warning
 buildCmd: "false  # TODO: replace with the build command users on this stack run"
 testCmd:  "false  # TODO: replace with the test command"
-lintCmd:
-  command: "false  # TODO: replace with the lint command, or remove this field"
-  absenceSignal: warning
+lintCmd:  "false  # TODO: replace with the lint command, or remove this field"
 securitySurfaces: []
   # TODO: see C1's schema spec and existing stacks/*.md files for surface
   # authoring patterns. An empty list is a valid stack (it just means /gan
@@ -114,17 +112,17 @@ Default output is human-readable: tables for lists, key-value pairs for single v
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 1 | Generic failure |
-| 2 | Validation failure (config has issues; the report is on stdout) |
-| 3 | Schema mismatch |
-| 4 | Invariant violation |
-| 5 | API/server unreachable (R1 not installed or crashed) |
-| 64 | Bad CLI arguments |
+| Code | F2 error code(s) | Meaning |
+|---|---|---|
+| 0 | _none_ | Success. |
+| 1 | `TrustCacheCorrupt` and any unmapped error code (the safety default) | Generic failure. Unmapped F2 codes default to `1` rather than `0` so a future-added code can never accidentally surface as success. |
+| 2 | `UntrustedOverlay`, `ValidationFailed` | Validation failure (config has issues; the structured report prints on stdout). The trust check fails closed on this code. |
+| 3 | `SchemaMismatch`, `InvalidYAML`, `MissingFile` | Schema or shape problem at the file boundary. |
+| 4 | `InvariantViolation`, `PathEscape`, `CacheEnvConflict` | Cross-file invariant violation (including the F4 path-escape and C1 cacheEnv conflicts surfaced as their own codes). |
+| 5 | `UnknownApiVersion`, plus the connection-failure path when the server cannot be reached | API/server unreachable (R1 not installed or crashed) or version-mismatched. |
+| 64 | `MalformedInput`, `UnknownStack`, `UnknownSplicePoint`, `NotImplemented` | Bad CLI arguments — caller-side input shape errors, references to unknown stacks/splice points, or invocation of a tool whose implementation is deferred. |
 
-Documented so CI scripts can act on specific failures.
+Documented so CI scripts can act on specific failures. The mapping is one-to-many in both directions: a single exit code can absorb multiple F2 codes (e.g. exit `4` covers `InvariantViolation`, `PathEscape`, and `CacheEnvConflict`), and the exit-code table is the authoritative cross-reference between the F2 enum and shell exit codes. New F2 error codes added in a future revision require a same-PR update to this table; the implementation in `src/cli/lib/exit-codes.ts` mirrors this table 1:1.
 
 ### Where it runs
 

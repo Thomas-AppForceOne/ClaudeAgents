@@ -29,7 +29,7 @@ skills/gan/
 
 `src/config-server/tools/writes.js` gains four new MCP tools (per F2 versioning):
 
-- `trustApprove(projectRoot, contentHash, note?)` → writes a record to the cache. Returns `{ mutated: true, ... }` per F2.
+- `trustApprove(projectRoot, note?)` → writes a record to the cache. The server computes the content hash from the current state of the committed files (per the hash algorithm below); the caller never passes the hash, eliminating any caller/server hash-mismatch surface. Returns `{ mutated: true, ... }` per F2. (Earlier drafts of this spec required the caller to pass `contentHash` — that signature was rejected before R5 shipped; the current spec text and implementation both use the projectRoot-only form.)
 - `trustRevoke(projectRoot)` → removes records for a project. Returns `{ mutated, ... }` per F2.
 - `trustList()` → returns all current trust records (read-only).
 - `getTrustState(projectRoot)` → returns whether the current `(projectRoot, current-hash)` is approved, plus a high-level "what kind of change" summary if not (counts of `additionalChecks` entries, command-overrides, etc.). Does **not** return a per-file diff in v1; users reading the change inspect it via git.

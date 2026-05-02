@@ -13,30 +13,52 @@ A Node 18+ MCP server packaged as `@claudeagents/config-server`. Implements ever
 ```
 src/
   config-server/
-    index.js                    # MCP entry point + tool registration
+    index.ts                    # MCP entry point + tool registration
+    errors.ts                   # F2 error factory (single producer of every code)
+    scaffold-banner.ts          # R3-shared DRAFT_BANNER constant (single source)
+    schemas-bundled.ts          # imports schemas/*.json at build time
     tools/
-      reads.js                  # getResolvedConfig, getStack, getOverlay, …
-      writes.js                 # updateStackField, setOverlayField, …
-      validate.js               # validateAll, validateStack, validateOverlay
+      reads.ts                  # getResolvedConfig, getStack, getOverlay, getMergedSplicePoints, getStackResolution, getTrustState, trustList, …
+      writes.ts                 # updateStackField, setOverlayField, appendToOverlayField, removeFromOverlayField, trustApprove, trustRevoke, …
+      validate.ts               # validateAll, validateStack, validateOverlay
     storage/
-      stack-loader.js           # reads stacks/*.md and tier overrides
-      overlay-loader.js         # reads project + user overlays
-      module-loader.js          # reads module manifests
-      yaml-block-parser.js      # extracts the YAML body block from markdown
-      yaml-block-writer.js      # rewrites the YAML body block, preserves prose
+      stack-loader.ts           # reads stacks/*.md and tier overrides
+      overlay-loader.ts         # reads project + user overlays
+      module-loader.ts          # reads module manifests
+      yaml-block-parser.ts      # extracts the YAML frontmatter block from markdown
+      yaml-block-writer.ts      # rewrites the YAML frontmatter block, preserves prose
+      atomic-write.ts           # temp-file + rename for every persisted write
     resolution/
-      detection.js              # C2's detection algorithm
-      cascade.js                # C4's three-tier overlay cascade
-      stack-resolution.js       # C5's three-tier stack file resolution
+      detection.ts              # C2's detection algorithm
+      cascade.ts                # C4's three-tier overlay cascade
+      stack-resolution.ts       # C5's three-tier stack file resolution
+      resolved-config.ts        # composes the resolved view backing getResolvedConfig
+      cache.ts                  # per-process resolver cache (keyed by canonical projectRoot)
     invariants/
-      pairs-with.js
-      cache-env-conflict.js
-      additional-context-paths.js
-      schema-version-handshake.js
-    schemas-bundled.js          # imports schemas/*.json at build time
-  package.json
-  index.js                      # re-exports for npm consumers (CLI in R3)
+      index.ts                  # registry of every cross-file invariant
+      pairs-with-consistency.ts
+      cache-env-no-conflict.ts
+      additional-context-path-resolves.ts
+      path-escape.ts            # F4 PathEscape (the F2-cataloged code)
+      overlay-tier-api-version.ts
+      stack-tier-api-version.ts
+      detection-tier3-only.ts
+      stack-no-draft-banner.ts
+    determinism/
+      index.ts                  # picomatch glob, realpathSync.native canonicalisation, sorted-key JSON, locale-sensitive sort
+    validation/
+      schema-check.ts           # per-file schema validation orchestration
+    trust/                      # R5
+      hash.ts                   # SHA-256 over committed command-declaring files
+      cache-io.ts               # ~/.claude/gan/trust-cache.json read/write (mode 0600)
+      integration.ts            # validateAll() trust-phase hook
+    logging/
+      index.ts                  # per-run log routing (GAN_RUN_ID → .gan-state/runs/<id>/logs/config-server.log)
+  index.ts                      # re-exports for npm consumers (CLI in R3)
+package.json
 ```
+
+The layout block enumerates the subdirectories R1 ships at sprint completion; downstream specs (R5 in particular) add files **inside** these subdirectories rather than introducing new top-level directories. The `trust/` and `validation/` subdirectories were added during R-series implementation (`trust/` for R5; `validation/` for R1 itself); both are catalogued here so the layout block matches the on-disk tree without a future audit needing to reconcile them.
 
 Test code lives under `tests/config-server/`. Per-tool unit tests, per-resolver unit tests, and integration tests against fixture configs.
 
