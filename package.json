@@ -27,7 +27,9 @@
     "pair-names": "node dist/scripts/pair-names/index.js",
     "evaluator-pipeline-check": "node dist/scripts/evaluator-pipeline-check/index.js",
     "publish-schemas": "node dist/scripts/publish-schemas/index.js",
-    "publish-schemas:check": "node dist/scripts/publish-schemas/index.js --dry-run"
+    "publish-schemas:check": "node dist/scripts/publish-schemas/index.js --dry-run",
+    "lint-no-stack-leak": "node dist/scripts/lint-no-stack-leak/index.js",
+    "lint-error-text": "node dist/scripts/lint-error-text/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

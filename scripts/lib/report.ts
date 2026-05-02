@@ -95,6 +95,38 @@ export interface PublishSchemasReport {
 }
 
 /**
+ * Report shape for `scripts/lint-no-stack-leak/`. The script walks a
+ * fixed scan scope (`agents/*.md`, `skills/gan/SKILL.md`, recursive
+ * `src/config-server/**\/*.ts`) looking for ecosystem-specific tokens
+ * that would leak Node/npm-shaped vocabulary outside their owning stack
+ * file. `checked` is the count of files inspected; `failures` carries
+ * `LeakDetected` and `EmptyTransitionalEntry` entries.
+ */
+export interface LintNoStackLeakReport {
+  kind: 'lint-no-stack-leak';
+  /** Number of files inspected. */
+  checked: number;
+  /** Subset of inspected files (and allowlist entries) that produced a hit. */
+  failures: ReportFailure[];
+}
+
+/**
+ * Report shape for `scripts/lint-error-text/`. The script walks
+ * `src/config-server/**\/*.ts` and `src/cli/**\/*.ts` looking for lines
+ * that emit a user-facing message (matching one of the known emit-site
+ * patterns) AND contain a forbidden ecosystem token. `checked` is the
+ * count of files inspected; `failures` carries `ErrorTextLeakDetected`
+ * entries.
+ */
+export interface LintErrorTextReport {
+  kind: 'lint-error-text';
+  /** Number of files inspected. */
+  checked: number;
+  /** Subset of inspected files that produced at least one emit-site hit. */
+  failures: ReportFailure[];
+}
+
+/**
  * Discriminated union of every per-script report shape. New scripts add
  * their own `kind` arm and `formatReport` grows a new branch.
  */
@@ -102,7 +134,9 @@ export type ScriptReport =
   | LintStacksReport
   | PairNamesReport
   | EvaluatorPipelineCheckReport
-  | PublishSchemasReport;
+  | PublishSchemasReport
+  | LintNoStackLeakReport
+  | LintErrorTextReport;
 
 export interface FormattedReport {
   stdout: string;
@@ -126,6 +160,12 @@ export function formatReport(input: ScriptReport): FormattedReport {
   }
   if (input.kind === 'publish-schemas') {
     return formatPublishSchemas(input);
+  }
+  if (input.kind === 'lint-no-stack-leak') {
+    return formatLintNoStackLeak(input);
+  }
+  if (input.kind === 'lint-error-text') {
+    return formatLintErrorText(input);
   }
   // Exhaustiveness guard. The `never` assignment forces a compile error
   // if a new `kind` is added without a matching branch above.
@@ -182,6 +222,26 @@ function formatPublishSchemas(input: PublishSchemasReport): FormattedReport {
   return { stdout, stderr };
 }
 
+function formatLintNoStackLeak(input: LintNoStackLeakReport): FormattedReport {
+  const stdout = `${input.checked} files scanned, ${input.failures.length} hits\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
+function formatLintErrorText(input: LintErrorTextReport): FormattedReport {
+  const stdout = `${input.checked} files scanned, ${input.failures.length} hits\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
 function countFailedFiles(failures: readonly ReportFailure[]): number {
   const seen = new Set<string>();
   for (const f of failures) {
@@ -205,6 +265,12 @@ export function formatReportJson(input: ScriptReport): string {
     return renderJson(input);
   }
   if (input.kind === 'publish-schemas') {
+    return renderJson(input);
+  }
+  if (input.kind === 'lint-no-stack-leak') {
+    return renderJson(input);
+  }
+  if (input.kind === 'lint-error-text') {
     return renderJson(input);
   }
   // Exhaustiveness guard for the JSON path. Mirrors `formatReport` so

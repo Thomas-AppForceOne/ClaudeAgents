@@ -11,6 +11,8 @@ export { formatReport, formatReportJson } from './report.js';
 export type {
   EvaluatorPipelineCheckReport,
   FormattedReport,
+  LintErrorTextReport,
+  LintNoStackLeakReport,
   LintStacksReport,
   PairNamesReport,
   PublishSchemasReport,
