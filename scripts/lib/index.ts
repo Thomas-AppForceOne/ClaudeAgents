@@ -13,6 +13,7 @@ export type {
   FormattedReport,
   LintStacksReport,
   PairNamesReport,
+  PublishSchemasReport,
   ReportFailure,
   ScriptReport,
 } from './report.js';

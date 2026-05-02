@@ -73,10 +73,36 @@ export interface EvaluatorPipelineCheckReport {
 }
 
 /**
+ * Report shape for `scripts/publish-schemas/`. The script reads each
+ * published schema, parses it, re-emits it via `stableStringify`, and
+ * compares the on-disk bytes to the canonical form. `checked` is the
+ * total schema count; `failures` carries `SchemaMissing`,
+ * `SchemaParseError`, and `SchemaDrift` entries; `rewritten` (write
+ * mode only) reports how many on-disk schemas the script repaired in
+ * place via `atomicWriteFile`.
+ */
+export interface PublishSchemasReport {
+  kind: 'publish-schemas';
+  /** Number of schema files inspected. */
+  checked: number;
+  /** Subset of schemas that were missing, unparseable, or drifted. */
+  failures: ReportFailure[];
+  /**
+   * Optional: number of schemas re-written in canonical form. Populated
+   * in write mode (default); omitted in `--dry-run` mode.
+   */
+  rewritten?: number;
+}
+
+/**
  * Discriminated union of every per-script report shape. New scripts add
  * their own `kind` arm and `formatReport` grows a new branch.
  */
-export type ScriptReport = LintStacksReport | PairNamesReport | EvaluatorPipelineCheckReport;
+export type ScriptReport =
+  | LintStacksReport
+  | PairNamesReport
+  | EvaluatorPipelineCheckReport
+  | PublishSchemasReport;
 
 export interface FormattedReport {
   stdout: string;
@@ -97,6 +123,9 @@ export function formatReport(input: ScriptReport): FormattedReport {
   }
   if (input.kind === 'evaluator-pipeline-check') {
     return formatEvaluatorPipelineCheck(input);
+  }
+  if (input.kind === 'publish-schemas') {
+    return formatPublishSchemas(input);
   }
   // Exhaustiveness guard. The `never` assignment forces a compile error
   // if a new `kind` is added without a matching branch above.
@@ -137,6 +166,22 @@ function formatEvaluatorPipelineCheck(input: EvaluatorPipelineCheckReport): Form
   return { stdout, stderr };
 }
 
+function formatPublishSchemas(input: PublishSchemasReport): FormattedReport {
+  const failedCount = countFailedFiles(input.failures);
+  // The `rewritten` count is intentionally omitted from the stdout
+  // summary line — it is surfaced only via the JSON form for now. This
+  // keeps the one-liner consistent with the other R4 scripts; a
+  // human-readable `(N rewritten)` suffix can be added later without
+  // breaking the JSON shape.
+  const stdout = `${input.checked} schemas checked, ${failedCount} failed\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
 function countFailedFiles(failures: readonly ReportFailure[]): number {
   const seen = new Set<string>();
   for (const f of failures) {
@@ -157,6 +202,9 @@ export function formatReportJson(input: ScriptReport): string {
     return renderJson(input);
   }
   if (input.kind === 'evaluator-pipeline-check') {
+    return renderJson(input);
+  }
+  if (input.kind === 'publish-schemas') {
     return renderJson(input);
   }
   // Exhaustiveness guard for the JSON path. Mirrors `formatReport` so
