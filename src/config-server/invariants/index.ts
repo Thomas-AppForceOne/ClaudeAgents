@@ -30,6 +30,7 @@ import { checkCacheEnvNoConflict } from './cache-env-no-conflict.js';
 import { checkDetectionTier3Only } from './detection-tier3-only.js';
 import { checkOverlayTierApiVersion } from './overlay-tier-api-version.js';
 import { checkPairsWithConsistency } from './pairs-with-consistency.js';
+import { checkPathEscape } from './path-escape.js';
 import { checkPathNoEscape } from './path-no-escape.js';
 import { checkStackNoDraftBanner } from './stack-no-draft-banner.js';
 import { checkStackTierApiVersion } from './stack-tier-api-version.js';
@@ -56,6 +57,7 @@ export const INVARIANTS: InvariantRegistration[] = [
   { id: 'detection.tier3_only', check: checkDetectionTier3Only },
   { id: 'overlay.tier_apiVersion', check: checkOverlayTierApiVersion },
   { id: 'pairsWith.consistency', check: checkPairsWithConsistency },
+  { id: 'path.escape', check: checkPathEscape },
   { id: 'path.no_escape', check: checkPathNoEscape },
   { id: 'stack.no_draft_banner', check: checkStackNoDraftBanner },
   { id: 'stack.tier_apiVersion', check: checkStackTierApiVersion },
