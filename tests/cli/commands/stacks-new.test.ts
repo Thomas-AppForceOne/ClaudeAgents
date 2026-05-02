@@ -59,14 +59,7 @@ describe('gan stacks new — default tier (project)', () => {
 describe('gan stacks new — --tier=repo', () => {
   it('writes <root>/stacks/<name>.md and exits 0', async () => {
     const proj = makeTmpProject();
-    const r = await runGan([
-      'stacks',
-      'new',
-      'web-rust',
-      '--tier=repo',
-      '--project-root',
-      proj,
-    ]);
+    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
     const canonicalRoot = canonicalizePath(proj);
@@ -76,14 +69,7 @@ describe('gan stacks new — --tier=repo', () => {
 
   it('the written bytes equal buildScaffold(name) for the repo tier too', async () => {
     const proj = makeTmpProject();
-    const r = await runGan([
-      'stacks',
-      'new',
-      'web-rust',
-      '--tier=repo',
-      '--project-root',
-      proj,
-    ]);
+    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
     expect(r.exitCode).toBe(0);
     const canonicalRoot = canonicalizePath(proj);
     const target = path.join(canonicalRoot, 'stacks', 'web-rust.md');
@@ -95,14 +81,7 @@ describe('gan stacks new — --tier=repo', () => {
 describe('gan stacks new — --tier=user is rejected', () => {
   it('exits 64 with a stderr message naming the unsupported tier; no file created', async () => {
     const proj = makeTmpProject();
-    const r = await runGan([
-      'stacks',
-      'new',
-      'web-node',
-      '--tier=user',
-      '--project-root',
-      proj,
-    ]);
+    const r = await runGan(['stacks', 'new', 'web-node', '--tier=user', '--project-root', proj]);
     expect(r.exitCode).toBe(64);
     expect(r.stdout).toBe('');
     expect(r.stderr).toMatch(/--tier/);
@@ -156,14 +135,7 @@ describe('gan stacks new — no-overwrite rule', () => {
     const target = path.join(dir, 'web-rust.md');
     writeFileSync(target, 'sentinel\n', 'utf8');
 
-    const r = await runGan([
-      'stacks',
-      'new',
-      'web-rust',
-      '--tier=repo',
-      '--project-root',
-      proj,
-    ]);
+    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain(target);
   });

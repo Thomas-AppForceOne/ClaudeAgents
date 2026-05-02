@@ -16,10 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import {
-  validateAll,
-  type Issue,
-} from '../../../src/config-server/tools/validate.js';
+import { validateAll, type Issue } from '../../../src/config-server/tools/validate.js';
 import { runGan } from '../helpers/spawn.js';
 import { stackFixturePath } from '../helpers/fixtures.js';
 
@@ -65,9 +62,7 @@ describe('gan validate — schema-only failure (fixture: cli-validate-schema-vio
   it('the fixture itself produces ONLY schema-class issues (no InvariantViolation)', () => {
     const direct = validateAll({ projectRoot: SCHEMA_VIOLATION_FIXTURE });
     expect(direct.issues.length).toBeGreaterThan(0);
-    const invariantHits = direct.issues.filter(
-      (i: Issue) => i.code === 'InvariantViolation',
-    );
+    const invariantHits = direct.issues.filter((i: Issue) => i.code === 'InvariantViolation');
     expect(invariantHits.length).toBe(0);
   });
 

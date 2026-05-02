@@ -11,7 +11,7 @@ import { buildScaffold, DRAFT_BANNER as SCAFFOLD_BANNER } from '../../../src/cli
 import { DRAFT_BANNER as SOURCE_BANNER } from '../../../src/config-server/scaffold-banner.js';
 
 const EXPECTED_SECOND_LINE =
-  '# `gan validate` and CI\'s lint-stacks will fail while this banner is present.';
+  "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
 
 const REQUIRED_KEYS = [
   'detection',

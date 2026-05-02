@@ -68,7 +68,7 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
     return createError('MalformedInput', {
       field: '--tier',
       message:
-        "gan stacks new does not support --tier=user; the user tier is not a supported scaffold target. Use --tier=project (default) or --tier=repo.",
+        'gan stacks new does not support --tier=user; the user tier is not a supported scaffold target. Use --tier=project (default) or --tier=repo.',
     });
   }
   if (!ALLOWED_TIERS.has(raw as ScaffoldTier)) {

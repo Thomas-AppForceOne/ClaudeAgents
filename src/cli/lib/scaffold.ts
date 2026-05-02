@@ -34,8 +34,7 @@ export { DRAFT_BANNER } from '../../config-server/scaffold-banner.js';
 
 import { DRAFT_BANNER as BANNER } from '../../config-server/scaffold-banner.js';
 
-const SECOND_LINE =
-  '# `gan validate` and CI\'s lint-stacks will fail while this banner is present.';
+const SECOND_LINE = "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
 
 const AUDIT_STUB =
   '"false  # TODO: replace before committing — your audit command, or remove this field"';

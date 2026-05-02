@@ -137,10 +137,7 @@ function buildBrokenDist(): string {
     path.join(csDir, 'scaffold-banner.js'),
     `export const DRAFT_BANNER = '# DRAFT (test-stub)';\n`,
   );
-  writeFileSync(
-    path.join(csDir, 'scaffold-banner.d.ts'),
-    'export const DRAFT_BANNER: string;\n',
-  );
+  writeFileSync(path.join(csDir, 'scaffold-banner.d.ts'), 'export const DRAFT_BANNER: string;\n');
 
   // Stand-in for `dist/index.js` (the package main re-export point that
   // S2's read commands import from). Every exported read function throws
