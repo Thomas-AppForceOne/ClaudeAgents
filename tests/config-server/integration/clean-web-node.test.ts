@@ -48,11 +48,13 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
       'discarded',
       'issues',
       'overlay',
+      'runtimeMode',
       'schemaVersions',
       'stacks',
     ]);
     expect(r.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(r.schemaVersions).toEqual({ stack: 1, overlay: 1 });
+    expect(r.runtimeMode).toEqual({ noProjectCommands: false });
     expect(r.stacks).toEqual({ active: [], byName: {} });
     expect(r.overlay).toEqual({});
     expect(r.discarded).toEqual([]);

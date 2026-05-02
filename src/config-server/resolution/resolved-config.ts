@@ -40,6 +40,17 @@ import { resolveStackFile, type ResolveStackOptions } from './stack-resolution.j
 export interface ResolvedConfig {
   apiVersion: string;
   schemaVersions: { stack: number; overlay: number };
+  /**
+   * Runtime knobs that affect how downstream agents *use* the resolved
+   * config (rather than how the framework computed it). R5 S3
+   * introduces `noProjectCommands`: when `true`, agents must skip
+   * project-declared commands (per F4's `--no-project-commands`
+   * runtime knob). The value is supplied by the caller via
+   * `ComposeContext.noProjectCommands`; it is *not* read from any env
+   * var here — the caller is responsible for surfacing the user's
+   * choice.
+   */
+  runtimeMode: { noProjectCommands: boolean };
   stacks: {
     /** Sorted active stack names. */
     active: string[];
@@ -81,6 +92,13 @@ export interface AdditionalContextRow {
 export interface ComposeContext {
   userHome?: string;
   apiVersion?: string;
+  /**
+   * Surface F4's `--no-project-commands` runtime knob into the
+   * resolved view. Callers (CLI / MCP) translate the user's choice
+   * into this boolean; the resolution layer only mirrors it onto
+   * `runtimeMode.noProjectCommands`. Defaults to `false`.
+   */
+  noProjectCommands?: boolean;
 }
 
 const SCHEMA_VERSIONS = { stack: 1, overlay: 1 } as const;
@@ -181,6 +199,7 @@ export function composeResolvedConfigSync(
   const resolved: ResolvedConfig = {
     apiVersion,
     schemaVersions: { ...SCHEMA_VERSIONS },
+    runtimeMode: { noProjectCommands: ctx.noProjectCommands ?? false },
     stacks: {
       active: detection.active.slice(),
       byName,

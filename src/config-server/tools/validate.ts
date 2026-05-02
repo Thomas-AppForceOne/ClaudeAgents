@@ -1,9 +1,9 @@
 /**
- * R1 sprint 4 — full validation pipeline (phases 1 + 2 + 3).
+ * Full validation pipeline (phases 1 + 2 + 3 + 4).
  *
  * Direct library entry points for the three F2 validation tools:
  *
- *   - `validateAll({ projectRoot })` — runs the three-phase pipeline:
+ *   - `validateAll({ projectRoot })` — runs the four-phase pipeline:
  *       phase 1 (discovery) → enumerates every stack file across the three
  *         tiers (project, user, built-in) and every overlay tier (default,
  *         user, project). Module discovery is a no-op (M1 lands real
@@ -17,6 +17,12 @@
  *         Each invariant returns 0+ issues; all are collected (no
  *         short-circuit). Order is the registry's deterministic order
  *         (alphabetical by id).
+ *       phase 4 (trust check, R5 S3) → delegates to
+ *         `trust/integration.runTrustCheck`. Reports an
+ *         `UntrustedOverlay` issue when the project declares commands
+ *         and the current overlay hash is not approved in
+ *         `~/.claude/gan/trust-cache.json`. Skipped when the project
+ *         declares no commands; bypassed via the trust-mode env knob.
  *
  *   - `validateStack({ projectRoot, name })` — single-stack equivalent:
  *       loads the named stack via the C5 three-tier resolver, runs phase 2
@@ -47,6 +53,7 @@ import {
   type ResolveStackOptions,
   type StackTier,
 } from '../resolution/stack-resolution.js';
+import { runTrustCheck } from '../trust/integration.js';
 import {
   validateOverlayBodyAgainstSchema,
   validateStackBodyAgainstSchema,
@@ -109,16 +116,33 @@ export interface ValidateOverlayInput {
 export interface ValidateContext {
   /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
   userHome?: string;
+  /**
+   * Override `process.env` for the trust check (R5 S3). Tests inject a
+   * controlled env so the trust-mode env var does not leak between
+   * cases.
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Override `os.homedir()` for the trust check (R5 S3). Tests inject a
+   * `mkdtempSync` directory so the trust cache lookup never reaches the
+   * real home directory.
+   */
+  homeDir?: string;
 }
 
 // ---- public API -----------------------------------------------------------
 
 /**
- * Run the full validation pipeline (phases 1 + 2; phase 3 is a stub).
+ * Run the full validation pipeline (phases 1 + 2 + 3 + 4).
  *
- * Returns a flat list of issues. An empty list means the project passed
- * schema validation; cross-file invariants (phase 3) ship in S4. Callers
- * must not treat an empty list as "fully validated" until S4 lands.
+ * Phase 4 (R5 S3) is the trust gate: when the project's overlays
+ * declare commands and the user has not approved the current overlay
+ * contents, `validateAll` reports an `UntrustedOverlay` issue. Issue
+ * order is stable: phase-1 discovery issues, then phase-2 schema
+ * issues, then phase-3 invariant issues, then phase-4 trust issues.
+ *
+ * Returns a flat list of issues. An empty list means the project
+ * passed every phase, including the trust gate.
  */
 export function validateAll(
   input: ValidateAllInput,
@@ -128,6 +152,7 @@ export function validateAll(
   runPhase1Discovery(snapshot, ctx);
   runPhase2SchemaValidation(snapshot);
   runPhase3Invariants(snapshot);
+  runPhase4Trust(snapshot, ctx);
   return { issues: snapshot.issues };
 }
 
@@ -449,6 +474,31 @@ function validateStackFileFromDisk(
 function runPhase3Invariants(snapshot: ValidationSnapshot): void {
   const produced = runAllInvariants(snapshot);
   if (produced.length > 0) snapshot.issues.push(...produced);
+}
+
+// ---- phase 4: trust check (R5 S3) ----------------------------------------
+
+/**
+ * Phase 4 — trust check.
+ *
+ * Delegates to `trust/integration.runTrustCheck`. The trust gate fires
+ * only when the project-tier overlay declares commands the framework
+ * would run; otherwise the phase is a no-op and `runTrustCheck`
+ * returns `'skipped'`. Issues are appended after phase-3 issues to
+ * preserve the stable phase ordering callers rely on.
+ *
+ * The trust-mode env var is read inside `runTrustCheck` only — this
+ * phase wrapper passes through `ctx.env` and `ctx.homeDir` for tests
+ * but does not consult either directly.
+ */
+function runPhase4Trust(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
+  const result = runTrustCheck({
+    projectRoot: snapshot.projectRoot,
+    snapshot,
+    env: ctx.env,
+    homeDir: ctx.homeDir,
+  });
+  if (result.issues.length > 0) snapshot.issues.push(...result.issues);
 }
 
 // ---- helpers --------------------------------------------------------------

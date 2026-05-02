@@ -7,6 +7,9 @@
   "discarded": [],
   "issues": [],
   "overlay": {},
+  "runtimeMode": {
+    "noProjectCommands": false
+  },
   "schemaVersions": {
     "overlay": 1,
     "stack": 1

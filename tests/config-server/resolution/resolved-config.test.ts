@@ -48,7 +48,7 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     expect(serialised).toBe(reSerialised);
   });
 
-  it('top-level keys: apiVersion, schemaVersions, stacks, overlay, discarded, additionalContext, issues', async () => {
+  it('top-level keys: apiVersion, schemaVersions, runtimeMode, stacks, overlay, discarded, additionalContext, issues', async () => {
     const r = await composeResolvedConfig(jsTsMinimal);
     const keys = Object.keys(r).sort();
     expect(keys).toEqual([
@@ -57,6 +57,7 @@ describe('composeResolvedConfig — F2 stable shape', () => {
       'discarded',
       'issues',
       'overlay',
+      'runtimeMode',
       'schemaVersions',
       'stacks',
     ]);
