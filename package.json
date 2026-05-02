@@ -24,7 +24,8 @@
     "test": "vitest run",
     "format:check": "prettier --check .",
     "lint-stacks": "node dist/scripts/lint-stacks/index.js",
-    "pair-names": "node dist/scripts/pair-names/index.js"
+    "pair-names": "node dist/scripts/pair-names/index.js",
+    "evaluator-pipeline-check": "node dist/scripts/evaluator-pipeline-check/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

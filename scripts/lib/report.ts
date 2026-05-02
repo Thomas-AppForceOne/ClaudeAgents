@@ -59,10 +59,24 @@ export interface PairNamesReport {
 }
 
 /**
+ * Report shape for `scripts/evaluator-pipeline-check/`. The script seeds
+ * a deterministic-core golden per fixture and diffs the live
+ * `validateAll` output against it; `checked` is the fixture count and
+ * `failures` carries `GoldenMissing` / `GoldenDriftDetected` entries.
+ */
+export interface EvaluatorPipelineCheckReport {
+  kind: 'evaluator-pipeline-check';
+  /** Number of bootstrap fixtures inspected. */
+  checked: number;
+  /** Subset of fixtures whose golden was missing or drifted. */
+  failures: ReportFailure[];
+}
+
+/**
  * Discriminated union of every per-script report shape. New scripts add
  * their own `kind` arm and `formatReport` grows a new branch.
  */
-export type ScriptReport = LintStacksReport | PairNamesReport;
+export type ScriptReport = LintStacksReport | PairNamesReport | EvaluatorPipelineCheckReport;
 
 export interface FormattedReport {
   stdout: string;
@@ -80,6 +94,9 @@ export function formatReport(input: ScriptReport): FormattedReport {
   }
   if (input.kind === 'pair-names') {
     return formatPairNames(input);
+  }
+  if (input.kind === 'evaluator-pipeline-check') {
+    return formatEvaluatorPipelineCheck(input);
   }
   // Exhaustiveness guard. The `never` assignment forces a compile error
   // if a new `kind` is added without a matching branch above.
@@ -109,6 +126,17 @@ function formatPairNames(input: PairNamesReport): FormattedReport {
   return { stdout, stderr };
 }
 
+function formatEvaluatorPipelineCheck(input: EvaluatorPipelineCheckReport): FormattedReport {
+  const failedCount = countFailedFiles(input.failures);
+  const stdout = `${input.checked} fixtures checked, ${failedCount} failed\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
 function countFailedFiles(failures: readonly ReportFailure[]): number {
   const seen = new Set<string>();
   for (const f of failures) {
@@ -126,6 +154,9 @@ export function formatReportJson(input: ScriptReport): string {
     return renderJson(input);
   }
   if (input.kind === 'pair-names') {
+    return renderJson(input);
+  }
+  if (input.kind === 'evaluator-pipeline-check') {
     return renderJson(input);
   }
   // Exhaustiveness guard for the JSON path. Mirrors `formatReport` so

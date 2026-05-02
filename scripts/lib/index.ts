@@ -9,6 +9,7 @@
  */
 export { formatReport, formatReportJson } from './report.js';
 export type {
+  EvaluatorPipelineCheckReport,
   FormattedReport,
   LintStacksReport,
   PairNamesReport,
