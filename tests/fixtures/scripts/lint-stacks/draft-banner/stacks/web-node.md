@@ -11,7 +11,7 @@ testCmd: "npm test"
 lintCmd: "npm run lint"
 ---
 
-# DRAFT — replace TODOs before committing.
+# DRAFT — replace TODOs and remove this banner before committing.
 
 This fixture's body is schema-clean but its first non-blank prose line
 is the verbatim DRAFT banner — `lint-stacks` must fire the

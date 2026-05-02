@@ -4,7 +4,7 @@
  * `gan stacks new` (R3, future) emits a stack file scaffold whose first
  * non-blank prose line is the literal banner:
  *
- *     # DRAFT — replace TODOs before committing.
+ *     # DRAFT — replace TODOs and remove this banner before committing.
  *
  * Removing the banner is the user's deliberate "I have replaced the
  * TODOs" act. A stack file at any tier that still carries the banner is

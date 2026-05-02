@@ -16,4 +16,4 @@
  * sprint contract's anti-criteria.
  */
 
-export const DRAFT_BANNER = '# DRAFT — replace TODOs before committing.';
+export const DRAFT_BANNER = '# DRAFT — replace TODOs and remove this banner before committing.';

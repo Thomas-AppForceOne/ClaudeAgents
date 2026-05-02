@@ -34,7 +34,7 @@ describe('buildScaffold — banner identity', () => {
   });
 
   it('exposes the canonical banner literal verbatim', () => {
-    expect(SOURCE_BANNER).toBe('# DRAFT — replace TODOs before committing.');
+    expect(SOURCE_BANNER).toBe('# DRAFT — replace TODOs and remove this banner before committing.');
   });
 });
 

@@ -29,7 +29,7 @@ gan config set <path> <value> [--tier=project|user]
                                         Update a single splice point.
 gan stacks list                         List active stacks with tier provenance.
 gan stacks new <name> [--tier=project|repo]
-                                        Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs before committing` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
+                                        Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs and remove this banner before committing.` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
 gan stack show <name>                   Print one stack's full data.
 gan stack update <name> <field> <value>
                                         Update one field of a stack file.
@@ -154,7 +154,7 @@ Comes with the npm package R2 already installs. No additional install step. Afte
 - `gan --help`, `gan -h`, `gan help`, and bare `gan` (no arguments) all print the top-level help to stdout and exit 0. Help text lists every subcommand from the surface table.
 - `gan <subcommand> --help` and `gan <subcommand> -h` print the subcommand's usage, flags, at least one example, and applicable exit codes; exits 0.
 - Unknown subcommands and unknown flags exit 64 with a one-line error and a pointer to `--help`.
-- `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs before committing` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
+- `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs and remove this banner before committing.` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
 - Running `gan validate` or `lint-stacks` against the unmodified scaffold fails with a clear error citing the unremoved DRAFT banner.
 - `gan stacks new <name>` against an existing file at the target path exits non-zero without overwriting; the error names the conflicting path.
 
