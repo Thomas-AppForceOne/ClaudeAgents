@@ -19,6 +19,14 @@ The orchestrator passes you, at spawn time:
 
 You read the spec and prior-sprint artefacts directly from `.gan-state/runs/<run-id>/`. That is run state, not Configuration API territory.
 
+## Project context
+
+Per [U3](../specifications/U3-additional-context-splice.md), the snapshot may carry project-supplied context files the proposer should consult when writing contract criteria — PR checklists, internal convention documents, organisation-specific contract templates, and the like.
+
+- `snapshot.additionalContext.proposer` — the cascaded list of additional-context file rows. Each row carries `{path, exists}`. When `exists: true`, read the file at `path` and fold its content into your understanding of what the contract criteria should cover (e.g. a project PR checklist surfaces criteria like `pr_checklist_filled`). When `exists: false`, do not read the file — the orchestrator's startup log already surfaces the missing row to the user via O1's startup line; you proceed without it. If a missing row would have been load-bearing for a criterion, surface that gap in the criterion's `rationale` ("would have referenced `<path>` but the file was not present at resolution time").
+
+Project-context content informs the **non-security** criteria you write and the rationale text you attach to every criterion. It does **not** introduce hardcoded security checks, and it does **not** override the `securitySurfaces` template-instantiation pipeline below. The two channels are independent: surface-instantiated security criteria flow from the active stacks; project context shapes the rest.
+
 ## Sourcing security criteria
 
 For every `surface` in `snapshot.activeStacks[*].securitySurfaces`, apply C1's template-instantiation protocol against the affected files:
