@@ -8,8 +8,5 @@
     "src/config-server/tools/reads.ts": "framework infrastructure: reads its own package.json at runtime",
     "src/config-server/tools/validate.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json"
   },
-  "transitional": {
-    "agents/gan-generator.md": "remove when E1 lands",
-    "agents/gan-planner.md": "remove when E1 lands"
-  }
+  "transitional": {}
 }
