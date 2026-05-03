@@ -13,7 +13,7 @@ As we add more stateful tools (Python venv tracking, DB seed registries, Terrafo
 
 ## Proposed change
 
-Three zones per project, modelled on the Linux filesystem hierarchy. Each zone has a **single owner lifecycle**; no zone is shared between opposing lifecycles.
+Three zones per project, following standard POSIX filesystem conventions. Each zone has a **single owner lifecycle**; no zone is shared between opposing lifecycles. (The framework's v1 platform priority — macOS primary, Linux best-effort, Windows out-of-scope — is documented under "Platform priority" in `PROJECT_CONTEXT.md`; the zone layout below is portable across both supported platforms.)
 
 ```
 <project>/
@@ -58,6 +58,8 @@ What is **forbidden**: silent / background / automatic writes. No agent, orchest
 
 The earlier wording "never write at run time" was overstated and contradicted F2's runtime API writes. The actual invariant is: zone 1 mutations happen only through validated, sanctioned channels — never opaquely.
 
+**Managed symlink: `~/.claude/gan/builtin-stacks/`.** A user-tier convenience handle for inspecting the framework's built-in stacks. The installer (per Sprint 7 / R2) creates `~/.claude/gan/builtin-stacks/` as a symlink pointing at `<packageRoot>/stacks/` (the npm-install location of `@claudeagents/config-server`). The resolver itself does not read through this symlink — it computes `<packageRoot>` from `import.meta.url` at server startup — but the symlink gives users a stable, predictable path for browsing canonical stack files regardless of where npm installed the package. Lifecycle: created by `install.sh`, refreshed on framework upgrades, removed on uninstall. Forward-reference [R2](R2-installer.md) (Sprint 7) for the symlink-management contract; [C5](C5-stack-file-resolution.md) covers how the resolver reaches `<packageRoot>` directly.
+
 ### Zone 2: `.gan-state/` — durable state
 
 - **Owner:** `/gan` skill and individual modules.
@@ -100,7 +102,7 @@ ClaudeAgents is pre-1.0; there is no migration path for stale `.gan/` directorie
 - `/gan` on a project with a pre-existing top-level `.gan/` halts with a hard error instructing the user to delete or rename the directory before re-running. No auto-migration.
 - A Docker module writing `.gan-state/modules/docker/port-registry.json` is never touched by `gan-recover`'s archive or delete steps — verified by a regression test that runs the recovery flow on a project with an active registry and asserts the registry file is unchanged.
 - `O2-recovery.md`'s archive step only ever sees paths under `.gan-state/runs/<run-id>/`.
-- `scripts/parity-check.sh` normalisation (spec E2) is updated to strip `.gan-state/runs/<run-id>/` and `.gan-cache/<worktree-id>/` path prefixes.
+- E3's normalisation rules (`tests/fixtures/normalise-rules.json`, consumed by `scripts/evaluator-pipeline-check/`) include path-prefix stripping for `.gan-state/runs/<run-id>/` and `.gan-cache/<worktree-id>/`. F1's contribution is the zone names; the normalisation rule itself lands in E3 and is verified when E3 ships.
 - A project without any of the three zones on disk behaves correctly: zones are created lazily by their owners at first write.
 - `.gitignore` templates in fixture projects (`tests/fixtures/stacks/*/`) list `.gan-state/` and `.gan-cache/` but not `.claude/gan/`.
 

@@ -1,0 +1,5 @@
+{
+  "paths": {
+    "src/cli/commands/version.ts": "framework infrastructure: reports framework-corruption diagnostics when its own package.json is malformed (CLI --version path); the error names the offending file so a maintainer can locate it"
+  }
+}

@@ -31,7 +31,7 @@ Semantics:
 
 No auto-discovery. No inference. The user tells `/gan` exactly what to read.
 
-**`additionalContext` is not stack-scoped in v1.** A polyglot project (e.g. Android + Python) lists planner additionalContext globally; there is no syntax for "load `architecture.md` only when planning for the Android stack." For most projects this is fine — context files are usually project-wide. As polyglot fixtures get richer (`tests/fixtures/stacks/polyglot-android-node/` already exists), per-stack additionalContext may be worth adding. Out of scope for v1; flagged for a future revision of this spec or a successor splice point.
+**`additionalContext` is not stack-scoped in v1.** A polyglot project (e.g. Android + Python) lists planner additionalContext globally; there is no syntax for "load `architecture.md` only when planning for the Android stack." For most projects this is fine — context files are usually project-wide. As polyglot fixtures get richer (`tests/fixtures/stacks/polyglot-webnode-synthetic/` is the active-plan equivalent), per-stack additionalContext may be worth adding. Out of scope for v1; flagged for a future revision of this spec or a successor splice point.
 
 ## Acceptance criteria
 

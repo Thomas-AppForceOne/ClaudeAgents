@@ -1,0 +1,21 @@
+{
+  "additionalContext": {
+    "planner": [],
+    "proposer": []
+  },
+  "apiVersion": "<api-version>",
+  "discarded": [],
+  "issues": [],
+  "overlay": {},
+  "runtimeMode": {
+    "noProjectCommands": false
+  },
+  "schemaVersions": {
+    "overlay": 1,
+    "stack": 1
+  },
+  "stacks": {
+    "active": [],
+    "byName": {}
+  }
+}

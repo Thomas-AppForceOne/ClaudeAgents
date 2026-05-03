@@ -9,7 +9,7 @@ Projects and users need to adjust `/gan` behavior without forking agents or stac
 Two overlay files share one schema:
 
 - **Project overlay:** `.claude/gan/project.md`. Zone 1 (config) per F1; committed to the repo.
-- **User overlay:** `~/.claude/gan/config.md`. Outside any project; user-personal.
+- **User overlay:** `~/.claude/gan/user.md`. Outside any project; user-personal.
 
 Both follow the same parse contract and field set. The only differences are the file location, the cascade tier they sit at (defined in C4), and a per-field rule that some splice points are forbidden in the user overlay (`additionalContext` keys).
 
@@ -94,6 +94,8 @@ This lets a polyglot project resolve a `cacheEnv` collision (per C1's "Conflict 
 - The named stack *is* active but does not declare a `securitySurfaces` entry with the named id. Catches typos like `web-node.express_route_inputs` (plural) when the stack defines `express_route_input`.
 
 Both warning subclasses share the same structured shape and surface through O1; both are non-aborting. Any future stack-keyed splice point added to this catalog inherits the same rule by reference: keys that point at non-existent stacks or non-existent sub-fields warn, do not abort, and are surfaced in observability output.
+
+**Implementation status (post-R audit, 2026-05-02).** R1's cascade merges these splice points correctly, but does not yet emit the inactive-stack-warning surface — a `cacheEnvOverride` keyed at a non-active stack or a `proposer.suppressSurfaces` entry pointing at a missing stack/surface is silently merged into the resolved view rather than surfacing a structured warning. The warning channel is **deferred until O1 ships its observability surface**: the warning has nowhere to surface today (`validateAll()` returns errors only; the resolved config has no warnings field; `gan config print` is not yet authored). When O1 lands, the warning emit-points are added in the same PR. Until then, the spec text above describes the intended behaviour; reviewers reading the audit trail should not read this as a runtime guarantee.
 
 ## `discardInherited`
 

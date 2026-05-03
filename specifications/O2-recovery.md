@@ -1,340 +1,403 @@
 # O2 — Recovery
 
-> ## DO NOT IMPLEMENT FROM THIS DOCUMENT
->
-> The body below was authored before F1 (filesystem layout), F2 (Configuration API), E1 (agent prompt rewrite), and the phase-coded restructure. Its mechanism assumes the retired `.gan/` directory and an external archive layout that no longer exists in the architecture. The **intent** is correct (a way to resume a previously-aborted run); the **mechanism** is not.
->
-> A first prescriptive revision is scheduled for the post-E1 revision break (per the roadmap). Until that revision lands, the body below is descriptive of intent only and **must not be implemented**. An implementer who treats it as prescriptive will write code against retired path conventions, miss F2's validateAll-first ordering, and violate F1's zone-2 module-state ownership.
->
-> Read the Problem and Solution-summary sections for the design target. Skip everything below "Detailed design" — those steps are slated for replacement, not refinement.
+> **Status:** prescriptive. The first prescriptive authoring of this spec landed during the post-E1 revision break per the [roadmap](roadmap.md#revision-break--post-e1-audit--o2-first-prescriptive-revision). The earlier descriptive draft is retired; everything below is implementable.
 
----
+**Decisions baked in (for git-history readers).** The post-E1 revision break enumerated six design choices; this spec was authored against these defaults:
 
-**Authored before:** F1, F2, E1, phase-coded restructure.
-**Replacement scheduled at:** post-E1 revision break (per roadmap).
-**Skeleton retained for:** intent + acceptance-criteria reference; the new revision will reuse the user-facing acceptance criteria where they still apply.
-
-**Decisions deferred to the post-E1 revision (must resolve, not skip):**
-
-- The recovery agent's placement: today E1's per-agent table includes `gan-recover` as a role, but `agents/gan-recover.md` does not exist as a file. The post-E1 revision specifies whether the role becomes a real prompt file under `agents/` or stays orchestrator-internal as part of the rewritten `SKILL.md`. Whichever path is chosen, the [roadmap's Retirement table](roadmap.md#retirement-table) is amended in the same revision PR with the resulting state (new `M` row if a file lands, no row if it stays orchestrator-internal).
-- The archive-on-abort mechanism under F1's zone-2 layout (per the body's alignment note above).
-- Validation-first ordering integrated with F2's `validateAll()` non-aborting mode for `--recover` (per the same alignment note).
-
----
+1. `gan-recover` placement: **orchestrator-internal in `skills/gan/SKILL.md`** (no separate agent file).
+2. Overlay-drift policy: **warn-and-continue** (drift surfaces in the recovery report; recovery proceeds).
+3. Cross-project recovery: **refused** (no `--project-root` override in v1; `progress.json.projectRoot` must match the current resolved root).
+4. Greenfield runs: **out of scope for v1** (recovery refuses runs whose `targetDir` is null).
+5. Recovered-run lifecycle: **same `runId`, append `recoveryHistory[]`, flip `terminal: true` on graceful end** (no copy-into-new-run-id step; no lock file).
+6. Garbage collection: **none in v1** (`gan run prune --keep <N>` is a Phase 7+ follow-up).
 
 ## Problem
 
-When a `/gan` run aborts (user answered `N` to resume, budget cap hit, an agent raised a fatal blocking condition, or the user manually stopped mid-run), the current teardown deletes `.gan/` from the invocation cwd. The run branch (`gan/<run-id>`) survives because it lives in git, but the orchestration state required to continue the attempt loop — `progress.json`, sprint contracts, evaluator feedback, the generator's spec rendering, the base-commit SHAs — is destroyed.
+When a `/gan` run aborts (user answered `N` at a resume prompt, budget cap hit, agent
+raised a fatal blocking condition, manual stop mid-run), the user has historically had no
+way to resume the specific failed run. The legacy mechanism deleted `.gan/` on teardown,
+destroying every artefact required to continue — `progress.json`, sprint contracts,
+evaluator feedback, generator spec rendering, base-commit SHAs.
 
-Consequence: to recover any value from a failed run you either cherry-pick commits off the run branch and finish the work by hand, or pay to re-run `/gan` from scratch. The harness has no "resume this specific failed run" mechanism.
+Under F1's filesystem layout this premise has changed. Per-run state now lives at
+`.gan-state/runs/<run-id>/` (zone 2) and **persists across runs by design**: F1 line 67
+defines zone 2 as durable, and the per-run subdirectory under `runs/<run-id>/` is
+"archived or deleted on teardown per O2-recovery.md." The orchestrator no longer deletes
+run state on graceful exit — it leaves the directory in place. The previous mechanism
+(move `.gan/` to a separate archive root, then copy back on recover) is dead architecture.
 
-The user's expectation — and the design target of this spec — is:
+The user's expectation, unchanged from legacy:
 
 ```
 /gan --recover              # resume the most recent non-complete run
 /gan --recover --run-id X   # resume a specific run
-/gan --list-recoverable     # print a table of archived runs
+/gan --list-recoverable     # print a table of recoverable runs
 ```
 
----
+What changes is how the framework delivers it.
 
 ## Solution summary
 
-Two changes, tightly coupled:
+Three coordinated mechanisms, all post-E1:
 
-1. **Archive on abort** (replace the current delete). On every code path that tears down a run — success, failure, user abort, budget cap, interrupted resume — move `.gan/` to `<telemetry-dir>/runs/<run-id>/gan-state/` instead of deleting. Write a small `archive-metadata.json` alongside it describing the archive.
-2. **`--recover` flag.** Discover an archive, restore it to `.gan/` at the invocation cwd, re-attach the git worktree from the saved run branch, then fall through to the existing Step 0 resume state machine.
+1. **Run directories persist as the recovery surface.** No archive copy step. The
+   orchestrator marks runs terminal at teardown (writing `terminal: true` plus a
+   `terminalReason` to `progress.json`) but never moves or deletes the directory. A
+   recoverable run is one whose `progress.json` has `terminal: false` (or is missing
+   `terminal` for backwards-compat — see migration below).
 
-`--list-recoverable` is a small companion that reads the telemetry directory and prints a summary table. No state changes.
+2. **Recovery is re-attach + resume, not copy + restore.** `--recover`:
+   - Calls `validateAll()` in non-aborting mode (per O1 / E1's recovery contract — the
+     user must be able to recover a known-broken project).
+   - Reads the target run's `progress.json` directly from `.gan-state/runs/<run-id>/`.
+   - Re-attaches the git worktree from the recorded `runBranch`.
+   - Compares the archived overlay state in `progress.json.overlaysAtArchive` against
+     the current `getResolvedConfig().overlays`; surfaces drift as a recovery-report
+     warning.
+   - Falls through to the existing in-`SKILL.md` resume state machine.
 
-The existing Step 0 resume machinery (`planning` | `negotiating` | `building` | `evaluating`) is sufficient once `.gan/` is restored — recovery does not need its own state machine.
+3. **`--list-recoverable` enumerates `.gan-state/runs/*/progress.json`** and filters by
+   `terminal: false` (recoverable) or includes terminal entries when the user asks for
+   history. Read-only; never mutates state.
 
----
+The `.gan-state/modules/` subdirectory is **never touched** by recovery — F1's zone-2
+ownership invariant. Module state belongs to modules; run-state has its own lane.
 
-## Dependencies and assumptions
-
-This spec depends only on behavior already present in `skills/gan/SKILL.md` and common POSIX/git tooling. Listed exhaustively so an implementer can verify each:
-
-| Dependency | Already present? | Where |
-|---|---|---|
-| Telemetry directory resolution: `--telemetry-dir` > `$GAN_TELEMETRY_DIR` > `$HOME/.gan-telemetry` | Yes | SKILL.md Step 0.75 |
-| `runId` format (`<YYYYMMDDTHHMMSS>-<4 hex>`) | Yes | Step 0.75 |
-| `progress.json` fields `runBranch`, `baseBranch`, `worktreePath`, `telemetry.runId`, `telemetry.dir`, `startingBranch` | Yes | Step 0.6 + Step 0.75 |
-| `.gan/sprint-N-base-commit.txt` for per-sprint reset | Yes | Step 2b |
-| Step 0 resume state machine | Yes | Step 0 |
-| Worktree re-attach without `-b` (`git worktree add <path> <branch>`) | Yes (documented for the `building` resume branch in Step 0) | Step 0 |
-| `python3` for JSON reads/writes | Yes — SKILL.md already requires it | throughout |
-| `git`, `mv`, `cp -R`, `find`, `sort` | Yes — POSIX baseline | — |
-
-**No external-repo dependencies.** The spec does not reference any file, script, or convention from any repo that consumes ClaudeAgents.
-
-### SKILL.md delivery path — clarification
-
-`~/.claude/skills/gan/SKILL.md` is currently a **regular file** on a developer's machine, not a symlink to this repo. Schemas under `~/.claude/skills/gan/schemas/` are symlinked to `ClaudeAgents/skills/gan/schemas/`, but SKILL.md itself is not.
-
-The implementer of this spec must:
-
-1. Edit `skills/gan/SKILL.md` in this repo as the source of truth.
-2. Update `install.sh` (top of this repo) so installation symlinks `~/.claude/skills/gan/SKILL.md` → `ClaudeAgents/skills/gan/SKILL.md`, matching the pattern already used for `agents/*.md` and `skills/gan/schemas/`. Back up any existing regular-file SKILL.md as `SKILL.md.pre-symlink` before replacing.
-3. Note in this spec's implementation PR that operators on machines with a pre-existing regular-file SKILL.md must re-run `install.sh` to pick up the change. The run-time behavior of the skill does not detect or fix this — it's a provisioning step.
-
-If the implementer decides not to move SKILL.md into the symlink pattern, they must instead document that this spec's changes need to be applied to each developer's local `~/.claude/skills/gan/SKILL.md` by hand, and justify the divergence from the agents/schemas pattern. The symlink path is preferred.
-
----
 
 ## Detailed design
 
-### 1. Archive layout
 
-For any run, successful or not, the archive is:
+### 1. Run-directory layout (post-E1)
 
 ```
-<telemetry-dir>/runs/<run-id>/
-├── config.json              # already written at Step 0.75 — unchanged
-├── outcome.json             # already written at run end — unchanged
-├── gan-state/               # NEW — the contents of .gan/ at teardown
-│   ├── progress.json
-│   ├── spec.md
-│   ├── sprint-N-contract.json
-│   ├── sprint-N-feedback-A.json
-│   ├── sprint-N-objection-A.json       (if any)
-│   ├── sprint-N-base-commit.txt
-│   └── ...every other file the run wrote to .gan/
-└── archive-metadata.json    # NEW — describes the archive
+.gan-state/runs/<run-id>/
+├── progress.json                 # orchestrator-owned; updated throughout run
+├── spec.md                       # planner output
+├── sprint-N-contract.json        # contract-proposer output (post-review)
+├── sprint-N-contract-draft.json  # contract-proposer output (pre-review)
+├── sprint-N-feedback-A.json      # evaluator output for sprint N attempt A
+├── sprint-N-objection-A.json     # generator objection (when applicable)
+├── sprint-N-base-commit.txt      # base commit SHA for sprint N
+├── worktree/                     # the git worktree (lives here, not at <cwd>/.gan/worktree)
+└── telemetry/                    # opt-in telemetry capture; honors --no-telemetry
+    ├── config.json
+    └── outcome.json
 ```
 
-`archive-metadata.json` schema:
+`<run-id>` follows the `<YYYYMMDDTHHMMSS>-<4 hex>` form already established.
+
+The worktree's parent directory moves from `.gan/worktree/` (legacy) to
+`.gan-state/runs/<run-id>/worktree/` (post-E1, per F1 zone 2). Generator confinement
+hooks check `.gan-state/runs/<run-id>/worktree/` instead of `.gan/worktree/`.
+
+### 2. `progress.json` extensions for recovery
+
+The post-E1 `progress.json` schema gains four fields beyond the legacy set:
 
 ```json
 {
-  "runId": "20260421T184210-a9f2",
-  "archivedAt": "2026-04-22T10:15:30Z",
-  "reason": "complete | failed-max-attempts | failed-budget | aborted-by-user | aborted-interrupted-resume | aborted-planner-error | ...",
-  "recoverable": true,
-  "recoverabilityNotes": "",
-  "runBranch": "gan/20260421T184210-a9f2",
-  "baseBranch": "develop",
-  "targetDir": "/Users/x/projects/foo",
-  "startingBranch": "develop",
+  "runId": "20260503T143010-b8e1",
+  "status": "planning | negotiating | building | evaluating | complete | failed",
   "currentSprint": 3,
+  "currentAttempt": 1,
   "totalSprints": 7,
   "completedSprints": 2,
-  "lastKnownStatus": "building"
+
+  "projectRoot": "/Users/thak/projects/myapp",
+  "runBranch": "gan/20260503T143010-b8e1",
+  "baseBranch": "develop",
+  "startingBranch": "develop",
+
+  "terminal": false,
+  "terminalReason": null,
+  "terminalAt": null,
+
+  "overlaysAtSnapshot": {
+    "user":    {"loaded": true, "path": "~/.claude/gan/user.md", "hash": "sha256:..."},
+    "project": {"loaded": true, "path": ".claude/gan/project.md", "hash": "sha256:..."}
+  },
+
+  "recoveryHistory": [
+    {"recoveredAt": "2026-05-03T14:55:00Z", "fromStatus": "building", "atSprint": 2}
+  ]
 }
 ```
 
-Field semantics:
+- `projectRoot` — recorded at run start; used by `--recover` to confirm the recovery
+  is happening in the right place.
+- `terminal` / `terminalReason` / `terminalAt` — set when the run ends. `terminal:
+  false` (or missing) means recoverable. `terminalReason` is one of the enumerated
+  codes below.
+- `overlaysAtSnapshot` — sha256 of overlay file contents at snapshot time. Compared
+  against current state during recovery to detect drift.
+- `recoveryHistory[]` — appended on each `--recover` invocation. Empty array on a
+  fresh run.
 
-- **`reason`** — human-readable, matched against the enumerated set below so `--list-recoverable` can filter/group. New reason codes are additive; unknown codes must be displayed verbatim, not rejected.
-- **`recoverable`** — `false` when the run reached terminal state (`complete`, `failed-max-attempts`, `failed-budget`) and there is nothing to continue. `true` otherwise. `--recover` refuses `recoverable: false` archives with a clear message.
-- **`recoverabilityNotes`** — populated by the archive writer when it can detect a reason recovery will fail (e.g. run branch missing from the target repo at archive time). Informational; does not by itself set `recoverable: false`.
-- **`runBranch`, `baseBranch`, `targetDir`, `startingBranch`** — copied from `progress.json` so `--list-recoverable` can render them without opening the state bundle.
-- **`lastKnownStatus`** — the `progress.json.status` at archive time. Callers render it.
-
-### 2. When to archive
-
-Replace every `rm -rf .gan` or equivalent deletion with a move to the archive. The places in SKILL.md that currently tear state down (search current text for `delete \.gan`, `worktree remove`, and the descriptive "delete `.gan/` contents" in Step 0):
-
-| Code path | Current behavior | New behavior | `reason` |
-|---|---|---|---|
-| Step 0 resume prompt, user answers `N` | Delete `.gan/` contents | Move `.gan/` to archive | `aborted-interrupted-resume` |
-| Step 2b sprint passes (all criteria met) | Delete `.gan/sprint-N-base-commit.txt`, `.gan/sprint-N-contract-draft.json` | Leave in place; archived at run end | (N/A — no archive yet) |
-| Step 2b sprint fails at `attempt == maxAttempts` | Status `failed`, teardown | Move `.gan/` to archive after final `progress.json` write | `failed-max-attempts` |
-| Step 2b budget cap (`maxAttemptsTotal`, `maxMinutes`) | Status `failed`, teardown | Archive | `failed-budget` |
-| Step 1 planner error / schema validation | Status `failed`, teardown | Archive | `aborted-planner-error` (or a more specific code — see below) |
-| Step 2a contract negotiation failure | Status `failed`, teardown | Archive | `aborted-contract-failed` |
-| Step 3 all sprints complete | Worktree teardown, status `complete` | Archive, `recoverable: false` | `complete` |
-| User manual `Ctrl-C` / session end mid-run | Currently: state remains in cwd's `.gan/` on disk | Unchanged — we cannot run code on an interrupted session. The next `/gan` invocation handles this: if it detects a stale `.gan/` with a non-terminal status that wasn't gracefully archived, it treats it as an implicit `Ctrl-C` case and offers to archive-then-recover. See Step 0 amendment below. |
-
-Enumerated `reason` codes in this spec's v1:
+Enumerated `terminalReason` codes:
 
 ```
-complete
-failed-max-attempts
-failed-budget
-aborted-by-user
-aborted-interrupted-resume
-aborted-planner-error
-aborted-contract-failed
-aborted-stale-state              (when .gan/ was left in cwd from a Ctrl-C)
+complete                       Run finished all sprints successfully
+failed-max-attempts            Sprint exhausted maxAttempts
+failed-budget                  Hit maxAttemptsTotal or maxMinutes
+aborted-by-user                User answered N at resume prompt
+aborted-planner-error          Planner failed (schema, refusal, etc.)
+aborted-contract-failed        Contract negotiation hit max revisions
+aborted-validation-failed      validateAll() failed in aborting mode
 ```
 
-Implementers may add codes without breaking this spec, provided `--list-recoverable` renders unknown codes verbatim.
+Schema lives at `schemas/run-state/progress-v1.json` per F3's naming conventions; this
+sprint adds it to the schema set if it isn't already present.
 
-### 3. Archive write procedure
+### 3. Teardown — terminal marker, never delete
 
-Immediately before the existing worktree teardown (`git worktree remove .gan/worktree --force`), execute in this order:
+Replace every legacy `rm -rf .gan` (and equivalent worktree-teardown deletion) with:
 
-1. Resolve `<archive-root>` = `<telemetry-dir>/runs/<run-id>/`. If telemetry is disabled (`--no-telemetry`) there is no telemetry dir → see **Telemetry-disabled fallback** below.
-2. `mkdir -p <archive-root>/gan-state`.
-3. Remove the worktree from git (`git worktree remove .gan/worktree --force || true`) **before** the move. This detaches `.gan/worktree/` so `.gan/` can be moved as a plain directory. The run branch is untouched; `git worktree list` no longer references the path.
-4. `mv .gan/* <archive-root>/gan-state/` — move every file. Use `mv` not `cp` so `.gan/` is left empty (or removed) in cwd.
-5. Remove the now-empty `.gan/` directory: `rmdir .gan 2>/dev/null || true`.
-6. Compose `archive-metadata.json` from `progress.json` fields + the teardown `reason`. Write it to `<archive-root>/archive-metadata.json`.
-7. If the run branch no longer exists in the target repo for any reason (`git -C <target> rev-parse --verify <runBranch>` fails), set `recoverabilityNotes` to `"run branch <X> not present in <targetDir>"` and `recoverable: false`.
+1. Write the worktree branch's tip (the run's accumulated commits stay on the run
+   branch in git; this is unchanged).
+2. `git worktree remove .gan-state/runs/<run-id>/worktree --force`. This detaches the
+   worktree but leaves the directory tree in place.
+3. Update `progress.json`:
+   - `terminal: true`
+   - `terminalReason: <one of the enumerated codes>`
+   - `terminalAt: <ISO 8601 UTC timestamp>`
+4. The directory remains on disk; subsequent `--list-recoverable` will see it as
+   terminal.
 
-Failure modes the writer must handle:
+Failure modes:
 
-- **Telemetry directory unwritable** → print a loud error on stderr (`CRITICAL: could not archive .gan/ to <path>: <error>; state will be deleted instead`) and fall back to the current delete behavior. Never leave half-archived state.
-- **Partial `mv`** (e.g. disk full mid-move) → move what you can, write `archive-metadata.json` with `recoverable: false` and a note describing the partial move, then continue teardown.
-- **Run invoked with `--no-telemetry`** → see fallback below.
-
-#### Telemetry-disabled fallback
-
-`--no-telemetry` is a valid flag. In that mode there is no telemetry directory, but runs can still fail and still have recoverable state. Fallback:
-
-- Archive root becomes `<cwd>/.gan-archive/<run-id>/` — sibling to the cwd where `.gan/` lived.
-- Print a one-line notice at archive time: `Telemetry disabled — archiving to .gan-archive/<run-id>/. Move or delete when done.`
-- `--recover` and `--list-recoverable` must search this sibling path **in addition to** the telemetry dir when telemetry is disabled. When telemetry is enabled they only search the telemetry dir.
+- **Worktree remove fails** (filesystem issue, branch checked out elsewhere) → log a
+  warning; still write the terminal marker so the run isn't picked up as recoverable.
+  Document in the recovery report that the worktree may need manual cleanup.
+- **`progress.json` write fails** (disk full, permissions) → loud stderr error; the run
+  remains "recoverable" (because `terminal: false` or missing) which is the safer
+  failure mode.
 
 ### 4. `--list-recoverable`
 
-New top-level flag. Parsed at Step 0 before the resume check. Behavior:
+New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
 
-1. Resolve telemetry dir (same precedence as elsewhere). If telemetry is disabled, also scan `<cwd>/.gan-archive/`.
-2. Enumerate every `<telemetry-dir>/runs/<run-id>/archive-metadata.json`.
-3. Print a table sorted by `archivedAt` desc:
+1. Calls `validateAll()` in non-aborting mode (per E1's recovery contract).
+2. Enumerates `<projectRoot>/.gan-state/runs/*/progress.json`.
+3. By default: filters to `terminal: false` (or missing). With `--include-terminal`,
+   also lists terminal runs.
+4. Sorts descending by directory mtime (the most recently active run first).
+5. Prints a table:
 
-```
-RUN ID                    ARCHIVED AT           STATUS              SPRINT   REASON                        RECOVERABLE
-20260422T031540-b8e1      2026-04-22T03:18:02Z  building            3/7      aborted-by-user               yes
-20260421T210000-a9f2      2026-04-21T21:45:11Z  failed              5/7      failed-max-attempts           no
-20260420T120000-aaaa      2026-04-20T12:02:13Z  complete            7/7      complete                      no
-```
+   ```
+   RUN ID                    STATE      SPRINT  STARTED AT            REASON                  RECOVERABLE
+   20260503T143010-b8e1      building   3/7     2026-05-03T14:30:10Z  -                       yes
+   20260502T210000-a9f2      failed     5/7     2026-05-02T21:00:00Z  failed-max-attempts     no (terminal)
+   20260501T120000-aaaa      complete   7/7     2026-05-01T12:00:00Z  complete                no (terminal)
+   ```
 
-4. Exit 0. Do not start a run, do not enter the resume flow.
+6. Exit 0. No state mutation, no spawn.
 
-Column widths are advisory; any format that keeps columns aligned is acceptable. The `SPRINT` column is rendered as `<currentSprint>/<totalSprints>` from `archive-metadata.json`.
-
-If no archives are found: print `No recoverable runs found at <telemetry-dir>.` and exit 0.
+If no runs found: `No runs found at <projectRoot>/.gan-state/runs/.` Exit 0.
 
 ### 5. `--recover [--run-id X]`
 
-New top-level flag. Parsed at Step 0 before the resume check. Behavior:
+New top-level flag. Parsed at SKILL.md flag-table dispatch. Per E1's recovery contract,
+runs `validateAll()` in non-aborting mode first.
 
-1. **Refuse if `.gan/` already exists at cwd.** Print: `Cannot recover: .gan/ already exists at <cwd>. Move or delete it first.` Exit 1. This prevents clobbering an in-progress run with a previous run's state.
-2. **Resolve the target archive.**
-   - If `--run-id X` was passed: look up `<telemetry-dir>/runs/X/archive-metadata.json`. If missing → `Archive for run <X> not found at <path>.` Exit 1.
-   - Otherwise: enumerate archives, filter `recoverable: true`, sort by `archivedAt` desc, pick the first. If none → `No recoverable runs found at <telemetry-dir>.` Exit 1.
-3. **Preflight the target repo state.**
-   - Resolve `targetDir` from `archive-metadata.json`. If null (greenfield run), recovery is not supported in v1 (see **Out of scope** below). Print a clear error and exit 1.
-   - `git -C <targetDir> rev-parse --verify <runBranch>` — if the branch is gone (force-deleted, pruned), recovery cannot proceed. Print: `Run branch <runBranch> is missing from <targetDir>. The archive's state is preserved at <archive-root> but cannot be resumed.` Exit 1.
-   - Verify the target repo's working tree is clean (same check as Step 0.5). If dirty, print the same abort message as Step 0.5 and exit 1.
-4. **Restore state.**
-   - `mkdir .gan`
-   - `cp -R <archive-root>/gan-state/* .gan/` (copy, don't move — the archive is authoritative; recovery must be re-runnable if something goes wrong)
-5. **Re-attach the worktree.**
-   - Read `worktreePath` from restored `progress.json`. Its parent directory should be `<cwd>/.gan/worktree` by convention.
-   - `git -C <targetDir> worktree add <worktreePath> <runBranch>` (no `-b` — the branch exists).
-   - If the worktree add fails because the path is already registered, `git -C <targetDir> worktree prune` then retry once.
-6. **Reset `progress.json`'s volatile fields** so the resume state machine handles the rest:
-   - Set `status` to whatever it was at archive time (already in the restored file).
-   - Do NOT modify `currentSprint`, `currentAttempt`, `attemptsTotal`, `completedSprints`. They were correct at archive time.
-7. **Mark the archive consumed.** Update `archive-metadata.json` in place: set `recoverable: false`, add `recoveredAt: <ISO now>`, add `recoveredTo: <cwd>`. This prevents a second `--recover` from competing for the same state.
-8. **Write the confinement marker** (if the target project requires it — see **Confinement marker** below) and proceed to Step 0's existing resume state machine. Skip the "interrupted run — resume?" prompt; recovery is an explicit decision already.
+1. **Resolve target run.**
+   - If `--run-id X`: look up `<projectRoot>/.gan-state/runs/X/progress.json`. Missing
+     → `Run <X> not found at <projectRoot>/.gan-state/runs/X/.` Exit 1.
+   - Otherwise: enumerate runs, filter `terminal: false`, sort by mtime desc, pick the
+     first. None → `No recoverable runs found at <projectRoot>/.gan-state/runs/.`
+     Exit 1.
 
-### Confinement marker
+2. **Preflight.**
+   - Read `progress.json` from the run directory.
+   - **Project-root check**: if `progress.json.projectRoot` exists and
+     differs from the orchestrator's resolved current project root, refuse:
+     `Run <runId> was created at <oldRoot>; cannot recover from <currentRoot>. Cross-
+     project recovery is not supported.` Exit 1.
+   - **Run-branch check**: `git rev-parse --verify <runBranch>` — if missing,
+     `Run branch <runBranch> is not present in this repository. The run state survives
+     at <path> but cannot be resumed.` Exit 1.
+   - **Working-tree-clean check**: same as the orchestrator's normal pre-run check.
+     Refuse if dirty.
+   - **Validation check**: if `validateAll()` returned errors, surface the structured
+     error report alongside this preflight; recovery still proceeds (per E1's
+     non-aborting contract) but the user sees the configuration is broken before
+     downstream agents fire on it.
 
-Some consumer repos use a PreToolUse hook keyed on `.gan/confinement-active` to sandbox sub-agents to the worktree. If the archived `.gan/` contained `confinement-active`, it was copied to the new `.gan/` in step 4 automatically. No extra handling needed — this is correct because the hook is driven by file presence, not by the orchestrator.
+3. **Overlay-drift check**.
+   - Compute current overlay hashes (project + user).
+   - Compare against `progress.json.overlaysAtSnapshot.{project,user}.hash`.
+   - For each mismatch, emit a recovery-report warning naming the overlay tier and the
+     hash change (no diff).
+   - Resume continues regardless.
 
-The skill itself does not require or inspect the confinement hook; this is a consumer-repo feature. The skill's only responsibility is to preserve `confinement-active` through archive and restore, which step 4's `cp -R` already does.
+4. **Re-attach the worktree.**
+   - `git worktree add <projectRoot>/.gan-state/runs/<runId>/worktree <runBranch>` (no
+     `-b` — the branch exists).
+   - If the worktree is already registered (`git worktree list` shows it), skip the add.
+   - If `git worktree add` fails because the path is registered but pointing elsewhere,
+     `git worktree prune` then retry once.
 
-### 6. Step 0 amendment for stale `.gan/`
+5. **Append `recoveryHistory[]`.**
+   ```json
+   {
+     "recoveredAt": "<ISO 8601 UTC>",
+     "fromStatus": "<progress.json.status at recovery time>",
+     "atSprint": "<currentSprint>"
+   }
+   ```
+   Write `progress.json` atomically.
 
-Currently, Step 0 resume prompt handles an existing `.gan/progress.json` with non-terminal status. Extend it to distinguish gracefully-archived state (none — `.gan/` is absent) from ungraceful state (`.gan/` exists at cwd but was not archived):
+6. **Print recovery report.**
+   ```
+   Recovered run 20260503T143010-b8e1
+     Status:     building
+     Sprint:     3 of 7 (attempt 1)
+     Run branch: gan/20260503T143010-b8e1
+     Overlays:   project drifted (sha256 changed since archive)
+   Resuming from sprint 3 attempt 1.
+   ```
 
-Current text:
-> If `.gan/progress.json` exists and `status` is not `"complete"` or `"failed"`:
-> Ask the user: `Found an interrupted run at sprint {currentSprint}/{totalSprints} (status: {status}). Resume? [Y/n]`
+7. **Fall through to the existing resume state machine.** The state machine in
+   `skills/gan/SKILL.md` already handles `planning`/`negotiating`/`building`/`evaluating`
+   resume. It does not need a recovery-specific path.
 
-New text (replaces the above):
+### 6. Forbidden territory
 
-> If `.gan/progress.json` exists and `status` is not `"complete"` or `"failed"`:
->
-> Ask the user: `Found an interrupted run at sprint {currentSprint}/{totalSprints} (status: {status}). Resume? [Y/n/archive]`
->
-> - **Y** — apply the state-machine table below.
-> - **N** — archive `.gan/` with `reason: aborted-interrupted-resume` and start fresh. (Was previously "delete".)
-> - **archive** — archive `.gan/` with `reason: aborted-stale-state` and exit without starting a new run. The user wanted to preserve state but not immediately resume.
+`--recover` and `--list-recoverable` are forbidden from:
 
-Three-option prompts are a small UX change. If the implementer prefers, keep two options and always archive rather than delete on `N`; the `aborted-stale-state` path can be invoked by `/gan --recover` looking at most-recent archive.
+- Reading or writing `.gan-state/modules/` (per F1 zone-2 invariant).
+- Reading or writing `.claude/gan/` (configuration belongs to the user; recovery is
+  read-through-the-snapshot only).
+- Reading or writing `.gan-cache/` (regenerable; not run-state).
+
+Concretely: any code path under recovery that opens a file outside
+`.gan-state/runs/<run-id>/` (or `.gan-state/runs/` for enumeration) is a bug. A test
+asserts this against `tests/fixtures/stacks/<fixture>/.gan-state/modules/<dummy>/`
+content remaining byte-identical across recovery.
 
 ### 7. Edge cases
 
 | Case | Behavior |
 |---|---|
-| Archive exists but `runBranch` was force-deleted | `--recover` refuses in preflight with a clear message; `--list-recoverable` still shows the archive (it has historical value). |
-| Archive's `targetDir` path no longer exists on this machine | Same as above — refuse with `targetDir <X> does not exist. Cannot resume a cross-machine run.` Future work: portable archives. |
-| Two archives have the same `runId` | Cannot happen — run IDs include a random 4-hex suffix. But defensively: `--list-recoverable` prints both, `--recover --run-id` picks the match; `--recover` without `--run-id` picks the most recently archived by `archivedAt`. |
-| User runs `/gan --recover` concurrently in two terminals against the same archive | Second `--recover` finds `recoverable: false` (set in step 7 of the recover flow) and refuses. Race condition is tolerable because step 7 is the last thing before handoff to Step 0 resume. |
-| Archive directory missing `gan-state/` subdir (partial archive from earlier disk-full) | Refuse with `Archive <runId> is incomplete (no gan-state/). Not recoverable.` |
-| User modifies the archive by hand before `--recover` | Not supported. Recovery trusts the archive's contents verbatim. |
-| `--no-telemetry` run aborts, then user re-runs with telemetry enabled, then `--recover` | Both locations are searched (see fallback section). The fallback sibling path takes priority if both exist for the same run id (shouldn't happen — different telemetry settings → different run ids). |
+| Run branch force-deleted | Refuse in preflight; `--list-recoverable` still shows the run. |
+| Two `--recover` invocations against the same run, concurrently | Second invocation reads the now-non-empty `recoveryHistory[]` and refuses if the most recent entry is < 5 minutes old (heuristic lock). Document this as best-effort; cross-process locking is out of scope. |
+| Recovered run completes successfully | `terminal: true` flips. The run is no longer `--list-recoverable`-recoverable. |
+| Recovered run's recovery itself fails | New `recoveryHistory[]` entry records the failure. The run remains `terminal: false`; future `--recover` is not blocked. |
+| Overlay drift but only formatting whitespace | Hashes still differ. Warning still fires. Acceptable false-positive; the user can ignore. |
+| Project moved on disk (`projectRoot` recorded vs current cwd diverge) | Refuse per Decision 3A. Future `--project-root` flag could relax. |
+| Stale `.gan/` directory at cwd from pre-E1 era | Hard error per F1's "no migration path" rule. User deletes manually. |
 
-### 8. Out of scope for v1
+### 8. Out of scope (v1)
 
-Document these as deferred so future specs can pick them up:
-
-- **Greenfield runs** (`--target` not passed). The archived `progress.json` has `targetDir: null`. v1 refuses to recover these because the `app/` directory created at Step 0.6 is not tracked by the archive, and re-creating it needs the original greenfield init logic. A v2 could archive `app/` alongside `gan-state/`.
-- **Cross-machine recovery.** Absolute worktree paths and `targetDir` make archives non-portable. A v2 could relocate paths based on environment variables or a rewrite pass.
-- **Automatic archive garbage collection.** v1 never deletes archives. A v2 might prune `recoverable: false` archives older than N days.
-- **Recovery of the `.gan/worktree/` filesystem when the run branch was pushed but the local copy is gone.** v1 assumes the branch is still reachable from `<targetDir>`. A v2 could `git fetch` + `worktree add` if the branch is available remotely.
+- Cross-machine recovery.
+- Cross-project recovery (`--project-root` override).
+- Greenfield-run recovery.
+- Garbage collection.
+- Recovery via the CLI (`gan recover`); only `/gan --recover` in v1. The CLI
+  command is a Phase 7 candidate.
+- Concurrent-run mutex (file lock). Best-effort heuristic only.
 
 ---
 
 ## Acceptance criteria
 
-Each criterion has a concrete, testable assertion.
+Each criterion concrete and testable.
 
-1. **Archive on user-`N` abort.** Given a run in `building` status, when the orchestrator handles a Step 0 resume prompt with user answer `N`, `.gan/` no longer exists at cwd and `<telemetry-dir>/runs/<run-id>/gan-state/` contains `progress.json` with `status: building`. `archive-metadata.json` exists with `reason: aborted-interrupted-resume` and `recoverable: true`.
-2. **Archive on max-attempts failure.** Given a sprint that exhausts `maxAttempts`, the teardown archives `.gan/` with `reason: failed-max-attempts`, `recoverable: false`.
-3. **Archive on success.** A successful run (`status: complete`) archives with `reason: complete`, `recoverable: false`.
-4. **`--list-recoverable` without archives.** Fresh telemetry dir → prints `No recoverable runs found at <telemetry-dir>.` Exit 0.
-5. **`--list-recoverable` with archives.** Three archives (one complete, one failed, one aborted) → prints all three sorted by `archivedAt` desc. Exit 0.
-6. **`--recover` without `--run-id` picks most recent recoverable.** Given two archives (newer `recoverable: false`, older `recoverable: true`), `--recover` picks the older one. Given two archives both `recoverable: true`, picks the newer.
-7. **`--recover` refuses when `.gan/` exists.** Exit 1 with the documented message. `.gan/` is not modified.
-8. **`--recover` refuses when run branch is gone.** Exit 1 with the documented message. `.gan/` is not created. Archive `archive-metadata.json` is not modified.
-9. **`--recover` restores state and re-attaches worktree.** After successful `--recover`, `.gan/progress.json` equals the archived file, `.gan/worktree/` is a git worktree of the target repo checked out to `runBranch`, and `archive-metadata.json.recoverable` is `false` with `recoveredAt` + `recoveredTo` populated.
-10. **`--recover` then normal resume works end-to-end.** After `--recover` on a run archived at `building/sprint 3/attempt 1`, the orchestrator enters the Step 0 building-branch resume (reset worktree to `sprint-3-base-commit.txt`, respawn generator for attempt 1). No duplicate attempt counting, no branch corruption.
-11. **`--no-telemetry` fallback.** A `--no-telemetry` run that fails archives to `<cwd>/.gan-archive/<run-id>/` with a stderr notice. `--list-recoverable` from the same cwd finds it.
-12. **Archive write atomicity.** The move sequence (worktree detach → `mv .gan/* …`) either completes fully or leaves `.gan/` intact + logs a critical error. No partial state left under `<telemetry-dir>` without a matching `archive-metadata.json`.
+1. **Terminal marker on graceful run end.** A run that completes all sprints lands
+   `progress.json.terminal: true`, `terminalReason: complete`, `terminalAt`
+   populated, run directory still on disk.
 
-Tests must cover:
+2. **Terminal marker on max-attempts failure.** Same fields; `terminalReason:
+   failed-max-attempts`.
 
-- **Success path** for 1, 5, 6, 9, 10 — a working recovery flow.
-- **Failure path** for 7, 8, 12 — refusals and write failures.
+3. **Terminal marker on user-N abort.** Same; `terminalReason: aborted-by-user`.
 
-Per ClaudeAgents' testing rules (see `CLAUDE.md` in this repo if one exists; otherwise the standard rule "new or updated code must be covered by tests exercising both success and at least one failure path"), no criterion should have happy-path coverage only.
+4. **`--list-recoverable` empty case.** Project with no `.gan-state/runs/` (or empty)
+   prints "No runs found..." and exits 0.
+
+5. **`--list-recoverable` filters terminal.** Three runs (one terminal-complete, one
+   terminal-failed, one non-terminal) → default output shows only the non-terminal one;
+   `--include-terminal` shows all three sorted by mtime.
+
+6. **`--recover` without `--run-id` picks most recent recoverable.** Two non-terminal
+   runs → newer mtime wins.
+
+7. **`--recover --run-id X` for missing run.** Exit 1, message names `<projectRoot>/.gan-state/runs/X/`.
+
+8. **`--recover` refuses cross-project recovery.** A run with `projectRoot:
+   /old/path` invoked from a different `cwd` → exit 1, message names both paths.
+
+9. **`--recover` refuses missing run branch.** Run branch deleted via `git branch -D`;
+   `--recover` exits 1 with the documented message.
+
+10. **`--recover` refuses dirty working tree.** Same dirty-tree message as the
+    orchestrator's normal preflight.
+
+11. **`--recover` runs `validateAll()` non-aborting.** A project with broken
+    overlays + a recoverable run → recovery proceeds; the recovery report includes the
+    structured error block.
+
+12. **Overlay drift surfaced.** Recover after editing `.claude/gan/project.md` →
+    recovery report's "Overlays:" line names "project drifted".
+
+13. **Worktree re-attach.** After `--recover`, `git worktree list` includes the
+    run's worktree at `.gan-state/runs/<runId>/worktree` checked out to `<runBranch>`.
+
+14. **`recoveryHistory[]` appended.** After `--recover`, `progress.json.recoveryHistory`
+    has one entry with `recoveredAt`, `fromStatus`, `atSprint`.
+
+15. **`.gan-state/modules/` untouched.** A regression test seeds
+    `tests/fixtures/<fixture>/.gan-state/modules/dummy/state.json` with a fixed payload,
+    runs the entire `--list-recoverable` + `--recover` flow, and asserts the file is
+    byte-identical at the end.
+
+16. **Resume state machine takes over.** After successful `--recover` on a
+    `building/sprint 3/attempt 1` run, the next thing the orchestrator does is reset the
+    worktree to `sprint-3-base-commit.txt` and respawn the generator for attempt 1
+    (matching SKILL.md's `building` resume branch). No duplicate counting, no branch
+    corruption.
+
+17. **Migration: stale `.gan/` directory hard error.** Per F1 acceptance criteria — a
+    project with a pre-existing `.gan/` halts with a hard error instructing manual
+    deletion. `--recover` and `--list-recoverable` honor this rule.
+
+Tests cover at minimum: success path for 1-4, 6, 11, 13-16; failure path for 7-10, 17.
 
 ---
+
+## Dependencies
+
+- **F1** — zone 2 layout. Recovery operates entirely inside `.gan-state/runs/<run-id>/`.
+- **F2** — `validateAll()` non-aborting mode.
+- **E1** — gan-recover role contract; orchestrator's snapshot model; SKILL.md's
+  `--recover` / `--list-recoverable` short-circuit dispatch.
+- **F3** — `progress-v1.json` schema (added in this sprint if not already present).
+- **O1** — fail-open contract for `--recover` validation behaviour.
 
 ## Implementation notes
 
-- **SKILL.md is prose.** The changes here are additions and edits to `skills/gan/SKILL.md`, plus a one-line change to `install.sh` for the symlink. No Python, no shell scripts, no schemas to change.
-- **No schema changes.** `progress.json` schema is unchanged. `archive-metadata.json` is a new document; its schema lives in this spec and should be copied into `skills/gan/schemas/archive-metadata.schema.json` for consistency with the existing pattern (see `progress.schema.json`, `contract.schema.json`, etc.).
-- **Step numbering.** The new `--recover` and `--list-recoverable` handling should slot in between Step 0 (resume) and Step 0.5 (target preflight). Suggested: rename current Step 0 to Step 0a (resume), new Step 0b (recover / list-recoverable), leaving downstream step numbers intact.
-- **`/gan --recover` does not need to honor other flags.** It ignores `--spec`, `--specs`, `--target`, `--max-attempts`, `--threshold`, `--label` — all of those are read from the archive. `--telemetry-dir` and `--no-telemetry` are honored because they drive archive discovery. `--run-id` is specific to `--recover`. Document that mixing `--recover` with spec flags is a usage error and prints `--recover takes only --run-id; other flags are read from the archive. Ignored: <list>`.
-- **Timestamps.** Every new timestamp in `archive-metadata.json` is UTC ISO 8601 (`2026-04-22T10:15:30Z`), matching existing timestamps elsewhere in the skill.
-- **Validation.** Add `archive-metadata.schema.json` and validate it at archive-write time and at recovery-read time. Schema validation is already used throughout SKILL.md (see any `validate against` references).
-
----
-
-## Non-goals
-
-- Supporting recovery across machines.
-- Supporting recovery when the run branch has been rewritten/force-deleted in the target repo.
-- Supporting recovery for greenfield runs (no `--target`).
-- Automatic cleanup of old archives.
-- Changing the existing Step 0 resume behavior for graceful exits (the `status: complete` / `failed` prompt stays as-is).
-- Exposing archive contents to sub-agents. Archives are orchestrator-internal.
-
----
+- **SKILL.md changes only.** No new agent file. The flag-dispatch table
+  in SKILL.md gains two short-circuit handlers (`--list-recoverable`, `--recover
+  [--run-id X]`).
+- **No external archive root.** `--telemetry-dir` and `--no-telemetry` no longer affect
+  recovery; telemetry is a separate concern. (Telemetry directories may still receive
+  copies of `progress.json` etc. for outcome tracking, but recovery does not depend on
+  them.)
+- **Schema bump.** `progress.json`'s shape changes (gains `terminal`, `terminalReason`,
+  `terminalAt`, `projectRoot`, `overlaysAtSnapshot`, `recoveryHistory`). Per the
+  pre-1.0 no-backward-compat rule, this is a `schemaVersion` bump on the run-state
+  schema if `schemas/run-state/progress-v1.json` exists, or first creation of that
+  file.
+- **Tests live under `tests/integration/recovery/`** (new directory, follows the
+  pattern of `tests/integration/snapshot-freshness.test.ts` and
+  `tests/integration/first-run-nudge.test.ts` from Phase 3 Sprint 6).
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Developers running old SKILL.md against new archives, or vice versa | `install.sh` symlink change forces a reinstall; spec instructs this in the PR body. Archive-metadata schema version field can be added in v2 if divergence becomes an issue — v1 ships without one. |
-| Telemetry dir filling up with archives | Documented in "Out of scope"; GC is a v2 follow-up. Archives are small (≤10 MB typical — mostly JSON and the run's spec.md). |
-| User recovers a run, that recovery fails partway, state is now half-restored | Recover is copy-based (step 4 is `cp -R`), so the archive is untouched until step 7. A failed recover leaves `.gan/` partially populated at cwd; the Step 0 resume check will catch it on the next `/gan` run. Document this in the error message: `Recovery left partial .gan/ at <cwd>. Inspect or remove before retrying.` |
-| Race between `--recover` and a concurrent `/gan` run starting in the same cwd | The "refuse if `.gan/` exists" check in `--recover` step 1 plus `/gan`'s implicit creation of `.gan/` at start make this a best-effort lock. Cross-process locking is out of scope; documented behavior is "don't do that". |
+| `progress.json` schema bump breaks Phase 3 tests | Schema version is bumped on the on-disk format; in-memory shape is additive. Existing tests that reference `progress.json` get updated. The `_audit-post-r.md` discipline applies. |
+| User runs `--recover` against a run from before this spec lands (no `terminal` field) | Treat missing `terminal` as `false` (recoverable). Acceptable — pre-revision runs were always recoverable in spirit. |
+| `recoveryHistory[]` grows unbounded across many recoveries of a chronically failing run | Bounded by user behaviour; in practice 1-3 entries typical. No GC needed in v1. |
+| Filesystem race: another process writes to the run directory mid-recovery | Best-effort. Document that recovery assumes exclusive access to `.gan-state/runs/<run-id>/`. Cross-process locking is out of scope (v2 candidate). |
+| Overlay drift hash check has high false-positive rate (whitespace edits) | Documented as acceptable; the warning is informational, not blocking. v2 could move to AST-level diff. |
+| `validateAll()` non-aborting mode surfaces too much noise during recovery | Recovery report sections are clearly separated (preflight / drift / validation). The user can scan the section they care about. |

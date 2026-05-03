@@ -4,3 +4,17 @@
 # so iteration drafts don't pollute the spec set.
 specifications/REVIEW.md
 specifications/REVIEW_RESPONSE*.md
+
+# Personal Claude Code overrides — never committed.
+.claude/settings.local.json
+
+# F1 zones 2 and 3 — durable state and ephemeral cache.
+# Zone 1 (.claude/gan/) is config and stays tracked; do not add it here.
+.gan-state/
+.gan-cache/
+
+# R1 toolchain artifacts.
+dist/
+node_modules/
+coverage/
+*.tsbuildinfo

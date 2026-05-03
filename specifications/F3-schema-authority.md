@@ -17,12 +17,15 @@ schemas/
   stack-v1.json
   overlay-v1.json
   module-manifest-v1.json
+  api-tools-v1.json
   …
 ```
 
 Naming: `<file-type>-v<N>.json`, where `<file-type>` is the kind of config file and `<N>` is the schemaVersion the document describes.
 
 Each domain spec authors the JSON Schema for its file type as part of its content (C1 owns `stack-v1.json`, C3 owns `overlay-v1.json`, M1 owns `module-manifest-v1.json`). The schema document is the authoritative declarative description; English prose in the spec is illustrative only.
+
+`api-tools-v1.json` is the parameter-shape schema for every MCP tool the reference server exposes (per F2's function surface and R1's MCP tool registration); it is owned by R1 because tool parameter shapes track the implementation surface, not a content-file format. Listed here for completeness so the on-disk schema set is enumerated in one place.
 
 ### `schemaVersion` semantics
 
@@ -81,16 +84,16 @@ This spec catalogs the cross-file invariants the API enforces. Each invariant is
 | `pairsWith.consistency` | M1 | If `src/modules/<name>/` and `stacks/<name>.md` both exist, both must declare `pairsWith` referring to each other; the names must match. |
 | `cacheEnv.no_conflict` | C1 | Across active stacks, no two stacks may declare `cacheEnv` entries with the same `envVar` and different `valueTemplate`. |
 | `additionalContext.path_resolves` | U3 | Each path listed in `planner.additionalContext` or `proposer.additionalContext` resolves to a readable file at validation time. Warning level (file may legitimately be missing during early authoring). |
-| `path.no_escape` | F4 | Every path declared in any committed config file (today: `planner.additionalContext`, `proposer.additionalContext`; future splice points must be added) resolves to a real path that is a descendant of the project root. Symlinks pointing outside the root are escapes. Hard error (`PathEscape`). |
+| `path.escape` | F4 | Every path declared in any committed config file (today: `planner.additionalContext`, `proposer.additionalContext`; future splice points must be added) resolves to a real path that is a descendant of the project root. Symlinks pointing outside the root are escapes. Hard error (`PathEscape`). |
 | `trust.approved` | F4 | If any committed file contains a command-declaring field and the project's content hash is not in the trust cache, validation fails with `UntrustedOverlay`. `GAN_TRUST=unsafe-trust-all` opts out. |
 | `overlay.tier_apiVersion` | C3 | Each overlay tier's `schemaVersion` matches the API's known overlay schema version. |
 | `stack.tier_apiVersion` | C1 | Each active stack file's `schemaVersion` matches the API's known stack schema version. |
 | `detection.tier3_only` | C5 | A `detection` block is permitted only in tier-3 (canonical / repo) stack files. A tier-1 (project) or tier-2 (user) stack file containing a `detection` block fails with a hard `InvariantViolation` error. Silent-drop is rejected: a project-tier file's "detection" reading as docs but never activating would be a footgun. C1's schema additionally forbids `detection` outside tier 3 at parse time; this cross-file invariant is the authoritative gate. |
-| `stack.no_draft_banner` | R3 | A stack file at any tier whose first non-blank line is the literal `# DRAFT — replace TODOs before committing.` banner emitted by `gan stacks new` (R3) fails with a hard `InvariantViolation` error citing the path. The banner is the scaffold's "you're not done yet" signal; removing it is the user's deliberate "I have replaced the TODOs" act. Catalogued as a cross-file invariant so it fires at *both* runtime via `gan validate` / `validateAll()` *and* at build time via R4's `lint-stacks` — without two separate code paths having to agree on the rule. |
+| `stack.no_draft_banner` | R3 | A stack file at any tier whose first non-blank line is the literal `# DRAFT — replace TODOs and remove this banner before committing.` banner emitted by `gan stacks new` (R3) fails with a hard `InvariantViolation` error citing the path. The banner is the scaffold's "you're not done yet" signal; removing it is the user's deliberate "I have replaced the TODOs" act. Catalogued as a cross-file invariant so it fires at *both* runtime via `gan validate` / `validateAll()` *and* at build time via R4's `lint-stacks` — without two separate code paths having to agree on the rule. |
 
 Invariants are implemented in code (R1) but live conceptually here so the catalog is centralised.
 
-**Single point of implementation.** Each invariant has one implementation in R1. R4's lint scripts that need to check invariants at build time **import R1's check function** rather than re-implementing — the same code path, called from a different entry point. This eliminates the drift risk a multi-implementation pattern would introduce: a rule can never silently differ between `gan validate` (runtime) and the maintainer-side lint (build time) because they call the same function. The invariants currently subject to this rule (most prominently `pairsWith.consistency`, `cacheEnv.no_conflict`, and `path.no_escape`, which span multiple consumer specs) all funnel through R1's invariant module; specs that catalogue or motivate a rule (C1, C5, M1, F4) do not duplicate the implementation.
+**Single point of implementation.** Each invariant has one implementation in R1. R4's lint scripts that need to check invariants at build time **import R1's check function** rather than re-implementing — the same code path, called from a different entry point. This eliminates the drift risk a multi-implementation pattern would introduce: a rule can never silently differ between `gan validate` (runtime) and the maintainer-side lint (build time) because they call the same function. The invariants currently subject to this rule (most prominently `pairsWith.consistency`, `cacheEnv.no_conflict`, and `path.escape`, which span multiple consumer specs) all funnel through R1's invariant module; specs that catalogue or motivate a rule (C1, C5, M1, F4) do not duplicate the implementation.
 
 ### Versioning across axes
 

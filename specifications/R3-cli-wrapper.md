@@ -28,8 +28,14 @@ gan config get <path> [--json]          Print one resolved value.
 gan config set <path> <value> [--tier=project|user]
                                         Update a single splice point.
 gan stacks list                         List active stacks with tier provenance.
-gan stacks new <name> [--tier=project|repo]
-                                        Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs before committing` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
+gan stacks new <name> [--tier=project]
+                                        Scaffold a minimal stack file at the project tier (the only supported value; default and required if `--tier` is supplied at all). Writes to `.claude/gan/stacks/<name>.md`. The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs and remove this banner before committing.` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
+gan stacks available [--json]           List the built-in stacks the framework ships at `<packageRoot>/stacks/`. Prints a `NAME / VERSION / DESCRIPTION` table by default; `--json` emits `{"stacks": [{description, name, path, schemaVersion}, ...]}`. Distinct from `gan stacks list` (active set) and from "installed" (vendored via `gan stacks customize`).
+gan stacks customize <name> [--tier=project|user] [--force]
+                                        Copy the named built-in stack into a customisation tier so the user can edit it (`<projectRoot>/.claude/gan/stacks/<name>.md` for `--tier=project`, the default; `<userHome>/.claude/gan/stacks/<name>.md` for `--tier=user`). Refuses to overwrite an existing customisation without `--force`.
+gan stacks reset <name> [--tier=project|user]
+                                        Delete the customisation copy at the named tier so the framework's built-in default re-wins resolution. Idempotent: a missing customisation prints a one-line warning and exits 0.
+gan stacks where [<name>]               Print the resolved location of a stack file. With no name, prints the absolute path to the framework's built-in stacks directory. With a name, calls R1's `getStackResolution` and prints `<path>  (tier: <tier>)` where tier is one of `project`, `user`, or `builtin` (per C5).
 gan stack show <name>                   Print one stack's full data.
 gan stack update <name> <field> <value>
                                         Update one field of a stack file.
@@ -38,6 +44,8 @@ gan version                             Print API version, server version, schem
 gan --help                              Help text.
 gan <subcommand> --help                 Per-subcommand help.
 ```
+
+**Active vs. available vs. installed.** `gan stacks list` reports the **active** set — stacks whose detection rules currently match this project's tree. `gan stacks available` lists what the framework **offers** — built-in stacks at `<packageRoot>/stacks/`. A stack is **installed** (vendored) when `gan stacks customize <name>` copies it into a customization tier (`<projectRoot>/.claude/gan/stacks/` for `--tier=project` or `<userHome>/.claude/gan/stacks/` for `--tier=user`); the customization-tier copy then wins resolution per C5's tier ordering. `gan stacks reset <name>` drops the customization so the built-in default kicks back in.
 
 **Trust commands** (`gan trust info`, `gan trust approve`, `gan trust revoke`, `gan trust list`) live in [R5](R5-trust-cache-impl.md) so the trust UX is co-located with its implementation. They are part of the same `gan` binary, just spec'd elsewhere.
 
@@ -83,9 +91,7 @@ auditCmd:
   absenceSignal: warning
 buildCmd: "false  # TODO: replace with the build command users on this stack run"
 testCmd:  "false  # TODO: replace with the test command"
-lintCmd:
-  command: "false  # TODO: replace with the lint command, or remove this field"
-  absenceSignal: warning
+lintCmd:  "false  # TODO: replace with the lint command, or remove this field"
 securitySurfaces: []
   # TODO: see C1's schema spec and existing stacks/*.md files for surface
   # authoring patterns. An empty list is a valid stack (it just means /gan
@@ -102,7 +108,7 @@ Discipline rules:
 
 - **No plausible-looking defaults.** Strings that would parse as "valid but empty" (`auditCmd: "true"`, empty `securitySurfaces`, blank `buildCmd`) are forbidden; placeholders are explicitly stub strings (`"false  # TODO: replace..."`) that fail at runtime if not replaced.
 - **The banner is enforcement, not decoration.** R4's `lint-stacks` fails on any stack file containing the `# DRAFT` banner. This makes "user committed a half-baked stack" a CI hard error, not a social problem.
-- **The scaffold writes to `.claude/gan/stacks/<name>.md` by default** (project tier per C5). `--tier=repo` writes to `stacks/<name>.md` and is intended for maintainer use when authoring a new canonical template; user projects almost never need it.
+- **The scaffold writes to `.claude/gan/stacks/<name>.md`** (project tier per C5). There is no end-user-facing repo tier: built-in stacks ship inside the framework's npm package (per E2's distribution model) and are surfaced via `gan stacks customize`; `--tier=repo` is rejected with exit 64 (`MalformedInput`).
 - **No detection inference.** The scaffold does not inspect the user's repo to guess detection rules; it produces a TODO placeholder. Detection is too easy to get subtly wrong; better to make the user think about it explicitly than to ship a "smart" guess that misfires.
 - **Refuses to overwrite.** If the target file exists, `gan stacks new` errors with a clear message. The user has to delete it first.
 
@@ -114,17 +120,17 @@ Default output is human-readable: tables for lists, key-value pairs for single v
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 1 | Generic failure |
-| 2 | Validation failure (config has issues; the report is on stdout) |
-| 3 | Schema mismatch |
-| 4 | Invariant violation |
-| 5 | API/server unreachable (R1 not installed or crashed) |
-| 64 | Bad CLI arguments |
+| Code | F2 error code(s) | Meaning |
+|---|---|---|
+| 0 | _none_ | Success. |
+| 1 | `TrustCacheCorrupt` and any unmapped error code (the safety default) | Generic failure. Unmapped F2 codes default to `1` rather than `0` so a future-added code can never accidentally surface as success. |
+| 2 | `UntrustedOverlay`, `ValidationFailed` | Validation failure (config has issues; the structured report prints on stdout). The trust check fails closed on this code. |
+| 3 | `SchemaMismatch`, `InvalidYAML`, `MissingFile` | Schema or shape problem at the file boundary. |
+| 4 | `InvariantViolation`, `PathEscape`, `CacheEnvConflict` | Cross-file invariant violation (including the F4 path-escape and C1 cacheEnv conflicts surfaced as their own codes). |
+| 5 | `UnknownApiVersion`, plus the connection-failure path when the server cannot be reached | API/server unreachable (R1 not installed or crashed) or version-mismatched. |
+| 64 | `MalformedInput`, `UnknownStack`, `UnknownSplicePoint`, `NotImplemented` | Bad CLI arguments — caller-side input shape errors, references to unknown stacks/splice points, or invocation of a tool whose implementation is deferred. |
 
-Documented so CI scripts can act on specific failures.
+Documented so CI scripts can act on specific failures. The mapping is one-to-many in both directions: a single exit code can absorb multiple F2 codes (e.g. exit `4` covers `InvariantViolation`, `PathEscape`, and `CacheEnvConflict`), and the exit-code table is the authoritative cross-reference between the F2 enum and shell exit codes. New F2 error codes added in a future revision require a same-PR update to this table; the implementation in `src/cli/lib/exit-codes.ts` mirrors this table 1:1.
 
 ### Where it runs
 
@@ -156,9 +162,10 @@ Comes with the npm package R2 already installs. No additional install step. Afte
 - `gan --help`, `gan -h`, `gan help`, and bare `gan` (no arguments) all print the top-level help to stdout and exit 0. Help text lists every subcommand from the surface table.
 - `gan <subcommand> --help` and `gan <subcommand> -h` print the subcommand's usage, flags, at least one example, and applicable exit codes; exits 0.
 - Unknown subcommands and unknown flags exit 64 with a one-line error and a pointer to `--help`.
-- `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs before committing` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
+- `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs and remove this banner before committing.` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
 - Running `gan validate` or `lint-stacks` against the unmodified scaffold fails with a clear error citing the unremoved DRAFT banner.
 - `gan stacks new <name>` against an existing file at the target path exits non-zero without overwriting; the error names the conflicting path.
+- `gan stacks new <name> --tier=repo` exits 64 with a `MalformedInput` structured error naming `--tier` and `project` as the supported value; no scaffold file is written at any path. There is no end-user-facing repo tier — built-in stacks ship inside the framework's npm package and are surfaced via `gan stacks customize`.
 
 ## Dependencies
 

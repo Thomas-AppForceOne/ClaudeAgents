@@ -135,7 +135,7 @@ Interactive prompts are not viable in CI. The trust mechanism reads an environme
 | `GAN_TRUST` value | Behavior |
 |---|---|
 | (unset) | Interactive prompt on `UntrustedOverlay`. Default for terminal sessions. |
-| `strict` | Refuse to run any project-defined command. `validateAll()` succeeds for read-only purposes (e.g. `gan validate`) but `/gan` runs error-out at the trust check on any unapproved hash. **Recommended CI setting** — every CI run validates against committed config. |
+| `strict` | Refuse to run any project-defined command on any unapproved hash. `validateAll()` returns the structured `UntrustedOverlay` error so `gan validate` reports it on stdout and exits non-zero, and `/gan` aborts at the validation step (no worktree, no agents). The "fail closed" behaviour is uniform across both surfaces; there is no read-only soft-pass. **Recommended CI setting** — every CI run validates against committed config. |
 | `unsafe-trust-all` | Skip the trust check entirely. For self-hosted CI on a trusted branch only. Logged loudly. |
 
 The pre-1.0 CI pattern is `GAN_TRUST=strict`; every run validates against committed config, no manifest infrastructure needed. A richer mode (`approved-hashes-only`) backed by an export/import manifest is a deferred R5 bit — authored when concrete CI workflows hit a case where strict-mode is impractical.
@@ -145,7 +145,7 @@ The pre-1.0 CI pattern is `GAN_TRUST=strict`; every run validates against commit
 A new top-level `/gan` flag (parsed by SKILL.md alongside `--print-config`, `--recover`, `--list-recoverable`). When set:
 
 - Every command sourced from a tier-1 or tier-2 file is skipped:
-  - `evaluator.additionalChecks` from `.claude/gan/project.md` or `~/.claude/gan/config.md` — skipped.
+  - `evaluator.additionalChecks` from `.claude/gan/project.md` or `~/.claude/gan/user.md` — skipped.
   - `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` from `.claude/gan/stacks/<name>.md` or `~/.claude/gan/stacks/<name>.md` (per C5) — falls back to the tier-3 (repo) version of the same field.
   - Project-tier stack files entirely defined at tier-1/tier-2 — fall back to tier-3 if a name match exists; otherwise the stack is treated as not-defined (the user gets a warning).
 - Tier-3 (repo-shipped) `stacks/*.md` commands still run. The framework's own defaults are trusted.

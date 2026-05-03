@@ -1,0 +1,22 @@
+dist
+node_modules
+coverage
+*.tsbuildinfo
+package-lock.json
+
+# Spec & doc surfaces are owned by the spec set, not the toolchain.
+specifications/
+agents/
+skills/
+README.md
+PROJECT_CONTEXT.md
+.claude/
+
+# Fixture markdown files are exact YAML+prose payloads under test;
+# do not let prettier rewrite them.
+tests/fixtures/
+
+# JSON Schemas have a canonical author-controlled shape (alphabetical keys
+# inside JSON Schema, deliberately formatted by hand). Skip prettier here
+# so we don't churn schemas vs. determinism's stableStringify output.
+schemas/

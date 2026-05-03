@@ -6,22 +6,35 @@ With the schema (C1) and dispatch (C2) in place, the existing stack-specific log
 
 ## Proposed change
 
-Extract each of the current hardcoded stacks into its own file under `stacks/`:
+Per the roadmap's "single real stack" principle (see [Cross-cutting principles](roadmap.md#cross-cutting-principles) and ["How to read the spec set"](roadmap.md#how-to-read-the-spec-set)), the active plan ships exactly **one real ecosystem stack** plus the generic fallback:
 
 - `stacks/web-node.md` — captures the existing JS/TS logic (`npm audit`, current secrets glob subset, TLS/CORS/session security surfaces, `node`/`npm start`-style run command). **Detection must use the composite form** defined in spec C1: `package.json` alone is insufficient; a lockfile (`package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`) or a `start`/`dev`/`build` script in `package.json` is also required. This prevents spurious activation on Node-packaged repositories that are not web-node applications — including the ClaudeAgents framework repo itself (which ships `package.json` only to support `npm link` for its runtime-utility modules).
-- `stacks/python.md` — `pip-audit` / `safety`, Python surfaces.
-- `stacks/rust.md` — `cargo audit`.
-- `stacks/go.md` — `govulncheck`.
-- `stacks/ruby.md` — `bundle audit`.
-- `stacks/kotlin.md` — `.kt`, `.kts`, `.gradle.kts` in `secretsGlob`; detection on any Kotlin source file.
-- `stacks/gradle.md` — detection on `settings.gradle` / `settings.gradle.kts` / `build.gradle*`; `auditCmd` with the Gradle branch logic including the "no audit tool configured" `blockingConcern` fallback.
 - `stacks/generic.md` — conservative fallback (spec C2).
 
-Once extracted, the agent prompts drop their hardcoded lists and rely on the active stack set. Each cache-using stack (`stacks/gradle.md`, `stacks/web-node.md`, any future tool-cache-bearing stack) declares its own `cacheEnv` per spec C1; there is no centralized env-var catalog in the orchestrator.
+The synthetic fixture-only stack (`tests/fixtures/stacks/synthetic-second/.claude/gan/stacks/synthetic-second.md`) is created by R1 per the multi-stack guard rail principle — it is **not** authored by E2 and is **not** a shipped real stack. E2 references it only to confirm its content remains consistent with C1's schema after extraction.
+
+**Stack-specific content currently in the old prompts but NOT shipped as separate stacks** (Python, Rust, Go, Ruby, Kotlin, Gradle, and the legacy stack-specific tokens in `gan-evaluator.md` like `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, `.kt`/`.kts`/`.gradle.kts` extensions, Gradle audit-fallback logic, etc.) are content-mining sources for the **extraction audit**, not extraction targets. Each such concept must end up in one of three buckets:
+
+1. **Lifted into `stacks/web-node.md` or `stacks/generic.md`** if it generalises to a shipped stack (e.g. a security-surface category that applies broadly).
+2. **Lifted into the synthetic-second fixture** if it usefully exercises the C1 schema (e.g. a detection composite, a `cacheEnv` shape) — note this is a fixture content addition, coordinated with R1, not a new shipped stack.
+3. **Explicitly retired** in the E2 PR's extraction audit subsection, with a one-line justification.
+
+Real-ecosystem stacks for Android (Kotlin client + Gradle), Kotlin Multiplatform, and iOS Swift are out of scope for the active plan. They live as authored-but-deferred specs in [`specifications/deferred/`](deferred/README.md) and are reactivated only per the criteria documented there. Any other ecosystem (Python, Rust, Go, Ruby) currently has no shipped real stack; users wanting one author it themselves at the project tier (per C5) or contribute it back upstream as a single canonical stack-file PR (per the roadmap's [single-canonical principle](roadmap.md#cross-cutting-principles)).
+
+Once extracted, the agent prompts drop their hardcoded stack-specific tokens and rely on the active stack set. `stacks/web-node.md` declares its own `cacheEnv` per spec C1 if it has tool caches to surface; `stacks/generic.md` does not. There is no centralized env-var catalog in the orchestrator.
 
 **The contract-proposer's hardcoded security checklist is also retired.** The proposer today enumerates ~10 generic security criteria directly in its prompt. After this extraction, all security criteria originate from active stacks' `securitySurfaces` via the template-instantiation protocol defined in spec C1. The proposer retains its sprint-shape logic (threshold selection, rationale writing) but owns zero stack-specific content.
 
 Correctness of the extraction is gated by the evaluator-pipeline harness (E3) — a separate spec covering the fixture layout, evaluator-plan goldens, and normalisation rules.
+
+## Distribution model
+
+Built-in stacks ship as data inside the framework's npm package, not as files copied into user projects.
+
+- The `stacks/` directory at the repo root (`stacks/web-node.md`, `stacks/generic.md`, plus any future canonical stack) is included in `package.json`'s `files` array, so a `npm install -g @claudeagents/config-server` (or, until publication, `npm install -g .` per R2's local-install-only rule) places the stack files at `<npm-root-g>/@claudeagents/config-server/stacks/`.
+- `install.sh` (per R2 / Sprint 7) creates a user-tier convenience symlink at `~/.claude/gan/builtin-stacks/` pointing at that directory, so users can browse the canonical stack files at a stable, predictable path regardless of where npm installed the package. The resolver itself does not read through the symlink — F1 / C5 specify that R1 computes `<packageRoot>` directly from `import.meta.url` at server startup — so the symlink is a UX affordance, not a load-bearing resolution path.
+- Built-in stacks are **never copied eagerly** into user projects on install. A user who wants to fork a built-in stack opts in explicitly via `gan stacks customize <name>`, which copies the named stack into `<projectRoot>/.claude/gan/stacks/<name>.md` (or, with `--tier=user`, into `<userHome>/.claude/gan/stacks/<name>.md`). The customisation tier then wins resolution per C5's tier ordering. `gan stacks reset <name>` drops the customisation so the built-in default re-wins.
+- Because of this distribution model, `gan stacks new` deliberately does **not** expose a repo-tier scaffold target. There is no end-user-facing repo tier: the framework's canonical stacks live inside the package, not in the host repo. `gan stacks new --tier=repo` exits 64 with a `MalformedInput` error directing the user to `--tier=project` (the default) and `gan stacks customize` for built-in derivatives. Maintainers authoring new canonical stacks edit `stacks/<name>.md` in the framework repo directly, not via the CLI.
 
 ## Acceptance criteria
 
@@ -52,17 +65,16 @@ E3 gates the refactor in implementation; E2 itself is authorable independently o
 
 ## Bite-size note
 
-E2 is larger than its "Value / effort" rating below suggests — eight stack files plus a contract-proposer retirement plus harness coordination. Recommended sprint slicing, with each slice gated by E3's harness:
+E2 is small under the active plan — two shipped stack files plus the contract-proposer retirement plus the extraction audit. Recommended sprint slicing, with each slice gated by E3's harness:
 
 1. `stacks/web-node.md` (most-tested ecosystem; surfaces detection-composite issues first).
-2. `stacks/python.md`, `stacks/rust.md`, `stacks/go.md`, `stacks/ruby.md` (one slice each; small and similar).
-3. `stacks/kotlin.md` + `stacks/gradle.md` (one slice; they pair via detection-union).
-4. `stacks/generic.md` (the fallback; lands last because earlier slices may surface fields it needs).
-5. Contract-proposer hardcoded-checklist retirement.
+2. `stacks/generic.md` (the fallback; lands second because the web-node slice may surface fields generic needs).
+3. Contract-proposer hardcoded-checklist retirement.
+4. Extraction audit (the PR-body subsection enumerating every old-prompt concept and its destination — lifted into web-node, lifted into the synthetic-second fixture, or explicitly retired).
 
-Alternative: collapse E2 into the same coordinated PR as E1 (the agent rewrite). They are inherently coupled — the rewrite cannot complete until stack files exist for the agents to read. Doing both in one PR with per-slice commits keeps review tractable while preserving end-to-end correctness gating.
+Per the roadmap's [Phase 3](roadmap.md#phase-3--agent-integration) coordination rules, E2 ships in the same PR as E1 (the agent rewrite). The two are inherently coupled — the rewrite cannot complete until stack files exist for the agents to read; the stack files are sourced from the prompts E1 retires. Per-slice commits inside the coordinated PR keep review tractable while preserving end-to-end correctness gating.
 
 ## Value / effort
 
 - **Value**: medium-high. Retires the old hardcoded code path. Also unblocks any future real-ecosystem stack (the Android, KMP, and iOS Swift specs in [`specifications/deferred/`](deferred/README.md), or any new ecosystem authored later) — once stack files exist as data rather than code, adding one is a file drop, not a refactor.
-- **Effort**: medium-large. Mechanical per stack, but eight stacks + the proposer retirement is more sprint slices than its "medium" sibling specs.
+- **Effort**: medium. Two shipped stack files plus the proposer retirement plus a careful extraction audit. Smaller than earlier drafts of this spec implied; the audit subsection (every old-prompt concept lifted, retained-as-fixture-content, or explicitly retired) is the discipline-keeping work.

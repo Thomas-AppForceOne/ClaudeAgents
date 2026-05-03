@@ -6,16 +6,14 @@ Today, stack-specific logic is mixed into every agent prompt: the planner has a 
 
 ## Parse contract
 
-A stack file is a markdown document with **one YAML frontmatter block** and **one canonical YAML body block**. Agents never parse markdown prose for semantic content.
+A stack file is a markdown document with **one YAML frontmatter block** carrying every field the schema defines. Agents never parse markdown prose for semantic content.
 
 ```
 ---
+schemaVersion: 1
 name: android
 description: Android client (Gradle, Kotlin/Java)
-schemaVersion: 1
----
 
-```yaml
 detection:
   - settings.gradle.kts
   - settings.gradle
@@ -70,25 +68,27 @@ securitySurfaces:
       and restrict the loaded origin.
     triggers:
       keywords: ["addJavascriptInterface", "WebView"]
-```
+---
 
-## conventions
-Optional free-text markdown after the YAML block. Not machine-parsed; agents
-pass it verbatim to any model that reads the stack file as context.
+## Conventions
+
+Optional free-text markdown after the frontmatter block. Not machine-parsed;
+agents pass it verbatim to any model that reads the stack file as context.
 ```
 
 Rules:
 
-- **Frontmatter** carries only file-level identity (`name`, `description`, `schemaVersion`).
-- **The body YAML block** (first fenced ```` ```yaml ```` block after the frontmatter) is the **sole source of semantic content**. Any field defined in this spec is required to live there.
-- **Markdown headings and prose** after the YAML block are for human readers only. Agents never extract fields from them.
-- The lint script (see acceptance criteria) validates the body YAML against a published JSON-schema.
+- **The YAML frontmatter block** (delimited by `---` lines at the top of the file) is the **sole source of semantic content**. Every field defined in this spec lives there: `schemaVersion`, `name`, optional `description`, plus the structural fields (`detection`, `scope`, `secretsGlob`, `cacheEnv`, `auditCmd`, `buildCmd`, `testCmd`, `lintCmd`, `securitySurfaces`).
+- **Markdown headings and prose** after the frontmatter block are for human readers only. Agents never extract fields from them.
+- The lint script (see acceptance criteria) validates the frontmatter YAML against the published JSON Schema.
+
+(Earlier drafts of this spec described a two-block format — frontmatter for identity plus a separate fenced ```` ```yaml ```` body block for structural fields. That model was collapsed into the single frontmatter form above before C1 shipped: it has fewer parser edge cases, exactly one delimiter convention to learn, and matches every fixture and the `gan stacks new` scaffold output.)
 
 ## Field reference
 
-### name (frontmatter)
+### name
 
-The stack's identifier. Must be **lowercase ASCII letters, digits, and hyphens only** (`^[a-z][a-z0-9-]*$`). The filename `stacks/<name>.md` must match the frontmatter `name` exactly. The lint script enforces both.
+The stack's identifier. Must be **lowercase ASCII letters, digits, and hyphens only** (`^[a-z][a-z0-9-]*$`). The filename `stacks/<name>.md` must match the `name` field in the frontmatter YAML block exactly. The lint script enforces both.
 
 This rule prevents case-sensitivity collisions across macOS / Linux / Windows filesystems (e.g. `Android.md` and `android.md` resolving to the same or different file depending on host OS) and prevents names that would not be valid as MCP tool parameter values.
 

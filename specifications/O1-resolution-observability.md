@@ -14,7 +14,7 @@ The skill orchestrator, after `validateAll()` succeeds and before spawning agent
 
 ```
 /gan loaded:
-  stacks: android.md (project), web-node.md (repo)
+  stacks: android.md (project), web-node.md (builtin)
   user overlay: ~/.claude/gan/config.md
   project overlay: .claude/gan/project.md
   additionalContext: docs/architecture.md, docs/conventions.md
@@ -22,6 +22,8 @@ The skill orchestrator, after `validateAll()` succeeds and before spawning agent
 ```
 
 Missing sources are listed explicitly (`(none)`), not silently omitted — "nothing loaded" is also useful information.
+
+Tier labels in the startup line and in `--print-config` JSON are the canonical [`project` / `user` / `builtin`](C5-stack-file-resolution.md) set per C5; earlier drafts of these specs used `repo` and that label is retired.
 
 The orchestrator owns this line because it owns the snapshot. Spawned agents do not re-emit their own loaded-files line; they consume the snapshot the orchestrator captured (per F2's validation timing).
 
@@ -43,7 +45,7 @@ The output:
   "apiVersion": 1,
   "activeStacks": [
     {"name": "android", "tier": "project", "path": ".claude/gan/stacks/android.md", "schemaVersion": 1},
-    {"name": "web-node", "tier": "repo",    "path": "stacks/web-node.md",          "schemaVersion": 1}
+    {"name": "web-node", "tier": "builtin", "path": "stacks/web-node.md",          "schemaVersion": 1}
   ],
   "overlays": {
     "user":    {"loaded": true, "path": "~/.claude/gan/config.md"},

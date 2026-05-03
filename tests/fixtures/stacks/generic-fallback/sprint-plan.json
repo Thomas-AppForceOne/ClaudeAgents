@@ -1,0 +1,9 @@
+{
+  "affectedFiles": ["README.md"],
+  "criteria": [
+    {
+      "id": "generic-only",
+      "description": "Verify a project with no ecosystem signal activates only the generic stack."
+    }
+  ]
+}

@@ -1,0 +1,687 @@
+{
+  "$id": "https://claudeagents.dev/schemas/api-tools-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool takes at minimum `projectRoot: string`. Immutable.",
+  "properties": {
+    "appendToModuleState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicatePolicy": {
+            "enum": [
+              "error",
+              "skip",
+              "allow"
+            ],
+            "type": "string"
+          },
+          "entry": {},
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "moduleName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "moduleName",
+          "key",
+          "entry"
+        ],
+        "type": "object"
+      }
+    },
+    "appendToOverlayField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicatePolicy": {
+            "enum": [
+              "error",
+              "skip",
+              "allow"
+            ],
+            "type": "string"
+          },
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "fieldPath",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "appendToStackField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicatePolicy": {
+            "enum": [
+              "error",
+              "skip",
+              "allow"
+            ],
+            "type": "string"
+          },
+          "field": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "name",
+          "field",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "getActiveStacks": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getApiVersion": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getMergedSplicePoints": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getModuleState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "moduleName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "moduleName",
+          "key"
+        ],
+        "type": "object"
+      }
+    },
+    "getOverlay": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getOverlayField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "getResolvedConfig": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getStack": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "getStackConventions": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "getStackResolution": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "getTrustDiff": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "getTrustState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "listModules": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "registerModule": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "manifest": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "pairsWith": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "pairsWith"
+            ],
+            "type": "object"
+          },
+          "moduleName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "moduleName",
+          "manifest"
+        ],
+        "type": "object"
+      }
+    },
+    "removeFromModuleState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "entryKey": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "moduleName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "moduleName",
+          "key",
+          "entryKey"
+        ],
+        "type": "object"
+      }
+    },
+    "removeFromOverlayField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "fieldPath",
+          "key"
+        ],
+        "type": "object"
+      }
+    },
+    "removeFromStackField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "name",
+          "field",
+          "key"
+        ],
+        "type": "object"
+      }
+    },
+    "setModuleState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "moduleName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "moduleName",
+          "key",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "setOverlayField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "fieldPath",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "trustApprove": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "contentHash": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "contentHash"
+        ],
+        "type": "object"
+      }
+    },
+    "trustRevoke": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "updateStackField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "name",
+          "field",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "validateAll": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
+    "validateOverlay": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "tier"
+        ],
+        "type": "object"
+      }
+    },
+    "validateStack": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "name"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "appendToModuleState",
+    "appendToOverlayField",
+    "appendToStackField",
+    "getActiveStacks",
+    "getApiVersion",
+    "getMergedSplicePoints",
+    "getModuleState",
+    "getOverlay",
+    "getOverlayField",
+    "getResolvedConfig",
+    "getStack",
+    "getStackConventions",
+    "getStackResolution",
+    "getTrustDiff",
+    "getTrustState",
+    "listModules",
+    "registerModule",
+    "removeFromModuleState",
+    "removeFromOverlayField",
+    "removeFromStackField",
+    "setModuleState",
+    "setOverlayField",
+    "trustApprove",
+    "trustRevoke",
+    "updateStackField",
+    "validateAll",
+    "validateOverlay",
+    "validateStack"
+  ],
+  "title": "ClaudeAgents config-server MCP tool catalog, v1",
+  "type": "object"
+}

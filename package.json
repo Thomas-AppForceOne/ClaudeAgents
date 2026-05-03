@@ -1,0 +1,52 @@
+{
+  "name": "@claudeagents/config-server",
+  "version": "0.1.0",
+  "description": "ClaudeAgents config MCP server (R1 skeleton).",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0 <23"
+  },
+  "bin": {
+    "claudeagents-config-server": "./dist/config-server/index.js",
+    "gan": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "schemas",
+    "stacks",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc && tsc -p tsconfig.scripts.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "test": "vitest run",
+    "format:check": "prettier --check .",
+    "lint-stacks": "node dist/scripts/lint-stacks/index.js",
+    "pair-names": "node dist/scripts/pair-names/index.js",
+    "evaluator-pipeline-check": "node dist/scripts/evaluator-pipeline-check/index.js",
+    "publish-schemas": "node dist/scripts/publish-schemas/index.js",
+    "publish-schemas:check": "node dist/scripts/publish-schemas/index.js --dry-run",
+    "lint-no-stack-leak": "node dist/scripts/lint-no-stack-leak/index.js",
+    "lint-error-text": "node dist/scripts/lint-error-text/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ajv": "^8.0.0",
+    "picomatch": "^4.0.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/picomatch": "^4.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
