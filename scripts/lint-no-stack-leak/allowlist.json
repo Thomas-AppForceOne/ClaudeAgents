@@ -9,8 +9,6 @@
     "src/config-server/tools/validate.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json"
   },
   "transitional": {
-    "agents/gan-contract-proposer.md": "remove when E1 lands",
-    "agents/gan-evaluator.md": "remove when E1 lands",
     "agents/gan-generator.md": "remove when E1 lands",
     "agents/gan-planner.md": "remove when E1 lands"
   }
