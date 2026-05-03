@@ -1,0 +1,38 @@
+{
+  "$comment": "Recommended Claude Code permissions for projects that use ClaudeAgents (the /gan skill). Copy or merge this into <project>/.claude/settings.json (per-project) or ~/.claude/settings.json (per-user) to suppress Claude Code permission prompts during /gan runs. The allowlist is intentionally conservative — it covers the operations the /gan agent loop performs in a typical sprint and nothing else. Destructive commands (rm -rf, git push --force, etc.) are NOT in the allowlist; they will still prompt. Tighten or extend per project: see https://docs.claude.com/en/docs/claude-code/settings or run the fewer-permission-prompts skill against an existing /gan transcript to generate a tailored allowlist.",
+  "permissions": {
+    "allow": [
+      "mcp__claudeagents-config__*",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Agent",
+      "TodoWrite",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git worktree prune:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(npm audit:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Bash(realpath:*)",
+      "Bash(test:*)",
+      "Bash(echo:*)"
+    ]
+  }
+}

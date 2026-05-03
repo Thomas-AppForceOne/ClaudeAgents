@@ -66,6 +66,12 @@ print_help() {
   cat <<'HELP'
 install.sh — install ClaudeAgents (the framework) into your environment.
 
+This is a once-per-machine installation. It modifies your user-level
+Claude Code configuration (under `~/.claude/`) so every project on your
+machine can invoke `/gan` and the `gan` CLI. Per-project filesystem zones
+(`.gan-state/`, `.gan-cache/`) are created lazily on first `/gan` use
+inside each repository — there is no per-project install step.
+
 Usage:
   install.sh [flags]
 
@@ -98,6 +104,14 @@ Prerequisites:
 Exit codes:
   0  Success.
   Non-zero on any failure; the message names what failed and how to fix it.
+
+After install:
+  - Restart Claude Code to pick up the new agents, skills, and config server.
+  - Optional: copy `templates/claude-settings.json` to your project's
+    `.claude/settings.json` (or merge it into an existing one) to suppress
+    Claude Code permission prompts during `/gan` runs. The template
+    allowlists only the operations the `/gan` agent loop performs in a
+    typical sprint — destructive commands still prompt.
 
 For more, see the project README.
 HELP
@@ -210,6 +224,22 @@ link_agents_and_skills() {
 
   if [ -d "$REPO_ROOT/skills/gan" ]; then
     target="$CLAUDE_HOME/skills/gan"
+    # If the target already exists as a real (non-symlink) directory, it
+    # is leftover state from an older install pattern that copied
+    # SKILL.md / trust-prompt.md instead of symlinking. `ln -sfn` cannot
+    # replace a real directory; without intervention the symlink would
+    # land inside the directory (creating $target/gan) or be silently
+    # ignored, leaving the regular-file copies stale. Move the directory
+    # aside as a timestamped backup, then create the symlink at the
+    # canonical location.
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+      local backup
+      backup="${target}.pre-symlink-backup-$(date +%Y%m%dT%H%M%S)"
+      mv "$target" "$backup"
+      log_info "Moved legacy regular-directory $target aside to $backup."
+      log_info "Inspect or delete the backup; the framework now serves these files via the symlink at $target."
+      STATE_LOG+=("backup-skills-gan:$backup")
+    fi
     ln -sfn "$REPO_ROOT/skills/gan" "$target"
     STATE_LOG+=("symlink:$target")
   fi

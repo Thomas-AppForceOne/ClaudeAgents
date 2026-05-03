@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
 const tmpDirs: string[] = [];
@@ -61,7 +61,13 @@ describe('gan stacks customize — project tier (default)', () => {
       extraEnv: { GAN_PACKAGE_ROOT_OVERRIDE: pkg },
     });
     expect(r.exitCode).toBe(0);
-    const target = path.join(canonicalizePath(proj), '.claude', 'gan', 'stacks', 'web-foo.md');
+    const target = path.join(
+      canonicalizePathForDisplay(proj),
+      '.claude',
+      'gan',
+      'stacks',
+      'web-foo.md',
+    );
     expect(existsSync(target)).toBe(true);
     expect(readFileSync(target, 'utf8')).toBe(readFileSync(source, 'utf8'));
     expect(r.stdout).toContain(target);
@@ -73,7 +79,7 @@ describe('gan stacks customize — project tier (default)', () => {
     const proj = makeTmpDir('gan-test-customize-proj-');
     seedBuiltin(pkg, 'web-foo');
     // Pre-seed an existing customisation.
-    const projDir = path.join(canonicalizePath(proj), '.claude', 'gan', 'stacks');
+    const projDir = path.join(canonicalizePathForDisplay(proj), '.claude', 'gan', 'stacks');
     mkdirSync(projDir, { recursive: true });
     const target = path.join(projDir, 'web-foo.md');
     writeFileSync(target, 'EXISTING\n', 'utf8');
@@ -91,7 +97,7 @@ describe('gan stacks customize — project tier (default)', () => {
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     const source = seedBuiltin(pkg, 'web-foo');
-    const projDir = path.join(canonicalizePath(proj), '.claude', 'gan', 'stacks');
+    const projDir = path.join(canonicalizePathForDisplay(proj), '.claude', 'gan', 'stacks');
     mkdirSync(projDir, { recursive: true });
     const target = path.join(projDir, 'web-foo.md');
     writeFileSync(target, 'EXISTING\n', 'utf8');
@@ -210,7 +216,7 @@ describe('gan stacks customize --json', () => {
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     seedBuiltin(pkg, 'web-foo');
-    const projDir = path.join(canonicalizePath(proj), '.claude', 'gan', 'stacks');
+    const projDir = path.join(canonicalizePathForDisplay(proj), '.claude', 'gan', 'stacks');
     mkdirSync(projDir, { recursive: true });
     writeFileSync(path.join(projDir, 'web-foo.md'), 'OLD\n', 'utf8');
     const r = await runGan(

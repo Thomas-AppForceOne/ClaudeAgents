@@ -23,7 +23,7 @@ Parse arguments from the user's message before doing anything else. The five fla
 | `--print-config` | n/a | Inspection short-circuit. Calls validation in non-aborting mode, prints the resolved view (plus any structured errors), exits. No worktree, no agents. |
 | `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. |
 | `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, prints recoverable runs, exits. |
-| `--no-project-commands` | false | Skip every command sourced from tier-1/tier-2 files for this run; falls back to tier-3 defaults (per F4). |
+| `--no-project-commands` | false | Skip every command sourced from `project` and `user` tier files for this run; falls back to `builtin` tier defaults (per F4). |
 
 Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring. Help includes at least one realistic invocation example.
 
@@ -51,6 +51,8 @@ The orchestrator follows this order on every regular `/gan` invocation:
 1. **Parse args.** Build the flag table from the user's message.
 2. **`validateAll()` (aborting).** This is the orchestrator's first action on a regular run. Failure aborts the run with the F2 structured error report — no worktree is created, no agent is spawned, and no zone-2 or zone-3 writes occur. The structured error fields (`code`, `file`, `field`, `line`, `message`) are surfaced verbatim. The user-facing remediation hint (when present) is forwarded as-is; the orchestrator does not paraphrase or interpret API errors.
 3. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
+
+   **Enrich the snapshot with active-stack bodies before spawn.** The F2 `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Without this enrichment step, agents see undefined per-stack commands and silently degrade to graceful-fallback paths even when the stack file declared the command. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
 4. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
 
    **First-run nudge.** When the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line. The verbatim text of the contract is reproduced here so the orchestrator can match the spec exactly:

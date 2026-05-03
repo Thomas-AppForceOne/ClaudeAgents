@@ -114,8 +114,11 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
 
   let projectRoot: string;
+  let projectRootDisplay: string;
   try {
-    projectRoot = resolveProjectRoot(rootFlag).path;
+    const resolved = resolveProjectRoot(rootFlag);
+    projectRoot = resolved.path;
+    projectRootDisplay = resolved.displayPath;
   } catch (e) {
     return errorResult(e, wantJson);
   }
@@ -127,12 +130,25 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(targetOrErr), code: EXIT_BAD_ARGS };
   }
   const target = targetOrErr;
+  // Display-form target: swap canonical project-root prefix for the
+  // case-preserving form so the user sees `/Users/...` rather than the
+  // lowercased `/users/...`. See cli/lib/project-root.ts for the rationale.
+  const targetDisplay =
+    projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
+      ? projectRootDisplay + target.slice(projectRoot.length)
+      : target;
 
   if (!existsSync(target)) {
-    const warning = `warning: no customization at ${target} for stack '${name}' (tier: ${tier})\n`;
+    const warning = `warning: no customization at ${targetDisplay} for stack '${name}' (tier: ${tier})\n`;
     if (wantJson) {
       return {
-        stdout: emitJson({ deleted: false, name, path: target, reason: 'no-customization', tier }),
+        stdout: emitJson({
+          deleted: false,
+          name,
+          path: targetDisplay,
+          reason: 'no-customization',
+          tier,
+        }),
         stderr: warning,
         code: EXIT_OK,
       };
@@ -148,10 +164,10 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   if (wantJson) {
     return {
-      stdout: emitJson({ deleted: true, name, path: target, tier }),
+      stdout: emitJson({ deleted: true, name, path: targetDisplay, tier }),
       stderr: '',
       code: EXIT_OK,
     };
   }
-  return { stdout: renderHumanSuccess(name, tier, target), stderr: '', code: EXIT_OK };
+  return { stdout: renderHumanSuccess(name, tier, targetDisplay), stderr: '', code: EXIT_OK };
 }

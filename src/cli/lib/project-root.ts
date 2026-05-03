@@ -13,20 +13,36 @@
 
 import { existsSync, statSync } from 'node:fs';
 
-import { canonicalizePath } from '../../config-server/determinism/index.js';
+import {
+  canonicalizePath,
+  canonicalizePathForDisplay,
+} from '../../config-server/determinism/index.js';
 import { createError } from '../../config-server/errors.js';
 
 export interface ResolvedProjectRoot {
-  /** Canonicalised path (per F3 determinism). */
+  /**
+   * Canonicalised path (per F3 determinism — symlinks resolved, trailing
+   * slash stripped, lowercased on Darwin/Win32). Use for cache keys,
+   * equality checks, and any internal lookup.
+   */
   path: string;
+  /**
+   * Display-form canonical path (same `realpath` + slash-strip as `path`
+   * but **without** the Darwin/Win32 case-folding). Use whenever a path
+   * is rendered to the user — CLI stdout, log lines, error messages —
+   * so users on macOS see `/Users/…` rather than the lowercased
+   * `/users/…`. The two forms differ only on case-insensitive
+   * filesystems; on Linux they are byte-identical.
+   */
+  displayPath: string;
   /** Whether `--project-root` was explicitly supplied. */
   explicit: boolean;
 }
 
 /**
  * Resolve a project-root value. If `flag` is undefined, falls back to
- * `process.cwd()`. The resulting path is canonicalised (symlinks resolved,
- * trailing slash stripped, lower-cased on Darwin/Win32 per F3's pin).
+ * `process.cwd()`. Returns both the canonical (cache-key) and display
+ * (case-preserving) forms; pick the one matching the consumer's purpose.
  *
  * Throws `Error` with a clear message if the path does not exist or is
  * not a directory. The dispatcher catches this and surfaces it via the
@@ -50,6 +66,7 @@ export function resolveProjectRoot(flag: string | undefined): ResolvedProjectRoo
   }
   return {
     path: canonicalizePath(raw),
+    displayPath: canonicalizePathForDisplay(raw),
     explicit,
   };
 }

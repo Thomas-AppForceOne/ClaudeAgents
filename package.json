@@ -16,7 +16,8 @@
   "files": [
     "dist",
     "schemas",
-    "stacks"
+    "stacks",
+    "templates"
   ],
   "scripts": {
     "build": "tsc && tsc -p tsconfig.scripts.json",

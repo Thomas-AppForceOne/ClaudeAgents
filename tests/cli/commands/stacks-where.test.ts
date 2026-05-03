@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
 const tmpDirs: string[] = [];
@@ -52,7 +52,7 @@ function seedBuiltin(packageRoot: string, name: string): string {
 }
 
 function seedProjectTier(projectRoot: string, name: string): string {
-  const dir = path.join(canonicalizePath(projectRoot), '.claude', 'gan', 'stacks');
+  const dir = path.join(canonicalizePathForDisplay(projectRoot), '.claude', 'gan', 'stacks');
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${name}.md`);
   writeFileSync(file, STACK_BODY(name), 'utf8');

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
 const tmpDirs: string[] = [];
@@ -38,7 +38,7 @@ function seedCustomization(rootDir: string, name: string, body: string = `# ${na
 describe('gan stacks reset — project tier (default)', () => {
   it('deletes <project>/.claude/gan/stacks/<name>.md and exits 0', async () => {
     const proj = makeTmpDir('gan-test-reset-proj-');
-    const target = seedCustomization(canonicalizePath(proj), 'web-foo');
+    const target = seedCustomization(canonicalizePathForDisplay(proj), 'web-foo');
     expect(existsSync(target)).toBe(true);
     const r = await runGan(['stacks', 'reset', 'web-foo', '--project-root', proj]);
     expect(r.exitCode).toBe(0);
@@ -100,7 +100,7 @@ describe('gan stacks reset — argument errors', () => {
 describe('gan stacks reset --json', () => {
   it('emits {deleted: true, name, path, tier} on success', async () => {
     const proj = makeTmpDir('gan-test-reset-proj-');
-    seedCustomization(canonicalizePath(proj), 'web-foo');
+    seedCustomization(canonicalizePathForDisplay(proj), 'web-foo');
     const r = await runGan(['stacks', 'reset', 'web-foo', '--json', '--project-root', proj]);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout) as {

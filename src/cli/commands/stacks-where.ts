@@ -79,8 +79,11 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   // Named: resolve via R1's stack resolver.
   let projectRoot: string;
+  let projectRootDisplay: string;
   try {
-    projectRoot = resolveProjectRoot(rootFlag).path;
+    const resolvedRoot = resolveProjectRoot(rootFlag);
+    projectRoot = resolvedRoot.path;
+    projectRootDisplay = resolvedRoot.displayPath;
   } catch (e) {
     return errorResult(e, wantJson);
   }
@@ -95,15 +98,24 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return errorResult(e, wantJson);
   }
 
+  // Display-form path: swap the canonical project-root prefix for the
+  // case-preserving form so output reads as `/Users/...` not `/users/...`
+  // on macOS. The resolver returns a canonical path; only the rendered
+  // version differs.
+  const resolvedPathDisplay =
+    projectRoot !== projectRootDisplay && resolved.path.startsWith(projectRoot)
+      ? projectRootDisplay + resolved.path.slice(projectRoot.length)
+      : resolved.path;
+
   if (wantJson) {
     return {
-      stdout: emitJson({ name, path: resolved.path, tier: resolved.tier }),
+      stdout: emitJson({ name, path: resolvedPathDisplay, tier: resolved.tier }),
       stderr: '',
       code: EXIT_OK,
     };
   }
   return {
-    stdout: `${resolved.path}  (tier: ${resolved.tier})\n`,
+    stdout: `${resolvedPathDisplay}  (tier: ${resolved.tier})\n`,
     stderr: '',
     code: EXIT_OK,
   };

@@ -35,6 +35,11 @@ export function glob(pattern: string, candidates: string[]): string[] {
  * If the path does not exist, falls back to `path.resolve` so callers can
  * canonicalise prospective paths (e.g. for path-escape checks) without
  * requiring the file on disk first.
+ *
+ * **Use this form for cache keys and equality checks.** For user-visible
+ * output use {@link canonicalizePathForDisplay} which performs the same
+ * `realpath` + slash-strip but preserves the original case so users on
+ * macOS see `/Users/...` rather than the lowercased `/users/...`.
  */
 export function canonicalizePath(p: string): string {
   let resolved: string;
@@ -50,6 +55,27 @@ export function canonicalizePath(p: string): string {
   const plat = platform();
   if (plat === 'darwin' || plat === 'win32') {
     resolved = resolved.toLowerCase();
+  }
+  return resolved;
+}
+
+/**
+ * Display-form path canonicalisation: same `realpath` + trailing-slash strip
+ * as {@link canonicalizePath}, but **without** the Darwin/Win32 case-folding.
+ * Use this for paths that are rendered to the user (CLI stdout, log lines,
+ * error messages). Cache keys and equality checks must continue to use
+ * {@link canonicalizePath} so two paths that differ only in case still hit
+ * the same cache slot on case-insensitive filesystems.
+ */
+export function canonicalizePathForDisplay(p: string): string {
+  let resolved: string;
+  try {
+    resolved = realpathSync.native(p);
+  } catch {
+    resolved = path.resolve(p);
+  }
+  if (resolved.length > 1 && (resolved.endsWith('/') || resolved.endsWith('\\'))) {
+    resolved = resolved.slice(0, -1);
   }
   return resolved;
 }

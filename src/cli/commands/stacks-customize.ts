@@ -141,8 +141,11 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
 
   let projectRoot: string;
+  let projectRootDisplay: string;
   try {
-    projectRoot = resolveProjectRoot(rootFlag).path;
+    const resolved = resolveProjectRoot(rootFlag);
+    projectRoot = resolved.path;
+    projectRootDisplay = resolved.displayPath;
   } catch (e) {
     return errorResult(e, wantJson);
   }
@@ -154,6 +157,15 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(targetOrErr), code: EXIT_BAD_ARGS };
   }
   const target = targetOrErr;
+  // Build the display-form target by swapping the canonical project-root
+  // prefix for the display-form one. This preserves the user's case (so
+  // "/Users/thak/..." doesn't read as "/users/thak/...") in the rendered
+  // success line while keeping `target` itself canonical for any
+  // internal use.
+  const targetDisplay =
+    projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
+      ? projectRootDisplay + target.slice(projectRoot.length)
+      : target;
 
   let stacksDir: string;
   try {
@@ -183,8 +195,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   if (existsSync(target) && !force) {
     const err = createError('MalformedInput', {
-      file: target,
-      message: `gan stacks customize refuses to overwrite '${target}'. Pass --force to replace the existing customization, or delete the file first.`,
+      file: targetDisplay,
+      message: `gan stacks customize refuses to overwrite '${targetDisplay}'. Pass --force to replace the existing customization, or delete the file first.`,
     });
     if (wantJson) return { stdout: renderErrorJson(err), stderr: '', code: EXIT_GENERIC };
     return { stdout: '', stderr: renderError(err), code: EXIT_GENERIC };
@@ -207,7 +219,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
 
   const stdout = wantJson
-    ? renderJsonSuccess(name, tier, target, source, force)
-    : renderHumanSuccess(name, tier, target);
+    ? renderJsonSuccess(name, tier, targetDisplay, source, force)
+    : renderHumanSuccess(name, tier, targetDisplay);
   return { stdout, stderr: '', code: EXIT_OK };
 }
