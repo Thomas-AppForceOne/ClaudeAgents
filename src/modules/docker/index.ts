@@ -92,12 +92,8 @@ _runPrerequisiteCheck();
 // their helpers; `PortRegistry`, `PortDiscovery`, and `ContainerHealth`
 // are named symbols (class / function).
 
-export { PortRegistry, createDefaultRegistryApi, portRegistryPath } from './PortRegistry.js';
-export type {
-  PortRegistryApi,
-  PortRegistryEntry,
-  PortRegistryFile,
-} from './PortRegistry.js';
+export { PortRegistry } from './PortRegistry.js';
+export type { PortRegistryEntry, PortRegistryFile } from './PortRegistry.js';
 
 import { nameForWorktree } from './ContainerNaming.js';
 export type { NameForWorktreeOptions } from './ContainerNaming.js';

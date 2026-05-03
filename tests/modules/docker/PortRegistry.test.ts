@@ -2,12 +2,14 @@
  * M2 — PortRegistry tests.
  *
  * Covers AC4:
- *   - constructor takes an API/handle (no path argument).
+ *   - constructor takes a project root.
  *   - register/lookup round-trip.
  *   - getAll returns array of entries sorted by worktreePath.
  *   - release removes entry.
- *   - on-disk JSON shape: {version: 1, entries: {...}} at
- *     `.gan-state/modules/docker/port-registry.json`.
+ *   - on-disk JSON shape: {version: 1, entries: {...}} at M1's
+ *     module-state path `.gan-state/modules/docker/state.json`.
+ *   - persistence routes through `setModuleState` / `loadModuleState`
+ *     (PortRegistry never imports `atomicWriteFile` or names a path).
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
@@ -17,12 +19,10 @@ import path from 'node:path';
 
 import {
   PortRegistry,
-  createDefaultRegistryApi,
-  portRegistryPath,
-  type PortRegistryApi,
   type PortRegistryFile,
 } from '../../../src/modules/docker/PortRegistry.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { moduleStatePath } from '../../../src/config-server/storage/module-loader.js';
 
 describe('PortRegistry', () => {
   let scratch: string;
@@ -34,22 +34,14 @@ describe('PortRegistry', () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  it('constructor takes only an API handle (no path argument)', () => {
-    // Verify the class signature: passing a path string should not be
-    // accepted by the type system. We test by constructing with the
-    // default api handle. If the constructor accepted a path string,
-    // this test wouldn't be exercising that contract; the type-system
-    // assertion is enforced by tsc --noEmit.
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+  it('constructor takes a project root (string)', () => {
+    const reg = new PortRegistry(scratch);
     expect(reg).toBeInstanceOf(PortRegistry);
   });
 
   it('register + lookup round-trip', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'worktree-a');
-    // Create the directory so canonicalisation hits a real path.
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 8080, 'app-a');
     const found = reg.lookup(wt);
@@ -57,14 +49,12 @@ describe('PortRegistry', () => {
   });
 
   it('lookup returns null when worktree was never registered', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     expect(reg.lookup(path.join(scratch, 'nope'))).toBeNull();
   });
 
   it('getAll returns array of all entries', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     const wtA = path.join(scratch, 'wt-a');
     const wtB = path.join(scratch, 'wt-b');
     mkdirSync(wtA, { recursive: true });
@@ -79,8 +69,7 @@ describe('PortRegistry', () => {
   });
 
   it('release removes an entry', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'wt-x');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 9000, 'app-x');
@@ -90,16 +79,15 @@ describe('PortRegistry', () => {
     expect(reg.getAll()).toHaveLength(0);
   });
 
-  it('on-disk JSON matches {version: 1, entries: {...}} shape at the documented path', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+  it('on-disk JSON matches {version: 1, entries: {...}} shape at M1 module-state path', () => {
+    const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'wt-disk');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 7000, 'app-disk');
-    // The file MUST live at the documented location.
-    const filePath = portRegistryPath(scratch);
+    // M1 owns the path: <projectRoot>/.gan-state/modules/<name>/state.json
+    const filePath = moduleStatePath(scratch, 'docker');
     expect(filePath).toBe(
-      path.join(scratch, '.gan-state', 'modules', 'docker', 'port-registry.json'),
+      path.join(scratch, '.gan-state', 'modules', 'docker', 'state.json'),
     );
     expect(existsSync(filePath)).toBe(true);
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8')) as PortRegistryFile;
@@ -110,24 +98,26 @@ describe('PortRegistry', () => {
   });
 
   it('release on absent worktree is a silent no-op', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     expect(() => reg.release(path.join(scratch, 'never-registered'))).not.toThrow();
   });
 
-  it('accepts an in-memory PortRegistryApi shim (constructor takes any API handle)', () => {
-    const store: { current: PortRegistryFile | null } = { current: null };
-    const api: PortRegistryApi = {
-      read: () => (store.current ? { version: 1, entries: { ...store.current.entries } } : null),
-      write: (blob) => {
-        store.current = { version: 1, entries: { ...blob.entries } };
-      },
-    };
-    const reg = new PortRegistry(api);
-    const wt = path.join(scratch, 'in-memory');
-    mkdirSync(wt, { recursive: true });
-    reg.register(wt, 4242, 'mem-app');
-    expect(reg.lookup(wt)).toEqual({ port: 4242, containerName: 'mem-app' });
-    expect(store.current?.version).toBe(1);
+  it('does not import atomic-write or filesystem helpers directly (routes through M1)', async () => {
+    // Source-level guarantee that PortRegistry is a pure consumer of
+    // the M1 module-state surface — no import of atomicWriteFile or
+    // node:fs read helpers, no path string for the on-disk file. We
+    // grep the import lines specifically so doc-comments mentioning
+    // those names (intentionally, to explain what we *don't* do) don't
+    // trip the assertion.
+    const src = readFileSync(
+      path.join(__dirname, '..', '..', '..', 'src', 'modules', 'docker', 'PortRegistry.ts'),
+      'utf8',
+    );
+    const imports = src.split('\n').filter((l) => /^\s*import\b/.test(l)).join('\n');
+    expect(imports).not.toMatch(/atomicWriteFile/);
+    expect(imports).not.toMatch(/readFileSync/);
+    expect(imports).not.toMatch(/from ['"]node:fs['"]/);
+    expect(imports).toMatch(/setModuleState/);
+    expect(imports).toMatch(/loadModuleState/);
   });
 });

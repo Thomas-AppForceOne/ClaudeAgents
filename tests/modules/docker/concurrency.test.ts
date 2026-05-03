@@ -16,10 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  PortRegistry,
-  createDefaultRegistryApi,
-} from '../../../src/modules/docker/PortRegistry.js';
+import { PortRegistry } from '../../../src/modules/docker/PortRegistry.js';
 
 describe('PortRegistry concurrency', () => {
   let scratch: string;
@@ -32,10 +29,8 @@ describe('PortRegistry concurrency', () => {
   });
 
   it('two clients writing distinct worktrees both land on disk', async () => {
-    const apiA = createDefaultRegistryApi(scratch);
-    const apiB = createDefaultRegistryApi(scratch);
-    const regA = new PortRegistry(apiA);
-    const regB = new PortRegistry(apiB);
+    const regA = new PortRegistry(scratch);
+    const regB = new PortRegistry(scratch);
 
     const wtA = path.join(scratch, 'wt-a');
     const wtB = path.join(scratch, 'wt-b');
@@ -56,7 +51,7 @@ describe('PortRegistry concurrency', () => {
 
     // The disk state must contain both entries (last writer wins on
     // conflict, but the keys differ here so both survive).
-    const reg = new PortRegistry(createDefaultRegistryApi(scratch));
+    const reg = new PortRegistry(scratch);
     const all = reg.getAll();
     expect(all).toHaveLength(2);
     const ports = all.map((e) => e.port).sort();
@@ -64,8 +59,7 @@ describe('PortRegistry concurrency', () => {
   });
 
   it('refuses duplicate-port registration with a structured factory error', () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     const wtA = path.join(scratch, 'wt-a');
     const wtB = path.join(scratch, 'wt-b');
     mkdirSync(wtA, { recursive: true });

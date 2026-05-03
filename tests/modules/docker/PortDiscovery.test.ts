@@ -19,10 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { discoverPort } from '../../../src/modules/docker/PortDiscovery.js';
-import {
-  PortRegistry,
-  createDefaultRegistryApi,
-} from '../../../src/modules/docker/PortRegistry.js';
+import { PortRegistry } from '../../../src/modules/docker/PortRegistry.js';
 
 describe('PortDiscovery.discoverPort', () => {
   let scratch: string;
@@ -69,8 +66,7 @@ describe('PortDiscovery.discoverPort', () => {
   });
 
   it('layer 2: PortRegistry lookup for the current worktree', async () => {
-    const api = createDefaultRegistryApi(scratch);
-    const reg = new PortRegistry(api);
+    const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'wt');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 7777, 'app-77');
