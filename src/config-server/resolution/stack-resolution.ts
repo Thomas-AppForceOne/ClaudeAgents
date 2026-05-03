@@ -1,12 +1,18 @@
 /**
  * C5 stack file resolver.
  *
- * Three-tier lookup, highest-priority wins (wholesale replacement, never
+ * Four-tier lookup, highest-priority wins (wholesale replacement, never
  * merge — see C5 invariants in PROJECT_CONTEXT.md):
  *
- *   1. project tier — `<projectRoot>/.claude/gan/stacks/<name>.md`
- *   2. user tier    — `<userHome>/.claude/gan/stacks/<name>.md`
- *   3. built-in tier — `<projectRoot>/stacks/<name>.md`
+ *   1. project tier     — `<projectRoot>/.claude/gan/stacks/<name>.md`
+ *   2. user tier        — `<userHome>/.claude/gan/stacks/<name>.md`
+ *   3. built-in tier    — `<packageRoot>/stacks/<name>.md`         (PRIMARY)
+ *   4. built-in tier    — `<projectRoot>/stacks/<name>.md`         (FALLBACK)
+ *
+ * Tiers 3 and 4 both report `tier: 'builtin'`. Tier 4 is a low-priority
+ * compatibility fallback for the framework's existing test fixture pattern,
+ * where each fixture under `tests/fixtures/stacks/<name>/` ships its own
+ * `stacks/` subdirectory; the caller cannot distinguish primary from fallback.
  *
  * The user tier is keyed by the caller-supplied `userHome` so tests can
  * substitute a temp directory rather than touching the real `~/.claude`. In
@@ -15,12 +21,18 @@
  * narrower CI use-case we additionally honour `GAN_USER_HOME` as an explicit
  * override env var so tests outside this package can target a fixture
  * without reaching into the resolver's API.
+ *
+ * The built-in package tier is keyed by the caller-supplied `packageRoot`
+ * so tests can inject a tmp directory; production callers leave it unset
+ * and the resolver calls `packageRoot()` from `../package-root.js` to walk
+ * up from `import.meta.url`.
  */
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import { createError } from '../errors.js';
+import { packageRoot as resolvePackageRoot } from '../package-root.js';
 
 export type StackTier = 'project' | 'user' | 'builtin';
 
@@ -39,10 +51,17 @@ export interface ResolveStackOptions {
    * / `process.env.USERPROFILE`.
    */
   userHome?: string;
+  /**
+   * Override for the package root used by the primary built-in tier
+   * (`<packageRoot>/stacks/<name>.md`). When unset, the resolver calls
+   * `packageRoot()` to walk up from `import.meta.url` and locate
+   * `@claudeagents/config-server`'s `package.json`.
+   */
+  packageRoot?: string;
 }
 
 /**
- * Resolve a stack file by name across the three C5 tiers.
+ * Resolve a stack file by name across the four C5 tiers.
  *
  * @throws ConfigServerError(MissingFile) when no tier carries the stack.
  */
@@ -57,23 +76,27 @@ export function resolveStackFile(
   }
 
   const userHome = resolveUserHome(opts.userHome);
-  if (userHome) {
-    const userPath = path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`);
-    if (existsSync(userPath)) {
-      return { path: userPath, tier: 'user' };
-    }
+  const userPath = userHome ? path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`) : null;
+  if (userPath && existsSync(userPath)) {
+    return { path: userPath, tier: 'user' };
   }
 
-  const builtinPath = path.join(projectRoot, 'stacks', `${name}.md`);
-  if (existsSync(builtinPath)) {
-    return { path: builtinPath, tier: 'builtin' };
+  const pkgRoot = opts.packageRoot ?? resolvePackageRoot();
+  const packageBuiltinPath = path.join(pkgRoot, 'stacks', `${name}.md`);
+  if (existsSync(packageBuiltinPath)) {
+    return { path: packageBuiltinPath, tier: 'builtin' };
+  }
+
+  const fixtureBuiltinPath = path.join(projectRoot, 'stacks', `${name}.md`);
+  if (existsSync(fixtureBuiltinPath)) {
+    return { path: fixtureBuiltinPath, tier: 'builtin' };
   }
 
   throw createError('MissingFile', {
-    file: builtinPath,
+    file: packageBuiltinPath,
     message: `Stack '${name}' not found in any tier (project: ${projectPath}; user: ${
-      userHome ? path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`) : '<no user home>'
-    }; built-in: ${builtinPath}).`,
+      userPath ?? '<no user home>'
+    }; built-in package: ${packageBuiltinPath}; built-in fixture: ${fixtureBuiltinPath}).`,
   });
 }
 

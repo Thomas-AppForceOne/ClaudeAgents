@@ -10,7 +10,8 @@ Extend stack-file resolution to three tiers, highest priority first. The tier la
 
 1. **`project` tier** — `<projectRoot>/.claude/gan/stacks/<name>.md`. Zone 1 (config) per [spec F1](F1-filesystem-layout.md); user-authored and committed.
 2. **`user` tier** — `~/.claude/gan/stacks/<name>.md`. User-personal; outside any project.
-3. **`builtin` tier** — `<repo>/stacks/<name>.md`. Built-in defaults shipped with ClaudeAgents. (The exact path the resolver uses to find these files is the subject of a downstream revision documented in C5's "Built-in tier path resolution" section, which lands with the resolver-change sprint; the three-tier mechanics in the rest of this spec are agnostic to that path.)
+3. **`builtin` tier** — `<packageRoot>/stacks/<name>.md` (PRIMARY: read from the framework's npm install location). `<packageRoot>` is computed at server startup via `import.meta.url` walk-up to the directory containing `@claudeagents/config-server`'s `package.json`.
+4. **`builtin` tier (fixture fallback)** — `<projectRoot>/stacks/<name>.md` (a low-priority 4th-tier fallback that exists for backwards-compat with the framework's test fixture pattern, where each fixture under `tests/fixtures/stacks/<name>/` ships its own `stacks/` subdirectory). Same `'builtin'` provenance label as tier 3 — the caller cannot distinguish primary from fallback.
 
 The resolution runs **inside the Configuration API** (F2) — specifically inside R1's stack loader. Agents call `getStack()` / `getActiveStacks()` and receive the resolved file's data; they never enumerate tiers themselves.
 
@@ -82,6 +83,19 @@ proposer:
 ```
 
 The forking path would have been ten times the code, with all the maintenance burden a fork carries. The boundary rule sends the user to the small-customisation slot where a small customisation belongs.
+
+## Built-in tier path resolution
+
+The `builtin` tier resolves through two physical paths, primary then fallback:
+
+1. **Primary** — `<packageRoot>/stacks/<name>.md`. `<packageRoot>` is computed at server startup by `packageRoot()` in `src/config-server/package-root.ts`: starting from `import.meta.url`, walk up directory by directory and return the first ancestor whose `package.json` declares `name === '@claudeagents/config-server'`. The walk skips ancestor `package.json` files belonging to monorepo parents (which have a different `name`). The result is cached in module scope after the first call so subsequent resolutions are free.
+2. **Fallback** — `<projectRoot>/stacks/<name>.md`. Used when the primary path does not contain a stack with the requested name. This 4th-tier fallback exists for the framework's test fixture pattern, where each fixture under `tests/fixtures/stacks/<name>/` ships its own `stacks/` subdirectory; without the fallback, every fixture would have to be wired through the package-root injection.
+
+Both paths report `tier: 'builtin'` — the caller cannot distinguish primary from fallback. Tests inject the package root via `ValidateContext.packageRoot` (and the corresponding `ResolveStackOptions.packageRoot`); production callers leave it unset and let the helper walk up.
+
+## User-facing path conventions
+
+`~/.claude/gan/builtin-stacks/` is the canonical user-facing handle for inspecting the framework's built-in stacks. It is created by `install.sh` (per Sprint 7 / R2) as a symlink to `<packageRoot>/stacks/`, so users can browse the canonical stack files at a stable, predictable location regardless of where npm installed the package. The resolver does not consult this symlink directly — it computes `<packageRoot>` afresh — but the symlink keeps the user-facing path conventions aligned with the implementation. Forward-reference [R2](R2-installer.md) for the symlink lifecycle.
 
 ## Acceptance criteria
 

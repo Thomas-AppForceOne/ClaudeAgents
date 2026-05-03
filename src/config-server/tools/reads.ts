@@ -40,11 +40,11 @@
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { canonicalizePath } from '../determinism/index.js';
 import { createError } from '../errors.js';
 import { getLogger, type Logger } from '../logging/logger.js';
+import { packageRoot as resolvePackageRoot } from '../package-root.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { loadStack, type LoadedStack } from '../storage/stack-loader.js';
 import {
@@ -72,6 +72,12 @@ export interface ReadToolContext {
   logger?: Logger;
   /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
   userHome?: string;
+  /**
+   * Forwarded to the C5 stack resolver as the package-tier built-in
+   * directory. When unset, the resolver walks up from `import.meta.url`
+   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
+   */
+  packageRoot?: string;
 }
 
 interface PackageMeta {
@@ -82,10 +88,10 @@ let cachedMeta: PackageMeta | null = null;
 
 function readPackageMetaSync(): PackageMeta {
   if (cachedMeta) return cachedMeta;
-  const here = fileURLToPath(import.meta.url);
-  // From `dist/config-server/tools/reads.js` (or `src/.../reads.ts`) we walk
-  // three levels up to reach `<package>/package.json`.
-  const pkgPath = path.resolve(path.dirname(here), '..', '..', '..', 'package.json');
+  // Read `package.json` from the package root located via the shared
+  // helper (which walks up from `import.meta.url` and verifies the
+  // package name). Avoids duplicating the walk-up logic here.
+  const pkgPath = path.join(resolvePackageRoot(), 'package.json');
   const raw = readFileSync(pkgPath, 'utf8');
   const parsed = JSON.parse(raw) as { version: string };
   cachedMeta = { version: parsed.version };
@@ -107,7 +113,9 @@ export function getStack(
   sourcePath: string;
 } {
   const root = canonicalizePath(input.projectRoot);
-  const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
   const loaded: LoadedStack = loadStack(input.name, root, opts);
   return {
     data: loaded.data,
@@ -134,6 +142,7 @@ export function getActiveStacks(
   const apiVersion = readPackageMetaSync().version;
   const resolved = composeResolvedConfigSync(root, apiVersion, {
     userHome: ctx.userHome,
+    packageRoot: ctx.packageRoot,
   });
   return { active: resolved.stacks.active.slice() };
 }
@@ -184,6 +193,7 @@ export function getMergedSplicePoints(
   const apiVersion = readPackageMetaSync().version;
   const resolved = composeResolvedConfigSync(root, apiVersion, {
     userHome: ctx.userHome,
+    packageRoot: ctx.packageRoot,
   });
   return { mergedSplicePoints: resolved.overlay };
 }
@@ -325,7 +335,9 @@ function computeProjectSummary(
   projectRoot: string,
   ctx: ReadToolContext = {},
 ): GetTrustStateSummary {
-  const phase1Ctx = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const phase1Ctx: { userHome?: string; packageRoot?: string } = {};
+  if (ctx.userHome) phase1Ctx.userHome = ctx.userHome;
+  if (ctx.packageRoot) phase1Ctx.packageRoot = ctx.packageRoot;
   const snapshot = _runPhase1ForTests(projectRoot, phase1Ctx);
   const projectRow = snapshot.overlays.project;
   let additionalChecksCount = 0;
@@ -380,7 +392,9 @@ export function getStackResolution(
   ctx: ReadToolContext = {},
 ): StackResolution {
   const root = canonicalizePath(input.projectRoot);
-  const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
   return resolveStackFile(input.name, root, opts);
 }
 
@@ -411,7 +425,10 @@ export async function getResolvedConfig(
   input: GetResolvedConfigInput,
   ctx: ReadToolContext = {},
 ): Promise<ResolvedConfig> {
-  return composeResolvedConfig(input.projectRoot, { userHome: ctx.userHome });
+  return composeResolvedConfig(input.projectRoot, {
+    userHome: ctx.userHome,
+    packageRoot: ctx.packageRoot,
+  });
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

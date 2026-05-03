@@ -23,6 +23,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 import { createError, ConfigServerError } from './errors.js';
 import { getLogger } from './logging/logger.js';
+import { packageRoot as resolvePackageRoot } from './package-root.js';
 import { apiToolsV1 } from './schemas-bundled.js';
 import {
   getActiveStacks as readGetActiveStacks,
@@ -117,15 +118,13 @@ let cachedMeta: PackageMeta | null = null;
 
 /**
  * Read the package.json at build/runtime to recover the server's name and
- * semver. The `dist/config-server/index.js` lives two levels under the
- * package root, so we walk up from `__dirname`.
+ * semver. Reads from the package root located via the shared `packageRoot()`
+ * helper (which walks up from `import.meta.url` and verifies the package
+ * name).
  */
 export async function readPackageMeta(): Promise<PackageMeta> {
   if (cachedMeta) return cachedMeta;
-  const here = fileURLToPath(import.meta.url);
-  // From `dist/config-server/index.js` → `<root>` is two levels up.
-  // From `src/config-server/index.ts` (ts-node / vitest) → also two levels up.
-  const pkgPath = path.resolve(path.dirname(here), '..', '..', 'package.json');
+  const pkgPath = path.join(resolvePackageRoot(), 'package.json');
   const raw = await readFile(pkgPath, 'utf8');
   const parsed = JSON.parse(raw) as PackageMeta;
   cachedMeta = { name: parsed.name, version: parsed.version };

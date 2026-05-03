@@ -46,6 +46,7 @@ import path from 'node:path';
 import { canonicalizePath, localeSort } from '../determinism/index.js';
 import { ConfigServerError } from '../errors.js';
 import { runAllInvariants } from '../invariants/index.js';
+import { packageRoot as resolvePackageRoot } from '../package-root.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import {
@@ -118,6 +119,12 @@ export interface ValidateContext {
   /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
   userHome?: string;
   /**
+   * Forwarded to the C5 stack resolver as the package-tier built-in
+   * directory. When unset, the resolver walks up from `import.meta.url`
+   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
+   */
+  packageRoot?: string;
+  /**
    * Override `process.env` for the trust check (R5 S3). Tests inject a
    * controlled env so the trust-mode env var does not leak between
    * cases.
@@ -169,7 +176,9 @@ export function validateStack(
 ): { issues: Issue[] } {
   const root = canonicalizePath(input.projectRoot);
   const issues: Issue[] = [];
-  const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
 
   let resolved: { path: string; tier: StackTier };
   try {
@@ -247,7 +256,18 @@ function createSnapshot(projectRoot: string): ValidationSnapshot {
 function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
   const root = snapshot.projectRoot;
 
-  // Built-in stacks: <projectRoot>/stacks/*.md
+  // Built-in stacks (PRIMARY): <packageRoot>/stacks/*.md
+  const pkgRoot = resolvePackageRootForDiscovery(ctx.packageRoot);
+  if (pkgRoot) {
+    enumerateTierStacks(path.join(pkgRoot, 'stacks')).forEach((p) => {
+      snapshot.stackFiles.set(`builtin:${p}`, { tier: 'builtin', path: p });
+    });
+  }
+
+  // Built-in stacks (FALLBACK): <projectRoot>/stacks/*.md
+  // Both primary and fallback rows are keyed by absolute path, so when the
+  // same stack name exists in both directories both rows survive (different
+  // absolute paths → different keys).
   enumerateBuiltinStacks(root).forEach((p) => {
     snapshot.stackFiles.set(`builtin:${p}`, { tier: 'builtin', path: p });
   });
@@ -341,6 +361,23 @@ function resolveUserHomeForDiscovery(explicit?: string): string | null {
 }
 
 /**
+ * Discovery-side counterpart to the resolver's package-root injection: tests
+ * pass `ctx.packageRoot`; production callers leave it unset and we fall
+ * through to `packageRoot()` which walks up from `import.meta.url`. Returns
+ * `null` if the helper throws (e.g. running in an environment where
+ * `@claudeagents/config-server`'s `package.json` cannot be located) — the
+ * resolver itself reports the same failure mode upstream.
+ */
+function resolvePackageRootForDiscovery(explicit?: string): string | null {
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+  try {
+    return resolvePackageRoot();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check whether overlays referencing stacks via `stack.override` name a
  * stack the framework can resolve. Unknown names → `MissingFile` issue
  * naming the offending overlay file and the missing stack.
@@ -349,7 +386,9 @@ function resolveUserHomeForDiscovery(explicit?: string): string | null {
  * `{ discardInherited, value: [...] }` wrapper. Both forms are honoured.
  */
 function checkStackOverrideReferences(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
-  const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
   for (const tier of ['default', 'user', 'project'] as const) {
     const row = snapshot.overlays[tier];
     if (!row || !isObject(row.data)) continue;

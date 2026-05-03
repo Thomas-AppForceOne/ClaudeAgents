@@ -58,6 +58,8 @@ What is **forbidden**: silent / background / automatic writes. No agent, orchest
 
 The earlier wording "never write at run time" was overstated and contradicted F2's runtime API writes. The actual invariant is: zone 1 mutations happen only through validated, sanctioned channels — never opaquely.
 
+**Managed symlink: `~/.claude/gan/builtin-stacks/`.** A user-tier convenience handle for inspecting the framework's built-in stacks. The installer (per Sprint 7 / R2) creates `~/.claude/gan/builtin-stacks/` as a symlink pointing at `<packageRoot>/stacks/` (the npm-install location of `@claudeagents/config-server`). The resolver itself does not read through this symlink — it computes `<packageRoot>` from `import.meta.url` at server startup — but the symlink gives users a stable, predictable path for browsing canonical stack files regardless of where npm installed the package. Lifecycle: created by `install.sh`, refreshed on framework upgrades, removed on uninstall. Forward-reference [R2](R2-installer.md) (Sprint 7) for the symlink-management contract; [C5](C5-stack-file-resolution.md) covers how the resolver reaches `<packageRoot>` directly.
+
 ### Zone 2: `.gan-state/` — durable state
 
 - **Owner:** `/gan` skill and individual modules.

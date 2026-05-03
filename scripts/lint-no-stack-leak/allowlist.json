@@ -1,9 +1,12 @@
 {
   "paths": {
     "src/config-server/index.ts": "framework infrastructure: reads its own package.json at runtime to recover server version metadata",
+    "src/config-server/package-root.ts": "framework infrastructure: locates the package root by walking up to the nearest @claudeagents/config-server package.json",
     "src/config-server/resolution/detection.ts": "framework infrastructure: skips standard build artifact directories (node_modules, dist, build) during marker-file detection",
     "src/config-server/resolution/resolved-config.ts": "framework infrastructure: documentation comment about runtime package.json read",
-    "src/config-server/tools/reads.ts": "framework infrastructure: reads its own package.json at runtime"
+    "src/config-server/resolution/stack-resolution.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json",
+    "src/config-server/tools/reads.ts": "framework infrastructure: reads its own package.json at runtime",
+    "src/config-server/tools/validate.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json"
   },
   "transitional": {
     "agents/gan-contract-proposer.md": "remove when E1 lands",

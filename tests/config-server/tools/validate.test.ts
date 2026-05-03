@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 
@@ -306,6 +306,51 @@ describe('phase 1 discovery (smoke)', () => {
   it('reports modules as the M1 no-op (empty array)', () => {
     const snapshot = _runPhase1ForTests(jsTsMinimal);
     expect(snapshot.modules).toEqual([]);
+  });
+
+  it('enumerates built-in stacks from BOTH packageRoot/stacks and projectRoot/stacks (dual fallback)', () => {
+    // Set up a tmp packageRoot with `stacks/web-node.md`, distinct from the
+    // js-ts-minimal fixture's own `stacks/web-node.md`. Phase 1 must enumerate
+    // both, keyed by absolute path — same stack name in both directories
+    // surfaces two `builtin:` rows.
+    const pkgRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-pkg-')));
+    const projRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-proj-')));
+    try {
+      const pkgStacksDir = path.join(pkgRoot, 'stacks');
+      mkdirSync(pkgStacksDir, { recursive: true });
+      writeFileSync(
+        path.join(pkgStacksDir, 'web-node.md'),
+        ['---', 'name: web-node', 'schemaVersion: 1', '---', 'package body', ''].join('\n'),
+      );
+      const projStacksDir = path.join(projRoot, 'stacks');
+      mkdirSync(projStacksDir, { recursive: true });
+      writeFileSync(
+        path.join(projStacksDir, 'web-node.md'),
+        ['---', 'name: web-node', 'schemaVersion: 1', '---', 'project body', ''].join('\n'),
+      );
+
+      const snapshot = _runPhase1ForTests(projRoot, { packageRoot: pkgRoot });
+      const builtinRows = Array.from(snapshot.stackFiles.entries()).filter(([k]) =>
+        k.startsWith('builtin:'),
+      );
+      // Both web-node files surface as separate `builtin:` rows (different
+      // absolute paths → different keys).
+      expect(builtinRows.length).toBeGreaterThanOrEqual(2);
+
+      // The snapshot's project-tier rows go through `canonicalizePath`, which
+      // lowercases on Darwin / Win32. Compare via case-insensitive prefix
+      // checks so the assertion is portable.
+      const lc = (s: string) => s.toLowerCase();
+      const paths = builtinRows.map(([, row]) => row.path);
+      const underPkg = paths.find((p) => lc(p).startsWith(lc(pkgRoot)));
+      const underProj = paths.find((p) => lc(p).startsWith(lc(projRoot)));
+      expect(underPkg).toBeTruthy();
+      expect(underProj).toBeTruthy();
+      expect(underPkg).not.toBe(underProj);
+    } finally {
+      rmSync(pkgRoot, { recursive: true, force: true });
+      rmSync(projRoot, { recursive: true, force: true });
+    }
   });
 });
 

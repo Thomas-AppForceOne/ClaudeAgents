@@ -83,6 +83,12 @@ export type { Issue };
 export interface WriteToolContext {
   logger?: Logger;
   userHome?: string;
+  /**
+   * Forwarded to the C5 stack resolver as the package-tier built-in
+   * directory. When unset, the resolver walks up from `import.meta.url`
+   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
+   */
+  packageRoot?: string;
 }
 
 /** A canonical mutation result. */
@@ -195,7 +201,9 @@ export function updateStackField(
 
   let resolved: { path: string };
   try {
-    const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+    const opts: ResolveStackOptions = {};
+    if (ctx.userHome) opts.userHome = ctx.userHome;
+    if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
     resolved = resolveStackFile(input.name, root, opts);
   } catch (e) {
     if (e instanceof ConfigServerError) {
@@ -227,7 +235,9 @@ export function appendToStackField(
 
   let resolved: { path: string };
   try {
-    const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+    const opts: ResolveStackOptions = {};
+    if (ctx.userHome) opts.userHome = ctx.userHome;
+    if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
     resolved = resolveStackFile(input.name, root, opts);
   } catch (e) {
     if (e instanceof ConfigServerError) {
@@ -259,7 +269,9 @@ export function removeFromStackField(
 
   let resolved: { path: string };
   try {
-    const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+    const opts: ResolveStackOptions = {};
+    if (ctx.userHome) opts.userHome = ctx.userHome;
+    if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
     resolved = resolveStackFile(input.name, root, opts);
   } catch (e) {
     if (e instanceof ConfigServerError) {

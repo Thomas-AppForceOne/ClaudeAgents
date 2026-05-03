@@ -93,6 +93,12 @@ export interface ComposeContext {
   userHome?: string;
   apiVersion?: string;
   /**
+   * Override for the package root used by the C5 resolver's primary
+   * built-in tier. When unset, the resolver calls `packageRoot()`
+   * itself; tests inject a `mkdtempSync` directory.
+   */
+  packageRoot?: string;
+  /**
    * Surface F4's `--no-project-commands` runtime knob into the
    * resolved view. Callers (CLI / MCP) translate the user's choice
    * into this boolean; the resolution layer only mirrors it onto
@@ -173,7 +179,9 @@ export function composeResolvedConfigSync(
 
   // Build per-stack metadata for every active stack via C5's resolver.
   const byName: Record<string, ResolvedStackEntry> = {};
-  const opts: ResolveStackOptions = ctx.userHome ? { userHome: ctx.userHome } : {};
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
   for (const name of detection.active) {
     try {
       const r = resolveStackFile(name, canonRoot, opts);
