@@ -9,6 +9,12 @@ Two plans, separated by who can run them:
 
 ---
 
+## Note on copy-pasting commands
+
+Markdown tables require pipe characters inside cells to be escaped as `\|`. **When you copy a command into bash, drop the backslash before each `|`.** Example: a cell containing `cmd1 \| cmd2` should be run as `cmd1 | cmd2`. Single-quoted regexes inside `grep -rE '...'` need the same unescaping (the bar is alternation, not a pipe). If a command does not contain `\|`, no changes are needed.
+
+---
+
 # Plan A — Human dogfooding
 
 ## Pre-flight
@@ -26,7 +32,7 @@ Two plans, separated by who can run them:
 | A1.1 | `cd /Users/thak/projects/ClaudeAgents-stack-plugin-rfc && ./install.sh --help` | Help text prints; exit 0. Lists `--uninstall`, `--no-claude-code`, `--help`. No mention of maintainer-only scripts.                                                                                                                                  | Read help text; if it references maintainer scripts, F4 violation.          |
 | A1.2 | `./install.sh` (a clean install).                                              | Script: prerequisite checks → symlinks `agents/*.md` and `skills/gan/` → installs the global package → MCP server registered in `~/.claude.json` → `~/.claude/gan/builtin-stacks/` symlink created → final "ClaudeAgents installed" message. Exit 0. | Read full output; identify the failing step.                                |
 | A1.3 | `ls -la ~/.claude/gan/builtin-stacks/`                                         | Symlink resolves to `<package-root>/stacks/`; contains `web-node.md` and `generic.md`.                                                                                                                                                               | Per Sprint 7 of R-series — symlink missing means R2 install code regressed. |
-| A1.4 | `cat ~/.claude.json \| python3 -m json.tool \| grep claudeagents-config -A 5`  | The `claudeagents-config` MCP entry exists with the correct command path.                                                                                                                                                                            | If absent, the install's MCP-config-edit step failed.                       |
+| A1.4 | `grep -A 5 '"claudeagents-config"' ~/.claude.json`                             | The `claudeagents-config` MCP entry prints with the correct `command` field; `args: []`, `env: {}`.                                                                                                                                                  | If absent, the install's MCP-config-edit step failed.                       |
 | A1.5 | `./install.sh` (re-run for idempotency).                                       | Reports "already installed (versions match)" or similar; no duplicate symlinks; no duplicate MCP entry. Exit 0.                                                                                                                                      | Idempotency regression.                                                     |
 
 ## A2 — Claude Code restart + MCP permission
