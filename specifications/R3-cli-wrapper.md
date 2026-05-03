@@ -30,6 +30,12 @@ gan config set <path> <value> [--tier=project|user]
 gan stacks list                         List active stacks with tier provenance.
 gan stacks new <name> [--tier=project|repo]
                                         Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs and remove this banner before committing.` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
+gan stacks available [--json]           List the built-in stacks the framework ships at `<packageRoot>/stacks/`. Prints a `NAME / VERSION / DESCRIPTION` table by default; `--json` emits `{"stacks": [{description, name, path, schemaVersion}, ...]}`. Distinct from `gan stacks list` (active set) and from "installed" (vendored via `gan stacks customize`).
+gan stacks customize <name> [--tier=project|user] [--force]
+                                        Copy the named built-in stack into a customisation tier so the user can edit it (`<projectRoot>/.claude/gan/stacks/<name>.md` for `--tier=project`, the default; `<userHome>/.claude/gan/stacks/<name>.md` for `--tier=user`). Refuses to overwrite an existing customisation without `--force`.
+gan stacks reset <name> [--tier=project|user]
+                                        Delete the customisation copy at the named tier so the framework's built-in default re-wins resolution. Idempotent: a missing customisation prints a one-line warning and exits 0.
+gan stacks where [<name>]               Print the resolved location of a stack file. With no name, prints the absolute path to the framework's built-in stacks directory. With a name, calls R1's `getStackResolution` and prints `<path>  (tier: <tier>)` where tier is one of `project`, `user`, or `builtin` (per C5).
 gan stack show <name>                   Print one stack's full data.
 gan stack update <name> <field> <value>
                                         Update one field of a stack file.
@@ -38,6 +44,8 @@ gan version                             Print API version, server version, schem
 gan --help                              Help text.
 gan <subcommand> --help                 Per-subcommand help.
 ```
+
+**Active vs. available vs. installed.** `gan stacks list` reports the **active** set — stacks whose detection rules currently match this project's tree. `gan stacks available` lists what the framework **offers** — built-in stacks at `<packageRoot>/stacks/`. A stack is **installed** (vendored) when `gan stacks customize <name>` copies it into a customization tier (`<projectRoot>/.claude/gan/stacks/` for `--tier=project` or `<userHome>/.claude/gan/stacks/` for `--tier=user`); the customization-tier copy then wins resolution per C5's tier ordering. `gan stacks reset <name>` drops the customization so the built-in default kicks back in.
 
 **Trust commands** (`gan trust info`, `gan trust approve`, `gan trust revoke`, `gan trust list`) live in [R5](R5-trust-cache-impl.md) so the trust UX is co-located with its implementation. They are part of the same `gan` binary, just spec'd elsewhere.
 

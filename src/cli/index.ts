@@ -28,8 +28,12 @@ import * as versionCmd from './commands/version.js';
 import * as configPrintCmd from './commands/config-print.js';
 import * as configGetCmd from './commands/config-get.js';
 import * as configSetCmd from './commands/config-set.js';
+import * as stacksAvailableCmd from './commands/stacks-available.js';
+import * as stacksCustomizeCmd from './commands/stacks-customize.js';
 import * as stacksListCmd from './commands/stacks-list.js';
 import * as stacksNewCmd from './commands/stacks-new.js';
+import * as stacksResetCmd from './commands/stacks-reset.js';
+import * as stacksWhereCmd from './commands/stacks-where.js';
 import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
@@ -85,7 +89,12 @@ async function configDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   }
 }
 
-/** Inner dispatch for `gan stacks <list|new>`. `new` ships in S4. */
+/**
+ * Inner dispatch for `gan stacks <list|new|available|customize|reset|where>`.
+ *
+ * The four built-in-stacks subcommands (`available`, `customize`, `reset`,
+ * `where`) ship in R-post sprint 6 alongside `list` (S2) and `new` (S4).
+ */
 async function stacksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   const inner = parsed._[0];
   const tail: ParsedArgs = {
@@ -98,11 +107,19 @@ async function stacksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
       return stacksListCmd.run(tail);
     case 'new':
       return stacksNewCmd.run(tail);
+    case 'available':
+      return stacksAvailableCmd.run(tail);
+    case 'customize':
+      return stacksCustomizeCmd.run(tail);
+    case 'reset':
+      return stacksResetCmd.run(tail);
+    case 'where':
+      return stacksWhereCmd.run(tail);
     case undefined:
       return {
         stdout: '',
         stderr:
-          'Error: gan stacks requires a subcommand (`list` or `new`). Run `gan stacks --help`.\n',
+          'Error: gan stacks requires a subcommand (`list`, `new`, `available`, `customize`, `reset`, or `where`). Run `gan stacks --help`.\n',
         code: EXIT_BAD_ARGS,
       };
     default:
@@ -254,6 +271,11 @@ const TOP_LEVEL_SPEC: CommandSpec = {
     // the top level so the dispatcher's parse does not reject it before
     // the trust subcommand sees it.
     { long: '--note', type: 'string' },
+    // `--force` is referenced by `gan stacks customize` (R-post S6). Surfaced
+    // at the top level so the dispatcher's parse does not reject it before
+    // the stacks subcommand sees it. Subcommands that do not consume it
+    // simply ignore it.
+    { long: '--force', type: 'boolean' },
   ],
   allowUnknownFlags: false,
 };

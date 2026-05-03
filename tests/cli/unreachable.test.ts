@@ -131,6 +131,25 @@ function buildBrokenDist(): string {
     path.join(csStorageDir, 'atomic-write.d.ts'),
     'export function atomicWriteFile(target: string, content: string): void;\n',
   );
+  // R-post S6 introduces `gan stacks available|customize|where`, which
+  // import `packageRoot` from `../../config-server/package-root.js` and
+  // `parseYamlBlock` from `../../config-server/storage/yaml-block-parser.js`
+  // directly. Provide stand-ins so the dispatcher's static import graph
+  // resolves; both throw on call so the new subcommands surface exit 5
+  // under the unreachable path.
+  writeFileSync(
+    path.join(csDir, 'package-root.js'),
+    `export function packageRoot() { throw new Error('framework library missing (test stub)'); }\n`,
+  );
+  writeFileSync(path.join(csDir, 'package-root.d.ts'), 'export function packageRoot(): string;\n');
+  writeFileSync(
+    path.join(csStorageDir, 'yaml-block-parser.js'),
+    `export function parseYamlBlock() { throw new Error('framework library missing (test stub)'); }\n`,
+  );
+  writeFileSync(
+    path.join(csStorageDir, 'yaml-block-parser.d.ts'),
+    'export function parseYamlBlock(text: string, filePath?: string): unknown;\n',
+  );
   // The S4 scaffold helper re-exports `DRAFT_BANNER` from R1's canonical
   // single-source module. Stub it so `dist/cli/lib/scaffold.js` loads.
   writeFileSync(
