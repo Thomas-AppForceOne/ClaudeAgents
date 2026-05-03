@@ -120,7 +120,7 @@ describe('S2 read tools (one positive test per tool)', () => {
   it('getTrustDiff returns the deferred stub shape and logs a warning', () => {
     const { logger, entries } = makeSpyLogger();
     const result = getTrustDiff({ projectRoot: jsTsMinimal }, { logger });
-    expect(result).toEqual({ diff: [], reason: 'trust-not-yet-implemented' });
+    expect(result).toEqual({ diff: [], reason: 'trust-diff-deferred' });
     const warns = entries.filter((e) => e.level === 'warn');
     expect(warns).toHaveLength(1);
     expect(warns[0].meta).toEqual({ tool: 'getTrustDiff' });

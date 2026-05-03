@@ -7,10 +7,11 @@
  * (byte-identical, and at the cached object identity). A write that
  * returns `mutated: true` is the only thing that should re-snapshot.
  *
- * This test exercises the no-op write path (`setModuleState` — a module
- * no-op that returns `{ mutated: false }` per OQ4) against the
- * `js-ts-minimal` fixture: prime the cache, run the write, re-read, and
- * assert the snapshot is preserved.
+ * Post-M1 the trivial OQ4 module no-op surface no longer exists; the
+ * remaining no-op shape is `removeFromModuleState` against a module
+ * whose state file is absent. We exercise that path here against the
+ * `js-ts-minimal` fixture: prime the cache, run the write, re-read,
+ * and assert the snapshot is preserved.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
@@ -19,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { getResolvedConfig } from '../../src/config-server/tools/reads.js';
-import { setModuleState } from '../../src/config-server/tools/writes.js';
+import { removeFromModuleState } from '../../src/config-server/tools/writes.js';
 import {
   cacheKeyForProjectRoot,
   clearResolvedConfigCache,
@@ -63,14 +64,16 @@ describe('snapshot freshness across `mutated: false` writes', () => {
     const key = cacheKeyForProjectRoot(proj);
     expect(cache.get(key)).toBeDefined();
 
-    // Inter-sprint API call that returns `{ mutated: false }` (module
-    // surface no-op per OQ4). Must NOT invalidate the cache.
-    const writeResult = setModuleState({
+    // No-op write path: `removeFromModuleState` against a module whose
+    // state file is absent returns `{ mutated: false }` and must NOT
+    // invalidate the cache.
+    const writeResult = removeFromModuleState({
       projectRoot: proj,
       name: 'unknown-module',
-      state: { any: 'value' },
+      fieldPath: 'log',
+      value: 'entry',
     });
-    expect(writeResult).toEqual({ mutated: false });
+    expect(writeResult.mutated).toBe(false);
 
     // Cache entry survives because the write did not mutate durable state.
     expect(cache.get(key)).toBeDefined();

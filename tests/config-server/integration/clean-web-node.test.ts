@@ -47,6 +47,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
       'apiVersion',
       'discarded',
       'issues',
+      'modules',
       'overlay',
       'runtimeMode',
       'schemaVersions',
@@ -60,6 +61,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
     expect(r.discarded).toEqual([]);
     expect(r.additionalContext).toEqual({ planner: [], proposer: [] });
     expect(r.issues).toEqual([]);
+    expect(r.modules).toEqual({});
   });
 
   it('serialised payload matches the on-disk snapshot', async () => {

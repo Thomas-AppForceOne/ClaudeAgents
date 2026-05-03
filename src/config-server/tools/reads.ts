@@ -48,7 +48,7 @@ import { packageRoot as resolvePackageRoot } from '../package-root.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { loadStack, type LoadedStack } from '../storage/stack-loader.js';
 import {
-  listInstalledModules,
+  getRegisteredModules,
   loadModuleState,
   type ModuleStateRecord,
 } from '../storage/module-loader.js';
@@ -284,12 +284,12 @@ export interface GetTrustDiffInput {
 export function getTrustDiff(
   _input: GetTrustDiffInput,
   ctx: ReadToolContext = {},
-): { diff: never[]; reason: 'trust-not-yet-implemented' } {
+): { diff: never[]; reason: 'trust-diff-deferred' } {
   const logger = ctx.logger ?? getLogger();
   logger.warn('trust diff is deferred; getTrustDiff returns an empty diff', {
     tool: 'getTrustDiff',
   });
-  return { diff: [], reason: 'trust-not-yet-implemented' };
+  return { diff: [], reason: 'trust-diff-deferred' };
 }
 
 /**
@@ -328,8 +328,8 @@ export function trustList(
  *
  * `perStackOverridesCount` is reserved for the per-stack
  * `auditCmd`/`buildCmd`/`testCmd`/`lintCmd` override count — that surface
- * is post-E1 work (per the TODO in `trust/integration.ts`), so v1 returns
- * `0` here.
+ * is post-E1 work (tracked alongside `trust/integration.ts`), so v1
+ * returns `0` here.
  */
 function computeProjectSummary(
   projectRoot: string,
@@ -360,7 +360,13 @@ export interface GetModuleStateInput {
   name: string;
 }
 
-/** No-op per OQ4. M1 ships real module discovery. */
+/**
+ * Real read (M1). Loads the persisted JSON blob at
+ * `<projectRoot>/.gan-state/modules/<name>/state.json`. Returns `null`
+ * when the file does not exist; throws via the factory on
+ * read/parse failure so callers can distinguish "no state" from
+ * "corrupt state".
+ */
 export function getModuleState(
   input: GetModuleStateInput,
   _ctx: ReadToolContext = {},
@@ -373,13 +379,21 @@ export interface ListModulesInput {
   projectRoot: string;
 }
 
-/** No-op per OQ4. */
+/**
+ * Real read (M1). Returns the names of every registered module (i.e.
+ * every module whose `manifest.json` was discovered and validated by
+ * the loader). The `projectRoot` argument is unused today — module
+ * registration is package-scoped, not per-project — but kept on the
+ * input shape for forward-compatibility with future per-project
+ * configuration views.
+ */
 export function listModules(
   input: ListModulesInput,
   _ctx: ReadToolContext = {},
 ): { modules: string[] } {
-  const root = canonicalizePath(input.projectRoot);
-  return { modules: listInstalledModules(root) };
+  void input;
+  const registered = getRegisteredModules();
+  return { modules: registered.map((r) => r.name) };
 }
 
 export interface GetStackResolutionInput {

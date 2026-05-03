@@ -1,0 +1,12 @@
+{
+  "description": "Fixture module whose prerequisite is a node version probe.",
+  "exports": ["sentinel"],
+  "name": "prereq-passing",
+  "prerequisites": [
+    {
+      "command": "node --version",
+      "errorHint": "Install Node.js 20.10+ (the framework's pinned engine)."
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,55 @@
+{
+  "$id": "https://claudeagents.dev/schemas/module-config-docker-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Per-module project configuration for the docker module (M2). Lives at <projectRoot>/.claude/gan/modules/docker.yaml and is exposed via getResolvedConfig().modules.docker.",
+  "properties": {
+    "containerPattern": {
+      "description": "Container-name match pattern used by PortDiscovery (`docker ps --filter name=<containerPattern>`).",
+      "type": "string"
+    },
+    "fallbackPort": {
+      "description": "Last-resort port returned by PortDiscovery when no other layer yields one.",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "healthCheck": {
+      "additionalProperties": false,
+      "description": "ContainerHealth defaults: HTTP path, expected status, total budget in seconds.",
+      "properties": {
+        "expectStatus": {
+          "description": "HTTP status code that signals the container is healthy.",
+          "type": "integer"
+        },
+        "path": {
+          "description": "HTTP path probed by ContainerHealth.waitForHealthy.",
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "description": "Total budget for ContainerHealth.waitForHealthy, in seconds.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "expectStatus",
+        "path",
+        "timeoutSeconds"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Module-config schema version. Exact-match per F3."
+    }
+  },
+  "required": [
+    "containerPattern",
+    "fallbackPort",
+    "healthCheck",
+    "schemaVersion"
+  ],
+  "title": "ClaudeAgents docker module config schema, v1",
+  "type": "object"
+}

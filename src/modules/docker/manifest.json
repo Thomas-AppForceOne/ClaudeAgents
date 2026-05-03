@@ -1,0 +1,23 @@
+{
+  "configKey": "docker",
+  "description": "Container and port management for git worktree workflows.",
+  "exports": [
+    "PortRegistry",
+    "PortDiscovery",
+    "ContainerHealth",
+    "PortValidator",
+    "ContainerNaming"
+  ],
+  "name": "docker",
+  "pairsWith": "docker",
+  "prerequisites": [
+    {
+      "command": "docker --version",
+      "errorHint": "Install Docker Desktop or Docker Engine."
+    }
+  ],
+  "schemaVersion": 1,
+  "stateKeys": [
+    "port-registry"
+  ]
+}

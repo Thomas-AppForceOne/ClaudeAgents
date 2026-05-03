@@ -318,14 +318,14 @@ describe('trust writes (R5 S4)', () => {
   });
 });
 
-describe('module no-ops', () => {
-  it('setModuleState returns {mutated: false}', () => {
+describe('module writes (M1)', () => {
+  it('setModuleState persists the state blob and returns {mutated: true}', () => {
     const proj = makeTmpProject();
     const r = setModuleState({ projectRoot: proj, name: 'mod-x', state: { any: 1 } });
-    expect(r).toEqual({ mutated: false });
+    expect(r.mutated).toBe(true);
   });
 
-  it('appendToModuleState returns {mutated: false}', () => {
+  it('appendToModuleState appends to the array at fieldPath and returns {mutated: true}', () => {
     const proj = makeTmpProject();
     const r = appendToModuleState({
       projectRoot: proj,
@@ -333,10 +333,10 @@ describe('module no-ops', () => {
       fieldPath: 'log',
       value: 'entry',
     });
-    expect(r).toEqual({ mutated: false });
+    expect(r.mutated).toBe(true);
   });
 
-  it('removeFromModuleState returns {mutated: false}', () => {
+  it('removeFromModuleState is a no-op when no state file exists', () => {
     const proj = makeTmpProject();
     const r = removeFromModuleState({
       projectRoot: proj,
@@ -344,13 +344,16 @@ describe('module no-ops', () => {
       fieldPath: 'log',
       value: 'entry',
     });
-    expect(r).toEqual({ mutated: false });
+    expect(r.mutated).toBe(false);
   });
 
-  it('registerModule returns {mutated: false}', () => {
+  it('registerModule probe reports unknown-module when the name is not registered', () => {
     const proj = makeTmpProject();
     const r = registerModule({ projectRoot: proj, name: 'mod-x', manifest: {} });
-    expect(r).toEqual({ mutated: false });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toContain('unknown-module');
+    }
   });
 });
 

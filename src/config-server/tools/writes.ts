@@ -44,7 +44,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -61,6 +61,12 @@ import {
 } from '../storage/yaml-block-parser.js';
 import { writeYamlBlock } from '../storage/yaml-block-writer.js';
 import { atomicWriteFile } from '../storage/atomic-write.js';
+import {
+  getRegisteredModules,
+  loadModuleState,
+  moduleStatePath,
+} from '../storage/module-loader.js';
+import { stableStringify } from '../determinism/index.js';
 import {
   readCache,
   removeApprovals,
@@ -416,7 +422,7 @@ function captureGitHead(projectRoot: string): string | undefined {
   }
 }
 
-// ---- module no-ops (OQ4) -------------------------------------------------
+// ---- module writes (M1) --------------------------------------------------
 
 export interface SetModuleStateInput {
   projectRoot: string;
@@ -424,11 +430,22 @@ export interface SetModuleStateInput {
   state: unknown;
 }
 
+/**
+ * Persist the supplied `state` blob for module `name` under
+ * `<projectRoot>/.gan-state/modules/<name>/state.json`. Atomic write
+ * via `atomicWriteFile`; serialised with `stableStringify` so the
+ * on-disk JSON is canonical (sorted keys, two-space indent, trailing
+ * newline) per F3 determinism.
+ */
 export function setModuleState(
-  _input: SetModuleStateInput,
+  input: SetModuleStateInput,
   _ctx: WriteToolContext = {},
-): { mutated: false } {
-  return { mutated: false };
+): WriteResult {
+  const root = canonicalizePath(input.projectRoot);
+  const filePath = moduleStatePath(root, input.name);
+  ensureDir(path.dirname(filePath));
+  atomicWriteFile(filePath, stableStringify(input.state));
+  return { mutated: true, path: filePath };
 }
 
 export interface AppendToModuleStateInput {
@@ -438,11 +455,26 @@ export interface AppendToModuleStateInput {
   value: unknown;
 }
 
+/**
+ * Append `value` to the array at `fieldPath` inside the module's state
+ * blob. Composes-if-absent: when no state file exists, treats the
+ * starting state as `{}` and creates the array. Loads, mutates, writes
+ * via the same atomic pipeline as `setModuleState`.
+ */
 export function appendToModuleState(
-  _input: AppendToModuleStateInput,
+  input: AppendToModuleStateInput,
   _ctx: WriteToolContext = {},
-): { mutated: false } {
-  return { mutated: false };
+): WriteResult {
+  const root = canonicalizePath(input.projectRoot);
+  const segments = parseFieldPath(input.fieldPath, 'appendToModuleState');
+  if (!segments)
+    return malformed(`appendToModuleState: 'fieldPath' must be a non-empty dotted path.`);
+  const filePath = moduleStatePath(root, input.name);
+  const data = readModuleStateOrEmpty(root, input.name);
+  appendAtPath(data, segments, deepClone(input.value));
+  ensureDir(path.dirname(filePath));
+  atomicWriteFile(filePath, stableStringify(data));
+  return { mutated: true, path: filePath };
 }
 
 export interface RemoveFromModuleStateInput {
@@ -452,11 +484,25 @@ export interface RemoveFromModuleStateInput {
   value: unknown;
 }
 
+/**
+ * Remove every entry deep-equal to `value` from the array at
+ * `fieldPath` inside the module's state blob. Silent no-op when no
+ * state file exists.
+ */
 export function removeFromModuleState(
-  _input: RemoveFromModuleStateInput,
+  input: RemoveFromModuleStateInput,
   _ctx: WriteToolContext = {},
-): { mutated: false } {
-  return { mutated: false };
+): WriteResult {
+  const root = canonicalizePath(input.projectRoot);
+  const segments = parseFieldPath(input.fieldPath, 'removeFromModuleState');
+  if (!segments)
+    return malformed(`removeFromModuleState: 'fieldPath' must be a non-empty dotted path.`);
+  const filePath = moduleStatePath(root, input.name);
+  if (!existsSync(filePath)) return { mutated: false, reason: 'state-file-absent' };
+  const data = readModuleStateOrEmpty(root, input.name);
+  removeAtPath(data, segments, input.value);
+  atomicWriteFile(filePath, stableStringify(data));
+  return { mutated: true, path: filePath };
 }
 
 export interface RegisterModuleInput {
@@ -465,11 +511,43 @@ export interface RegisterModuleInput {
   manifest: unknown;
 }
 
+/**
+ * `registerModule` is a runtime registration probe. The authoritative
+ * registration set is computed by the loader on server start (per AC6
+ * — collisions there halt server start). This tool reports whether the
+ * named module is currently registered, so external callers can verify
+ * that their assumptions hold without reaching for the loader directly.
+ *
+ * Returns `{ mutated: true }` to signal a successful registration probe;
+ * `{ mutated: false, reason: 'unknown-module' }` when the named module
+ * is not in the registry.
+ */
 export function registerModule(
-  _input: RegisterModuleInput,
+  input: RegisterModuleInput,
   _ctx: WriteToolContext = {},
-): { mutated: false } {
-  return { mutated: false };
+): WriteResult {
+  void input.manifest;
+  void input.projectRoot;
+  const registry = getRegisteredModules();
+  const found = registry.find((r) => r.name === input.name);
+  if (!found) {
+    return { mutated: false, reason: `unknown-module:${input.name}` };
+  }
+  return { mutated: true, path: found.manifestPath };
+}
+
+function readModuleStateOrEmpty(projectRoot: string, name: string): Record<string, unknown> {
+  const existing = loadModuleState(name, projectRoot);
+  if (existing === null) return {};
+  if (isObject(existing.state)) {
+    return deepClone(existing.state) as Record<string, unknown>;
+  }
+  return {};
+}
+
+function ensureDir(dir: string): void {
+  if (existsSync(dir)) return;
+  mkdirSync(dir, { recursive: true });
 }
 
 // ---- internals -----------------------------------------------------------

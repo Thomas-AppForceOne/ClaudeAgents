@@ -29,12 +29,38 @@ import path from 'node:path';
 
 import { canonicalizePath, localeSort, stableStringify } from '../determinism/index.js';
 import { loadOverlay } from '../storage/overlay-loader.js';
+import { loadModuleConfig } from '../storage/module-config-loader.js';
 import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import { _runPhase1ForTests, validateAll, type Issue } from '../tools/validate.js';
 import { cascadeOverlays } from './cascade.js';
 import { detectActiveStacks } from './detection.js';
 import { getResolvedConfigCache, cacheKeyForProjectRoot } from './cache.js';
 import { resolveStackFile, type ResolveStackOptions } from './stack-resolution.js';
+
+/**
+ * One value in `ResolvedConfig.modules`, keyed by module name. Carries
+ * the registration meta from `ValidationSnapshot.modules[i]` (`name`,
+ * `manifestPath`, optional `pairsWith`) AND, when the project has
+ * authored a per-module config YAML at
+ * `<projectRoot>/.claude/gan/modules/<name>.yaml`, the parsed YAML
+ * fields are spread directly into the same row so that
+ * `getResolvedConfig().modules.<name>.<configField>` works as the M2
+ * spec body documents.
+ *
+ * The keying-by-name (object, not array) is M2's design: M1 originally
+ * carried this surface as an array, but M2's per-module config is
+ * accessed via `.modules.<name>` and a record-shaped surface composes
+ * cleanly without the post-M1 callers having to do `arr.find(...)`.
+ */
+export interface ResolvedModuleEntry {
+  name: string;
+  manifestPath: string;
+  pairsWith?: string;
+  // Per-module YAML fields are spread directly onto this row. We do
+  // not enumerate them statically (each module's schema differs); the
+  // index signature carries them.
+  [extra: string]: unknown;
+}
 
 /** Stable F2-shape resolved config. */
 export interface ResolvedConfig {
@@ -72,6 +98,14 @@ export interface ResolvedConfig {
   };
   /** Sorted issue list (validation + cascade + detection). */
   issues: Issue[];
+  /**
+   * Registered modules. Keyed by module name; each value is a
+   * `ResolvedModuleEntry` carrying both registration meta (`name`,
+   * `manifestPath`, optional `pairsWith`) and any per-module config
+   * fields parsed from `<projectRoot>/.claude/gan/modules/<name>.yaml`.
+   * Empty object when no modules ship on disk yet.
+   */
+  modules: Record<string, ResolvedModuleEntry>;
 }
 
 export interface ResolvedStackEntry {
@@ -105,6 +139,12 @@ export interface ComposeContext {
    * `runtimeMode.noProjectCommands`. Defaults to `false`.
    */
   noProjectCommands?: boolean;
+  /**
+   * Override the modules root used for M1 module discovery. Tests
+   * inject a fixture path so the resolved view's `modules` rows are
+   * hermetic. Production callers leave this unset.
+   */
+  modulesRoot?: string;
 }
 
 const SCHEMA_VERSIONS = { stack: 1, overlay: 1 } as const;
@@ -138,14 +178,25 @@ export function composeResolvedConfigSync(
   const cached = cache.get(canonRoot);
   if (cached !== undefined) return cached;
 
-  const validation = validateAll({ projectRoot: canonRoot }, ctx);
+  const validation = validateAll(
+    { projectRoot: canonRoot },
+    {
+      ...(ctx.userHome ? { userHome: ctx.userHome } : {}),
+      ...(ctx.packageRoot ? { packageRoot: ctx.packageRoot } : {}),
+      ...(ctx.modulesRoot ? { modulesRoot: ctx.modulesRoot } : {}),
+    },
+  );
   const allIssues: Issue[] = [...validation.issues];
 
   // Re-build the snapshot to access parsed stack bodies for detection.
   // The cost is bounded (a few file reads); the alternative would be
   // exposing a snapshot accessor on `validateAll`, which would leak phase
   // internals.
-  const snapshot = _runPhase1ForTests(canonRoot, ctx);
+  const snapshot = _runPhase1ForTests(canonRoot, {
+    ...(ctx.userHome ? { userHome: ctx.userHome } : {}),
+    ...(ctx.packageRoot ? { packageRoot: ctx.packageRoot } : {}),
+    ...(ctx.modulesRoot ? { modulesRoot: ctx.modulesRoot } : {}),
+  });
   for (const row of snapshot.stackFiles.values()) {
     if (row.data !== undefined) continue;
     try {
@@ -204,6 +255,27 @@ export function composeResolvedConfigSync(
 
   const sortedIssues = sortIssues(allIssues);
 
+  // Modules surface. Keyed by module name. Each entry carries the
+  // snapshot's registration meta AND, when the project has authored a
+  // per-module YAML at `<projectRoot>/.claude/gan/modules/<name>.yaml`,
+  // the parsed YAML fields spread directly onto the entry so
+  // `getResolvedConfig().modules.<name>.<configField>` works.
+  const modules: Record<string, ResolvedModuleEntry> = {};
+  for (const m of snapshot.modules) {
+    const entry: ResolvedModuleEntry = { name: m.name, manifestPath: m.manifestPath };
+    if (typeof m.pairsWith === 'string') entry.pairsWith = m.pairsWith;
+    const cfg = loadModuleConfig(canonRoot, m.name);
+    if (cfg !== null && isObject(cfg)) {
+      for (const k of Object.keys(cfg)) {
+        // Don't let the config silently overwrite the registration
+        // meta — those keys are reserved.
+        if (k === 'name' || k === 'manifestPath' || k === 'pairsWith') continue;
+        entry[k] = cfg[k];
+      }
+    }
+    modules[m.name] = entry;
+  }
+
   const resolved: ResolvedConfig = {
     apiVersion,
     schemaVersions: { ...SCHEMA_VERSIONS },
@@ -216,6 +288,7 @@ export function composeResolvedConfigSync(
     discarded: cascade.discarded.slice(),
     additionalContext,
     issues: sortedIssues,
+    modules,
   };
 
   // Round-trip through stableStringify so every nested key order is

@@ -47,6 +47,11 @@ import { canonicalizePath, localeSort } from '../determinism/index.js';
 import { ConfigServerError } from '../errors.js';
 import { runAllInvariants } from '../invariants/index.js';
 import { packageRoot as resolvePackageRoot } from '../package-root.js';
+import {
+  defaultModulesRoot,
+  loadModules,
+  type ModuleRegistration,
+} from '../storage/module-loader.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import {
@@ -85,9 +90,20 @@ export interface SnapshotOverlayRow {
 }
 
 /**
+ * Per-module snapshot row. Populated in phase 1 from the module loader
+ * registry; consumed by the `pairs-with-consistency` invariant and
+ * surfaced through `validateAll` / `getResolvedConfig`.
+ */
+export interface SnapshotModuleRow {
+  name: string;
+  manifestPath: string;
+  pairsWith?: string;
+}
+
+/**
  * Validation snapshot threaded through phases 1 → 2 → 3. Phase 1 fills in
- * `stackFiles` and `overlays`; phase 2 appends to `issues`; phase 3 (stub)
- * does not append (S4 will).
+ * `stackFiles`, `overlays`, and `modules`; phase 2 appends to `issues`;
+ * phase 3 invariants read the snapshot and append more `issues`.
  */
 export interface ValidationSnapshot {
   projectRoot: string;
@@ -97,7 +113,7 @@ export interface ValidationSnapshot {
     user: SnapshotOverlayRow | null;
     project: SnapshotOverlayRow | null;
   };
-  modules: never[];
+  modules: SnapshotModuleRow[];
   issues: Issue[];
 }
 
@@ -136,6 +152,14 @@ export interface ValidateContext {
    * real home directory.
    */
   homeDir?: string;
+  /**
+   * Override the modules root used for M1 module discovery. Production
+   * callers leave this unset — the loader resolves
+   * `<packageRoot>/src/modules/`. Tests inject a fixture path so the
+   * registered module set is hermetic. NOT a runtime knob (no env var,
+   * no CLI flag); a test-only context parameter, mirroring `packageRoot`.
+   */
+  modulesRoot?: string;
 }
 
 // ---- public API -----------------------------------------------------------
@@ -242,6 +266,36 @@ function createSnapshot(projectRoot: string): ValidationSnapshot {
 }
 
 /**
+ * Load registered modules from the configured root. Tests inject
+ * `ctx.modulesRoot`; production callers fall through to
+ * `defaultModulesRoot()` (`<packageRoot>/src/modules/`). When the
+ * production directory does not exist (no concrete module yet on
+ * disk), discovery returns `[]`.
+ */
+function loadModuleRegistrationsFor(ctx: ValidateContext): ModuleRegistration[] {
+  if (typeof ctx.modulesRoot === 'string' && ctx.modulesRoot.length > 0) {
+    return loadModules(ctx.modulesRoot);
+  }
+  let prodRoot: string;
+  try {
+    prodRoot = defaultModulesRoot();
+  } catch {
+    return [];
+  }
+  try {
+    return loadModules(prodRoot);
+  } catch (e) {
+    // A schema-invalid manifest at the production root must not be
+    // swallowed; re-throw so the caller (server start, validateAll)
+    // surfaces the structured error per AC5. Tests that need an
+    // isolated module set inject `ctx.modulesRoot` and never hit this
+    // branch.
+    if (e instanceof ConfigServerError) throw e;
+    throw e;
+  }
+}
+
+/**
  * Phase 1 — discovery.
  *
  * Enumerates every stack file across the three tiers and every overlay
@@ -316,6 +370,22 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
   const userOverlay = snapshot.overlays.user;
   if (userOverlay) {
     checkUserOverlayForbiddenFields(userOverlay.path, userOverlay.data, snapshot.issues);
+  }
+
+  // M1 module discovery. Production callers see an empty list when
+  // `<packageRoot>/src/modules/` does not exist; tests inject a
+  // fixture path via `ctx.modulesRoot`. Manifest schema failures and
+  // `ModuleCollision` propagate as structured errors (per AC5/AC6).
+  const registrations = loadModuleRegistrationsFor(ctx);
+  for (const reg of registrations) {
+    const row: { name: string; manifestPath: string; pairsWith?: string } = {
+      name: reg.name,
+      manifestPath: reg.manifestPath,
+    };
+    if (typeof reg.manifest.pairsWith === 'string') {
+      row.pairsWith = reg.manifest.pairsWith;
+    }
+    snapshot.modules.push(row);
   }
 }
 

@@ -1,78 +1,81 @@
 /**
  * `pairsWith.consistency` invariant (F3 catalog; sourced from M1 + C5).
  *
- * Two enforcement branches share this file:
+ * Pairing is a **one-way declaration from the module to its stack**.
+ * A module's `manifest.pairsWith: <stackName>` says "I belong alongside
+ * the stack named X". Stacks need NOT enumerate paired modules — the
+ * back-reference graph is deliberately avoided so that a module shipped
+ * to the framework after a stack is canonicalised does not require a
+ * coordinated edit to the stack file.
  *
- *  1. **Module side (M1).** When `src/modules/<name>/` and
- *     `stacks/<name>.md` both exist, both must declare `pairsWith`
- *     referring to each other. Until M1 ships and `snapshot.modules` is
- *     populated, this branch is a no-op (R1's "module surface no-op
- *     contract" — see PROJECT_CONTEXT.md). When M1 lands, the existing
- *     module rows feed into this branch without changing the function
- *     signature.
+ * Four cases the invariant adjudicates (per the M1 spec + C5 + the
+ * "soft-OK pairsWith" rule documented in PROJECT_CONTEXT.md):
  *
- *  2. **Stack side (C5 shadowed-default).** When a project-tier stack
- *     file shadows a canonical built-in stack file, but the project-tier
- *     file *omits* a `pairsWith` declaration that the built-in carried,
- *     this invariant fires with the **C5 verbatim remediation hint**.
- *     The string template lives below; it is reproduced byte-for-byte
- *     from `specifications/C5-stack-file-resolution.md`.
+ *   1. **Soft-OK.** A module declares `pairsWith: X`; the stack `X`
+ *      exists at some tier with no `pairsWith` field; the project-tier
+ *      file does NOT shadow a built-in. No error.
  *
- * Per S4's "no new error codes" rule, both branches surface as
- * `InvariantViolation` issues.
+ *   2. **Disagree.** Both sides declare `pairsWith` and the values
+ *      don't match. Hard error.
+ *
+ *   3. **Shadowed-default (C5).** A project-tier stack file shadows a
+ *      canonical built-in stack file that paired with a module, but
+ *      the project-tier file omits `pairsWith`. Hard error using the
+ *      C5 verbatim remediation string (see SHADOWED_DEFAULT_REMEDIATION).
+ *
+ *   4. **Stack references missing module.** A stack's `pairsWith: M`
+ *      references a module name that is not registered. Hard error.
+ *
+ * The C5 verbatim remediation string is reproduced byte-for-byte from
+ * `specifications/C5-stack-file-resolution.md`. It is exported as a
+ * named constant `SHADOWED_DEFAULT_REMEDIATION` so tests can import and
+ * assert byte-equality without copy-pasting the multiline string.
  */
 
 import path from 'node:path';
 
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
-import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
+import type {
+  SnapshotModuleRow,
+  SnapshotStackRow,
+  ValidationSnapshot,
+} from '../tools/validate.js';
 
 /**
- * Build the C5 shadowed-default error message.
+ * Verbatim C5 remediation string for the shadowed-default case. Read
+ * by `buildShadowedPairsWithMessage` and exported so test code can
+ * assert byte-equality without duplicating the multiline string.
  *
- * The string is reproduced byte-for-byte from C5
- * (`specifications/C5-stack-file-resolution.md`), with the substituted
- * fields:
- *   - the offending project-tier file path (relative to the project
- *     root, with forward-slash separators — the exact form C5 uses);
- *   - the canonical built-in path (relative, forward-slash);
- *   - the example "rename your file (e.g. ...)" path, derived from the
- *     stack name;
- *   - the expected `pairsWith` value (== the stack name).
- *
- * The wording around the substitutions ("shadows the canonical … but
- * does not declare pairsWith. The X module shipped by ClaudeAgents
- * expects … Either re-declare pairsWith: X at the top of your
- * project-tier file, or rename your file (e.g. …) and force its
- * activation via stack.override in your project overlay.") is identical
- * to C5's quoted block.
+ * The literal is parameterised by `<stackName>` (placeholder) — the
+ * call site substitutes it via `buildShadowedPairsWithMessage`. The
+ * substituted result reproduces C5's quoted block character-for-character.
+ */
+export const SHADOWED_DEFAULT_REMEDIATION =
+  'pairs-with.consistency: project-tier stack file ".claude/gan/stacks/<stackName>.md" ' +
+  'shadows the canonical "stacks/<stackName>.md" but does not declare pairsWith. The ' +
+  '<stackName> module shipped by ClaudeAgents expects this stack file to declare ' +
+  'pairsWith: <stackName>. Either re-declare pairsWith: <stackName> at the top of your ' +
+  'project-tier file, or rename your file (e.g. .claude/gan/stacks/my-<stackName>-variant.md) ' +
+  'and force its activation via stack.override in your project overlay.';
+
+/**
+ * Build the C5 shadowed-default error message by substituting
+ * `<stackName>` placeholders in `SHADOWED_DEFAULT_REMEDIATION` with the
+ * actual stack name. The result is byte-identical to C5's quoted block.
  */
 export function buildShadowedPairsWithMessage(stackName: string): string {
-  const projectRel = `.claude/gan/stacks/${stackName}.md`;
-  const builtinRel = `stacks/${stackName}.md`;
-  const renamedExample = `.claude/gan/stacks/my-${stackName}-variant.md`;
-  return (
-    `pairs-with.consistency: project-tier stack file "${projectRel}" shadows the canonical ` +
-    `"${builtinRel}" but does not declare pairsWith. The ${stackName} module shipped by ` +
-    `ClaudeAgents expects this stack file to declare pairsWith: ${stackName}. Either ` +
-    `re-declare pairsWith: ${stackName} at the top of your project-tier file, or ` +
-    `rename your file (e.g. ${renamedExample}) and force its activation via ` +
-    `stack.override in your project overlay.`
-  );
+  return SHADOWED_DEFAULT_REMEDIATION.split('<stackName>').join(stackName);
 }
 
 export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
 
   // --- Stack-side (C5 shadowed-default) branch ----------------------------
-  // Pair every project-tier row with the built-in row of the same stack
-  // name. If the built-in declares `pairsWith: X` and the project-tier
-  // file omits `pairsWith`, fire the C5 verbatim error.
   const projectRows = collectStackRowsByTier(snapshot, 'project');
   const builtinRows = collectStackRowsByTier(snapshot, 'builtin');
-  const projectByName = byName(projectRows, snapshot.projectRoot);
-  const builtinByName = byName(builtinRows, snapshot.projectRoot);
+  const projectByName = byName(projectRows);
+  const builtinByName = byName(builtinRows);
   for (const [name, projectRow] of projectByName) {
     const builtinRow = builtinByName.get(name);
     if (!builtinRow) continue;
@@ -80,12 +83,7 @@ export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[]
     if (typeof builtinPairsWith !== 'string') continue;
     const projectPairsWith = readPairsWith(projectRow);
     if (typeof projectPairsWith === 'string') continue;
-    // Confirmed: project-tier shadows a paired built-in but omits
-    // `pairsWith`. Reproduce C5's verbatim wording.
     const messageBody = buildShadowedPairsWithMessage(name);
-    // Build via the central error factory so the wording stays alongside
-    // the rest of the invariant violations if a dedicated factory branch
-    // is ever added.
     const err = createError('InvariantViolation', { message: messageBody });
     issues.push({
       code: 'InvariantViolation',
@@ -96,18 +94,79 @@ export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[]
     });
   }
 
-  // --- Module-side (M1) branch -------------------------------------------
-  // OQ4 / R1 module surface no-op contract: `snapshot.modules` is empty
-  // until M1 ships. We iterate it for shape readiness; today the loop
-  // body never executes. When M1 lands, each module row will carry a
-  // `name` + `pairsWith` and we'll cross-check those against the matching
-  // stack row's `pairsWith`.
-  for (const _module of snapshot.modules as unknown[]) {
-    // Intentionally empty: M1 will populate this branch.
-    void _module;
+  // --- Module-side branches (M1) ------------------------------------------
+  // Pre-index resolved stacks by name (highest tier wins). Resolution:
+  // project > user > builtin. We pick whichever row's parsed body says
+  // `name === X` (or basename === X if `name` is missing) and prefer
+  // higher tiers.
+  const allByName = new Map<string, SnapshotStackRow>();
+  for (const tier of ['builtin', 'user', 'project'] as const) {
+    for (const [name, row] of byName(collectStackRowsByTier(snapshot, tier))) {
+      allByName.set(name, row);
+    }
+  }
+  const moduleNames = new Set<string>();
+  for (const m of snapshot.modules) moduleNames.add(m.name);
+
+  // Disagree case (case 2): both sides declare pairsWith and they differ.
+  for (const moduleRow of snapshot.modules) {
+    if (typeof moduleRow.pairsWith !== 'string') continue;
+    const stackRow = allByName.get(moduleRow.pairsWith);
+    if (!stackRow) continue;
+    const stackPairsWith = readPairsWith(stackRow);
+    if (typeof stackPairsWith !== 'string') continue;
+    if (stackPairsWith === moduleRow.name) continue;
+    issues.push(buildDisagreeIssue(moduleRow, stackRow, stackPairsWith));
+  }
+
+  // Stack-references-missing-module case (case 4): a stack's pairsWith
+  // names a module that is not registered.
+  for (const [stackName, stackRow] of allByName) {
+    const stackPairsWith = readPairsWith(stackRow);
+    if (typeof stackPairsWith !== 'string') continue;
+    if (moduleNames.has(stackPairsWith)) continue;
+    issues.push(buildMissingModuleIssue(stackName, stackRow, stackPairsWith));
   }
 
   return issues;
+}
+
+function buildDisagreeIssue(
+  moduleRow: SnapshotModuleRow,
+  stackRow: SnapshotStackRow,
+  stackPairsWith: string,
+): Issue {
+  const message =
+    `pairs-with.consistency: module '${moduleRow.name}' declares pairsWith: ${moduleRow.pairsWith}, ` +
+    `but stack '${stackRow.path}' declares pairsWith: ${stackPairsWith}. ` +
+    `Both sides must agree, or one side must omit pairsWith.`;
+  const err = createError('InvariantViolation', { message });
+  return {
+    code: 'InvariantViolation',
+    path: stackRow.path,
+    field: '/pairsWith',
+    message: err.message,
+    severity: 'error',
+  };
+}
+
+function buildMissingModuleIssue(
+  stackName: string,
+  stackRow: SnapshotStackRow,
+  referencedModule: string,
+): Issue {
+  const message =
+    `pairs-with.consistency: stack '${stackName}' declares pairsWith: ${referencedModule}, ` +
+    `but no module with that name is registered. Either remove pairsWith from the stack ` +
+    `file or add the missing module under src/modules/${referencedModule}/.`;
+  const err = createError('InvariantViolation', { message });
+  return {
+    code: 'InvariantViolation',
+    path: stackRow.path,
+    field: '/pairsWith',
+    message: err.message,
+    severity: 'error',
+  };
 }
 
 function collectStackRowsByTier(
@@ -127,23 +186,20 @@ function collectStackRowsByTier(
  * sans `.md` so a stack file that ships without an explicit name still
  * gets paired with its peer at another tier.
  */
-function byName(rows: SnapshotStackRow[], projectRoot: string): Map<string, SnapshotStackRow> {
+function byName(rows: SnapshotStackRow[]): Map<string, SnapshotStackRow> {
   const out = new Map<string, SnapshotStackRow>();
   for (const row of rows) {
-    const name = stackName(row, projectRoot);
+    const name = stackName(row);
     if (name) out.set(name, row);
   }
   return out;
 }
 
-function stackName(row: SnapshotStackRow, projectRoot: string): string | null {
+function stackName(row: SnapshotStackRow): string | null {
   if (row.data && isObject(row.data)) {
     const declared = row.data['name'];
     if (typeof declared === 'string' && declared.length > 0) return declared;
   }
-  // Fallback: basename of the file without `.md`. `path.basename` works
-  // even for paths under the project root that have not been resolved.
-  void projectRoot;
   const base = path.basename(row.path);
   if (base.endsWith('.md')) return base.slice(0, -3);
   return null;
