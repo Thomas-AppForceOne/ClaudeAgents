@@ -1,0 +1,9 @@
+{
+  "affectedFiles": ["src/main.ts", "synthetic/foo.txt"],
+  "criteria": [
+    {
+      "id": "polyglot-coexistence",
+      "description": "Verify both web-node and synthetic-second surfaces fire only on their own scopes."
+    }
+  ]
+}

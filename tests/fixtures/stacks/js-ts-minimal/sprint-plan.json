@@ -1,0 +1,9 @@
+{
+  "affectedFiles": ["src/handler.ts", "src/util.ts"],
+  "criteria": [
+    {
+      "id": "tls",
+      "description": "Verify TLS-required surfaces fire on the affected handler."
+    }
+  ]
+}

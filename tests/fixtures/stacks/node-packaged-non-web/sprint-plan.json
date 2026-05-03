@@ -1,0 +1,9 @@
+{
+  "affectedFiles": ["src/index.js"],
+  "criteria": [
+    {
+      "id": "generic-fallback-on-bare-package",
+      "description": "Verify a package.json without lockfile/scripts falls through to the generic stack."
+    }
+  ]
+}

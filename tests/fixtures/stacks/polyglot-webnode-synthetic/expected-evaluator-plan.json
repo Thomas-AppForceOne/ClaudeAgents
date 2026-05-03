@@ -1,0 +1,107 @@
+{
+  "activeStacks": [
+    {
+      "name": "synthetic-second",
+      "scope": [
+        "synthetic/**"
+      ]
+    },
+    {
+      "name": "web-node",
+      "scope": [
+        "**/*.ts",
+        "**/*.tsx"
+      ]
+    }
+  ],
+  "auditCommands": [
+    {
+      "absenceSignal": "warning",
+      "command": "echo synthetic-second audit",
+      "stack": "synthetic-second"
+    },
+    {
+      "absenceSignal": "warning",
+      "command": "npm audit --audit-level=high",
+      "stack": "web-node"
+    }
+  ],
+  "buildTestLint": {
+    "buildCmd": "echo synthetic-second build",
+    "lintCmd": "echo synthetic-second lint",
+    "testCmd": "echo synthetic-second test"
+  },
+  "evaluatorAdditionalChecks": [],
+  "secretsScans": [
+    {
+      "extension": "md",
+      "files": [],
+      "stack": "synthetic-second"
+    },
+    {
+      "extension": "txt",
+      "files": [
+        "synthetic/foo.txt"
+      ],
+      "stack": "synthetic-second"
+    },
+    {
+      "extension": "cjs",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "env",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "js",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "json",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "jsx",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "mjs",
+      "files": [],
+      "stack": "web-node"
+    },
+    {
+      "extension": "ts",
+      "files": [
+        "src/main.ts"
+      ],
+      "stack": "web-node"
+    },
+    {
+      "extension": "tsx",
+      "files": [],
+      "stack": "web-node"
+    }
+  ],
+  "securitySurfacesInstantiated": [
+    {
+      "appliesToFiles": [
+        "synthetic/foo.txt"
+      ],
+      "id": "synthetic_scope_only_surface",
+      "stack": "synthetic-second",
+      "templateText": "Files inside the synthetic scope must declare their handler signature explicitly.\n",
+      "triggerEvidence": {
+        "keywordsHit": [],
+        "scopeMatched": [
+          "synthetic/foo.txt"
+        ]
+      }
+    }
+  ]
+}

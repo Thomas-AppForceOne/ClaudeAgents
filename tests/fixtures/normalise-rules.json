@@ -1,0 +1,17 @@
+{
+  "sortArrays": [
+    { "path": "activeStacks", "by": "name" },
+    { "path": "secretsScans", "by": ["stack", "extension"] },
+    { "path": "auditCommands", "by": "stack" },
+    { "path": "securitySurfacesInstantiated", "by": ["stack", "id"] },
+    { "path": "evaluatorAdditionalChecks", "by": "command" }
+  ],
+  "sortInPlace": [
+    "secretsScans[*].files",
+    "securitySurfacesInstantiated[*].triggerEvidence.scopeMatched",
+    "securitySurfacesInstantiated[*].triggerEvidence.keywordsHit",
+    "securitySurfacesInstantiated[*].appliesToFiles",
+    "activeStacks[*].scope"
+  ],
+  "stripPrefixes": [".gan-state/runs/[a-z0-9-]+/", ".gan-cache/[a-z0-9-]+/"]
+}

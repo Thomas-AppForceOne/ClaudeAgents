@@ -1,0 +1,9 @@
+{
+  "affectedFiles": ["synthetic/foo.txt"],
+  "criteria": [
+    {
+      "id": "synthetic-input-validation",
+      "description": "Verify the synthetic-second surfaces fire when synthetic files are touched."
+    }
+  ]
+}

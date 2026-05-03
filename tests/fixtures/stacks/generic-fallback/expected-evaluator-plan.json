@@ -1,0 +1,21 @@
+{
+  "activeStacks": [
+    {
+      "name": "generic",
+      "scope": [
+        "**/*"
+      ]
+    }
+  ],
+  "auditCommands": [],
+  "buildTestLint": {},
+  "evaluatorAdditionalChecks": [],
+  "secretsScans": [
+    {
+      "extension": "env",
+      "files": [],
+      "stack": "generic"
+    }
+  ],
+  "securitySurfacesInstantiated": []
+}
