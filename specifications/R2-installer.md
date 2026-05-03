@@ -21,10 +21,11 @@ The rewritten installer makes a particular point of cleanup: any pre-existing `.
 1. **Prerequisite checks.** Verify Node 20.10+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
 2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
 3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant). Until `@claudeagents/config-server` is published to a public registry, `install.sh` instead runs `npm install -g .` from the repo root (the **local-install-only rule** documented in `PROJECT_CONTEXT.md`); the published-registry path lights up automatically once the package is released.
-4. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
-5. **Prepare filesystem zones for the current project (if `install.sh` is run inside a git repo).** Create `.gan-state/` and `.gan-cache/` and add them to `.gitignore` if not already present. `.claude/gan/` is left alone (created lazily when the user first authors an overlay).
-6. **Run `validateAll()` against the current project.** A first sanity check; reports any pre-existing config issues. A failure here is a warning, not an installer abort, since the project may legitimately have no overlays yet.
-7. **Print a final status block.** "ClaudeAgents installed. Restart Claude Code once; on first `/gan` invocation, approve the MCP server when prompted. After that, you're ready."
+4. **Create the built-in stacks symlink** at `~/.claude/gan/builtin-stacks/` pointing at `<packageRoot>/stacks/` (where `<packageRoot>` is `<npm-root-g>/@claudeagents/config-server`). The symlink is a user-tier convenience handle for browsing the framework's canonical stack files; the resolver itself reaches `<packageRoot>` directly via `import.meta.url` and does not depend on this symlink. Idempotent: a re-run that finds the same symlink already pointing at the right target is a no-op; a stale symlink pointing somewhere else is replaced atomically (`ln -sfn`); a real file or directory at the link path is left alone with a warning. Skipped on Windows shells (MSYS / Cygwin / MinGW). Best-effort: a missing `npm root -g` resolution or absent `<packageRoot>/stacks/` directory logs a warning and continues. Recorded in STATE_LOG so partial-failure rollback can undo it; removed by `--uninstall` only when the symlink still points into the framework install (user-redirected symlinks are left alone).
+5. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
+6. **Prepare filesystem zones for the current project (if `install.sh` is run inside a git repo).** Create `.gan-state/` and `.gan-cache/` and add them to `.gitignore` if not already present. `.claude/gan/` is left alone (created lazily when the user first authors an overlay).
+7. **Run `validateAll()` against the current project.** A first sanity check; reports any pre-existing config issues. A failure here is a warning, not an installer abort, since the project may legitimately have no overlays yet.
+8. **Print a final status block.** "ClaudeAgents installed. Restart Claude Code once; on first `/gan` invocation, approve the MCP server when prompted. After that, you're ready."
 
 ### Friction profile
 
@@ -64,6 +65,7 @@ Bare `install.sh` runs the install (this is the primary verb and changing it wou
 
 - Removes the agent and skill symlinks.
 - Removes the MCP server entry from Claude Code's config (does not uninstall the npm package, since other tools may depend on it).
+- Removes the `~/.claude/gan/builtin-stacks/` symlink **only when** it still points into the globally-installed framework package (`<npm-root-g>/@claudeagents/config-server/...`). User-redirected symlinks are left alone with a warning so a deliberate user override is never silently destroyed.
 - Leaves filesystem zones intact (they contain user state; the user opts in to their removal).
 - Prints the equivalent npm and rm commands needed to clean up further if desired.
 
@@ -87,6 +89,7 @@ Any failure halts the installer with a non-zero exit code, an error message nami
 - A failure mid-install (simulated by killing the npm step) leaves the system either fully pre-install or fully post-install, never half-configured.
 - The installer does not touch `.claude/gan/`, `.gan-state/runs/`, or any user data not created by itself.
 - `install.sh --help` and `install.sh -h` print the help text to stdout and exit 0; the text lists every flag, the prerequisites, and a summary of what the installer creates. Unknown flags exit non-zero with a pointer to `--help`.
+- After a clean install, `~/.claude/gan/builtin-stacks/` exists as a symlink pointing at `<npm-root-g>/@claudeagents/config-server/stacks/`. A re-run produces the same symlink with no errors and no duplicate STATE_LOG entries. A pre-existing real file or directory at the link path is left intact with a warning. The Windows-shell case (MSYS / Cygwin / MinGW) skips the step silently. `install.sh --uninstall` removes the symlink only when it still points into the framework install; user-redirected symlinks survive uninstall.
 
 ## Dependencies
 

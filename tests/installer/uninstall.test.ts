@@ -17,6 +17,8 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -178,5 +180,122 @@ describe('install.sh --uninstall', () => {
     // The follow-up hints should still appear.
     expect(result.stdout).toMatch(/`npm uninstall -g @claudeagents\/config-server`/);
     expect(result.stdout).toMatch(/`rm -rf \.gan-state \.gan-cache`/);
+  });
+
+  it('removes builtin-stacks symlink when pointing into framework install', async () => {
+    // Set up a synthetic npm root and a symlink that points into it.
+    const tmp = makeTmpHome({ withRepo: true });
+    cleanups.push(tmp);
+    const npmRoot = path.join(tmp.root, 'npm-root');
+    const fakeFrameworkStacks = path.join(npmRoot, '@claudeagents', 'config-server', 'stacks');
+    mkdirSync(fakeFrameworkStacks, { recursive: true });
+
+    // Stub `npm root -g` to print our synthetic root.
+    const escapedRoot = JSON.stringify(npmRoot);
+    const escapedLog = JSON.stringify(npmInvocationLog(tmp.root));
+    writeStubBin(
+      tmp.bin,
+      'npm',
+      [
+        `printf '%s\\n' "$*" >> ${escapedLog}`,
+        `if [ "$1" = "root" ] && [ "$2" = "-g" ]; then`,
+        `  printf '%s\\n' ${escapedRoot}`,
+        `  exit 0`,
+        `fi`,
+        `exit 0`,
+      ].join('\n'),
+    );
+
+    const hostNode = process.execPath;
+    writeStubBin(
+      tmp.bin,
+      'node',
+      [
+        `if [ "$1" = "--version" ]; then`,
+        `  printf '%s\\n' "v20.10.0"`,
+        `  exit 0`,
+        `fi`,
+        `exec ${JSON.stringify(hostNode)} "$@"`,
+      ].join('\n'),
+    );
+    writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
+    writeStubBin(tmp.bin, 'claude', 'exit 0');
+
+    // Pre-seed the symlink at the canonical user-tier location.
+    const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
+    mkdirSync(path.dirname(linkPath), { recursive: true });
+    symlinkSync(fakeFrameworkStacks, linkPath);
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+
+    const r = await runInstall(['--uninstall'], {
+      home: tmp.home,
+      pathOverride: tmp.bin,
+      cwd: tmp.repo!,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).not.toMatch(/error:/);
+
+    // Symlink removed.
+    expect(existsSync(linkPath)).toBe(false);
+  });
+
+  it('leaves user-redirected builtin-stacks symlink alone', async () => {
+    // Symlink points OUTSIDE the framework install — uninstall must not
+    // remove it.
+    const tmp = makeTmpHome({ withRepo: true });
+    cleanups.push(tmp);
+    const npmRoot = path.join(tmp.root, 'npm-root');
+    mkdirSync(npmRoot, { recursive: true });
+
+    // Stub `npm root -g` to print our synthetic root.
+    const escapedRoot = JSON.stringify(npmRoot);
+    const escapedLog = JSON.stringify(npmInvocationLog(tmp.root));
+    writeStubBin(
+      tmp.bin,
+      'npm',
+      [
+        `printf '%s\\n' "$*" >> ${escapedLog}`,
+        `if [ "$1" = "root" ] && [ "$2" = "-g" ]; then`,
+        `  printf '%s\\n' ${escapedRoot}`,
+        `  exit 0`,
+        `fi`,
+        `exit 0`,
+      ].join('\n'),
+    );
+
+    const hostNode = process.execPath;
+    writeStubBin(
+      tmp.bin,
+      'node',
+      [
+        `if [ "$1" = "--version" ]; then`,
+        `  printf '%s\\n' "v20.10.0"`,
+        `  exit 0`,
+        `fi`,
+        `exec ${JSON.stringify(hostNode)} "$@"`,
+      ].join('\n'),
+    );
+    writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
+    writeStubBin(tmp.bin, 'claude', 'exit 0');
+
+    // Pre-seed the symlink pointing somewhere unrelated.
+    const userTarget = path.join(tmp.root, 'my-own-stacks-dir');
+    mkdirSync(userTarget, { recursive: true });
+    const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
+    mkdirSync(path.dirname(linkPath), { recursive: true });
+    symlinkSync(userTarget, linkPath);
+
+    const r = await runInstall(['--uninstall'], {
+      home: tmp.home,
+      pathOverride: tmp.bin,
+      cwd: tmp.repo!,
+    });
+    expect(r.exitCode).toBe(0);
+
+    // Symlink survived intact.
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(linkPath)).toBe(userTarget);
+    // Stderr mentions the leave-alone case.
+    expect(r.stderr).toMatch(/points elsewhere; leaving alone/);
   });
 });

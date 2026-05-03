@@ -220,6 +220,62 @@ describe('install.sh — S3 rollback on partial failure', () => {
     expect(stragglers).toEqual([]);
   });
 
+  it('rollback handles builtin-stacks-symlink STATE_LOG kind: removes the logged symlink, leaves others alone', async () => {
+    // Direct-invoke the installer's `rollback` function with a
+    // synthetic STATE_LOG containing a `builtin-stacks-symlink` entry,
+    // by sourcing `install.sh` in a sub-shell. The function-level test
+    // is the only way to exercise this case statement — the install
+    // flow places `create_builtin_stacks_symlink` as the last state-
+    // creating step, so no later failure can trigger a real rollback
+    // through it.
+    const { tmp } = baseSetup();
+    const installScript = path.join(repoRootDir(), 'install.sh');
+
+    // Pre-seed a symlink that the synthetic STATE_LOG entry will
+    // reference.
+    const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
+    mkdirSync(path.dirname(linkPath), { recursive: true });
+    const fakeTarget = path.join(tmp.root, 'fake-target');
+    mkdirSync(fakeTarget, { recursive: true });
+    symlinkSync(fakeTarget, linkPath);
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+
+    // Read install.sh, strip the trailing `main "$@"` so sourcing does
+    // not run the install flow, and source the trimmed copy from a
+    // tiny driver script. Then directly invoke `rollback` with a
+    // synthetic STATE_LOG.
+    const installRaw = readFileSync(installScript, 'utf8');
+    const trimmed = installRaw.replace(/\nmain "\$@"\s*$/, '\n');
+    const trimmedPath = path.join(tmp.root, 'install-no-main.sh');
+    writeFileSync(trimmedPath, trimmed);
+
+    const driver = path.join(tmp.root, 'driver.sh');
+    writeFileSync(
+      driver,
+      [
+        `#!/usr/bin/env bash`,
+        `set -uo pipefail`,
+        `# shellcheck disable=SC1090`,
+        `source ${JSON.stringify(trimmedPath)}`,
+        `STATE_LOG=("builtin-stacks-symlink:${linkPath}")`,
+        `# Call rollback directly. It logs warnings, never exits non-zero.`,
+        `rollback`,
+        `exit 0`,
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const { spawnSync } = await import('node:child_process');
+    const result = spawnSync('/bin/bash', [driver], {
+      env: { ...process.env, HOME: tmp.home },
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+
+    // Symlink removed by rollback.
+    expect(existsSync(linkPath)).toBe(false);
+  });
+
   it('S3-AC4: rollback never undoes pre-existing state — a pre-created symlink survives rollback', async () => {
     const { tmp, pathOverride, cwd } = baseSetup();
 

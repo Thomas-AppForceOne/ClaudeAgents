@@ -172,9 +172,11 @@ describe('install.sh — S2 happy-path install', () => {
     const r2 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r2.exitCode).toBe(0);
 
-    // The version-probe matches package.json on both runs, so npm is
-    // never invoked.
-    expect(readNpmInvocations(npmLog)).toEqual([]);
+    // The version-probe matches package.json on both runs, so `npm
+    // install` is never invoked. (Read-only `npm root -g` calls from
+    // `create_builtin_stacks_symlink` are benign and ignored here.)
+    const stateChanging = readNpmInvocations(npmLog).filter((line) => !line.startsWith('root -g'));
+    expect(stateChanging).toEqual([]);
 
     // .gitignore must not have duplicates.
     const gi = readFileSync(path.join(cwd, '.gitignore'), 'utf8');

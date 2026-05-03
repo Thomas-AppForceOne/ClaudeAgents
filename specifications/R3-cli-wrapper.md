@@ -28,8 +28,8 @@ gan config get <path> [--json]          Print one resolved value.
 gan config set <path> <value> [--tier=project|user]
                                         Update a single splice point.
 gan stacks list                         List active stacks with tier provenance.
-gan stacks new <name> [--tier=project|repo]
-                                        Scaffold a minimal stack file at the named tier (default: project, writing to `.claude/gan/stacks/<name>.md`). The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs and remove this banner before committing.` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
+gan stacks new <name> [--tier=project]
+                                        Scaffold a minimal stack file at the project tier (the only supported value; default and required if `--tier` is supplied at all). Writes to `.claude/gan/stacks/<name>.md`. The scaffold is intentionally stub-quality: every required C1 field is present but written as an obvious TODO placeholder, and the file opens with a `# DRAFT — replace TODOs and remove this banner before committing.` banner that R4's `lint-stacks` treats as a hard error until removed. See "Scaffold contract" below.
 gan stacks available [--json]           List the built-in stacks the framework ships at `<packageRoot>/stacks/`. Prints a `NAME / VERSION / DESCRIPTION` table by default; `--json` emits `{"stacks": [{description, name, path, schemaVersion}, ...]}`. Distinct from `gan stacks list` (active set) and from "installed" (vendored via `gan stacks customize`).
 gan stacks customize <name> [--tier=project|user] [--force]
                                         Copy the named built-in stack into a customisation tier so the user can edit it (`<projectRoot>/.claude/gan/stacks/<name>.md` for `--tier=project`, the default; `<userHome>/.claude/gan/stacks/<name>.md` for `--tier=user`). Refuses to overwrite an existing customisation without `--force`.
@@ -108,7 +108,7 @@ Discipline rules:
 
 - **No plausible-looking defaults.** Strings that would parse as "valid but empty" (`auditCmd: "true"`, empty `securitySurfaces`, blank `buildCmd`) are forbidden; placeholders are explicitly stub strings (`"false  # TODO: replace..."`) that fail at runtime if not replaced.
 - **The banner is enforcement, not decoration.** R4's `lint-stacks` fails on any stack file containing the `# DRAFT` banner. This makes "user committed a half-baked stack" a CI hard error, not a social problem.
-- **The scaffold writes to `.claude/gan/stacks/<name>.md` by default** (project tier per C5). `--tier=repo` writes to `stacks/<name>.md` and is intended for maintainer use when authoring a new canonical template; user projects almost never need it.
+- **The scaffold writes to `.claude/gan/stacks/<name>.md`** (project tier per C5). There is no end-user-facing repo tier: built-in stacks ship inside the framework's npm package (per E2's distribution model) and are surfaced via `gan stacks customize`; `--tier=repo` is rejected with exit 64 (`MalformedInput`).
 - **No detection inference.** The scaffold does not inspect the user's repo to guess detection rules; it produces a TODO placeholder. Detection is too easy to get subtly wrong; better to make the user think about it explicitly than to ship a "smart" guess that misfires.
 - **Refuses to overwrite.** If the target file exists, `gan stacks new` errors with a clear message. The user has to delete it first.
 
@@ -165,6 +165,7 @@ Comes with the npm package R2 already installs. No additional install step. Afte
 - `gan stacks new <name>` writes a stub stack file to `.claude/gan/stacks/<name>.md` matching the Scaffold contract above. The file opens with the `# DRAFT — replace TODOs and remove this banner before committing.` banner; every required C1 field is present as a TODO placeholder; `securitySurfaces` is an empty list with an authoring-guide pointer.
 - Running `gan validate` or `lint-stacks` against the unmodified scaffold fails with a clear error citing the unremoved DRAFT banner.
 - `gan stacks new <name>` against an existing file at the target path exits non-zero without overwriting; the error names the conflicting path.
+- `gan stacks new <name> --tier=repo` exits 64 with a `MalformedInput` structured error naming `--tier` and `project` as the supported value; no scaffold file is written at any path. There is no end-user-facing repo tier — built-in stacks ship inside the framework's npm package and are surfaced via `gan stacks customize`.
 
 ## Dependencies
 

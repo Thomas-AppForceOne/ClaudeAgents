@@ -1,11 +1,13 @@
 /**
- * R3 sprint 4 — `gan stacks new <name> [--tier=project|repo] [--project-root DIR]`.
+ * R3 sprint 4 — `gan stacks new <name> [--tier=project] [--project-root DIR]`.
  *
- * Scaffolds a DRAFT-bannered stack file at the chosen tier. Default tier is
- * `project` (writes to `<root>/.claude/gan/stacks/<name>.md`); `--tier=repo`
- * writes to `<root>/stacks/<name>.md`. The user tier is unsupported here —
- * `--tier=user` exits 64 with a structured error (per the scaffold-no-user
- * rule: user-tier scaffolding is not part of v1).
+ * Scaffolds a DRAFT-bannered stack file at the project tier (writes to
+ * `<root>/.claude/gan/stacks/<name>.md`). `--tier` accepts only `project`
+ * (the default); any other value — including the legacy `repo`, the
+ * cascade-only `user` tier, or unknown strings — exits 64 with a
+ * structured `MalformedInput` error. There is no end-user-facing repo
+ * scaffold target: built-in stacks ship inside the published npm package
+ * and are surfaced via `gan stacks customize`.
  *
  * Refuses to overwrite an existing file (the scaffold-no-overwrite rule):
  * exits 1 with a clear stderr message naming the absolute path. The CLI
@@ -36,18 +38,21 @@ import {
 import { EXIT_BAD_ARGS, EXIT_GENERIC, EXIT_OK } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
-type ScaffoldTier = 'project' | 'repo';
+type ScaffoldTier = 'project';
 
-const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>(['project', 'repo']);
+const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>(['project']);
 
 /**
  * Read and validate `--tier`. Returns the resolved tier (default `project`)
  * or a `ConfigServerError` describing the failure (rendered as exit 64).
  *
- * `--tier=user` is rejected explicitly: the user tier exists for cascade
- * mechanics (C3/C4) and shadow stacks (C5), but `gan stacks new` does not
- * scaffold there — it would invite committed copies of personal user-tier
- * forks. The error message names the supported values.
+ * Only `project` is supported. The user tier exists for cascade mechanics
+ * (C3/C4) and shadow stacks (C5), not scaffolding; the legacy repo tier
+ * has no end-user-facing scaffold target either — built-in stacks ship
+ * inside the npm package (per E2's distribution model) and are surfaced
+ * via `gan stacks customize`. Any value other than `project` (including
+ * the legacy/deprecated tiers and unknown strings) flows through the same
+ * generic rejection path that names the supported value.
  */
 function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   const raw = parsed.flags['tier'];
@@ -55,36 +60,26 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   if (raw === true) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: '--tier requires a value (`project` or `repo`).',
+      message: '--tier requires a value (`project`).',
     });
   }
   if (typeof raw !== 'string' || raw.length === 0) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: '--tier requires a value (`project` or `repo`).',
-    });
-  }
-  if (raw === 'user') {
-    return createError('MalformedInput', {
-      field: '--tier',
-      message:
-        'gan stacks new does not support --tier=user; the user tier is not a supported scaffold target. Use --tier=project (default) or --tier=repo.',
+      message: '--tier requires a value (`project`).',
     });
   }
   if (!ALLOWED_TIERS.has(raw as ScaffoldTier)) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: `--tier must be 'project' or 'repo' (got '${raw}').`,
+      message: `--tier must be 'project' (got '${raw}').`,
     });
   }
   return raw as ScaffoldTier;
 }
 
 /** Resolve the absolute target path for the named stack at the given tier. */
-function targetPathFor(projectRoot: string, tier: ScaffoldTier, name: string): string {
-  if (tier === 'repo') {
-    return path.join(projectRoot, 'stacks', `${name}.md`);
-  }
+function targetPathFor(projectRoot: string, _tier: ScaffoldTier, name: string): string {
   return path.join(projectRoot, '.claude', 'gan', 'stacks', `${name}.md`);
 }
 

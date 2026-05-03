@@ -35,6 +35,11 @@ PREEXISTING_GAN_DIR=""
 # print_final_status.
 MIDPIVOT_WARNING_FIRED=0
 
+# Set by create_builtin_stacks_symlink when the symlink at
+# `~/.claude/gan/builtin-stacks/` is in place after the install body
+# runs; consumed by print_final_status.
+BUILTIN_STACKS_LINKED=0
+
 # Per-run pre-edit copy of `~/.claude.json` (if any). The install branch
 # of `main()` cleans this up after every other step succeeds; rollback
 # uses it to restore the file on failure.
@@ -415,6 +420,74 @@ run_validate_all_best_effort() {
   fi
 }
 
+# create_builtin_stacks_symlink
+#
+# Creates `$HOME/.claude/gan/builtin-stacks` as a symlink pointing at the
+# globally-installed package's `stacks/` directory (i.e. `<npm root
+# -g>/@claudeagents/config-server/stacks/`). The resolver itself does not
+# read through this symlink — F1 / C5 compute `<packageRoot>` directly
+# from `import.meta.url` — but the symlink gives users a stable,
+# predictable path for browsing the framework's canonical stack files
+# regardless of where npm installed the package.
+#
+# Skipped on Windows shells (MSYS / Cygwin / MinGW). Best-effort: if
+# `npm root -g` cannot be resolved or the target directory does not exist,
+# the function logs a warning and returns 0 so the install does not abort.
+# Idempotent: a re-run that finds the same symlink already pointing at
+# the right target is a no-op; a stale symlink pointing somewhere else is
+# replaced atomically (`ln -sfn`); a real file or directory at the link
+# path is left alone with a warning.
+create_builtin_stacks_symlink() {
+  # Skip on Windows.
+  case "$(uname -s)" in
+    MINGW*|CYGWIN*|MSYS*)
+      return 0
+      ;;
+  esac
+
+  # Resolve <packageRoot>. Best-effort.
+  local npm_root
+  if ! npm_root="$(npm root -g 2>/dev/null)" || [ -z "$npm_root" ]; then
+    log_warn "Could not resolve npm global root; skipping built-in stacks symlink."
+    return 0
+  fi
+
+  local pkg_dir="$npm_root/@claudeagents/config-server"
+  local target_dir="$pkg_dir/stacks"
+  if [ ! -d "$target_dir" ]; then
+    log_warn "Built-in stacks directory not found at '$target_dir'; skipping symlink."
+    return 0
+  fi
+
+  local link_path="$HOME/.claude/gan/builtin-stacks"
+  mkdir -p "$HOME/.claude/gan"
+
+  if [ -L "$link_path" ]; then
+    local current_target
+    current_target="$(readlink "$link_path")"
+    if [ "$current_target" = "$target_dir" ]; then
+      # Already correct; no-op.
+      BUILTIN_STACKS_LINKED=1
+      return 0
+    fi
+    ln -sfn "$target_dir" "$link_path"
+    STATE_LOG+=("builtin-stacks-symlink:$link_path")
+    BUILTIN_STACKS_LINKED=1
+    log_info "Replaced built-in stacks symlink at '$link_path'."
+    return 0
+  fi
+
+  if [ -e "$link_path" ]; then
+    log_warn "A real file or directory exists at '$link_path'; refusing to clobber. Built-in stacks symlink not created."
+    return 0
+  fi
+
+  ln -s "$target_dir" "$link_path"
+  STATE_LOG+=("builtin-stacks-symlink:$link_path")
+  BUILTIN_STACKS_LINKED=1
+  log_info "Linked built-in stacks at '$link_path'."
+}
+
 # print_final_status
 #
 # Emits the post-install status block. Names the zones, mentions the
@@ -427,6 +500,10 @@ print_final_status() {
   log_info "  - Agent and skill links written under $CLAUDE_HOME/."
   log_info "  - Claude Code registration written to $CLAUDE_CONFIG_JSON (skipped under --no-claude-code)."
   log_info "  - Repository zones \`.gan-state/\` and \`.gan-cache/\` prepared (when run inside a git repo)."
+
+  if [ "${BUILTIN_STACKS_LINKED:-0}" = "1" ]; then
+    printf '  - Built-in stacks linked at %s/.claude/gan/builtin-stacks/.\n' "$HOME"
+  fi
 
   if [ -n "$PREEXISTING_GAN_DIR" ]; then
     log_info ""
@@ -480,6 +557,11 @@ rollback() {
         # undone by deleting the link, which is what we want.
         if [ -L "$payload" ]; then
           rm -f "$payload" 2>/dev/null || true
+        fi
+        ;;
+      builtin-stacks-symlink)
+        if [ -L "$payload" ]; then
+          rm -f "$payload"
         fi
         ;;
       claude-json-edited)
@@ -678,6 +760,27 @@ uninstall_main() {
     mv "$tmp" "$CLAUDE_CONFIG_JSON"
   fi
 
+  # Remove the built-in stacks symlink only when it points into the
+  # globally-installed framework package. Symlinks the user has redirected
+  # somewhere else are left alone.
+  local builtin_link="$HOME/.claude/gan/builtin-stacks"
+  if [ -L "$builtin_link" ]; then
+    local current_target
+    current_target="$(readlink "$builtin_link")"
+    local npm_root
+    if npm_root="$(npm root -g 2>/dev/null)" && [ -n "$npm_root" ]; then
+      local expected_prefix="$npm_root/@claudeagents/config-server"
+      case "$current_target" in
+        "$expected_prefix"|"$expected_prefix"/*)
+          rm -f "$builtin_link"
+          ;;
+        *)
+          log_warn "Built-in stacks symlink at '$builtin_link' points elsewhere; leaving alone."
+          ;;
+      esac
+    fi
+  fi
+
   log_info ""
   log_info "ClaudeAgents installer: uninstall complete."
   log_info "  - Removed $removed_links framework symlink(s) from $CLAUDE_HOME/."
@@ -756,6 +859,8 @@ main() {
   detect_preexisting_gan_dir
   prepare_zones
   run_validate_all_best_effort
+
+  create_builtin_stacks_symlink
 
   # Every state-creating step has succeeded — disarm the rollback trap
   # and remove the per-run preedit copy of `~/.claude.json` (if any).

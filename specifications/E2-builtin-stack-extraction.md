@@ -27,6 +27,15 @@ Once extracted, the agent prompts drop their hardcoded stack-specific tokens and
 
 Correctness of the extraction is gated by the evaluator-pipeline harness (E3) — a separate spec covering the fixture layout, evaluator-plan goldens, and normalisation rules.
 
+## Distribution model
+
+Built-in stacks ship as data inside the framework's npm package, not as files copied into user projects.
+
+- The `stacks/` directory at the repo root (`stacks/web-node.md`, `stacks/generic.md`, plus any future canonical stack) is included in `package.json`'s `files` array, so a `npm install -g @claudeagents/config-server` (or, until publication, `npm install -g .` per R2's local-install-only rule) places the stack files at `<npm-root-g>/@claudeagents/config-server/stacks/`.
+- `install.sh` (per R2 / Sprint 7) creates a user-tier convenience symlink at `~/.claude/gan/builtin-stacks/` pointing at that directory, so users can browse the canonical stack files at a stable, predictable path regardless of where npm installed the package. The resolver itself does not read through the symlink — F1 / C5 specify that R1 computes `<packageRoot>` directly from `import.meta.url` at server startup — so the symlink is a UX affordance, not a load-bearing resolution path.
+- Built-in stacks are **never copied eagerly** into user projects on install. A user who wants to fork a built-in stack opts in explicitly via `gan stacks customize <name>`, which copies the named stack into `<projectRoot>/.claude/gan/stacks/<name>.md` (or, with `--tier=user`, into `<userHome>/.claude/gan/stacks/<name>.md`). The customisation tier then wins resolution per C5's tier ordering. `gan stacks reset <name>` drops the customisation so the built-in default re-wins.
+- Because of this distribution model, `gan stacks new` deliberately does **not** expose a repo-tier scaffold target. There is no end-user-facing repo tier: the framework's canonical stacks live inside the package, not in the host repo. `gan stacks new --tier=repo` exits 64 with a `MalformedInput` error directing the user to `--tier=project` (the default) and `gan stacks customize` for built-in derivatives. Maintainers authoring new canonical stacks edit `stacks/<name>.md` in the framework repo directly, not via the CLI.
+
 ## Acceptance criteria
 
 - Running `/gan` on each fixture in `tests/fixtures/stacks/` produces a feedback JSON that matches the fixture's golden file (after normalisation).

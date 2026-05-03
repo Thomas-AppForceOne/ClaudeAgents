@@ -1,10 +1,12 @@
 /**
  * R3 sprint 4 — `gan stacks new` spawn-based tests.
  *
- * Covers contract criteria AC6-AC12: dispatcher wiring, default tier,
- * `--tier=repo`, `--tier=user` rejection, no-overwrite refusal, atomic
- * write through `atomicWriteFile`, byte-for-byte equality with
- * `buildScaffold(name)`.
+ * Covers the dispatcher wiring and scaffold-contract criteria: default
+ * tier writes to `<root>/.claude/gan/stacks/<name>.md`, `--tier=user`
+ * rejection, `--tier=repo` rejection (post-R audit Sprint 7 — no
+ * end-user-facing repo tier; built-in stacks ship inside the framework
+ * package), no-overwrite refusal, atomic write through `atomicWriteFile`,
+ * and byte-for-byte equality with `buildScaffold(name)`.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -56,25 +58,23 @@ describe('gan stacks new — default tier (project)', () => {
   });
 });
 
-describe('gan stacks new — --tier=repo', () => {
-  it('writes <root>/stacks/<name>.md and exits 0', async () => {
+describe('gan stacks new — --tier=repo is rejected', () => {
+  it('exits 64 with stderr naming --tier and the supported value; no file is created', async () => {
     const proj = makeTmpProject();
-    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).toBe('');
+    const r = await runGan(['stacks', 'new', 'web-node', '--tier=repo', '--project-root', proj]);
+    expect(r.exitCode).toBe(64);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/--tier/);
+    expect(r.stderr).toMatch(/project/);
+    // No file at any tier (check both raw and canonical roots since the
+    // tmp dir lives under /var/folders → /private/var/folders on Darwin).
     const canonicalRoot = canonicalizePath(proj);
-    const target = path.join(canonicalRoot, 'stacks', 'web-rust.md');
-    expect(existsSync(target)).toBe(true);
-  });
-
-  it('the written bytes equal buildScaffold(name) for the repo tier too', async () => {
-    const proj = makeTmpProject();
-    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
-    expect(r.exitCode).toBe(0);
-    const canonicalRoot = canonicalizePath(proj);
-    const target = path.join(canonicalRoot, 'stacks', 'web-rust.md');
-    const written = readFileSync(target, 'utf8');
-    expect(written).toBe(buildScaffold('web-rust'));
+    expect(existsSync(path.join(proj, '.claude', 'gan', 'stacks', 'web-node.md'))).toBe(false);
+    expect(existsSync(path.join(proj, 'stacks', 'web-node.md'))).toBe(false);
+    expect(existsSync(path.join(canonicalRoot, '.claude', 'gan', 'stacks', 'web-node.md'))).toBe(
+      false,
+    );
+    expect(existsSync(path.join(canonicalRoot, 'stacks', 'web-node.md'))).toBe(false);
   });
 });
 
@@ -124,20 +124,6 @@ describe('gan stacks new — no-overwrite rule', () => {
     const afterStat = statSync(target);
     expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
     expect(afterStat.size).toBe(beforeStat.size);
-  });
-
-  it('exits 1 when the repo-tier target exists', async () => {
-    const proj = makeTmpProject();
-    const canonicalRoot = canonicalizePath(proj);
-    const dir = path.join(canonicalRoot, 'stacks');
-    const fs = await import('node:fs');
-    fs.mkdirSync(dir, { recursive: true });
-    const target = path.join(dir, 'web-rust.md');
-    writeFileSync(target, 'sentinel\n', 'utf8');
-
-    const r = await runGan(['stacks', 'new', 'web-rust', '--tier=repo', '--project-root', proj]);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain(target);
   });
 });
 

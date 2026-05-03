@@ -15,7 +15,8 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "stacks"
   ],
   "scripts": {
     "build": "tsc && tsc -p tsconfig.scripts.json",

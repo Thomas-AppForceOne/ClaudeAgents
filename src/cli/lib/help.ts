@@ -156,14 +156,10 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
     description:
       'List active stacks or scaffold a new stack file.\n' +
       '  gan stacks list                       List active stacks.\n' +
-      '  gan stacks new <name> [--tier=project|repo]\n' +
+      '  gan stacks new <name> [--tier=project]\n' +
       '                                        Scaffold a stack file.',
-    flags: ['      --tier=project|repo   Where to scaffold (default: project).'],
-    examples: [
-      '  gan stacks list',
-      '  gan stacks new ios',
-      '  gan stacks new web-rust --tier=repo',
-    ],
+    flags: ['      --tier=project        Where to scaffold (default: project).'],
+    examples: ['  gan stacks list', '  gan stacks new ios'],
     exitCodes: [
       '  0   Success',
       '  1   Generic failure (target file already exists)',
