@@ -436,6 +436,15 @@ export interface SetModuleStateInput {
  * via `atomicWriteFile`; serialised with `stableStringify` so the
  * on-disk JSON is canonical (sorted keys, two-space indent, trailing
  * newline) per F3 determinism.
+ *
+ * Whole-value replacement. Callers needing atomic read-modify-write
+ * (e.g. PortRegistry's "no two entries share a port" check) currently
+ * rely on F2's single-writer-process guarantee plus orchestrator
+ * serialisation; this function does not lock or version the file.
+ * Concurrency primitives for modules — CAS / `expectedVersion`,
+ * `withLock(name, key, fn)`, or per-key scoping per F2's
+ * `setModuleState(moduleName, key, value)` signature — are open
+ * questions for the post-M revision break.
  */
 export function setModuleState(
   input: SetModuleStateInput,
