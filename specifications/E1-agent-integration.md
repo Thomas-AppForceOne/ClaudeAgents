@@ -148,14 +148,9 @@ These six files survive at their existing paths but their old content goes away 
 **Deleted (`D` entries in the PR diff — files go away entirely):**
 
 - `skills/gan/gan` — broken symlink, dead artifact.
-- `skills/gan/schemas/contract.schema.json`
-- `skills/gan/schemas/feedback.schema.json`
-- `skills/gan/schemas/objection.schema.json`
-- `skills/gan/schemas/progress.schema.json`
-- `skills/gan/schemas/review.schema.json`
-- `skills/gan/schemas/telemetry-summary.schema.json`
+- The six legacy run-state schema documents under `skills/gan/schemas/`: `contract`, `feedback`, `objection`, `progress`, `review`, and `telemetry-summary` (each formerly a `*-schema.json` file). The directory itself is removed once the files are gone.
 
-The six `skills/gan/schemas/*.json` files describe per-run state inside the old orchestrator. The rewritten orchestrator either re-authors them under a new location consistent with F1's zones (e.g. `schemas/run-state/<type>-v1.json` per F3's naming) **or** drops them if the new flow no longer validates against the same shapes. The E1 PR must commit to one of the two paths and execute it; whichever is chosen, the originals are deleted at the old path. Leaving them at the old path implies the old SKILL.md is still loading them.
+The six legacy run-state schema files described per-run state inside the old orchestrator. The rewritten orchestrator either re-authors them under a new location consistent with F1's zones (e.g. `schemas/run-state/<type>-v1.json` per F3's naming) **or** drops them if the new flow no longer validates against the same shapes. The E1 PR committed to dropping them: per-run state under `.gan-state/runs/<run-id>/` is owned by the orchestrator directly and no longer needs JSON Schema validation at the legacy path.
 
 **Verification.** The PR reviewer cross-checks the diff against this list. Survivors block the merge until retirement is complete. After E1 lands, `find . -path '*/skills/gan/gan' -o -path '*/skills/gan/schemas/contract*'` and similar commands should produce empty output.
 
