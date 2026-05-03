@@ -279,7 +279,20 @@ install_mcp_server() {
   if ! out="$(cd "$REPO_ROOT" && npm install -g . 2>&1)"; then
     : "captured but suppressed: $out"
     log_error "ClaudeAgents installer: failed to install the framework's config server."
-    die "Re-run \`npm install -g .\` from $REPO_ROOT to see the underlying error."
+    log_error "Re-run \`npm install -g .\` from $REPO_ROOT to see the underlying error."
+    # `return 1` (rather than `die ...`) so the ERR trap installed in
+    # `main()` fires in the parent shell context. Bash 4.4+ does not
+    # propagate `set -e` into command substitution by default
+    # (`inherit_errexit` opt), which means the trap does NOT fire from
+    # inside the `$(cd ... && npm install)` subshell when npm exits
+    # non-zero. Returning from the function instead lets the trap fire
+    # at the call site, where rollback() runs in the parent and
+    # actually undoes the symlinks. (On bash 3.2 — the macOS system
+    # bash — this behavior was the default; on bash 5 it requires
+    # either `inherit_errexit` or this re-routing through the function
+    # return. We do both: see the `shopt -s inherit_errexit` near the
+    # top of `main()` for the bash-4.4+ side of the fix.)
+    return 1
   fi
   STATE_LOG+=("npm-installed")
 }
@@ -856,6 +869,15 @@ main() {
   # with `set -e`, this means any unhandled non-zero exit anywhere in
   # the install branch routes through `on_error` -> `rollback`.
   set -E
+  # Bash 4.4 changed the default: `set -e` no longer propagates into
+  # command substitution (`$(...)`) subshells unless `inherit_errexit`
+  # is set explicitly. macOS system bash (3.2) inherited unconditionally.
+  # We need the bash-3.2 behaviour so a failure inside e.g.
+  # `out=$(npm install -g .)` aborts the subshell and routes through
+  # the ERR trap. Quietly succeed on bash 3.2 (where the option does
+  # not exist and the inherit-by-default behaviour already applies) by
+  # swallowing the unknown-option error.
+  shopt -s inherit_errexit 2>/dev/null || true
   trap on_error ERR
 
   feature_branch_warning
