@@ -102,7 +102,7 @@ describe('validateAll', () => {
   it('surfaces both invariants in one run for the invariant-multi-violation fixture', () => {
     // The fixture combines two invariants:
     //  - cacheEnv.no_conflict (NODE_VERSION 20 vs 22 across two built-in stacks)
-    //  - path.no_escape (proposer.additionalContext: ../../etc/passwd)
+    //  - path.escape (proposer.additionalContext: ../../etc/passwd)
     // Both must surface in a single validateAll() pass — phase 3 runs every
     // invariant without short-circuit.
     const result = validateAll({ projectRoot: invariantMultiViolation });
@@ -114,7 +114,7 @@ describe('validateAll', () => {
     );
     const pathEscapeFired = result.issues.find(
       (i) =>
-        i.code === 'InvariantViolation' &&
+        i.code === 'PathEscape' &&
         (i.field ?? '') === '/proposer/additionalContext' &&
         i.message.includes('outside the project root'),
     );

@@ -65,7 +65,7 @@ describe('validateAll — phase 4 trust check (R5 S3)', () => {
   });
 
   it('(d) phase ordering: phase-3 invariant issues precede phase-4 trust issues', () => {
-    // The `invariant-path-escape` fixture both violates `path.no_escape`
+    // The `invariant-path-escape` fixture both violates `path.escape`
     // (phase 3) AND declares `evaluator.additionalChecks` so phase 4
     // fires too. Their issue ordering must be phase-3 → phase-4.
 

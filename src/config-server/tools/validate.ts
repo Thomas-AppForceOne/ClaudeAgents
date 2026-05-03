@@ -466,7 +466,7 @@ function validateStackFileFromDisk(
  *
  * The 8 R1-owned F3 invariants are: `pairsWith.consistency`,
  * `cacheEnv.no_conflict`, `additionalContext.path_resolves`,
- * `path.no_escape`, `overlay.tier_apiVersion`, `stack.tier_apiVersion`,
+ * `path.escape`, `overlay.tier_apiVersion`, `stack.tier_apiVersion`,
  * `detection.tier3_only`, `stack.no_draft_banner`. The 9th catalogued
  * invariant (`trust.approved`) is owned by R5 and is omitted until R5
  * ships.

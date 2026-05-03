@@ -1,12 +1,10 @@
 /**
- * `PathEscape` invariant (R5 sprint 2).
+ * `path.escape` invariant (F3 catalog; sourced from F4).
  *
- * R5 introduces a dedicated invariant that surfaces filesystem path
- * escapes under the F2 `PathEscape` error code. It complements the
- * existing `path.no_escape` invariant (which fires under
- * `InvariantViolation` per S4's "no new error codes" rule); R5 is the
- * first sprint where the trust pipeline needs to distinguish path
- * escapes from generic invariant violations, so it gets its own code.
+ * Surfaces filesystem path escapes under the F2 `PathEscape` error code.
+ * R5 introduced this dedicated invariant; the post-R audit deduplication
+ * collapsed an earlier duplicate (which fired the same rule under
+ * `InvariantViolation`) into this file, leaving a single implementation.
  *
  * The check walks every overlay tier and inspects the path-bearing
  * splice points (`planner.additionalContext`, `proposer.additionalContext`).

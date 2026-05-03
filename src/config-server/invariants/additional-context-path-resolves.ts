@@ -10,7 +10,7 @@
  * legitimate "early-authoring" state. We surface it as an issue with
  * `severity: 'warning'` so callers can render it in lint output without
  * blocking dev workflows. Files that *escape* the project root are out
- * of scope here; that case is owned by `path.no_escape` and the two
+ * of scope here; that case is owned by `path.escape` and the two
  * invariants run independently (escape check is a hard error, this one
  * is a warning).
  */
@@ -37,7 +37,7 @@ export function checkAdditionalContextPathResolves(snapshot: ValidationSnapshot)
     for (const target of PATH_BEARING_FIELDS) {
       const entries = extractPaths(row.data, target.block, target.field);
       for (const entry of entries) {
-        // Skip path-escapers — they are reported by `path.no_escape`. The
+        // Skip path-escapers — they are reported by `path.escape`. The
         // two invariants are independent; reporting both for the same
         // entry would double-count without adding information.
         if (escapesRoot(entry, snapshot.projectRoot, canonRoot)) continue;
