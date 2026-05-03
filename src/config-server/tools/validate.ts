@@ -59,6 +59,7 @@ import {
   validateStackBodyAgainstSchema,
   type Issue,
 } from '../validation/schema-check.js';
+import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidden.js';
 
 export type { Issue };
 
@@ -288,6 +289,14 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
   // Cross-tier reference check: project overlay's `stack.override` lists
   // must name stacks that exist at some tier. Unknown names → MissingFile.
   checkStackOverrideReferences(snapshot, ctx);
+
+  // User-tier forbidden-field check (per C3 lines 71-75). The schema
+  // validates shape only; the tier gate lives here, alongside loader-time
+  // and write-time checks (per the schema-vs-tier separation rule).
+  const userOverlay = snapshot.overlays.user;
+  if (userOverlay) {
+    checkUserOverlayForbiddenFields(userOverlay.path, userOverlay.data, snapshot.issues);
+  }
 }
 
 /**

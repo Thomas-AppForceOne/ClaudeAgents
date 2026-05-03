@@ -74,6 +74,7 @@ import {
   validateStackBodyAgainstSchema,
   type Issue,
 } from '../validation/schema-check.js';
+import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidden.js';
 import type { OverlayTier } from '../storage/overlay-loader.js';
 
 export type { Issue };
@@ -530,6 +531,13 @@ function persistOverlayMutation(
   // Validate the resulting body against the overlay schema.
   const issues: Issue[] = [];
   validateOverlayBodyAgainstSchema(filePath, data, issues);
+  // Tier-aware forbidden-field guard (per C3 lines 71-75): a user-tier
+  // overlay declaring `planner.additionalContext`,
+  // `proposer.additionalContext`, `stack.override`, or
+  // `stack.cacheEnvOverride` is rejected before the file touches disk.
+  if (tier === 'user') {
+    checkUserOverlayForbiddenFields(filePath, data, issues);
+  }
   if (issues.length > 0) return { mutated: false, issues };
 
   // Build the new file source.

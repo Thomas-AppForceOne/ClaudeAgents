@@ -147,6 +147,8 @@ The error-code set covers three families:
 - **Semantic errors:** `UnknownStack`, `UnknownSplicePoint`, `InvariantViolation`, `ValidationFailed`, `UnknownApiVersion`, `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`, `CacheEnvConflict` (a specialised invariant violation for the C1 "Conflict resolution" rule — every active stack's `cacheEnv` for a given `envVar` must agree after override resolution; surfaced as its own code so CLI exit-code mappings and IDE integrations can target it without parsing prose).
 - **Caller / state errors:** `MalformedInput` (any tool argument that fails its `api-tools-v1.json` shape check or fails the server's pre-call validation — wrong type, missing required field, malformed dotted path), `NotImplemented` (a tool present in the surface but whose implementation is deferred to a downstream spec; the loud-stub return path).
 
+`MalformedInput` is also raised when a user overlay declares a tier-forbidden field (per [C3's User-overlay forbidden fields rule](C3-overlay-schema.md), lines 71-75): `planner.additionalContext`, `proposer.additionalContext`, `stack.override`, or `stack.cacheEnvOverride` at user tier produce one `MalformedInput` issue per declared field.
+
 **`remediation` field carries actionable snippets where possible.** For errors that beginners frequently hit, the `remediation` field contains a copy-paste-ready hint, not just prose. The clearest example is `cacheEnv` conflicts (per C1's "Conflict resolution" rule): the error's `remediation` field contains a one-line YAML fragment showing the `stack.cacheEnvOverride` shape the user must add to `.claude/gan/project.md` — e.g.
 
 ```yaml

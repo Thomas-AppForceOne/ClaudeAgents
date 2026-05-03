@@ -24,6 +24,7 @@ import path from 'node:path';
 
 import { ConfigServerError } from '../errors.js';
 import { validateOverlayBodyAgainstSchema, type Issue } from '../validation/schema-check.js';
+import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidden.js';
 import { parseYamlBlock, type YamlBlockProse } from './yaml-block-parser.js';
 
 export type OverlayTier = 'default' | 'user' | 'project';
@@ -97,6 +98,9 @@ export function loadOverlayWithValidation(
   }
   if (!loaded) return { loaded: null, issues };
   validateOverlayBodyAgainstSchema(loaded.path, loaded.data, issues);
+  if (tier === 'user') {
+    checkUserOverlayForbiddenFields(loaded.path, loaded.data, issues);
+  }
   return { loaded, issues };
 }
 

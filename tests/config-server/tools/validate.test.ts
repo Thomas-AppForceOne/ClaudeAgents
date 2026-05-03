@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 
 import {
@@ -26,6 +27,27 @@ const invariantMultiViolation = path.join(fixturesRoot, 'invariant-multi-violati
 function findIssue(issues: Issue[], predicate: (i: Issue) => boolean): Issue | undefined {
   return issues.find(predicate);
 }
+
+const tmpUserHomes: string[] = [];
+
+function makeUserHomeWithOverlay(body: string): string {
+  const userHome = mkdtempSync(path.join(tmpdir(), 'cas-validate-userhome-'));
+  tmpUserHomes.push(userHome);
+  const ganDir = path.join(userHome, '.claude', 'gan');
+  mkdirSync(ganDir, { recursive: true });
+  writeFileSync(path.join(ganDir, 'user.md'), body);
+  return userHome;
+}
+
+afterEach(() => {
+  for (const d of tmpUserHomes.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
+});
 
 describe('validateAll', () => {
   it('returns no issues for a clean fixture (js-ts-minimal)', () => {
@@ -120,6 +142,107 @@ describe('validateAll', () => {
     );
     expect(cacheEnvFired).toBeTruthy();
     expect(pathEscapeFired).toBeTruthy();
+  });
+});
+
+describe('validateAll — user-tier forbidden fields (C3 lines 71-75)', () => {
+  it('reports MalformedInput for planner.additionalContext at user tier', () => {
+    const userHome = makeUserHomeWithOverlay(
+      `---
+schemaVersion: 1
+planner:
+  additionalContext:
+    - "~/notes.md"
+---
+`,
+    );
+    const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
+    const forbidden = result.issues.filter(
+      (i) => i.code === 'MalformedInput' && i.field === 'planner.additionalContext',
+    );
+    expect(forbidden.length).toBe(1);
+  });
+
+  it('reports MalformedInput for proposer.additionalContext at user tier', () => {
+    const userHome = makeUserHomeWithOverlay(
+      `---
+schemaVersion: 1
+proposer:
+  additionalContext:
+    - "~/checks.md"
+---
+`,
+    );
+    const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
+    const forbidden = result.issues.filter(
+      (i) => i.code === 'MalformedInput' && i.field === 'proposer.additionalContext',
+    );
+    expect(forbidden.length).toBe(1);
+  });
+
+  it('reports MalformedInput for stack.override at user tier', () => {
+    const userHome = makeUserHomeWithOverlay(
+      `---
+schemaVersion: 1
+stack:
+  override:
+    - web-node
+---
+`,
+    );
+    const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
+    const forbidden = result.issues.filter(
+      (i) => i.code === 'MalformedInput' && i.field === 'stack.override',
+    );
+    expect(forbidden.length).toBe(1);
+  });
+
+  it('reports MalformedInput for stack.cacheEnvOverride at user tier', () => {
+    const userHome = makeUserHomeWithOverlay(
+      `---
+schemaVersion: 1
+stack:
+  cacheEnvOverride:
+    web-node:
+      NODE_VERSION: "20"
+---
+`,
+    );
+    const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
+    const forbidden = result.issues.filter(
+      (i) => i.code === 'MalformedInput' && i.field === 'stack.cacheEnvOverride',
+    );
+    expect(forbidden.length).toBe(1);
+  });
+
+  it('reports exactly four MalformedInput issues in deterministic order when all forbidden fields are declared', () => {
+    const userHome = makeUserHomeWithOverlay(
+      `---
+schemaVersion: 1
+planner:
+  additionalContext:
+    - "~/notes.md"
+proposer:
+  additionalContext:
+    - "~/checks.md"
+stack:
+  override:
+    - web-node
+  cacheEnvOverride:
+    web-node:
+      NODE_VERSION: "20"
+---
+`,
+    );
+    const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
+    const forbidden = result.issues.filter((i) => i.code === 'MalformedInput');
+    expect(forbidden.length).toBe(4);
+    expect(forbidden.map((i) => i.field)).toEqual([
+      'planner.additionalContext',
+      'proposer.additionalContext',
+      'stack.cacheEnvOverride',
+      'stack.override',
+    ]);
   });
 });
 

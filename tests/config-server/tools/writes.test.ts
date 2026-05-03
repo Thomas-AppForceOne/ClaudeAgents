@@ -470,7 +470,7 @@ describe('writeFileSync escape hatch verification', () => {
 });
 
 describe('user-tier writes', () => {
-  it('setOverlayField on user tier writes to <userHome>/.claude/gan/user.md', () => {
+  it('rejects setOverlayField on user tier for planner.additionalContext (C3 forbidden field)', () => {
     const proj = makeTmpProject();
     const userHome = mkdtempSync(path.join(tmpdir(), 'cas-userhome-'));
     tmpDirs.push(userHome);
@@ -484,11 +484,213 @@ describe('user-tier writes', () => {
       },
       { userHome },
     );
-    expect(r.mutated).toBe(true);
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'issues' in r) {
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'MalformedInput',
+          field: 'planner.additionalContext',
+        }),
+      );
+    }
+    // File must NOT have been created on disk.
     const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
-    expect(existsSync(userOverlay)).toBe(true);
-    const written = readFileSync(userOverlay, 'utf8');
-    expect(written).toContain('~/notes.md');
-    expect(written).toContain('schemaVersion: 1');
+    expect(existsSync(userOverlay)).toBe(false);
+  });
+
+  it('rejects setOverlayField on user tier for proposer.additionalContext (C3 forbidden field)', () => {
+    const proj = makeTmpProject();
+    const userHome = mkdtempSync(path.join(tmpdir(), 'cas-userhome-'));
+    tmpDirs.push(userHome);
+
+    const r = setOverlayField(
+      {
+        projectRoot: proj,
+        tier: 'user',
+        fieldPath: 'proposer.additionalContext',
+        value: ['~/checks.md'],
+      },
+      { userHome },
+    );
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'issues' in r) {
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'MalformedInput',
+          field: 'proposer.additionalContext',
+        }),
+      );
+    }
+    const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
+    expect(existsSync(userOverlay)).toBe(false);
+  });
+
+  it('rejects setOverlayField on user tier for stack.override (C3 forbidden field)', () => {
+    const proj = makeTmpProject();
+    const userHome = mkdtempSync(path.join(tmpdir(), 'cas-userhome-'));
+    tmpDirs.push(userHome);
+
+    const r = setOverlayField(
+      {
+        projectRoot: proj,
+        tier: 'user',
+        fieldPath: 'stack.override',
+        value: ['web-node'],
+      },
+      { userHome },
+    );
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'issues' in r) {
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'MalformedInput',
+          field: 'stack.override',
+        }),
+      );
+    }
+    const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
+    expect(existsSync(userOverlay)).toBe(false);
+  });
+
+  it('rejects setOverlayField on user tier for stack.cacheEnvOverride (C3 forbidden field)', () => {
+    const proj = makeTmpProject();
+    const userHome = mkdtempSync(path.join(tmpdir(), 'cas-userhome-'));
+    tmpDirs.push(userHome);
+
+    const r = setOverlayField(
+      {
+        projectRoot: proj,
+        tier: 'user',
+        fieldPath: 'stack.cacheEnvOverride',
+        value: { 'web-node': { NODE_VERSION: '20' } },
+      },
+      { userHome },
+    );
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'issues' in r) {
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'MalformedInput',
+          field: 'stack.cacheEnvOverride',
+        }),
+      );
+    }
+    const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
+    expect(existsSync(userOverlay)).toBe(false);
+  });
+});
+
+describe('project-tier writes for fields forbidden at user tier (regression guard)', () => {
+  it('accepts setOverlayField on project tier for planner.additionalContext', () => {
+    const proj = makeTmpProject();
+
+    const r = setOverlayField({
+      projectRoot: proj,
+      tier: 'project',
+      fieldPath: 'planner.additionalContext',
+      value: ['./notes.md'],
+    });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === false && 'issues' in r) {
+      // Defensive: should not contain a forbidden-field rejection.
+      expect(
+        r.issues.some(
+          (i) => i.code === 'MalformedInput' && i.field === 'planner.additionalContext',
+        ),
+      ).toBe(false);
+    }
+    const projectOverlay = path.join(proj, '.claude', 'gan', 'project.md');
+    expect(existsSync(projectOverlay)).toBe(true);
+    expect(readFileSync(projectOverlay, 'utf8')).toContain('./notes.md');
+  });
+
+  it('accepts setOverlayField on project tier for proposer.additionalContext', () => {
+    const proj = makeTmpProject();
+
+    const r = setOverlayField({
+      projectRoot: proj,
+      tier: 'project',
+      fieldPath: 'proposer.additionalContext',
+      value: ['./checks.md'],
+    });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === false && 'issues' in r) {
+      expect(
+        r.issues.some(
+          (i) => i.code === 'MalformedInput' && i.field === 'proposer.additionalContext',
+        ),
+      ).toBe(false);
+    }
+    const projectOverlay = path.join(proj, '.claude', 'gan', 'project.md');
+    expect(existsSync(projectOverlay)).toBe(true);
+    expect(readFileSync(projectOverlay, 'utf8')).toContain('./checks.md');
+  });
+
+  it('accepts setOverlayField on project tier for stack.override', () => {
+    const proj = makeTmpProject();
+
+    const r = setOverlayField({
+      projectRoot: proj,
+      tier: 'project',
+      fieldPath: 'stack.override',
+      value: ['web-node'],
+    });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === false && 'issues' in r) {
+      expect(
+        r.issues.some((i) => i.code === 'MalformedInput' && i.field === 'stack.override'),
+      ).toBe(false);
+    }
+    const projectOverlay = path.join(proj, '.claude', 'gan', 'project.md');
+    expect(existsSync(projectOverlay)).toBe(true);
+    expect(readFileSync(projectOverlay, 'utf8')).toContain('web-node');
+  });
+
+  it('accepts setOverlayField on project tier for stack.cacheEnvOverride', () => {
+    const proj = makeTmpProject();
+
+    const r = setOverlayField({
+      projectRoot: proj,
+      tier: 'project',
+      fieldPath: 'stack.cacheEnvOverride',
+      value: { 'web-node': { NODE_VERSION: '20' } },
+    });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === false && 'issues' in r) {
+      expect(
+        r.issues.some((i) => i.code === 'MalformedInput' && i.field === 'stack.cacheEnvOverride'),
+      ).toBe(false);
+    }
+    const projectOverlay = path.join(proj, '.claude', 'gan', 'project.md');
+    expect(existsSync(projectOverlay)).toBe(true);
+    const written = readFileSync(projectOverlay, 'utf8');
+    expect(written).toContain('NODE_VERSION');
+  });
+
+  it('appendToOverlayField on user tier also rejects a forbidden field (same persist path)', () => {
+    const proj = makeTmpProject();
+    const userHome = mkdtempSync(path.join(tmpdir(), 'cas-userhome-'));
+    tmpDirs.push(userHome);
+
+    const r = appendToOverlayField(
+      {
+        projectRoot: proj,
+        tier: 'user',
+        fieldPath: 'planner.additionalContext',
+        value: '~/notes.md',
+      },
+      { userHome },
+    );
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'issues' in r) {
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'MalformedInput',
+          field: 'planner.additionalContext',
+        }),
+      );
+    }
+    const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
+    expect(existsSync(userOverlay)).toBe(false);
   });
 });
