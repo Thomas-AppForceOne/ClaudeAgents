@@ -71,6 +71,12 @@ export async function runGan(
   if (process.env.HOME !== undefined) {
     env.HOME = process.env.HOME;
   }
+  // Forward the test-isolation override so spawned `gan` invocations
+  // honour the same built-in package tier as in-process tests do
+  // (see tests/setup.ts).
+  if (process.env.GAN_PACKAGE_ROOT_OVERRIDE !== undefined) {
+    env.GAN_PACKAGE_ROOT_OVERRIDE = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+  }
   if (options.extraEnv) {
     for (const [k, v] of Object.entries(options.extraEnv)) {
       env[k] = v;
