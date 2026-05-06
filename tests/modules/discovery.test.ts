@@ -268,4 +268,29 @@ describe('listModules read tool integration', () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
+
+  it('loadModules returns all entries and the name-projection matches what listModules() would surface', () => {
+    const scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-list-projection-'));
+    try {
+      const prereqDst = path.join(scratch, 'prereq-passing');
+      mkdirSync(prereqDst, { recursive: true });
+      writeFileSync(
+        path.join(prereqDst, 'manifest.json'),
+        readFileSync(path.join(fixturesRoot, 'prereq-passing', 'manifest.json'), 'utf8'),
+      );
+
+      const sentinelDst = path.join(scratch, 'sentinel-mod');
+      mkdirSync(sentinelDst, { recursive: true });
+      writeFileSync(
+        path.join(sentinelDst, 'manifest.json'),
+        '{"name":"sentinel-mod","schemaVersion":1,"description":"x","exports":[]}',
+      );
+
+      const out = loadModules(scratch);
+      expect(out.length).toBe(2);
+      expect(out.map((r) => r.name)).toEqual(['prereq-passing', 'sentinel-mod']);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
 });

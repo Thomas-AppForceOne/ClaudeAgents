@@ -1,6 +1,6 @@
 # Project context
 
-_Last verified: 2026-05-03 by spec-validator (M1+M2 module conventions persisted: JSON manifests, vitest test runner override, module-config schema minimal-now-extend-later, soft-OK pairsWith)_
+_Last verified: 2026-05-06 by spec-validator (M1+M2 module conventions persisted: JSON manifests, vitest test runner override, module-config schema minimal-now-extend-later, soft-OK pairsWith; M1+M2 implementation has landed on this branch — see `src/config-server/storage/module-loader.ts` + `module-config-loader.ts` and `src/modules/docker/`)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
@@ -202,6 +202,6 @@ CI workflow inventory is locked (see Testing).
 - No tests, no fixtures, no synthetic-second stack on disk yet. R1's first sprint slice introduces the bootstrap fixture set (`js-ts-minimal`, `synthetic-second`, `polyglot-webnode-synthetic`).
 - No `stacks/` directory yet. E2 introduces `web-node` + `generic`.
 - **R5 (trust) not yet implemented** — R1 ships loud-stubs for `getTrustState`/`getTrustDiff`/`trustApprove`/`trustRevoke`; `trust.approved` invariant is omitted from `validateAll` until R5.
-- **M1 (modules) not yet implemented** — R1 ships the module surface as a no-op (zero modules); behavior arrives with M1.
+- **M1 (modules) implemented on `feature/modules-m1-m2`** — `loadModules()` / `getRegisteredModules()` discover + ajv-validate `manifest.json` under `src/modules/<name>/`; the production registry caller in `tools/reads.ts` (`listModules`) and `tools/writes.ts` (`registerModule`) currently has no `modulesRoot` injection seam, so tests that need the non-empty path either operate on the real `src/modules/` tree (Docker prereq required) or must use `loadModules(scratch)` directly to assert discovery. M2's docker module ships under `src/modules/docker/` with a `docker --version` prerequisite.
 - **R3 (CLI wrapper) — implementation in progress.** Skeleton + bin entry + arg parser + help and read subcommands land first; writes and `gan stacks new` follow. R5's trust subcommands (`gan trust *`) are NOT R3's territory; they ship with R5.
 - README still describes the legacy `.gan/`-based architecture. E1 rewrites it; do not touch it before then.

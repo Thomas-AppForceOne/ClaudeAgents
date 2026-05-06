@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,7 +20,13 @@ import {
   trustRevoke,
   updateStackField,
 } from '../../../src/config-server/tools/writes.js';
-import { getResolvedConfig } from '../../../src/config-server/tools/reads.js';
+import {
+  getModuleState,
+  getResolvedConfig,
+  listModules,
+} from '../../../src/config-server/tools/reads.js';
+import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
+import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
 import {
   clearResolvedConfigCache,
   getResolvedConfigCache,
@@ -354,6 +361,66 @@ describe('module writes (M1)', () => {
     if (r.mutated === false && 'reason' in r) {
       expect(r.reason).toContain('unknown-module');
     }
+  });
+});
+
+describe('registerModule (success path)', () => {
+  // The success-path probe runs against the real `src/modules/` tree
+  // (M2's docker module). The docker module's manifest declares a
+  // `docker --version` prerequisite, so this test's behavior depends on
+  // whether `docker` is on PATH. We detect availability up front and
+  // skip the body cleanly when it is not — failing here on a CI runner
+  // without docker installed would be an environment error, not a code
+  // regression.
+  let dockerAvailable = false;
+  try {
+    execFileSync('docker', ['--version'], { stdio: 'ignore' });
+    dockerAvailable = true;
+  } catch {
+    dockerAvailable = false;
+  }
+
+  // The global vitest setup pins `GAN_PACKAGE_ROOT_OVERRIDE` to an empty
+  // tmp dir to isolate tests from the framework's canonical `stacks/`
+  // directory. For this test we deliberately want the production
+  // resolution path — `defaultModulesRoot()` must point at the real
+  // repo's `src/modules/` so `getRegisteredModules()` discovers the
+  // docker manifest. We swap the override around the test body and
+  // restore it (plus the package-root cache) afterwards.
+  let savedOverride: string | undefined;
+
+  beforeEach(() => {
+    savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = repoRoot;
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+  afterEach(() => {
+    if (savedOverride === undefined) {
+      delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    } else {
+      process.env.GAN_PACKAGE_ROOT_OVERRIDE = savedOverride;
+    }
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+
+  it('registerModule returns {mutated:true} for the docker module and listModules reflects it (skipped when docker not on PATH)', () => {
+    // Early-return when `docker` is not available on PATH: the module's
+    // prerequisite probe would fail and the test would be reporting on
+    // the host environment rather than the code under test.
+    if (!dockerAvailable) return;
+
+    const proj = makeTmpProject();
+    const r = registerModule({ projectRoot: proj, name: 'docker', manifest: {} });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === true) {
+      expect(r.path.endsWith(path.join('src', 'modules', 'docker', 'manifest.json'))).toBe(true);
+    }
+
+    const listed = listModules({ projectRoot: proj });
+    expect(listed.modules).toContain('docker');
   });
 });
 
@@ -695,5 +762,100 @@ describe('project-tier writes for fields forbidden at user tier (regression guar
     }
     const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
     expect(existsSync(userOverlay)).toBe(false);
+  });
+});
+
+describe('module state round-trip (M1)', () => {
+  it('setModuleState persists the blob and getModuleState round-trips it', () => {
+    const proj = makeTmpProject();
+    const blob = {
+      ports: [3000, 3001],
+      settings: { healthy: true, label: 'svc' },
+      count: 2,
+    };
+
+    const result = setModuleState({ projectRoot: proj, name: 'mod-x', state: blob });
+    expect(result.mutated).toBe(true);
+    if (result.mutated === true) {
+      expect(
+        result.path.endsWith(path.join('.gan-state', 'modules', 'mod-x', 'state.json')),
+      ).toBe(true);
+    }
+
+    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'state.json'))).toBe(
+      true,
+    );
+
+    const record = getModuleState({ projectRoot: proj, name: 'mod-x' });
+    expect(record).not.toBeNull();
+    expect(record!.state).toEqual(blob);
+  });
+
+  it('appendToModuleState then removeFromModuleState round-trips through getModuleState', () => {
+    const proj = makeTmpProject();
+
+    const r1 = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-y',
+      fieldPath: 'log',
+      value: 'first',
+    });
+    expect(r1.mutated).toBe(true);
+
+    const r2 = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-y',
+      fieldPath: 'log',
+      value: 'second',
+    });
+    expect(r2.mutated).toBe(true);
+
+    const afterAppend = getModuleState({ projectRoot: proj, name: 'mod-y' });
+    expect(afterAppend).not.toBeNull();
+    expect(afterAppend!.state).toEqual({ log: ['first', 'second'] });
+
+    const r3 = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-y',
+      fieldPath: 'log',
+      value: 'first',
+    });
+    expect(r3.mutated).toBe(true);
+
+    const afterRemove = getModuleState({ projectRoot: proj, name: 'mod-y' });
+    expect(afterRemove).not.toBeNull();
+    expect(afterRemove!.state).toEqual({ log: ['second'] });
+  });
+
+  it("setModuleState for two modules in the same project keeps each module's state file independent", () => {
+    const proj = makeTmpProject();
+
+    const rA = setModuleState({ projectRoot: proj, name: 'mod-a', state: { value: 'A' } });
+    expect(rA.mutated).toBe(true);
+
+    const rB = setModuleState({ projectRoot: proj, name: 'mod-b', state: { value: 'B' } });
+    expect(rB.mutated).toBe(true);
+
+    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-a', 'state.json'))).toBe(true);
+    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-b', 'state.json'))).toBe(true);
+
+    const recA1 = getModuleState({ projectRoot: proj, name: 'mod-a' });
+    expect(recA1).not.toBeNull();
+    expect(recA1!.state).toEqual({ value: 'A' });
+
+    const recB1 = getModuleState({ projectRoot: proj, name: 'mod-b' });
+    expect(recB1).not.toBeNull();
+    expect(recB1!.state).toEqual({ value: 'B' });
+
+    const rA2 = setModuleState({ projectRoot: proj, name: 'mod-a', state: { value: 'A2' } });
+    expect(rA2.mutated).toBe(true);
+
+    const recA2 = getModuleState({ projectRoot: proj, name: 'mod-a' });
+    expect(recA2).not.toBeNull();
+    expect(recA2!.state).toEqual({ value: 'A2' });
+
+    const recB2 = getModuleState({ projectRoot: proj, name: 'mod-b' });
+    expect(recB2).not.toBeNull();
+    expect(recB2!.state).toEqual({ value: 'B' });
   });
 });

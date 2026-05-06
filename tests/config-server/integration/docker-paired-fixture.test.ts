@@ -19,13 +19,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { validateAll } from '../../../src/config-server/tools/validate.js';
-import { getStack } from '../../../src/config-server/tools/reads.js';
+import { getModuleState, getStack } from '../../../src/config-server/tools/reads.js';
+import { setModuleState } from '../../../src/config-server/tools/writes.js';
 import { composeResolvedConfig } from '../../../src/config-server/resolution/resolved-config.js';
 import { clearResolvedConfigCache } from '../../../src/config-server/resolution/cache.js';
 import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
@@ -36,6 +37,7 @@ const fixtureRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'docker-p
 
 describe('docker-paired fixture integration', () => {
   let scratchModulesRoot: string;
+  const scratchProjects: string[] = [];
 
   beforeEach(() => {
     clearResolvedConfigCache();
@@ -70,6 +72,10 @@ describe('docker-paired fixture integration', () => {
   });
   afterEach(() => {
     rmSync(scratchModulesRoot, { recursive: true, force: true });
+    while (scratchProjects.length > 0) {
+      const dir = scratchProjects.pop()!;
+      rmSync(dir, { recursive: true, force: true });
+    }
     clearResolvedConfigCache();
     _resetModuleRegistrationCacheForTests();
   });
@@ -119,5 +125,53 @@ describe('docker-paired fixture integration', () => {
       expectStatus: 200,
       timeoutSeconds: 30,
     });
+  });
+
+  it('getResolvedConfig.modules.docker reflects fixture YAML config AND getModuleState returns persisted state when both exist', async () => {
+    // Stage a writable copy of the fixture so the test can persist
+    // module state without mutating the shared `tests/fixtures/...`
+    // tree. The original fixture must be byte-unchanged after the
+    // test run.
+    const scratchProj = mkdtempSync(path.join(os.tmpdir(), 'gan-test-'));
+    scratchProjects.push(scratchProj);
+    cpSync(fixtureRoot, scratchProj, { recursive: true });
+
+    const blob = {
+      version: 1,
+      entries: { '/some/wt': { port: 9999, containerName: 'demo' } },
+    };
+    const writeResult = setModuleState({
+      projectRoot: scratchProj,
+      name: 'docker',
+      state: blob,
+    });
+    expect(writeResult.mutated).toBe(true);
+
+    // Both the YAML config (copied from the fixture) and the
+    // persisted state.json (just written) must coexist.
+    expect(existsSync(path.join(scratchProj, '.claude', 'gan', 'modules', 'docker.yaml'))).toBe(
+      true,
+    );
+    expect(
+      existsSync(path.join(scratchProj, '.gan-state', 'modules', 'docker', 'state.json')),
+    ).toBe(true);
+
+    const r = await composeResolvedConfig(scratchProj, {
+      apiVersion: '0.0.0-test',
+      modulesRoot: scratchModulesRoot,
+    });
+    expect(r.modules.docker.containerPattern).toBe('myapp-*');
+    expect(r.modules.docker.fallbackPort).toBe(8080);
+    expect(r.modules.docker.healthCheck).toEqual({
+      path: '/health',
+      expectStatus: 200,
+      timeoutSeconds: 30,
+    });
+    expect(typeof r.modules.docker.manifestPath).toBe('string');
+    expect((r.modules.docker.manifestPath as string).length).toBeGreaterThan(0);
+
+    const record = getModuleState({ projectRoot: scratchProj, name: 'docker' });
+    expect(record).not.toBeNull();
+    expect(record!.state).toEqual(blob);
   });
 });
