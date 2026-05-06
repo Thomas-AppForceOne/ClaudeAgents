@@ -37,6 +37,8 @@ The manifest looks like:
 }
 ```
 
+`stateKeys` and `configKey` are declared but their enforcement semantics are deferred to the post-M revision break (see roadmap). `stateKeys` is currently documentation-only; the API does not validate writes against it. `configKey` names the key under which `getResolvedConfig().modules` exposes this module's config, but cascade rules for that config are not yet specified in C4.
+
 ### Lifecycle
 
 1. **Build time.** The module's manifest is committed alongside its code. `scripts/lint-stacks` and `scripts/pair-names` (R4) check that manifests are valid and `pairsWith` is consistent.
