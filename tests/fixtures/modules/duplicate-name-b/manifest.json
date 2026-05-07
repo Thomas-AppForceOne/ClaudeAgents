@@ -1,0 +1,6 @@
+{
+  "description": "Duplicate-name fixture B: shares 'duplicate' with sibling A to exercise the ModuleCollision path.",
+  "exports": ["sentinel"],
+  "name": "duplicate",
+  "schemaVersion": 1
+}

@@ -1,0 +1,71 @@
+{
+  "$id": "https://claudeagents.dev/schemas/module-manifest-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Manifest for a ClaudeAgents module (M1).",
+  "properties": {
+    "configKey": {
+      "description": "Optional key under getResolvedConfig().modules.<configKey> for this module's project config.",
+      "type": "string"
+    },
+    "description": {
+      "description": "Human-readable description of the module.",
+      "type": "string"
+    },
+    "exports": {
+      "description": "List of named exports the module barrel re-exports.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "Module name. Must be unique across the registered set.",
+      "type": "string"
+    },
+    "pairsWith": {
+      "description": "Optional stack name this module pairs with. The pairing is one-way (module -> stack); stacks need not enumerate paired modules.",
+      "type": "string"
+    },
+    "prerequisites": {
+      "description": "Shell-free prerequisite checks. Each command is whitespace-split, no shell expansion; the first token is the executable, remaining tokens are arguments.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "Prerequisite command, whitespace-split, no shell expansion.",
+            "type": "string"
+          },
+          "errorHint": {
+            "description": "Human-readable hint surfaced when the prerequisite check fails.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "errorHint"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Manifest schema version. Exact-match per F3."
+    },
+    "stateKeys": {
+      "description": "Optional state keys the module reads/writes through getModuleState/setModuleState.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "description",
+    "exports",
+    "name",
+    "schemaVersion"
+  ],
+  "type": "object"
+}

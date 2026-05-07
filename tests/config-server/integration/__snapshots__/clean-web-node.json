@@ -6,6 +6,7 @@
   "apiVersion": "<api-version>",
   "discarded": [],
   "issues": [],
+  "modules": {},
   "overlay": {},
   "runtimeMode": {
     "noProjectCommands": false

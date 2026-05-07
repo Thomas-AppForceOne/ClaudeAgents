@@ -1,6 +1,6 @@
 # Project context
 
-_Last verified: 2026-05-01 by spec-validator (R3 CLI wrapper decisions persisted; OQ-R3-1..6 locked)_
+_Last verified: 2026-05-06 by spec-validator (M1+M2 module conventions persisted: JSON manifests, vitest test runner override, module-config schema minimal-now-extend-later, soft-OK pairsWith; M1+M2 implementation has landed on this branch — see `src/config-server/storage/module-loader.ts` + `module-config-loader.ts` and `src/modules/docker/`)_
 
 This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
 
@@ -176,6 +176,10 @@ CI workflow inventory is locked (see Testing).
 - Honor the **scaffold-banner verbatim rule** (R3-locked): the DRAFT banner emitted by `gan stacks new` is a single canonical constant at `src/cli/lib/scaffold.ts`. R1's `stack-no-draft-banner` invariant and R4's `lint-stacks` both import the same constant; nobody hand-types the banner string. Its format: `# DRAFT — replace TODOs and remove this banner before committing.` followed by the explanatory line shown in R3's spec body. Any text change is a coordinated edit across R1 + R3 + R4 (and the existing `tests/fixtures/stacks/invariant-stack-draft-banner/` fixture).
 - Honor the **no-detection-inference rule** (R3-locked): `gan stacks new` does not inspect the host repo to guess `detection`, `scope`, or any other ecosystem-specific field. It writes TODO placeholders only. "Smart" inference is explicitly out of scope (per R3's scaffold-contract discipline).
 - Honor the **scaffold-no-overwrite rule** (R3-locked): `gan stacks new <name>` exits non-zero with a clear message if the target file already exists. The user must delete it first; the CLI does not expose a `--force` flag in v1.
+- Honor the **module manifest-format rule** (M1-locked): module manifests are `manifest.json` (JSON, not YAML). They validate against `schemas/module-manifest-v1.json`. M2's spec body still shows YAML for *project-config* (`.claude/gan/modules/<name>.yaml`) — that distinction is intentional: project config is YAML for human edits; manifests are JSON for machine validation alongside the rest of the schema set.
+- Honor the **module test-runner rule** (M1/M2-locked): module tests use **vitest** (matches the project-wide test runner per R1/R2/R3). M2's spec body says `node --test`; that line is overridden — every test under `tests/modules/<name>/` runs via vitest. Do not introduce `node:test` as a second test runner.
+- Honor the **module-config schema minimal-now-extend-later rule** (M1-locked): each per-module config schema (`schemas/module-config-<name>-vN.json`) covers exactly the fields the module's spec documents at ship time, with no speculative additions. Future fields ship as a `vN+1` bump (per F3's exact-match + immutable-once-published rules), not as additive edits to the published schema. M2's `module-config-docker-v1.json` therefore covers only `containerPattern`, `fallbackPort`, `healthCheck.{path, expectStatus, timeoutSeconds}` — anything else is a v2.
+- Honor the **soft-OK `pairsWith` rule** (M1-locked): the `pairs-with-consistency` invariant treats the case where a stack file *omits* `pairsWith` while a module declares `pairsWith: <stackName>` as a **soft-OK** (success with no error). Rationale: stacks may legitimately exist without knowing about every module that pairs to them (modules can be added to the framework after a stack is canonicalised), and forcing every stack to enumerate paired modules creates a back-reference graph the architecture deliberately avoids — pairing is a one-way declaration *from* the module *to* its stack. The invariant fires only when both sides declare `pairsWith` and they disagree, or when a stack's `pairsWith` references a module that doesn't exist (per M1's existing rules). The shadowed-default case (per C5) remains a hard error with verbatim wording. The invariant comment in `src/config-server/invariants/pairs-with-consistency.ts` documents this asymmetry.
 
 **Don't:**
 - Don't introduce backward-compatibility shims or transitional dual-path windows. Pre-1.0; schema changes bump `schemaVersion` and break.
@@ -193,11 +197,11 @@ CI workflow inventory is locked (see Testing).
 ## Known gaps
 
 - No `package.json` and no Node code on disk yet. R1 (Phase 2) introduces them; tooling and engine are locked (see Tech stack / Tooling).
-- Schemas: `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` lands when M1 ships.
+- Schemas: `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` lands when M1 ships, and `module-config-docker-v1.json` (minimal: `containerPattern`, `fallbackPort`, `healthCheck.{path,expectStatus,timeoutSeconds}`) lands when M2 ships.
 - No CI workflows on disk yet. R4 introduces them.
 - No tests, no fixtures, no synthetic-second stack on disk yet. R1's first sprint slice introduces the bootstrap fixture set (`js-ts-minimal`, `synthetic-second`, `polyglot-webnode-synthetic`).
 - No `stacks/` directory yet. E2 introduces `web-node` + `generic`.
 - **R5 (trust) not yet implemented** — R1 ships loud-stubs for `getTrustState`/`getTrustDiff`/`trustApprove`/`trustRevoke`; `trust.approved` invariant is omitted from `validateAll` until R5.
-- **M1 (modules) not yet implemented** — R1 ships the module surface as a no-op (zero modules); behavior arrives with M1.
+- **M1 (modules) implemented on `feature/modules-m1-m2`** — `loadModules()` / `getRegisteredModules()` discover + ajv-validate `manifest.json` under `src/modules/<name>/`; the production registry caller in `tools/reads.ts` (`listModules`) and `tools/writes.ts` (`registerModule`) currently has no `modulesRoot` injection seam, so tests that need the non-empty path either operate on the real `src/modules/` tree (Docker prereq required) or must use `loadModules(scratch)` directly to assert discovery. M2's docker module ships under `src/modules/docker/` with a `docker --version` prerequisite.
 - **R3 (CLI wrapper) — implementation in progress.** Skeleton + bin entry + arg parser + help and read subcommands land first; writes and `gan stacks new` follow. R5's trust subcommands (`gan trust *`) are NOT R3's territory; they ship with R5.
 - README still describes the legacy `.gan/`-based architecture. E1 rewrites it; do not touch it before then.

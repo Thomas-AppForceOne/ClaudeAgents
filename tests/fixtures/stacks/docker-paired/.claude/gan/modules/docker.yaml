@@ -1,0 +1,7 @@
+schemaVersion: 1
+containerPattern: "myapp-*"
+fallbackPort: 8080
+healthCheck:
+  path: "/health"
+  expectStatus: 200
+  timeoutSeconds: 30

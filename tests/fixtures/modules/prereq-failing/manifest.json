@@ -1,0 +1,12 @@
+{
+  "description": "Fixture module whose prerequisite always exits non-zero, exercising the prereq-failure path.",
+  "exports": ["sentinel"],
+  "name": "prereq-failing",
+  "prerequisites": [
+    {
+      "command": "node --eval process.exit(1)",
+      "errorHint": "DOCKER_HINT_FIXTURE"
+    }
+  ],
+  "schemaVersion": 1
+}

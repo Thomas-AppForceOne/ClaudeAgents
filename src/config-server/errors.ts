@@ -24,7 +24,14 @@ export type ErrorCode =
   | 'PathEscape'
   | 'NotImplemented'
   | 'MalformedInput'
-  | 'CacheEnvConflict';
+  | 'CacheEnvConflict'
+  | 'ModuleManifestInvalid'
+  | 'ModuleCollision'
+  | 'ModulePrerequisiteFailed'
+  | 'PlatformNotSupported'
+  | 'TimeoutError'
+  | 'PortInUse'
+  | 'PortNotDiscovered';
 
 export interface ConfigServerErrorShape {
   code: ErrorCode;
@@ -123,6 +130,13 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   NotImplemented: 'This tool is not yet implemented in the current sprint.',
   MalformedInput: 'Tool received malformed input.',
   CacheEnvConflict: 'Two active stacks declare conflicting cacheEnv values for the same key.',
+  ModuleManifestInvalid: 'Module manifest failed schema validation.',
+  ModuleCollision: 'Two modules declare the same name; module names must be unique.',
+  ModulePrerequisiteFailed: 'Module prerequisite check failed.',
+  PlatformNotSupported: 'This operation is not supported on the current platform.',
+  TimeoutError: 'Operation timed out before completion.',
+  PortInUse: 'Requested port is already in use.',
+  PortNotDiscovered: 'Could not discover a port for the requested container.',
 };
 
 /**

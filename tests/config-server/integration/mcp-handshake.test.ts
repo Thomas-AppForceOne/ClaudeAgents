@@ -10,10 +10,13 @@
  *   3. Call a representative read tool (`getResolvedConfig` against the
  *      `js-ts-minimal` fixture) and a representative write tool
  *      (`setOverlayField` against a temp-dir copy of the same fixture).
- *      Both must succeed with structured payloads.
+ *      Both must succeed with structured payloads. Then exercise the
+ *      M1 module-state surface end-to-end via `setModuleState` followed
+ *      by `getModuleState`, asserting the persisted blob round-trips
+ *      verbatim through the MCP transport.
  *   4. Assert the per-run log file exists with at least one entry per
- *      tool call, and that overlay values + trust hashes never appear in
- *      the log (anonymisation contract).
+ *      tool call, and that overlay values, module-state values, and
+ *      trust hashes never appear in the log (anonymisation contract).
  *   5. Close stdin and verify the subprocess exits cleanly within the
  *      timeout window.
  */
@@ -221,6 +224,95 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(writePayload.mutated).toBe(true);
     expect(typeof writePayload.path).toBe('string');
 
+    // 3c. Module-state write: setModuleState round-trips the blob to disk.
+    const moduleStateBlob = {
+      ports: [3000, 3001],
+      settings: { healthy: true, label: 'mcp-handshake-module-state' },
+      count: 2,
+    };
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: {
+        name: 'setModuleState',
+        arguments: {
+          projectRoot,
+          name: 'mod-x',
+          state: moduleStateBlob,
+        },
+      },
+    });
+    const setStateResp = (await rpc.awaitId(5)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(setStateResp.error).toBeUndefined();
+    expect(setStateResp.result.isError).toBeFalsy();
+    const setStatePayload = JSON.parse(setStateResp.result.content[0].text) as Record<
+      string,
+      unknown
+    >;
+    expect(setStatePayload.mutated).toBe(true);
+    expect(typeof setStatePayload.path).toBe('string');
+    expect(
+      (setStatePayload.path as string).endsWith(
+        path.join('.gan-state', 'modules', 'mod-x', 'state.json'),
+      ),
+    ).toBe(true);
+
+    // 3d. Module-state read: getModuleState returns the same blob verbatim.
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'tools/call',
+      params: {
+        name: 'getModuleState',
+        arguments: {
+          projectRoot,
+          name: 'mod-x',
+        },
+      },
+    });
+    const getStateResp = (await rpc.awaitId(6)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(getStateResp.error).toBeUndefined();
+    expect(getStateResp.result.isError).toBeFalsy();
+    const getStatePayload = JSON.parse(getStateResp.result.content[0].text) as Record<
+      string,
+      unknown
+    >;
+    expect(getStatePayload.state).toEqual(moduleStateBlob);
+    // Sanity-check the round-trip carried the labelled marker through.
+    expect(
+      ((getStatePayload.state as { settings: { label: string } }).settings.label),
+    ).toBe('mcp-handshake-module-state');
+
+    // 3c. Error-path round-trip: malformed input (missing `name`) on a
+    // module-state tool must surface a structured error through the MCP
+    // envelope (isError: true + JSON-encoded ConfigServerError payload).
+    // Locks in the failure-shape contract for any caller relying on
+    // isError to detect tool failures over JSON-RPC.
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: {
+        name: 'setModuleState',
+        arguments: { projectRoot, state: { anything: true } },
+      },
+    });
+    const errorResp = (await rpc.awaitId(7)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(errorResp.error).toBeUndefined();
+    expect(errorResp.result.isError).toBe(true);
+    expect(Array.isArray(errorResp.result.content)).toBe(true);
+    const errorPayload = JSON.parse(errorResp.result.content[0].text) as Record<string, unknown>;
+    expect(typeof errorPayload.code).toBe('string');
+    expect(errorPayload.code).toBe('MalformedInput');
+    expect(typeof errorPayload.message).toBe('string');
+
     // 4. Per-run log file present and well-formed.
     const expectedLogPath = path.join(
       projectRoot,
@@ -241,6 +333,7 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(logText).not.toContain('docs/notes.md');
     expect(logText).not.toContain('"value"'); // forbidden meta key
     expect(logText).not.toContain('"trustHash"');
+    expect(logText).not.toContain('mcp-handshake-module-state');
 
     // 5. Close stdin → subprocess exits cleanly.
     child.stdin.end();

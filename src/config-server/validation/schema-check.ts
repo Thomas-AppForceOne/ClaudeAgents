@@ -161,15 +161,17 @@ function checkSchemaVersionExactMatch(
 
 /**
  * Strip C1/C3 frontmatter-only fields (`name`, `description`,
- * `schemaVersion`) before passing the body to ajv. The body schema does
- * not declare these fields and `additionalProperties: false` would
- * otherwise flag them as violations. `schemaVersion` is consumed by the
- * F3 schema-pick step, not by ajv.
+ * `schemaVersion`) and the M1 cross-cutting field (`pairsWith`) before
+ * passing the body to ajv. The body schema does not declare these
+ * fields and `additionalProperties: false` would otherwise flag them as
+ * violations. `schemaVersion` is consumed by the F3 schema-pick step;
+ * `pairsWith` is consumed by the `pairs-with-consistency` invariant
+ * (M1) — neither is part of the body schema's surface.
  */
 function stripFrontmatterFields(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(data)) {
-    if (k === 'name' || k === 'description' || k === 'schemaVersion') continue;
+    if (k === 'name' || k === 'description' || k === 'schemaVersion' || k === 'pairsWith') continue;
     out[k] = data[k];
   }
   return out;
