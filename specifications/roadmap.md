@@ -117,19 +117,17 @@ Specs to revisit, with what to verify:
 - **F2/M1 (duplicatePolicy)** — the F2 spec wins: `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` is the correct signature. The M1 implementation must add the parameter to match the existing `appendToOverlayField` / `appendToStackField` convention.
 - **F2/M1 (removeFromModuleState)** — the F2 spec wins: `removeFromModuleState(moduleName, key, entryKey)` is the correct signature. Removal is by entry key (keyed lookup), not by deep-equal value match.
 
-### Implementation alignment (Phase 4 follow-up, blocking Phase 5)
+### Implementation alignment
 
-The audit's spec-level decisions imply implementation work that must land before Phase 5 begins. Three of the eight decisions (stateKeys allowlist, duplicatePolicy, removeFromModuleState lookup) require code changes that bring M1's module-state surface back in line with F2's per-key contract. Tracked as a Phase 4 follow-up sprint:
+Three of the eight decisions (stateKeys allowlist, duplicatePolicy, removeFromModuleState lookup) require code changes that bring M1's module-state surface back in line with F2's per-key contract. The detailed implementation contract is authored separately as **M3** (see Phase 4 alignment below), following the precedent set by the post-E1 revision break which produced O2's first prescriptive spec inside that break.
 
-- Restructure module state files: `.gan-state/modules/<name>/state.json` → `.gan-state/modules/<name>/<key>.json` (one file per declared key).
-- Add `key: string` parameter to `getModuleState`, `setModuleState`, `appendToModuleState`, `removeFromModuleState` in the Configuration API surface.
-- Implement `stateKeys` allowlist enforcement: reject writes whose `key` is not in the module's manifest.
-- Add `duplicatePolicy: "error" | "skip" | "allow"` parameter to `appendToModuleState` (default `"error"` per F2).
-- Change `removeFromModuleState` from deep-equal value match to keyed lookup (use `entryKey` parameter).
-- Update the `PortRegistry` module utility to call `setModuleState('docker', 'port-registry', …)` etc.
-- Update the module-state tests added in the M1/M2 PR (`writes.test.ts`, `mcp-handshake.test.ts`, `module-config-loader.test.ts`, `PortRegistry.test.ts`) to pass the `key` parameter and exercise the per-key file layout.
+Same checkpoint discipline as the other revision breaks: spec revisions and the M3 implementation ride together; no Phase 5 work begins until M3 lands.
 
-Same checkpoint discipline as the other revision breaks: spec revisions and implementation alignment ride together; no Phase 5 work begins until the alignment lands.
+## Phase 4 alignment — module surface
+
+The post-M audit's resolutions imply runtime surface changes. M3 is the implementation contract that brings M1 + M2's runtime back in line with F2.
+
+- [M3-module-surface-alignment.md](M3-module-surface-alignment.md) — Per-key state-file layout, `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, keyed-lookup `removeFromModuleState`. PortRegistry and the M1/M2 module-state tests update accordingly.
 
 ## Phase 5 — Resolution observability
 
