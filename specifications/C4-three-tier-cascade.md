@@ -114,6 +114,16 @@ Note that B's *position* stays where the user declared it (slot 2), but B's *con
 - A project overlay declaring field-level `generator.additionalRules.discardInherited: true` plus `generator.additionalRules.value` discards user-level `additionalRules` while leaving other fields in the `generator` block merged normally.
 - A project overlay declaring block-level `discardInherited: true` on a block with a nested field carrying `discardInherited: false` preserves the nested field's merge semantics.
 
+## Module configurations (M1)
+
+Per-module configuration files at `.claude/gan/modules/<name>.yaml` (declared in M1) **do not participate in the three-tier cascade**. They are project-tier only — there is no user-tier or default-tier counterpart, and no merge step.
+
+Rationale: module configs are typically project-specific (e.g. Docker's `containerPattern` is unlikely to have a meaningful per-user override), and each module declares its own JSON Schema for the file's shape. Mixing per-module schemas into the cascade machinery would force every module's schema to define its own merge rules per field, multiplying the surface area without an established use case.
+
+When the resolver builds `getResolvedConfig().modules.<name>`, it reads the project-tier file directly and exposes its parsed contents (validated against the module's schema if one exists). User overlays cannot override module config; if the need arises later, this decision is reopenable as a separate spec, but until then there are no `modules.*` entries in C3's splice-point catalog by design.
+
+This rule is symmetric with `stack.override` (project-only) but stricter: even the project-tier file is module-defined rather than overlay-merged, because it lives outside `.claude/gan/project.md`.
+
 ## Dependencies
 
 - C3 (overlay schema this cascade resolves against).

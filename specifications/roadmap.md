@@ -106,7 +106,30 @@ Specs to revisit, with what to verify:
 - **F2/M1** — reconcile `appendToModuleState` signature: F2 specifies `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` with explicit duplicate-handling semantics, but M1's implementation drops the `duplicatePolicy` parameter and unconditionally appends. Audit: should `duplicatePolicy` be added (and what are the valid values: `"error" | "skip" | "allow"`), or should F2 be revised to drop it? Same shape as the `stateKeys` divergence — either implement the spec or update the spec to match. Resolve before module callers come to depend on duplicate-detection behaviour.
 - **F2/M1** — reconcile `removeFromModuleState` lookup semantics: F2 specifies `removeFromModuleState(moduleName, key, entryKey)` where the `entryKey` parameter name implies keyed lookup (find the entry whose key matches and remove it). M1's implementation takes a `value` parameter and performs deep-equal removal of any matching entry instead. Distinct from the `stateKeys` question (which asks whether per-key blobs exist at all) — this asks, given the chosen storage model, whether removal targets a key or a value. Audit: align on one semantic (keyed lookup vs deep-equal match) and update either the spec or the implementation. Resolve before any module relies on the current deep-equal behaviour.
 
-Same checkpoint discipline as the other revision breaks: specs revised in place; no Phase 5 work begins until the audit closes.
+### Resolutions (2026-05-07)
+
+- **F2** — closed with a minor edit to the `registerModule` table row clarifying that the tool is a runtime probe (not a registration trigger) and that the `manifest` argument is currently advisory; the production registration cache is built lazily by `getRegisteredModules()`.
+- **F3** — closed with no edit; both schemas already cover what M2 declares and uses.
+- **R1** — closed with no edit; the misleading registration-timing prose lived in M1 (not R1) and was fixed there.
+- **M1** — closed with edits to the registration-time bullet (clarifying lazy registration), the `stateKeys`/`configKey` paragraph (replacing the "decorative" note with the post-audit conclusion), and the persistence bullet (per-key state files). The prerequisite-scaling cost note is left in place for the next revision break — at two shipped modules the O(N) cost is still acceptable, but the question is genuinely open and the note should travel with M1 until it's answered.
+- **C4** — module configs at `.claude/gan/modules/<name>.yaml` are **project-tier-only** and do not participate in the three-tier cascade. C4 gains a "Module configurations" section codifying this. C3's splice-point catalog stays free of `modules.*` entries by design.
+- **M1/F2 (stateKeys)** — `stateKeys` is the **authoritative allowlist** of named state blobs the module owns. Each declared key persists to its own file at `.gan-state/modules/<name>/<key>.json`. The Configuration API rejects writes to undeclared keys with a structured error. The original F2 design (per-key blobs) is restored; M1's whole-blob implementation was a shortcut that silently dropped F2's `key` parameter.
+- **F2/M1 (duplicatePolicy)** — the F2 spec wins: `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` is the correct signature. The M1 implementation must add the parameter to match the existing `appendToOverlayField` / `appendToStackField` convention.
+- **F2/M1 (removeFromModuleState)** — the F2 spec wins: `removeFromModuleState(moduleName, key, entryKey)` is the correct signature. Removal is by entry key (keyed lookup), not by deep-equal value match.
+
+### Implementation alignment (Phase 4 follow-up, blocking Phase 5)
+
+The audit's spec-level decisions imply implementation work that must land before Phase 5 begins. Three of the eight decisions (stateKeys allowlist, duplicatePolicy, removeFromModuleState lookup) require code changes that bring M1's module-state surface back in line with F2's per-key contract. Tracked as a Phase 4 follow-up sprint:
+
+- Restructure module state files: `.gan-state/modules/<name>/state.json` → `.gan-state/modules/<name>/<key>.json` (one file per declared key).
+- Add `key: string` parameter to `getModuleState`, `setModuleState`, `appendToModuleState`, `removeFromModuleState` in the Configuration API surface.
+- Implement `stateKeys` allowlist enforcement: reject writes whose `key` is not in the module's manifest.
+- Add `duplicatePolicy: "error" | "skip" | "allow"` parameter to `appendToModuleState` (default `"error"` per F2).
+- Change `removeFromModuleState` from deep-equal value match to keyed lookup (use `entryKey` parameter).
+- Update the `PortRegistry` module utility to call `setModuleState('docker', 'port-registry', …)` etc.
+- Update the module-state tests added in the M1/M2 PR (`writes.test.ts`, `mcp-handshake.test.ts`, `module-config-loader.test.ts`, `PortRegistry.test.ts`) to pass the `key` parameter and exercise the per-key file layout.
+
+Same checkpoint discipline as the other revision breaks: spec revisions and implementation alignment ride together; no Phase 5 work begins until the alignment lands.
 
 ## Phase 5 — Resolution observability
 

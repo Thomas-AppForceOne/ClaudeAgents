@@ -37,15 +37,17 @@ The manifest looks like:
 }
 ```
 
-`stateKeys` and `configKey` are declared but their enforcement semantics are deferred to the post-M revision break (see roadmap). `stateKeys` is currently documentation-only; the API does not validate writes against it. `configKey` names the key under which `getResolvedConfig().modules` exposes this module's config, but cascade rules for that config are not yet specified in C4.
+`stateKeys` is the manifest's authoritative declaration of the named state blobs the module owns. Each entry corresponds to one persisted file at `.gan-state/modules/<name>/<key>.json` (one file per declared key, not a single whole-blob `state.json`). The Configuration API enforces this list as an allowlist: a `setModuleState(moduleName, key, value)` call where `key` is not in the manifest's `stateKeys` array is rejected with a structured error. A module that needs no persistent state may omit the field; a module that adds a new state blob in a later release adds the key to its manifest first.
+
+`configKey` names the key under which `getResolvedConfig().modules` exposes this module's project-tier config (read from `.claude/gan/modules/<name>.yaml`). Module configs are project-tier-only and do not participate in the three-tier cascade — see C4's "Module configurations" section.
 
 ### Lifecycle
 
 1. **Build time.** The module's manifest is committed alongside its code. `scripts/lint-stacks` and `scripts/pair-names` (R4) check that manifests are valid and `pairsWith` is consistent.
 2. **Install time.** `install.sh` (R2) makes the module's code available to agents (npm-link or per-package install; details in R2).
-3. **Registration time.** When the Configuration MCP server starts, it discovers each module via its manifest and calls `registerModule()` (F2) to record it. The API rejects registration on a `pairsWith` collision; the failure surfaces as a structured error.
+3. **Registration time.** Module discovery happens lazily on first query of the module registry (typically the first `listModules()` or `validateAll()` call after server start), not at server startup. Each module's manifest is validated against `module-manifest-v1.json`, prerequisites are executed via `execFileSync`, and the result is memoized for the server process lifetime. A `pairsWith` collision surfaces as a structured error at this point. The `registerModule()` API tool (F2) is a runtime probe that confirms a module loaded successfully; it does not trigger registration itself.
 4. **Runtime.** An agent imports the module's barrel. The barrel runs prerequisite checks (e.g. `docker --version`); failures throw at import. The agent uses the exported utilities. **Cost note for the post-M revision break:** at v1 with two shipped modules this is fine, but barrel-runs-prerequisites scales O(N) in shipped modules even on projects whose paired stack is inactive. An iOS-only project paying `docker --version` at every `/gan` startup is acceptable today, awkward at five shipped modules, and a real complaint at twenty. Post-M audit revisits whether prerequisites should run lazily on first export use, gated by paired-stack activation, or some other shape — flagged here so the audit catches it deliberately rather than discovering the cost when it's already large.
-5. **Persistence.** The module reads/writes durable state via `getModuleState()` / `setModuleState()`. It never writes files outside `.gan-state/modules/<name>/`. It never writes to zone 1 or zone 3.
+5. **Persistence.** The module reads/writes durable state via `getModuleState(moduleName, key)` / `setModuleState(moduleName, key, value)`, where `key` must be a member of the manifest's `stateKeys` allowlist. Each declared key persists to its own file at `.gan-state/modules/<name>/<key>.json` so that distinct state concerns (e.g. an ephemeral port registry vs. a long-lived build cache) can be written, archived, and recovered independently. The module never writes files outside `.gan-state/modules/<name>/`. It never writes to zone 1 or zone 3.
 
 ### Pairing with stacks
 
