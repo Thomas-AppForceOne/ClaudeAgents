@@ -126,8 +126,21 @@ describe('S2 read tools (one positive test per tool)', () => {
     expect(warns[0].meta).toEqual({ tool: 'getTrustDiff' });
   });
 
-  it('getModuleState returns null (M1 no-op)', () => {
-    const result = getModuleState({ projectRoot: jsTsMinimal, name: 'anything' });
+  it('getModuleState returns null when no state file exists for the key', () => {
+    const result = getModuleState({
+      projectRoot: jsTsMinimal,
+      name: 'anything',
+      key: 'port-registry',
+    });
+    expect(result).toBeNull();
+  });
+
+  it('getModuleState returns null for an undeclared key (consistent with no-file)', () => {
+    const result = getModuleState({
+      projectRoot: jsTsMinimal,
+      name: 'anything',
+      key: 'never-declared',
+    });
     expect(result).toBeNull();
   });
 

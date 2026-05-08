@@ -83,12 +83,25 @@ describe('O2 archive non-interference: .gan-state/modules/ bytes are inviolate',
   });
 
   it('getModuleState for a different module does not mutate probe bytes', () => {
-    getModuleState({ projectRoot: scratch, name: 'unrelated-module' });
+    getModuleState({ projectRoot: scratch, name: 'unrelated-module', key: 'port-registry' });
     expect(sha256OfFile(probePath)).toBe(preHash);
   });
 
   it('setModuleState for an unrelated module does not mutate the probe bytes', () => {
-    setModuleState({ projectRoot: scratch, name: 'unrelated-module', state: { v: 1 } });
+    // M3 allowlist gate: `unrelated-module` is not registered so the
+    // call rejects with `UnknownStateKey` before any I/O. The probe
+    // bytes are unaffected either way — guarding the throw here keeps
+    // the surface assertion (no probe-byte mutation) intact.
+    try {
+      setModuleState({
+        projectRoot: scratch,
+        name: 'unrelated-module',
+        key: 'port-registry',
+        state: { v: 1 },
+      });
+    } catch {
+      // Expected under M3.
+    }
     expect(sha256OfFile(probePath)).toBe(preHash);
   });
 
@@ -104,8 +117,17 @@ describe('O2 archive non-interference: .gan-state/modules/ bytes are inviolate',
   it('full pipeline (every surface in sequence) leaves probe bytes byte-identical', () => {
     validateAll({ projectRoot: scratch });
     listModules({ projectRoot: scratch });
-    getModuleState({ projectRoot: scratch, name: 'unrelated-module' });
-    setModuleState({ projectRoot: scratch, name: 'unrelated-module', state: { v: 1 } });
+    getModuleState({ projectRoot: scratch, name: 'unrelated-module', key: 'port-registry' });
+    try {
+      setModuleState({
+        projectRoot: scratch,
+        name: 'unrelated-module',
+        key: 'port-registry',
+        state: { v: 1 },
+      });
+    } catch {
+      // Expected under M3 (unregistered module).
+    }
     registerModule({
       projectRoot: scratch,
       name: 'unknown-module',

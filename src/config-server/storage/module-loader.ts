@@ -269,22 +269,36 @@ function detectCollisions(registrations: ModuleRegistration[]): void {
 // ---- module state I/O (zone 2) -------------------------------------------
 
 /**
- * Resolve the on-disk state file for a module under
- * `<projectRoot>/.gan-state/modules/<name>/state.json`. The path is
- * deterministic and exclusive to this module (per F1's zone-2 rules).
+ * Resolve the on-disk state file for a module + state key under
+ * `<projectRoot>/.gan-state/modules/<name>/<key>.json` (M3-locked
+ * per-key layout). Each declared `stateKeys` entry persists to its
+ * own file; the manifest's `stateKeys` array is the authoritative
+ * allowlist enforced on writes (see `assertStateKeyAllowed`).
+ *
+ * The path is deterministic and exclusive to this module (per F1's
+ * zone-2 rules).
  */
-export function moduleStatePath(projectRoot: string, name: string): string {
-  return path.join(projectRoot, '.gan-state', 'modules', name, 'state.json');
+export function moduleStatePath(projectRoot: string, name: string, key: string): string {
+  return path.join(projectRoot, '.gan-state', 'modules', name, `${key}.json`);
 }
 
 /**
- * Load a module's persisted state. Returns `null` when the state file
- * is absent (no error — modules may have never written state). Read
- * failures and JSON parse failures throw via the factory so callers
- * can distinguish "no state" from "corrupt state".
+ * Load a module's persisted state for the given `key`. Returns `null`
+ * when the file is absent (no error — modules may have never written
+ * state for this key). Read failures and JSON parse failures throw
+ * via the factory so callers can distinguish "no state" from "corrupt
+ * state".
+ *
+ * No allowlist enforcement here: reads against undeclared keys also
+ * return `null` (consistent with "no file"). The write-path helpers
+ * own the allowlist gate.
  */
-export function loadModuleState(name: string, projectRoot: string): ModuleStateRecord | null {
-  const filePath = moduleStatePath(projectRoot, name);
+export function loadModuleState(
+  name: string,
+  key: string,
+  projectRoot: string,
+): ModuleStateRecord | null {
+  const filePath = moduleStatePath(projectRoot, name, key);
   if (!existsSync(filePath)) return null;
   let raw: string;
   try {
@@ -309,6 +323,45 @@ export function loadModuleState(name: string, projectRoot: string): ModuleStateR
     });
   }
   return { name, state: parsed };
+}
+
+/**
+ * Resolve the manifest-declared `stateKeys` array for a registered
+ * module. Returns `[]` when the module is not registered or its
+ * manifest omits `stateKeys` (which means "no keys allowed" per the
+ * M3 contract — the module cannot persist any state).
+ */
+export function getModuleStateKeys(name: string): string[] {
+  const registry = getRegisteredModules();
+  const found = registry.find((r) => r.name === name);
+  if (!found) return [];
+  return found.manifest.stateKeys ?? [];
+}
+
+/**
+ * Allowlist gate for module-state writes. Throws `UnknownStateKey`
+ * when `key` is not declared in the named module's manifest
+ * `stateKeys` array. The error message names both the module and the
+ * offending key (per M3-locked contract). Modules whose manifest
+ * omits `stateKeys` always reject — they cannot persist any state.
+ *
+ * Used by `setModuleState` / `appendToModuleState` /
+ * `removeFromModuleState` before any I/O. `getModuleState` does NOT
+ * call this — undeclared-key reads return `null` consistently with
+ * "no file".
+ */
+export function assertStateKeyAllowed(name: string, key: string): void {
+  const allowed = getModuleStateKeys(name);
+  if (!allowed.includes(key)) {
+    throw createError('UnknownStateKey', {
+      message:
+        `Module '${name}' does not declare state key '${key}'. ` +
+        `Declared keys: ${
+          allowed.length === 0 ? '(none)' : allowed.map((k) => `'${k}'`).join(', ')
+        }. ` +
+        `Add '${key}' to the module manifest's 'stateKeys' array to enable this write.`,
+    });
+  }
 }
 
 /**
