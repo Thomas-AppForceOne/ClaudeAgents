@@ -306,7 +306,8 @@ async function dispatchRead(
     case 'getModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
       const name = requireName(args, toolName);
-      return readGetModuleState({ projectRoot, name });
+      const key = requireStateKey(args, toolName);
+      return readGetModuleState({ projectRoot, name, key });
     }
     case 'listModules': {
       const projectRoot = requireProjectRoot(args, toolName);
@@ -381,22 +382,40 @@ async function dispatchRead(
     case 'setModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
       const name = requireName(args, toolName);
+      const key = requireStateKey(args, toolName);
       const state = readValue(args, 'state');
-      return runSetModuleState({ projectRoot, name, state });
+      return runSetModuleState({ projectRoot, name, key, state });
     }
     case 'appendToModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
       const name = requireName(args, toolName);
+      const key = requireStateKey(args, toolName);
       const fieldPath = requireFieldPath(args, toolName);
       const value = readValue(args);
-      return runAppendToModuleState({ projectRoot, name, fieldPath, value });
+      // The library's `appendToModuleState` validates
+      // `duplicatePolicy` itself (throws `MalformedInput` on
+      // unknown strings) so the dispatcher passes the raw value
+      // through and the validation stays single-sourced.
+      const duplicatePolicy = optionalDuplicatePolicy(args) as
+        | 'error'
+        | 'skip'
+        | 'allow'
+        | undefined;
+      return runAppendToModuleState({
+        projectRoot,
+        name,
+        key,
+        fieldPath,
+        value,
+        ...(duplicatePolicy !== undefined ? { duplicatePolicy } : {}),
+      });
     }
     case 'removeFromModuleState': {
       const projectRoot = requireProjectRoot(args, toolName);
       const name = requireName(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
-      return runRemoveFromModuleState({ projectRoot, name, fieldPath, value });
+      const key = requireStateKey(args, toolName);
+      const entryKey = requireEntryKey(args, toolName);
+      return runRemoveFromModuleState({ projectRoot, name, key, entryKey });
     }
     case 'registerModule': {
       const projectRoot = requireProjectRoot(args, toolName);
@@ -421,8 +440,57 @@ function requireFieldPath(args: Record<string, unknown>, tool: string): string {
   return fp;
 }
 
+/**
+ * Validate that `key` is a non-empty string; throw `MalformedInput`
+ * otherwise. Used by the four module-state tools (M3 per-key
+ * contract). The allowlist gate against the manifest's `stateKeys`
+ * happens downstream — this helper only checks shape.
+ */
+function requireStateKey(args: Record<string, unknown>, tool: string): string {
+  const k = args['key'];
+  if (typeof k !== 'string' || k.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      message: `Tool '${tool}' requires a non-empty 'key' string in its input.`,
+    });
+  }
+  return k;
+}
+
+/**
+ * Validate that `entryKey` is a non-empty string; throw
+ * `MalformedInput` otherwise. Used by `removeFromModuleState`'s
+ * keyed-lookup contract (M3): the function removes by map property
+ * name (for map-shaped state) or by `key` field (for list-of-`{key,
+ * …}`-shaped state). The on-disk shape check happens downstream.
+ */
+function requireEntryKey(args: Record<string, unknown>, tool: string): string {
+  const k = args['entryKey'];
+  if (typeof k !== 'string' || k.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      message: `Tool '${tool}' requires a non-empty 'entryKey' string in its input.`,
+    });
+  }
+  return k;
+}
+
 function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
   return args[key];
+}
+
+/**
+ * Read an optional `duplicatePolicy` argument and pass through any
+ * recognised string verbatim. Unknown strings (and non-string
+ * values) are returned as-is so the downstream library function
+ * can throw `MalformedInput` consistently — keeping the validation
+ * single-sourced inside `appendToModuleState`. `undefined` (the
+ * absent-key case) is returned untouched so the library default
+ * applies.
+ */
+function optionalDuplicatePolicy(args: Record<string, unknown>): unknown {
+  if (!Object.prototype.hasOwnProperty.call(args, 'duplicatePolicy')) return undefined;
+  return args['duplicatePolicy'];
 }
 
 /**
@@ -459,7 +527,27 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       out['hashPresent'] = typeof args[k] === 'string';
       continue;
     }
-    if (k === 'projectRoot' || k === 'name' || k === 'tier' || k === 'fieldPath') {
+    if (k === 'key') {
+      // Module-state `key` is user-defined (declared in a module's
+      // manifest `stateKeys` allowlist). Treat it as opaque in logs —
+      // a module author may legitimately name keys after internal
+      // namespaces, and the per-run log line should not echo those
+      // strings. Echo presence only, never the raw value.
+      out['keyPresent'] = typeof args[k] === 'string';
+      continue;
+    }
+    if (k === 'entryKey') {
+      // Same reasoning as `key`: caller-supplied string used to address
+      // a slot within module state. Echo presence only.
+      out['entryKeyPresent'] = typeof args[k] === 'string';
+      continue;
+    }
+    if (
+      k === 'projectRoot' ||
+      k === 'name' ||
+      k === 'tier' ||
+      k === 'fieldPath'
+    ) {
       out[k] = args[k];
       continue;
     }

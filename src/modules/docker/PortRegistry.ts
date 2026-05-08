@@ -3,8 +3,9 @@
  * the docker module.
  *
  * Persistence is routed through M1's module-state surface
- * (`setModuleState` / `loadModuleState`), keyed by module name "docker".
- * Three properties depend on this routing:
+ * (`setModuleState` / `loadModuleState`), keyed by module name
+ * "docker" plus the F2/M3 state key "port-registry". Three properties
+ * depend on this routing:
  *
  *   1. Cross-process serialisation. Two `/gan` runs both reach the
  *      single Configuration MCP server process; the server mediates
@@ -13,8 +14,9 @@
  *
  *   2. Black-box rule (F2). Modules don't know about storage layout.
  *      The on-disk JSON file lives at
- *      `<projectRoot>/.gan-state/modules/docker/state.json` per M1's
- *      `moduleStatePath()`; PortRegistry never names that path.
+ *      `<projectRoot>/.gan-state/modules/docker/port-registry.json`
+ *      per M3's per-key `moduleStatePath()`; PortRegistry never names
+ *      that path.
  *
  *   3. Mutation tracking (F2 §"Write functions return a mutation
  *      indicator"). `setModuleState` returns `{mutated, path, ...}`;
@@ -35,16 +37,14 @@
  *
  * The constructor takes a project root; tests pass a scratch dir.
  *
- * Note (post-M audit): F2 specifies `setModuleState(moduleName, key,
- * value)` with a `key` parameter so a module can persist multiple
- * named state blobs side-by-side. M1's implementation is whole-blob
- * (`setModuleState({projectRoot, name, state})`) — there is no `key`.
- * PortRegistry therefore owns 100% of the docker module's persisted
- * state. Adding a second docker subsystem with its own state will
- * require either threading F2's `key` parameter through M1 or wrapping
- * additional state under top-level keys inside this module's blob. The
- * manifest's `stateKeys: ["port-registry"]` declaration is decorative
- * until the M1/F2 divergence closes.
+ * Note (M3): F2's per-key contract is now honoured end-to-end. Each
+ * declared `stateKeys` entry persists to its own
+ * `<key>.json` file under `.gan-state/modules/<name>/`. The docker
+ * module declares `stateKeys: ["port-registry"]`, so this class
+ * routes all reads/writes through `key: "port-registry"`. A second
+ * docker subsystem would add a new entry to the manifest and write
+ * through `setModuleState('docker', '<new-key>', …)` without
+ * conflicting with this file.
  */
 
 import { canonicalizePath } from '../../config-server/determinism/index.js';
@@ -66,6 +66,7 @@ export interface PortRegistryEntry {
 }
 
 const MODULE_NAME = 'docker';
+const STATE_KEY = 'port-registry';
 
 /**
  * PortRegistry — worktree → {port, containerName} mapping persisted to
@@ -144,7 +145,7 @@ export class PortRegistry {
    * on JSON parse failure).
    */
   private load(): PortRegistryFile {
-    const record = loadModuleState(MODULE_NAME, this.projectRoot);
+    const record = loadModuleState(MODULE_NAME, STATE_KEY, this.projectRoot);
     if (record === null) return { version: 1, entries: {} };
     return validateBlob(record.state);
   }
@@ -154,6 +155,7 @@ export class PortRegistry {
     setModuleState({
       projectRoot: this.projectRoot,
       name: MODULE_NAME,
+      key: STATE_KEY,
       state: blob,
     });
   }

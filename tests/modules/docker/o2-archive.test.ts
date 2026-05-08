@@ -1,9 +1,9 @@
 /**
  * M2 — O2 archive non-interference (AC14).
  *
- * Writes deterministic content to the docker module's M1-owned state
- * file at `<scratch>/.gan-state/modules/docker/state.json`, runs the
- * O2-style recovery surfaces (every module-touching API + validateAll),
+ * Writes deterministic content to the docker module's M3-owned per-key
+ * state file at `<scratch>/.gan-state/modules/docker/port-registry.json`,
+ * runs the O2-style recovery surfaces (every module-touching API + validateAll),
  * and asserts SHA-256 byte-equality pre/post. The recovery flow must
  * leave docker module state untouched per F1 + O2 semantics.
  */
@@ -40,7 +40,8 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-o2-archive-'));
-    statePath = moduleStatePath(scratch, 'docker');
+    // M3 per-key path: `<scratch>/.gan-state/modules/docker/port-registry.json`.
+    statePath = moduleStatePath(scratch, 'docker', 'port-registry');
     mkdirSync(path.dirname(statePath), { recursive: true });
     writeFileSync(statePath, deterministicContent);
     preHash = sha256OfFile(statePath);
@@ -63,12 +64,21 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   });
 
   it('getModuleState for an unrelated module does not mutate docker module state bytes', () => {
-    getModuleState({ projectRoot: scratch, name: 'unrelated-module' });
+    getModuleState({ projectRoot: scratch, name: 'unrelated-module', key: 'port-registry' });
     expect(sha256OfFile(statePath)).toBe(preHash);
   });
 
   it('setModuleState for an unrelated module does not mutate docker module state bytes', () => {
-    setModuleState({ projectRoot: scratch, name: 'unrelated-module', state: { v: 1 } });
+    try {
+      setModuleState({
+        projectRoot: scratch,
+        name: 'unrelated-module',
+        key: 'port-registry',
+        state: { v: 1 },
+      });
+    } catch {
+      // Expected under M3 (unregistered module).
+    }
     expect(sha256OfFile(statePath)).toBe(preHash);
   });
 
@@ -80,8 +90,17 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   it('full O2-style pipeline leaves docker module state byte-identical', () => {
     validateAll({ projectRoot: scratch });
     listModules({ projectRoot: scratch });
-    getModuleState({ projectRoot: scratch, name: 'unrelated' });
-    setModuleState({ projectRoot: scratch, name: 'unrelated', state: { v: 1 } });
+    getModuleState({ projectRoot: scratch, name: 'unrelated', key: 'port-registry' });
+    try {
+      setModuleState({
+        projectRoot: scratch,
+        name: 'unrelated',
+        key: 'port-registry',
+        state: { v: 1 },
+      });
+    } catch {
+      // Expected under M3 (unregistered module).
+    }
     registerModule({ projectRoot: scratch, name: 'unknown', manifest: {} });
     expect(sha256OfFile(statePath)).toBe(preHash);
   });

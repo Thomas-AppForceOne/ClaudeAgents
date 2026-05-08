@@ -12,20 +12,72 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { PortRegistry } from '../../../src/modules/docker/PortRegistry.js';
+import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
+import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..', '..');
+
+/**
+ * Stage a fake package root with the docker module's manifest so the
+ * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
+ * state key. Without this, every PortRegistry write would reject with
+ * `UnknownStateKey`.
+ */
+function stageDockerModuleRoot(): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'm2-conc-modroot-'));
+  writeFileSync(
+    path.join(root, 'package.json'),
+    readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
+  );
+  const dir = path.join(root, 'src', 'modules', 'docker');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'manifest.json'),
+    JSON.stringify(
+      {
+        name: 'docker',
+        schemaVersion: 1,
+        description: 'Container and port management for git worktree workflows.',
+        exports: ['PortRegistry'],
+        stateKeys: ['port-registry'],
+      },
+      null,
+      2,
+    ),
+  );
+  return root;
+}
 
 describe('PortRegistry concurrency', () => {
   let scratch: string;
+  let stagedRoot: string;
+  let savedOverride: string | undefined;
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-concurrency-'));
+    savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    stagedRoot = stageDockerModuleRoot();
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
   });
   afterEach(() => {
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(stagedRoot, { recursive: true, force: true });
+    if (savedOverride === undefined) {
+      delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    } else {
+      process.env.GAN_PACKAGE_ROOT_OVERRIDE = savedOverride;
+    }
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
   });
 
   it('two clients writing distinct worktrees both land on disk', async () => {

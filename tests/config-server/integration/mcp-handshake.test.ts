@@ -22,7 +22,15 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,12 +141,43 @@ describe('integration: MCP handshake (subprocess)', () => {
     cpSync(jsTsMinimal, projectRoot, { recursive: true });
     tmpDirs.push(projectRoot);
 
+    // Stage a fake package root containing a `docker` module manifest
+    // declaring `port-registry` as an allowed state key, so the M3
+    // allowlist gate finds the key when the subprocess processes
+    // `setModuleState` / `getModuleState` calls. Without this override
+    // the global vitest setup's empty fake root would leave the docker
+    // module unregistered and every write would reject with
+    // `UnknownStateKey`.
+    const stagedPkgRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-pkgroot-'));
+    tmpDirs.push(stagedPkgRoot);
+    writeFileSync(
+      path.join(stagedPkgRoot, 'package.json'),
+      readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
+    );
+    const dockerDir = path.join(stagedPkgRoot, 'src', 'modules', 'docker');
+    mkdirSync(dockerDir, { recursive: true });
+    writeFileSync(
+      path.join(dockerDir, 'manifest.json'),
+      JSON.stringify(
+        {
+          name: 'docker',
+          schemaVersion: 1,
+          description: 'Container and port management for git worktree workflows.',
+          exports: ['PortRegistry'],
+          stateKeys: ['port-registry'],
+        },
+        null,
+        2,
+      ),
+    );
+
     const runId = 'mcp-handshake-test';
     const child = spawn(process.execPath, [distEntry], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         GAN_RUN_ID: runId,
+        GAN_PACKAGE_ROOT_OVERRIDE: stagedPkgRoot,
       },
       cwd: projectRoot,
     });
@@ -238,7 +277,8 @@ describe('integration: MCP handshake (subprocess)', () => {
         name: 'setModuleState',
         arguments: {
           projectRoot,
-          name: 'mod-x',
+          name: 'docker',
+          key: 'port-registry',
           state: moduleStateBlob,
         },
       },
@@ -256,7 +296,7 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(typeof setStatePayload.path).toBe('string');
     expect(
       (setStatePayload.path as string).endsWith(
-        path.join('.gan-state', 'modules', 'mod-x', 'state.json'),
+        path.join('.gan-state', 'modules', 'docker', 'port-registry.json'),
       ),
     ).toBe(true);
 
@@ -269,7 +309,8 @@ describe('integration: MCP handshake (subprocess)', () => {
         name: 'getModuleState',
         arguments: {
           projectRoot,
-          name: 'mod-x',
+          name: 'docker',
+          key: 'port-registry',
         },
       },
     });
@@ -313,6 +354,43 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(errorPayload.code).toBe('MalformedInput');
     expect(typeof errorPayload.message).toBe('string');
 
+    // 3e. Module-state allowlist round-trip: a setModuleState call with
+    // an undeclared `key` must reject with a structured `UnknownStateKey`
+    // error over the MCP envelope. The manifest staged above declares
+    // only `port-registry`; `made-up-key` is therefore outside the
+    // allowlist. The error message must name both the module and the
+    // offending key (per the M3 spec). The made-up key string must not
+    // leak into the per-run log (anonymisation contract: state-key
+    // strings are caller-supplied identifiers and the dispatcher echoes
+    // only the anonymised arg shape).
+    rpc.send({
+      jsonrpc: '2.0',
+      id: 8,
+      method: 'tools/call',
+      params: {
+        name: 'setModuleState',
+        arguments: {
+          projectRoot,
+          name: 'docker',
+          key: 'made-up-key',
+          state: { anything: true },
+        },
+      },
+    });
+    const unknownKeyResp = (await rpc.awaitId(8)) as JsonRpcResponse & {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    };
+    expect(unknownKeyResp.error).toBeUndefined();
+    expect(unknownKeyResp.result.isError).toBe(true);
+    expect(Array.isArray(unknownKeyResp.result.content)).toBe(true);
+    const unknownKeyPayload = JSON.parse(
+      unknownKeyResp.result.content[0].text,
+    ) as Record<string, unknown>;
+    expect(unknownKeyPayload.code).toBe('UnknownStateKey');
+    expect(typeof unknownKeyPayload.message).toBe('string');
+    expect(unknownKeyPayload.message as string).toContain('docker');
+    expect(unknownKeyPayload.message as string).toContain('made-up-key');
+
     // 4. Per-run log file present and well-formed.
     const expectedLogPath = path.join(
       projectRoot,
@@ -334,6 +412,10 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(logText).not.toContain('"value"'); // forbidden meta key
     expect(logText).not.toContain('"trustHash"');
     expect(logText).not.toContain('mcp-handshake-module-state');
+    // The undeclared state-key string passed in id-8 is caller-supplied
+    // identifier surface. The anonymiser redacts `key` to a presence
+    // flag, so the literal 'made-up-key' must never appear in the log.
+    expect(logText).not.toContain('made-up-key');
 
     // 5. Close stdin → subprocess exits cleanly.
     child.stdin.end();
