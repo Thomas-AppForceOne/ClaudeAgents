@@ -67,13 +67,23 @@ describe('snapshot freshness across `mutated: false` writes', () => {
     // No-op write path: `removeFromModuleState` against a module whose
     // state file is absent returns `{ mutated: false }` and must NOT
     // invalidate the cache.
-    const writeResult = removeFromModuleState({
-      projectRoot: proj,
-      name: 'unknown-module',
-      fieldPath: 'log',
-      value: 'entry',
-    });
-    expect(writeResult.mutated).toBe(false);
+    // M3 allowlist gate: an unregistered module rejects with
+    // `UnknownStateKey` before any I/O. The cache invalidation guard
+    // only runs on the success path, so a thrown error is also a
+    // legitimate way to assert "no cache mutation occurred". We
+    // exercise the synchronous-throw branch here.
+    let threw: unknown;
+    try {
+      removeFromModuleState({
+        projectRoot: proj,
+        name: 'unknown-module',
+        key: 'port-registry',
+        entryKey: 'entry',
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeDefined();
 
     // Cache entry survives because the write did not mutate durable state.
     expect(cache.get(key)).toBeDefined();

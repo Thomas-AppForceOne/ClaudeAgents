@@ -46,3 +46,17 @@ Importing the barrel runs `docker --version` via
 `child_process.execFileSync` (whitespace-split, no shell). A non-zero
 exit or spawn error throws `ModulePrerequisiteFailed` with the
 manifest's `errorHint` woven into the message.
+
+## Troubleshooting
+
+Pre-M3 builds wrote module state to a single
+`.gan-state/modules/<name>/state.json` per module. After upgrading,
+that file is orphaned — never read, never written — and may safely
+be deleted:
+
+```sh
+rm <projectRoot>/.gan-state/modules/docker/state.json
+```
+
+The current per-key file `port-registry.json` lives alongside it and
+is unaffected. Cleanup is optional; the orphan is harmless.

@@ -1,7 +1,16 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +53,50 @@ function makeTmpProject(): string {
   cpSync(jsTsMinimalSrc, dir, { recursive: true });
   tmpDirs.push(dir);
   return dir;
+}
+
+/**
+ * Stage a temp "package root" containing a `package.json` plus a
+ * `src/modules/<name>/manifest.json` for each requested module. Used
+ * to enable the M3 `stateKeys` allowlist gate in module-state tests:
+ * `defaultModulesRoot()` resolves to `<override>/src/modules`, so any
+ * module the test wants to write to must be registered here.
+ *
+ * Each entry `{ name, stateKeys }` becomes a minimal valid manifest
+ * (no prerequisites, no exports) at
+ * `<override>/src/modules/<name>/manifest.json`. The default
+ * `pairsWith` is omitted (validation does not require it for
+ * module-state writes).
+ *
+ * Tests must wrap their setup with
+ * `withStagedModuleRoot([...])` (sets `GAN_PACKAGE_ROOT_OVERRIDE`,
+ * resets caches) and tear down via `restoreStagedModuleRoot()`.
+ */
+function stageModuleRoot(modules: Array<{ name: string; stateKeys: string[] }>): string {
+  const root = mkdtempSync(path.join(tmpdir(), 'cas-writes-modroot-'));
+  tmpDirs.push(root);
+  // `package.json` is mandatory for `packageRoot()` resolution.
+  const realPkg = path.join(repoRoot, 'package.json');
+  writeFileSync(path.join(root, 'package.json'), readFileSync(realPkg, 'utf8'));
+  for (const m of modules) {
+    const dir = path.join(root, 'src', 'modules', m.name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify(
+        {
+          name: m.name,
+          schemaVersion: 1,
+          description: `Test fixture module ${m.name}.`,
+          exports: [],
+          stateKeys: m.stateKeys,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  return root;
 }
 
 function fileHash(p: string): string {
@@ -325,11 +378,111 @@ describe('trust writes (R5 S4)', () => {
   });
 });
 
-describe('module writes (M1)', () => {
-  it('setModuleState persists the state blob and returns {mutated: true}', () => {
+describe('module writes (M3 per-key)', () => {
+  // Stage a fake package root with manifests for the test modules so
+  // `assertStateKeyAllowed` can resolve their `stateKeys` arrays.
+  let savedOverride: string | undefined;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    savedHome = process.env.GAN_USER_HOME;
+    const stagedRoot = stageModuleRoot([
+      { name: 'mod-x', stateKeys: ['port-registry'] },
+      { name: 'mod-y', stateKeys: ['port-registry'] },
+      { name: 'mod-a', stateKeys: ['port-registry'] },
+      { name: 'mod-b', stateKeys: ['port-registry'] },
+      { name: 'mod-multi', stateKeys: ['key-one', 'key-two'] },
+      { name: 'mod-no-keys', stateKeys: [] },
+    ]);
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
+    // Isolate from the host's `~/.claude/gan/` so trust-cache reads
+    // never escape the staged environment.
+    process.env.GAN_USER_HOME = stagedRoot;
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+  afterEach(() => {
+    if (savedOverride === undefined) {
+      delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    } else {
+      process.env.GAN_PACKAGE_ROOT_OVERRIDE = savedOverride;
+    }
+    if (savedHome === undefined) {
+      delete process.env.GAN_USER_HOME;
+    } else {
+      process.env.GAN_USER_HOME = savedHome;
+    }
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+
+  it('setModuleState writes to <projectRoot>/.gan-state/modules/<name>/<key>.json', () => {
     const proj = makeTmpProject();
-    const r = setModuleState({ projectRoot: proj, name: 'mod-x', state: { any: 1 } });
+    const r = setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { any: 1 },
+    });
     expect(r.mutated).toBe(true);
+    if (r.mutated === true) {
+      expect(
+        r.path.endsWith(
+          path.join('.gan-state', 'modules', 'mod-x', 'port-registry.json'),
+        ),
+      ).toBe(true);
+    }
+    expect(
+      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'port-registry.json')),
+    ).toBe(true);
+    // The legacy whole-blob path must NOT be written.
+    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'state.json'))).toBe(
+      false,
+    );
+  });
+
+  it('setModuleState rejects an undeclared key with UnknownStateKey naming the module and key', () => {
+    const proj = makeTmpProject();
+    expect(() =>
+      setModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'not-declared',
+        state: { any: 1 },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'UnknownStateKey',
+        message: expect.stringContaining('mod-x'),
+      }),
+    );
+    expect(() =>
+      setModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'not-declared',
+        state: { any: 1 },
+      }),
+    ).toThrow(/not-declared/);
+    // No file must have been created.
+    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x'))).toBe(false);
+  });
+
+  it('setModuleState against a module with empty stateKeys always rejects with UnknownStateKey', () => {
+    const proj = makeTmpProject();
+    expect(() =>
+      setModuleState({
+        projectRoot: proj,
+        name: 'mod-no-keys',
+        key: 'port-registry',
+        state: { any: 1 },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'UnknownStateKey',
+      }),
+    );
   });
 
   it('appendToModuleState appends to the array at fieldPath and returns {mutated: true}', () => {
@@ -337,30 +490,418 @@ describe('module writes (M1)', () => {
     const r = appendToModuleState({
       projectRoot: proj,
       name: 'mod-x',
+      key: 'port-registry',
       fieldPath: 'log',
       value: 'entry',
     });
     expect(r.mutated).toBe(true);
   });
 
-  it('removeFromModuleState is a no-op when no state file exists', () => {
+  it('appendToModuleState default policy rejects a duplicate list entry without writing', () => {
     const proj = makeTmpProject();
-    const r = removeFromModuleState({
+    // Seed with `{log: ['entry']}` — append 'entry' a second time.
+    setModuleState({
       projectRoot: proj,
       name: 'mod-x',
+      key: 'port-registry',
+      state: { log: ['entry'] },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
       fieldPath: 'log',
       value: 'entry',
     });
     expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    } else {
+      throw new Error('expected duplicate-entry reason');
+    }
+    // Disk untouched.
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState explicit 'error' policy returns duplicate-entry without writing", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { log: ['entry'] },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'log',
+      value: 'entry',
+      duplicatePolicy: 'error',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    }
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState explicit 'skip' policy returns duplicate-entry without writing", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { log: ['entry'] },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'log',
+      value: 'entry',
+      duplicatePolicy: 'skip',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    }
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState 'allow' policy appends a duplicate list entry to disk", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { log: ['entry'] },
+    });
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'log',
+      value: 'entry',
+      duplicatePolicy: 'allow',
+    });
+    expect(r.mutated).toBe(true);
+
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual({ log: ['entry', 'entry'] });
+  });
+
+  it('appendToModuleState default policy rejects a map-shape key collision without writing', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { ports: { svc: { port: 3000 } } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'ports',
+      value: { key: 'svc', port: 4000 },
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    }
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState 'error' policy on a map-shape collision returns duplicate-entry without writing", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { ports: { svc: { port: 3000 } } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'ports',
+      value: { key: 'svc', port: 4000 },
+      duplicatePolicy: 'error',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    }
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState 'skip' policy on a map-shape collision returns duplicate-entry without writing", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { ports: { svc: { port: 3000 } } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeHash = fileHash(filePath);
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'ports',
+      value: { key: 'svc', port: 4000 },
+      duplicatePolicy: 'skip',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('duplicate-entry');
+    }
+    expect(fileHash(filePath)).toBe(beforeHash);
+  });
+
+  it("appendToModuleState 'allow' policy on a map-shape collision overwrites the existing key", () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { ports: { svc: { port: 3000 } } },
+    });
+
+    const r = appendToModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      fieldPath: 'ports',
+      value: { key: 'svc', port: 4000 },
+      duplicatePolicy: 'allow',
+    });
+    expect(r.mutated).toBe(true);
+
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual({ ports: { svc: { key: 'svc', port: 4000 } } });
+  });
+
+  it('appendToModuleState rejects scalar-shape stored value with MalformedInput', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { greeting: 'hello' },
+    });
+
+    expect(() =>
+      appendToModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'port-registry',
+        fieldPath: 'greeting',
+        value: 'world',
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'MalformedInput',
+        message: expect.stringContaining('string'),
+      }),
+    );
+  });
+
+  it("appendToModuleState rejects an unknown duplicatePolicy value with MalformedInput", () => {
+    const proj = makeTmpProject();
+    expect(() =>
+      appendToModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'port-registry',
+        fieldPath: 'log',
+        value: 'entry',
+        // Cast through `any` so the call compiles even with the
+        // strict `DuplicatePolicy` union — the runtime guard is
+        // what we're exercising.
+        duplicatePolicy: 'replace' as unknown as 'error',
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'MalformedInput',
+      }),
+    );
+  });
+
+  it('appendToModuleState rejects an undeclared key with UnknownStateKey', () => {
+    const proj = makeTmpProject();
+    expect(() =>
+      appendToModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'not-declared',
+        fieldPath: 'log',
+        value: 'entry',
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'UnknownStateKey',
+        message: expect.stringContaining('mod-x'),
+      }),
+    );
+  });
+
+  it('removeFromModuleState is a no-op when no state file exists for the key', () => {
+    const proj = makeTmpProject();
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'some-entry',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('entry-not-found');
+    }
+  });
+
+  it('removeFromModuleState rejects an undeclared key with UnknownStateKey', () => {
+    const proj = makeTmpProject();
+    expect(() =>
+      removeFromModuleState({
+        projectRoot: proj,
+        name: 'mod-x',
+        key: 'not-declared',
+        entryKey: 'some-entry',
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'UnknownStateKey',
+      }),
+    );
   });
 
   it('registerModule probe reports unknown-module when the name is not registered', () => {
     const proj = makeTmpProject();
-    const r = registerModule({ projectRoot: proj, name: 'mod-x', manifest: {} });
+    const r = registerModule({ projectRoot: proj, name: 'unknown-mod', manifest: {} });
     expect(r.mutated).toBe(false);
     if (r.mutated === false && 'reason' in r) {
       expect(r.reason).toContain('unknown-module');
     }
+  });
+
+  it('two declared keys for one module persist to two distinct files', () => {
+    const proj = makeTmpProject();
+    const r1 = setModuleState({
+      projectRoot: proj,
+      name: 'mod-multi',
+      key: 'key-one',
+      state: { v: 'one' },
+    });
+    expect(r1.mutated).toBe(true);
+    const r2 = setModuleState({
+      projectRoot: proj,
+      name: 'mod-multi',
+      key: 'key-two',
+      state: { v: 'two' },
+    });
+    expect(r2.mutated).toBe(true);
+    const fileOne = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-multi',
+      'key-one.json',
+    );
+    const fileTwo = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-multi',
+      'key-two.json',
+    );
+    expect(existsSync(fileOne)).toBe(true);
+    expect(existsSync(fileTwo)).toBe(true);
+    expect(JSON.parse(readFileSync(fileOne, 'utf8'))).toEqual({ v: 'one' });
+    expect(JSON.parse(readFileSync(fileTwo, 'utf8'))).toEqual({ v: 'two' });
+    // The legacy whole-blob `state.json` must NOT exist alongside.
+    expect(
+      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-multi', 'state.json')),
+    ).toBe(false);
+  });
+
+  it('getModuleState returns null for an undeclared key (no throw)', () => {
+    const proj = makeTmpProject();
+    const r = getModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'not-declared',
+    });
+    expect(r).toBeNull();
   });
 });
 
@@ -765,7 +1306,41 @@ describe('project-tier writes for fields forbidden at user tier (regression guar
   });
 });
 
-describe('module state round-trip (M1)', () => {
+describe('module state round-trip (M3 per-key)', () => {
+  // Reuse the staged fake package root so each module has a manifest
+  // declaring `port-registry` as an allowed state key.
+  let savedOverride: string | undefined;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    savedHome = process.env.GAN_USER_HOME;
+    const stagedRoot = stageModuleRoot([
+      { name: 'mod-x', stateKeys: ['port-registry'] },
+      { name: 'mod-y', stateKeys: ['port-registry'] },
+      { name: 'mod-a', stateKeys: ['port-registry'] },
+      { name: 'mod-b', stateKeys: ['port-registry'] },
+    ]);
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
+    process.env.GAN_USER_HOME = stagedRoot;
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+  afterEach(() => {
+    if (savedOverride === undefined) {
+      delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    } else {
+      process.env.GAN_PACKAGE_ROOT_OVERRIDE = savedOverride;
+    }
+    if (savedHome === undefined) {
+      delete process.env.GAN_USER_HOME;
+    } else {
+      process.env.GAN_USER_HOME = savedHome;
+    }
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
+  });
+
   it('setModuleState persists the blob and getModuleState round-trips it', () => {
     const proj = makeTmpProject();
     const blob = {
@@ -774,19 +1349,30 @@ describe('module state round-trip (M1)', () => {
       count: 2,
     };
 
-    const result = setModuleState({ projectRoot: proj, name: 'mod-x', state: blob });
+    const result = setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: blob,
+    });
     expect(result.mutated).toBe(true);
     if (result.mutated === true) {
       expect(
-        result.path.endsWith(path.join('.gan-state', 'modules', 'mod-x', 'state.json')),
+        result.path.endsWith(
+          path.join('.gan-state', 'modules', 'mod-x', 'port-registry.json'),
+        ),
       ).toBe(true);
     }
 
-    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'state.json'))).toBe(
-      true,
-    );
+    expect(
+      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'port-registry.json')),
+    ).toBe(true);
 
-    const record = getModuleState({ projectRoot: proj, name: 'mod-x' });
+    const record = getModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+    });
     expect(record).not.toBeNull();
     expect(record!.state).toEqual(blob);
   });
@@ -794,68 +1380,305 @@ describe('module state round-trip (M1)', () => {
   it('appendToModuleState then removeFromModuleState round-trips through getModuleState', () => {
     const proj = makeTmpProject();
 
+    // Seed two top-level properties via append, each containing a list
+    // whose member carries a `key` field. The appended entries are now
+    // addressable by name from `removeFromModuleState`'s map-shape
+    // branch (the root of the per-key file is a map: top-level
+    // properties are the targetable `entryKey`s).
     const r1 = appendToModuleState({
       projectRoot: proj,
       name: 'mod-y',
-      fieldPath: 'log',
-      value: 'first',
+      key: 'port-registry',
+      fieldPath: 'first',
+      value: { key: 'first', port: 3000 },
     });
     expect(r1.mutated).toBe(true);
 
     const r2 = appendToModuleState({
       projectRoot: proj,
       name: 'mod-y',
-      fieldPath: 'log',
-      value: 'second',
+      key: 'port-registry',
+      fieldPath: 'second',
+      value: { key: 'second', port: 3001 },
     });
     expect(r2.mutated).toBe(true);
 
-    const afterAppend = getModuleState({ projectRoot: proj, name: 'mod-y' });
+    const afterAppend = getModuleState({
+      projectRoot: proj,
+      name: 'mod-y',
+      key: 'port-registry',
+    });
     expect(afterAppend).not.toBeNull();
-    expect(afterAppend!.state).toEqual({ log: ['first', 'second'] });
+    expect(afterAppend!.state).toEqual({
+      first: [{ key: 'first', port: 3000 }],
+      second: [{ key: 'second', port: 3001 }],
+    });
 
+    // Map-shape removal: the file root is an object; entryKey 'first'
+    // matches the property name and that whole property is removed.
     const r3 = removeFromModuleState({
       projectRoot: proj,
       name: 'mod-y',
-      fieldPath: 'log',
-      value: 'first',
+      key: 'port-registry',
+      entryKey: 'first',
     });
     expect(r3.mutated).toBe(true);
 
-    const afterRemove = getModuleState({ projectRoot: proj, name: 'mod-y' });
+    const afterRemove = getModuleState({
+      projectRoot: proj,
+      name: 'mod-y',
+      key: 'port-registry',
+    });
     expect(afterRemove).not.toBeNull();
-    expect(afterRemove!.state).toEqual({ log: ['second'] });
+    expect(afterRemove!.state).toEqual({
+      second: [{ key: 'second', port: 3001 }],
+    });
   });
 
   it("setModuleState for two modules in the same project keeps each module's state file independent", () => {
     const proj = makeTmpProject();
 
-    const rA = setModuleState({ projectRoot: proj, name: 'mod-a', state: { value: 'A' } });
+    const rA = setModuleState({
+      projectRoot: proj,
+      name: 'mod-a',
+      key: 'port-registry',
+      state: { value: 'A' },
+    });
     expect(rA.mutated).toBe(true);
 
-    const rB = setModuleState({ projectRoot: proj, name: 'mod-b', state: { value: 'B' } });
+    const rB = setModuleState({
+      projectRoot: proj,
+      name: 'mod-b',
+      key: 'port-registry',
+      state: { value: 'B' },
+    });
     expect(rB.mutated).toBe(true);
 
-    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-a', 'state.json'))).toBe(true);
-    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-b', 'state.json'))).toBe(true);
+    expect(
+      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-a', 'port-registry.json')),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-b', 'port-registry.json')),
+    ).toBe(true);
 
-    const recA1 = getModuleState({ projectRoot: proj, name: 'mod-a' });
+    const recA1 = getModuleState({
+      projectRoot: proj,
+      name: 'mod-a',
+      key: 'port-registry',
+    });
     expect(recA1).not.toBeNull();
     expect(recA1!.state).toEqual({ value: 'A' });
 
-    const recB1 = getModuleState({ projectRoot: proj, name: 'mod-b' });
+    const recB1 = getModuleState({
+      projectRoot: proj,
+      name: 'mod-b',
+      key: 'port-registry',
+    });
     expect(recB1).not.toBeNull();
     expect(recB1!.state).toEqual({ value: 'B' });
 
-    const rA2 = setModuleState({ projectRoot: proj, name: 'mod-a', state: { value: 'A2' } });
+    const rA2 = setModuleState({
+      projectRoot: proj,
+      name: 'mod-a',
+      key: 'port-registry',
+      state: { value: 'A2' },
+    });
     expect(rA2.mutated).toBe(true);
 
-    const recA2 = getModuleState({ projectRoot: proj, name: 'mod-a' });
+    const recA2 = getModuleState({
+      projectRoot: proj,
+      name: 'mod-a',
+      key: 'port-registry',
+    });
     expect(recA2).not.toBeNull();
     expect(recA2!.state).toEqual({ value: 'A2' });
 
-    const recB2 = getModuleState({ projectRoot: proj, name: 'mod-b' });
+    const recB2 = getModuleState({
+      projectRoot: proj,
+      name: 'mod-b',
+      key: 'port-registry',
+    });
     expect(recB2).not.toBeNull();
     expect(recB2!.state).toEqual({ value: 'B' });
+  });
+
+  it('removeFromModuleState (map-shape): existing entryKey is removed and persisted', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { alpha: { port: 3000 }, beta: { port: 3001 } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'alpha',
+    });
+    expect(r.mutated).toBe(true);
+    if (r.mutated === true) {
+      expect(r.path.endsWith(path.join('mod-x', 'port-registry.json'))).toBe(true);
+    }
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual({ beta: { port: 3001 } });
+  });
+
+  it('removeFromModuleState (list-shape): member with matching key field is filtered out', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: [
+        { key: 'alpha', port: 3000 },
+        { key: 'beta', port: 3001 },
+        { key: 'gamma', port: 3002 },
+      ],
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'beta',
+    });
+    expect(r.mutated).toBe(true);
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual([
+      { key: 'alpha', port: 3000 },
+      { key: 'gamma', port: 3002 },
+    ]);
+  });
+
+  it('removeFromModuleState (map-shape): non-existent entryKey is a no-op', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { alpha: { port: 3000 } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeBytes = readFileSync(filePath);
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'not-present',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('entry-not-found');
+    }
+    expect(readFileSync(filePath).equals(beforeBytes)).toBe(true);
+  });
+
+  it('removeFromModuleState (list-shape): non-existent entryKey is a no-op', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: [{ key: 'alpha', port: 3000 }],
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+    const beforeBytes = readFileSync(filePath);
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'not-present',
+    });
+    expect(r.mutated).toBe(false);
+    if (r.mutated === false && 'reason' in r) {
+      expect(r.reason).toBe('entry-not-found');
+    }
+    expect(readFileSync(filePath).equals(beforeBytes)).toBe(true);
+  });
+
+  it('removeFromModuleState (map-shape): removing the only entry leaves {} on disk', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: { only: { port: 3000 } },
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'only',
+    });
+    expect(r.mutated).toBe(true);
+    expect(existsSync(filePath)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual({});
+  });
+
+  it('removeFromModuleState (list-shape): removing the only entry leaves [] on disk', () => {
+    const proj = makeTmpProject();
+    setModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      state: [{ key: 'only', port: 3000 }],
+    });
+    const filePath = path.join(
+      proj,
+      '.gan-state',
+      'modules',
+      'mod-x',
+      'port-registry.json',
+    );
+
+    const r = removeFromModuleState({
+      projectRoot: proj,
+      name: 'mod-x',
+      key: 'port-registry',
+      entryKey: 'only',
+    });
+    expect(r.mutated).toBe(true);
+    expect(existsSync(filePath)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
+    expect(onDisk).toEqual([]);
   });
 });

@@ -358,21 +358,27 @@ function computeProjectSummary(
 export interface GetModuleStateInput {
   projectRoot: string;
   name: string;
+  key: string;
 }
 
 /**
- * Real read (M1). Loads the persisted JSON blob at
- * `<projectRoot>/.gan-state/modules/<name>/state.json`. Returns `null`
+ * Real read (M3 per-key). Loads the persisted JSON blob at
+ * `<projectRoot>/.gan-state/modules/<name>/<key>.json`. Returns `null`
  * when the file does not exist; throws via the factory on
  * read/parse failure so callers can distinguish "no state" from
  * "corrupt state".
+ *
+ * Reads against a `key` that the module manifest does not declare
+ * also return `null` (consistent with "no file") rather than throwing
+ * — tooling that probes for keys is a legitimate use case, and there
+ * is no risk of corrupting durable state on a read.
  */
 export function getModuleState(
   input: GetModuleStateInput,
   _ctx: ReadToolContext = {},
 ): ModuleStateRecord | null {
   const root = canonicalizePath(input.projectRoot);
-  return loadModuleState(input.name, root);
+  return loadModuleState(input.name, input.key, root);
 }
 
 export interface ListModulesInput {

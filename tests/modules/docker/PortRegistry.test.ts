@@ -6,32 +6,92 @@
  *   - register/lookup round-trip.
  *   - getAll returns array of entries sorted by worktreePath.
  *   - release removes entry.
- *   - on-disk JSON shape: {version: 1, entries: {...}} at M1's
- *     module-state path `.gan-state/modules/docker/state.json`.
+ *   - on-disk JSON shape: {version: 1, entries: {...}} at M3's per-key
+ *     module-state path `.gan-state/modules/docker/port-registry.json`.
  *   - persistence routes through `setModuleState` / `loadModuleState`
  *     (PortRegistry never imports `atomicWriteFile` or names a path).
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   PortRegistry,
   type PortRegistryFile,
 } from '../../../src/modules/docker/PortRegistry.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
-import { moduleStatePath } from '../../../src/config-server/storage/module-loader.js';
+import {
+  _resetModuleRegistrationCacheForTests,
+  moduleStatePath,
+} from '../../../src/config-server/storage/module-loader.js';
+import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..', '..');
+
+/**
+ * Stage a fake package root with the docker module's manifest so the
+ * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
+ * state key. Without this, every PortRegistry write would reject with
+ * `UnknownStateKey` (the global vitest setup pins
+ * `GAN_PACKAGE_ROOT_OVERRIDE` to an empty tmp dir).
+ */
+function stageDockerModuleRoot(): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'm2-portreg-modroot-'));
+  const realPkg = path.join(repoRoot, 'package.json');
+  writeFileSync(path.join(root, 'package.json'), readFileSync(realPkg, 'utf8'));
+  const dir = path.join(root, 'src', 'modules', 'docker');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'manifest.json'),
+    JSON.stringify(
+      {
+        name: 'docker',
+        schemaVersion: 1,
+        description: 'Container and port management for git worktree workflows.',
+        exports: ['PortRegistry'],
+        stateKeys: ['port-registry'],
+      },
+      null,
+      2,
+    ),
+  );
+  return root;
+}
 
 describe('PortRegistry', () => {
   let scratch: string;
+  let stagedRoot: string;
+  let savedOverride: string | undefined;
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-portregistry-'));
+    savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    stagedRoot = stageDockerModuleRoot();
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
   });
   afterEach(() => {
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(stagedRoot, { recursive: true, force: true });
+    if (savedOverride === undefined) {
+      delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    } else {
+      process.env.GAN_PACKAGE_ROOT_OVERRIDE = savedOverride;
+    }
+    _resetPackageRootCacheForTests();
+    _resetModuleRegistrationCacheForTests();
   });
 
   it('constructor takes a project root (string)', () => {
@@ -79,15 +139,15 @@ describe('PortRegistry', () => {
     expect(reg.getAll()).toHaveLength(0);
   });
 
-  it('on-disk JSON matches {version: 1, entries: {...}} shape at M1 module-state path', () => {
+  it('on-disk JSON matches {version: 1, entries: {...}} shape at M3 module-state per-key path', () => {
     const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'wt-disk');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 7000, 'app-disk');
-    // M1 owns the path: <projectRoot>/.gan-state/modules/<name>/state.json
-    const filePath = moduleStatePath(scratch, 'docker');
+    // M3 owns the path: <projectRoot>/.gan-state/modules/<name>/<key>.json
+    const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
     expect(filePath).toBe(
-      path.join(scratch, '.gan-state', 'modules', 'docker', 'state.json'),
+      path.join(scratch, '.gan-state', 'modules', 'docker', 'port-registry.json'),
     );
     expect(existsSync(filePath)).toBe(true);
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8')) as PortRegistryFile;

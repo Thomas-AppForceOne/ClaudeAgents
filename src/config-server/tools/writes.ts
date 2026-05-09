@@ -62,6 +62,7 @@ import {
 import { writeYamlBlock } from '../storage/yaml-block-writer.js';
 import { atomicWriteFile } from '../storage/atomic-write.js';
 import {
+  assertStateKeyAllowed,
   getRegisteredModules,
   loadModuleState,
   moduleStatePath,
@@ -427,91 +428,307 @@ function captureGitHead(projectRoot: string): string | undefined {
 export interface SetModuleStateInput {
   projectRoot: string;
   name: string;
+  key: string;
   state: unknown;
 }
 
 /**
- * Persist the supplied `state` blob for module `name` under
- * `<projectRoot>/.gan-state/modules/<name>/state.json`. Atomic write
- * via `atomicWriteFile`; serialised with `stableStringify` so the
- * on-disk JSON is canonical (sorted keys, two-space indent, trailing
- * newline) per F3 determinism.
+ * Persist the supplied `state` blob for module `name` at the named
+ * `key` under `<projectRoot>/.gan-state/modules/<name>/<key>.json`
+ * (M3-locked per-key layout). Atomic write via `atomicWriteFile`;
+ * serialised with `stableStringify` so the on-disk JSON is canonical
+ * (sorted keys, two-space indent, trailing newline) per F3
+ * determinism.
  *
- * Whole-value replacement. Callers needing atomic read-modify-write
- * (e.g. PortRegistry's "no two entries share a port" check) currently
- * rely on F2's single-writer-process guarantee plus orchestrator
- * serialisation; this function does not lock or version the file.
- * Concurrency primitives for modules — CAS / `expectedVersion`,
- * `withLock(name, key, fn)`, or per-key scoping per F2's
- * `setModuleState(moduleName, key, value)` signature — are open
- * questions for the post-M revision break.
+ * Whole-value replacement of the named key's blob. The `key` must
+ * appear in the module manifest's `stateKeys` allowlist; an
+ * undeclared key throws `UnknownStateKey` before any I/O. A module
+ * whose manifest omits `stateKeys` cannot persist any state.
+ *
+ * Other declared keys for the same module are unaffected — each key
+ * lives in its own file.
  */
 export function setModuleState(
   input: SetModuleStateInput,
   _ctx: WriteToolContext = {},
 ): WriteResult {
+  assertStateKeyAllowed(input.name, input.key);
   const root = canonicalizePath(input.projectRoot);
-  const filePath = moduleStatePath(root, input.name);
+  const filePath = moduleStatePath(root, input.name, input.key);
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(input.state));
   return { mutated: true, path: filePath };
 }
 
+/**
+ * Recognised duplicate-handling policies for `appendToModuleState`.
+ * Matches F2's contract for the corresponding overlay/stack append
+ * tools:
+ *
+ *  - `'error'` (default): a duplicate aborts the write and returns
+ *    `{ mutated: false, reason: 'duplicate-entry' }`.
+ *  - `'skip'`: same outward result, but semantically "I expected
+ *    this might already be there" — also no write.
+ *  - `'allow'`: append unconditionally; for list shapes the list
+ *    grows even with duplicates, for map shapes the existing key is
+ *    overwritten.
+ *
+ * The default-when-absent is `'error'`; an unrecognised string is
+ * rejected at input validation with `MalformedInput` (never silently
+ * coerced to the default).
+ */
+export type DuplicatePolicy = 'error' | 'skip' | 'allow';
+
+const DUPLICATE_POLICIES: ReadonlySet<DuplicatePolicy> = new Set([
+  'error',
+  'skip',
+  'allow',
+]);
+
 export interface AppendToModuleStateInput {
   projectRoot: string;
   name: string;
+  key: string;
   fieldPath: string;
   value: unknown;
+  /**
+   * How to handle a duplicate when the value at `fieldPath` already
+   * contains an entry that matches the new one. Default `'error'`.
+   * See `DuplicatePolicy` for the per-policy semantics. An
+   * unrecognised string throws `MalformedInput` before any I/O.
+   */
+  duplicatePolicy?: DuplicatePolicy;
 }
 
 /**
- * Append `value` to the array at `fieldPath` inside the module's state
- * blob. Composes-if-absent: when no state file exists, treats the
- * starting state as `{}` and creates the array. Loads, mutates, writes
- * via the same atomic pipeline as `setModuleState`.
+ * Append `value` to the list-or-map at `fieldPath` inside the
+ * module's state blob for the named `key`. Composes-if-absent: when
+ * no state file exists for the key, treats the starting state as
+ * `{}` and creates the list at the requested path. Loads, mutates,
+ * writes via the same atomic pipeline as `setModuleState`.
+ *
+ * Shape rules (per F2 / M3, mirroring
+ * `appendToOverlayField`/`appendToStackField` for keyed entries):
+ *
+ *   - The stored value at `fieldPath` may be an `Array<unknown>`
+ *     (list-shape) or a `Record<string, unknown>` (map-shape).
+ *     Anything else throws `ConfigServerError` with
+ *     `code === 'MalformedInput'` whose message identifies the
+ *     offending shape.
+ *   - List-shape: `value` is appended; "duplicate" means deep-equal
+ *     to an existing member.
+ *   - Map-shape: the input `value` must be an object with a
+ *     `key: string` property. The map property whose name equals
+ *     `value.key` is the duplicate target.
+ *
+ * `duplicatePolicy` (default `'error'`) controls what happens on a
+ * duplicate hit:
+ *
+ *   - `'error'` / `'skip'`: return
+ *     `{ mutated: false, reason: 'duplicate-entry' }`; no write.
+ *   - `'allow'`: append unconditionally; map-shape overwrites the
+ *     existing property at `value.key`.
+ *
+ * The `key` parameter must appear in the manifest's `stateKeys`
+ * allowlist; undeclared keys throw `UnknownStateKey` before any I/O.
  */
 export function appendToModuleState(
   input: AppendToModuleStateInput,
   _ctx: WriteToolContext = {},
 ): WriteResult {
+  assertStateKeyAllowed(input.name, input.key);
+  const policy = resolveDuplicatePolicy(input.duplicatePolicy);
   const root = canonicalizePath(input.projectRoot);
   const segments = parseFieldPath(input.fieldPath, 'appendToModuleState');
   if (!segments)
     return malformed(`appendToModuleState: 'fieldPath' must be a non-empty dotted path.`);
-  const filePath = moduleStatePath(root, input.name);
-  const data = readModuleStateOrEmpty(root, input.name);
-  appendAtPath(data, segments, deepClone(input.value));
+  const filePath = moduleStatePath(root, input.name, input.key);
+  const data = readModuleStateOrEmpty(root, input.name, input.key);
+
+  const parent = navigateToParent(data, segments);
+  const lastKey = segments[segments.length - 1];
+  const current = parent[lastKey];
+  const cloned = deepClone(input.value);
+
+  if (current === undefined) {
+    // Compose-if-absent: initialise as a single-element list.
+    parent[lastKey] = [cloned];
+  } else if (Array.isArray(current)) {
+    const isDuplicate = current.some((entry) => deepEqual(entry, cloned));
+    if (isDuplicate && policy !== 'allow') {
+      return { mutated: false, reason: 'duplicate-entry' };
+    }
+    current.push(cloned);
+  } else if (isObject(current)) {
+    const entryKey = extractEntryMapKey(cloned);
+    if (entryKey === null) {
+      throw createError('MalformedInput', {
+        field: '/' + segments.join('/'),
+        message:
+          `Cannot append to '${segments.join('.')}': stored value is a map, ` +
+          `so the appended entry must be an object with a 'key' string property.`,
+      });
+    }
+    const collision = Object.prototype.hasOwnProperty.call(current, entryKey);
+    if (collision && policy !== 'allow') {
+      return { mutated: false, reason: 'duplicate-entry' };
+    }
+    current[entryKey] = cloned;
+  } else {
+    throw createError('MalformedInput', {
+      field: '/' + segments.join('/'),
+      message:
+        `Cannot append to '${segments.join('.')}': stored value at the path ` +
+        `is a ${describeShape(current)}; expected an array (list-shape) or a ` +
+        `plain object (map-shape).`,
+    });
+  }
+
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(data));
   return { mutated: true, path: filePath };
 }
 
-export interface RemoveFromModuleStateInput {
-  projectRoot: string;
-  name: string;
-  fieldPath: string;
-  value: unknown;
+/**
+ * Validate `policy` shape and resolve to a concrete
+ * `DuplicatePolicy`. `undefined` falls through to the default
+ * `'error'`. Any other non-recognised value throws
+ * `MalformedInput` so unknown policy strings (e.g. `"replace"`) can
+ * never silently coerce to the default.
+ */
+function resolveDuplicatePolicy(value: unknown): DuplicatePolicy {
+  if (value === undefined) return 'error';
+  if (typeof value === 'string' && DUPLICATE_POLICIES.has(value as DuplicatePolicy)) {
+    return value as DuplicatePolicy;
+  }
+  throw createError('MalformedInput', {
+    field: 'duplicatePolicy',
+    message:
+      `'duplicatePolicy' must be one of 'error', 'skip', or 'allow'. ` +
+      `Received: ${JSON.stringify(value)}.`,
+  });
 }
 
 /**
- * Remove every entry deep-equal to `value` from the array at
- * `fieldPath` inside the module's state blob. Silent no-op when no
- * state file exists.
+ * Walk `data` to the immediate parent of `segments[last]`, creating
+ * intermediate objects on the way (matching the behaviour of
+ * `appendAtPath`/`setAtPath`). Returns the parent record so the
+ * caller can inspect the child's shape directly.
+ */
+function navigateToParent(
+  data: Record<string, unknown>,
+  segments: string[],
+): Record<string, unknown> {
+  let cursor: Record<string, unknown> = data;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    const existing = cursor[seg];
+    if (!isObject(existing)) {
+      const next: Record<string, unknown> = {};
+      cursor[seg] = next;
+      cursor = next;
+    } else {
+      cursor = existing;
+    }
+  }
+  return cursor;
+}
+
+/**
+ * Extract the `key` string from an entry intended for a map-shaped
+ * field. Returns the key when `entry` is an object with a non-empty
+ * `key: string` property; returns `null` otherwise.
+ */
+function extractEntryMapKey(entry: unknown): string | null {
+  if (!isObject(entry)) return null;
+  const k = entry['key'];
+  if (typeof k !== 'string' || k.length === 0) return null;
+  return k;
+}
+
+/** Human-readable shape descriptor used in `MalformedInput` messages. */
+function describeShape(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  return typeof v;
+}
+
+export interface RemoveFromModuleStateInput {
+  projectRoot: string;
+  name: string;
+  key: string;
+  entryKey: string;
+}
+
+/**
+ * Remove a single entry — addressed by `entryKey` — from the module's
+ * state blob at the named `key`. Two stored shapes are supported (per
+ * F2 / M3):
+ *
+ *   - **Map-shape**: the file at `<projectRoot>/.gan-state/modules/
+ *     <name>/<key>.json` is a plain JSON object. `entryKey` matches
+ *     the property name; the property is deleted.
+ *   - **List-shape**: the file is a JSON array of records, each
+ *     carrying a `key: string` field. `entryKey` matches that field;
+ *     the matching member is filtered out.
+ *
+ * If `entryKey` is not found in either shape (or the file is absent),
+ * the call is a silent no-op that returns
+ * `{ mutated: false, reason: 'entry-not-found' }` and never touches
+ * disk. Removing the last entry leaves `[]` / `{}` on disk — the
+ * file is not auto-deleted.
+ *
+ * The `key` must appear in the manifest's `stateKeys` allowlist;
+ * undeclared keys throw `UnknownStateKey` before any I/O.
+ *
+ * Anything other than a plain object or an array stored at `key` is
+ * `MalformedInput` — `removeFromModuleState` has no defined meaning
+ * against a scalar.
  */
 export function removeFromModuleState(
   input: RemoveFromModuleStateInput,
   _ctx: WriteToolContext = {},
 ): WriteResult {
+  assertStateKeyAllowed(input.name, input.key);
+  if (typeof input.entryKey !== 'string' || input.entryKey.length === 0) {
+    return malformed(`removeFromModuleState: 'entryKey' must be a non-empty string.`);
+  }
   const root = canonicalizePath(input.projectRoot);
-  const segments = parseFieldPath(input.fieldPath, 'removeFromModuleState');
-  if (!segments)
-    return malformed(`removeFromModuleState: 'fieldPath' must be a non-empty dotted path.`);
-  const filePath = moduleStatePath(root, input.name);
-  if (!existsSync(filePath)) return { mutated: false, reason: 'state-file-absent' };
-  const data = readModuleStateOrEmpty(root, input.name);
-  removeAtPath(data, segments, input.value);
-  atomicWriteFile(filePath, stableStringify(data));
-  return { mutated: true, path: filePath };
+  const filePath = moduleStatePath(root, input.name, input.key);
+  if (!existsSync(filePath)) return { mutated: false, reason: 'entry-not-found' };
+
+  const existing = loadModuleState(input.name, input.key, root);
+  if (existing === null) return { mutated: false, reason: 'entry-not-found' };
+  const stored = existing.state;
+
+  if (Array.isArray(stored)) {
+    const idx = stored.findIndex(
+      (member) =>
+        isObject(member) && typeof member['key'] === 'string' && member['key'] === input.entryKey,
+    );
+    if (idx === -1) return { mutated: false, reason: 'entry-not-found' };
+    const next = stored.slice();
+    next.splice(idx, 1);
+    atomicWriteFile(filePath, stableStringify(next));
+    return { mutated: true, path: filePath };
+  }
+
+  if (isObject(stored)) {
+    if (!Object.prototype.hasOwnProperty.call(stored, input.entryKey)) {
+      return { mutated: false, reason: 'entry-not-found' };
+    }
+    const next: Record<string, unknown> = { ...stored };
+    delete next[input.entryKey];
+    atomicWriteFile(filePath, stableStringify(next));
+    return { mutated: true, path: filePath };
+  }
+
+  throw createError('MalformedInput', {
+    field: input.key,
+    message:
+      `removeFromModuleState: stored value at module '${input.name}' key '${input.key}' is a ` +
+      `${describeShape(stored)}; expected an array (list-shape) or a plain object (map-shape).`,
+  });
 }
 
 export interface RegisterModuleInput {
@@ -545,8 +762,12 @@ export function registerModule(
   return { mutated: true, path: found.manifestPath };
 }
 
-function readModuleStateOrEmpty(projectRoot: string, name: string): Record<string, unknown> {
-  const existing = loadModuleState(name, projectRoot);
+function readModuleStateOrEmpty(
+  projectRoot: string,
+  name: string,
+  key: string,
+): Record<string, unknown> {
+  const existing = loadModuleState(name, key, projectRoot);
   if (existing === null) return {};
   if (isObject(existing.state)) {
     return deepClone(existing.state) as Record<string, unknown>;

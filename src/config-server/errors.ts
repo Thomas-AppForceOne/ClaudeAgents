@@ -31,7 +31,8 @@ export type ErrorCode =
   | 'PlatformNotSupported'
   | 'TimeoutError'
   | 'PortInUse'
-  | 'PortNotDiscovered';
+  | 'PortNotDiscovered'
+  | 'UnknownStateKey';
 
 export interface ConfigServerErrorShape {
   code: ErrorCode;
@@ -137,6 +138,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   TimeoutError: 'Operation timed out before completion.',
   PortInUse: 'Requested port is already in use.',
   PortNotDiscovered: 'Could not discover a port for the requested container.',
+  UnknownStateKey:
+    'Module-state operation referenced a state key that is not declared in the module manifest.',
 };
 
 /**
