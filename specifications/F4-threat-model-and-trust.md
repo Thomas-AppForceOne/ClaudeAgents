@@ -159,6 +159,20 @@ This flag is the answer to "I want to review someone's PR locally without runnin
 - Per-command sandboxing beyond the existing PreToolUse confinement to the worktree. Out of scope; Linux/macOS process-level sandboxing of arbitrary commands is platform-specific and a real spec on its own.
 - Network egress restrictions during `/gan` runs. Out of scope.
 
+### Trust prompt is a protocol, not a server-side gate
+
+`trustApprove` is a regular MCP tool. The agent (running inside Claude Code) can call it directly without any prompt being shown to the user, because the MCP server has no reliable way to distinguish "agent is calling because the user pressed `[a]`pprove at an interactive prompt" from "agent is calling on its own initiative."
+
+This means the trust-prompt UX described under "Interactive trust prompt" above is a **protocol the orchestrator is contracted to obey** — when the orchestrator encounters `UntrustedOverlay`, it MUST surface the diff to the user and wait for explicit consent before calling `trustApprove`. The prompt is NOT a hard gate the server enforces; faithful orchestration is part of the threat model's trusted base.
+
+Implications for the threat model:
+
+- **A misbehaving or compromised orchestrator can bypass the prompt** by calling `trustApprove` directly with the hash from `getTrustState`. The orchestrator's faithfulness is assumed.
+- **A user invoking `/gan` against a malicious project** is trusting the orchestrator's prompt UX to surface the project's commands before approval. This is the same trust posture as Claude Code's other prompts (the user trusts the host runtime to honor its own UI contracts).
+- **Server-side enforcement options** (rate-limit per session, require call to echo a content-hash the user just saw, structured audit log) are deferred to v1.1 as a real F4 amendment with trade-offs laid out then. v1.0 documents the truth and accepts the trust-base posture.
+
+If a future threat model needs a hard gate (e.g. Claude Code introduces a "user-mediated tool" affordance the server can require), F4 amends accordingly. For v1.0 the documentation honesty is what closes the bug — users running `/gan` should know what the prompt is and isn't.
+
 ### Path-resolution rules
 
 A related class of footgun: paths in committed config files that escape the project root. The most relevant case is `additionalContext` in U3, where a user could declare:

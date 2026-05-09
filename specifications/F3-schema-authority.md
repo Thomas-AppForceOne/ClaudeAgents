@@ -124,6 +124,21 @@ Mismatches:
 
 R4's stack-file lint script reads the same `schemas/*.json` documents the API does. There are no shadow rules. A file that passes the lint must pass the API's schema validation, and vice versa. Cross-file invariants are also runnable as a lint check.
 
+### Schema-runtime alignment for MCP tool surfaces
+
+`schemas/api-tools-v1.json` declares the inputSchema for every F2 tool the MCP server advertises. This schema is consumed by clients (Claude Code's tool layer) to validate the agent's tool calls before they reach the server.
+
+The principle: **the schema and the runtime validators must agree on what counts as a valid call.** If the schema says `required: ["projectRoot"]` but the runtime requires `["projectRoot", "tier"]`, the agent receives a misleading contract — the call passes the client-side schema check, then errors at the server with a "missing required field" message.
+
+v1.0 ships two enforcement rules:
+
+- **No `NotImplemented` tools in the advertised list.** A tool that is registered but always throws `NotImplemented` is worse than an unregistered tool. The advertised list (`buildToolList()` in `index.ts`) filters out any tool whose dispatch path cannot succeed under any input. Tools that re-implement land back in the list automatically.
+- **Schema and runtime must agree on parameter shape.** The schema's `required` array MUST match the runtime validator's required-field set for every advertised tool. Drift is a bug.
+
+v1.0 enforces these by hand (the advertised-list filter is a one-line change; parameter alignment is a manual audit at v1.0 cut). v1.1 lands the structural fix: either generate the JSON Schema from runtime validators at build time, or add CI that calls every tool with deliberately-bad input and asserts the runtime error matches the schema's declared `required` set. v1.0 cut is the manual baseline; v1.1 closes the drift permanently.
+
+This rule applies to the MCP tool surface today. If future spec families introduce other schema-bearing surfaces (event-trace schemas, contract-output schemas), the same alignment discipline applies.
+
 ## Acceptance criteria
 
 - Every config file format has a corresponding `schemas/<type>-v<N>.json` document at the repo root.
