@@ -66,7 +66,7 @@ The architectural spine has landed across five completed phases. Each phase clos
 ### Phase 4 — Modules
 - [M1-modules-architecture.md](M1-modules-architecture.md) — Module manifest, lifecycle, `pairsWith` enforcement, filesystem zone boundaries, distribution.
 - [M2-docker-module.md](M2-docker-module.md) — PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming.
-- [M3-module-surface-alignment.md](M3-module-surface-alignment.md) — Per-key state-file layout, `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, keyed-lookup `removeFromModuleState`. **Spec registered; implementation pending in v1.0** — `writes.ts` still uses M1's single-blob `state.json` layout, a known F2 contract violation tracked under v1.0 ship-blockers below.
+- [M3-module-surface-alignment.md](M3-module-surface-alignment.md) — Per-key state-file layout, `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, keyed-lookup `removeFromModuleState`. Implementation landed in PR #8 alongside the spec; the post-M F2 contract is now end-to-end aligned.
 
 ### Revision-break record
 
@@ -87,7 +87,7 @@ Each shipped phase closed with an audit. Their resolutions remain load-bearing f
 
 ## v1.0 — first release
 
-**Goal:** ship a usable product to early users so design assumptions get tested against real prompts, real codebases, and real failures. Fifteen items in v1.0: six carryover specs (M3 implementation, O1 full surface, O2, U1, U2, U3), nine new specs (A1, T1, E5, I1, I2, I3, D1, H1, W1), plus three documentation-only chores and inline amendments to F2/F3/F4/C2/R3.
+**Goal:** ship a usable product to early users so design assumptions get tested against real prompts, real codebases, and real failures. Fifteen items in v1.0: five carryover specs (O1 full surface, O2, U1, U2, U3), nine new specs (A1, T1, E5, I1, I2, I3, D1, H1, W1), plus three documentation-only chores and inline amendments to F2/F3/F4/C2/R3. M3 already shipped during the post-M revision break.
 
 The shape of the v1.0 user experience: a developer installs ClaudeAgents, edits `.claude/gan/project.md` to declare their project's quirks, runs `/gan` with a prompt, gets bounded clarifying questions on genuine ambiguities, sees a startup log telling them which stacks activated (with non-aborting warnings naming any overlay misuse), gets a sprint plan/contract/generation/evaluation cycle that won't loop forever, can `--recover` if interrupted, and can read a structured trace afterward to understand what happened.
 
@@ -95,7 +95,6 @@ The shape of the v1.0 user experience: a developer installs ClaudeAgents, edits 
 
 ### Carryover
 
-- **[M3-module-surface-alignment.md](M3-module-surface-alignment.md) implementation.** Spec landed at the post-M revision break (2026-05-07) but the runtime still uses M1's single-blob `state.json` per module — a known F2 contract violation. v1.0 closes this by implementing per-key state files, the `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, and keyed-lookup `removeFromModuleState`. Highest-priority remaining shipped-spec gap; lands first in the implementation order below.
 - **Full [O1-resolution-observability.md](O1-resolution-observability.md).** R1 already shipped the minimum-viable startup-log surface in Phase 2. v1.0 adds `gan config print`, `--print-config` JSON, and discard-array reporting. Without these, users can't debug their own setups without filing issues.
 - **[O2-recovery.md](O2-recovery.md).** Per-run state archive, `--recover`, `--list-recoverable`. Spec already had its prescriptive authoring at the post-E1 break.
 - **[U1-project-overlay-ux.md](U1-project-overlay-ux.md).** Hand-editable `.claude/gan/project.md`, validation errors, examples, mental-model guide. Project overlays are the reason the configuration API exists; v1.0 without them is a tech demo.
@@ -134,9 +133,9 @@ The shape of the v1.0 user experience: a developer installs ClaudeAgents, edits 
 
 Dependency-ordered sequence the v1.0 work lands in. Each item gates the items below it.
 
-1. **M3 implementation.** Closes the known F2 contract violation; one focused sprint. No external dependencies.
-2. **I1 — Self-contained install correctness.** Copies-not-symlinks, `prepare` script, post-install bin verification. The install pipeline must be honest before any other v1.0 work lands, otherwise downstream features ship behind a misleading install. ~1 sprint. Depends only on M3 conceptually.
-3. **I3 — Uninstall and version policy.** Symmetric uninstall (npm package removal), Node version warn-not-die, MCP absolute-path registration. ~1–2 sprints. Can run in parallel with I1 (no shared code paths).
+1. ~~**M3 implementation.**~~ ✅ Shipped in PR #8 alongside the spec.
+2. **I1 — Self-contained install correctness.** Copies-not-symlinks, `prepare` script, post-install bin verification. The install pipeline must be honest before any other v1.0 work lands, otherwise downstream features ship behind a misleading install. ~1 sprint. ✅ Shipped in PR #9.
+3. **I3 — Uninstall and version policy.** Symmetric uninstall (npm package removal), Node version warn-not-die, MCP absolute-path registration. ~1–2 sprints. **Partially shipped in PR #9** — symmetric uninstall ✅ and MCP absolute-path registration ✅ landed; the Node version warn-not-die slice (introduce `TESTED_THROUGH_NODE_MAJOR`, convert the upper-bound `die` to a warning, add tests) is the next sprint and the first task with substantive remaining work.
 4. **I2 — Install user-facing surfaces.** Post-install message, first-run welcome banner, permission consent flow. ~3–4 sprints. Depends on I1 (working install) and I3 (settings.json patterns).
 5. **F2 cache-coherence amendment + F3 schema-runtime alignment chore.** Resolver invalidation on writes; filter `NotImplemented` tools from advertised list. ~1 sprint combined. Closes the dogfooding session's "trustApprove cache staleness" bug.
 6. **T1 schema authoring + event-emission infrastructure.** Substrate every later v1.0 item reads from. ~2–3 sprints. Must land before A1 (which extends T1's `safetyHalt` extension point) and before E5 (which adds T1's `clarifierFinding` event class).
