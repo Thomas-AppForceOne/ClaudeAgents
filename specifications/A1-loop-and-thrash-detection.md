@@ -88,9 +88,9 @@ When any of the three triggers fires, the orchestrator:
 
 The error message rendered to the user is plain prose:
 
-> The generator made 3 attempts at this sprint and the changes oscillated between two interpretations. The sprint has been halted to avoid wasting tokens. Run `gan run trace <run-id>` to see what was tried, or `--recover` after adjusting the prompt.
+> The generator made 3 attempts at this sprint and the changes oscillated between two interpretations. The sprint has been halted to avoid wasting tokens. Trace files at `.gan-state/runs/<run-id>/trace/`. Run `--recover` after adjusting the prompt.
 
-(`gan run trace` is a T2 surface; for v1.0 the user reads files under `.gan-state/runs/<id>/trace/` directly.)
+The message points at the trace directory directly because v1.0 ships without a `gan run trace` command — that surface is T2's scope in v1.1. When T2 lands, A1's PR for v1.1 updates the message to reference the command instead of the directory.
 
 ### Halt timing
 

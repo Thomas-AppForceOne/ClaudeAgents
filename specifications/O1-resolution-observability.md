@@ -38,6 +38,13 @@ Both produce identical JSON when given `--json`. The flag parsing for `/gan --pr
 
 **Failure mode: fail-open.** `--print-config` is a debug surface. When `validateAll()` fails, the output prints both the partial resolved view (everything the resolver could compute despite the errors) **and** the structured error report. Both are JSON when `--json` is given; both surfaces are top-level keys in the output (`resolvedConfig` and `validationErrors`). Exit code reflects the validation status (non-zero on failure), but the user always gets the resolved view to debug from. This differs from a regular `/gan` run, which fails closed and prints only the validation report.
 
+**Exit code policy on warnings (v1.0).** `validateAll()` distinguishes errors from warnings; the latter are non-aborting (e.g. the per-stack overlay override warning per the v1.0 pre-release chore, or a missing `additionalContext` file). `--print-config`'s exit code is:
+
+- **0** — `validateAll()` produced no errors. Warnings, if any, appear under a top-level `validationWarnings` key and are also enumerated to stderr in non-JSON mode. CI scripts that gate on warnings can check this key explicitly; the default exit-zero matches the contract that "warnings inform, errors fail."
+- **Non-zero** — `validateAll()` produced one or more errors. The error array appears under `validationErrors`; warnings (if any) still appear under `validationWarnings`. The non-zero exit code is the same regardless of whether warnings are also present.
+
+This policy is explicit because CI ergonomics depend on it: a build that wants to fail on any warning passes `--strict-warnings` (added in v1.1's `gan` CLI work, not v1.0). For v1.0, warnings are exit-0 and CI scripts that care write a separate check.
+
 The output:
 
 ```json

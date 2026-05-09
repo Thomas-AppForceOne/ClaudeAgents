@@ -158,6 +158,48 @@ T1 ships only the on-disk format and the schemas. There is no `gan run trace` CL
 
 This split is intentional: shipping the data first, the read surface second, lets v1.0 dogfooding tell us what the read CLI should prioritise. Without trace data in real users' hands, the read CLI's design would be speculative. T2 (v1.1) adds the read CLI on top of the existing structure.
 
+### Real-time progress surface (v1.0)
+
+While T1 ships no read CLI, it does ship a minimal real-time progress signal so users running a sprint can see what it's costing them as it runs. Three classes of stderr emission:
+
+**1. Agent-attempt heartbeat.** When the orchestrator spawns an agent, it emits a single line *before* the agent's first LLM call:
+
+```
+[<role>] thinking...
+```
+
+This addresses the long-silence failure mode where an agent has a multi-second thinking phase before its first LLM call. Without the heartbeat, a user might think the tool froze. The line is emitted at agent-attempt-start; subsequent LLM calls for that attempt produce the per-call summary (next).
+
+**2. Per-LLM-call summary.** Every `llmCall` event emits a one-line stderr summary at the moment it completes:
+
+```
+[<role>] <tokensInput> in / <tokensOutput> out / <tokensCached> cached / <latencyMs/1000>s [cache hit|miss]
+```
+
+**3. Sprint-end cumulative summary.** At every sprint termination — graceful completion, A1 halt, validation abort, user cancel, error — the orchestrator emits one line summarising the run before exiting:
+
+```
+[sprint-summary] 47/8 LLM calls / 38192 in / 5347 out / 28412 cached / 4m23s
+```
+
+Combined example output during a sprint:
+
+```
+[gan-clarifier] thinking...
+[gan-clarifier] 2104 in / 187 out / 0 cached / 1.4s [miss]
+[gan-planner] thinking...
+[gan-planner] 4827 in / 612 out / 3201 cached / 8.3s [hit]
+[gan-generator] thinking...
+[gan-generator] 12459 in / 2841 out / 9870 cached / 22.1s [hit]
+[sprint-summary] 47/8 LLM calls / 38192 in / 5347 out / 28412 cached / 4m23s
+```
+
+Rationale: without T2's full cost surface in v1.0, users running a sprint have no idea what it's costing them in real time, and long agent-thinking phases compound the uncertainty with apparent silence. The three-line surface closes both gaps with negligible implementation effort — the `thinking...` line is one console.error at agent-spawn time; the per-call summary reads from the existing `llmCall` event; the sprint-summary aggregates from the trace at termination. T2 in v1.1 adds the friendlier `gan run report` aggregation; v1.0's stderr surface is the lowest-effort substrate that gives users a fuel gauge.
+
+The lines are emitted unconditionally to stderr — there is no `--quiet` flag in v1.0. CI invocations that want silence pipe stderr to `/dev/null`. A `--quiet` flag is a v1.1 candidate if usage shows the lines are noise rather than signal.
+
+Dollar-cost is not surfaced in v1.0 because the price-per-token table is per-model and varies; T2's cost surface owns the conversion.
+
 ### Recovery integration
 
 O2's archive includes the entire trace directory. `--recover` reads the trace to reconstruct sprint state — most importantly, A1's attempt counters and the position of the last completed milestone. A recovered sprint continues writing to the same trace directory; new events get sequence numbers continuing from where the archive ended.

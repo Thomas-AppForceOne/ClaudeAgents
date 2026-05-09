@@ -16,7 +16,7 @@ CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
-MAX_NODE_MAJOR=22
+MAX_NODE_MAJOR=25
 
 # STATE_LOG — append-only audit trail of state-creating steps. S3 consumes
 # this in `rollback()`. Each entry is a single line `<kind>:<payload>`:
