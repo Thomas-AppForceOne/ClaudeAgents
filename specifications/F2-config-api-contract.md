@@ -123,6 +123,20 @@ This is a deliberate consistency choice: a sprint contract issued in sprint N mu
 
 The combination — frozen across user edits, re-snapshotted after agent writes — gives the system a predictable two-tier freshness contract: external state is stable for the run; internal state advances on agent action.
 
+### Server-side cache coherence
+
+The two-tier freshness contract above governs the **orchestrator's** view of the snapshot. It does NOT govern the **server's** internal data caches — and a coherence bug at the server layer surfaces as the same symptom (callers see stale state) even when the orchestrator does everything right.
+
+The cache-coherence rule for v1.0:
+
+- **Every state-mutating tool call invalidates the server's data caches before returning.** This includes every write tool (`setOverlayField`, `appendToOverlayField`, `removeFromOverlayField`, `updateStackField`, `appendToStackField`, `removeFromStackField`, `setModuleState`, `appendToModuleState`, `removeFromModuleState`), the trust writes (`trustApprove`, `trustRevoke`), and `registerModule`. After the call returns, the next read of any cached data MUST observe the post-write state.
+- **Mtime-driven invalidation** catches hand-edits that bypass the API. The first read after an overlay or stack file's mtime advances past the cached value's read time MUST re-parse the file. Implementations may choose stat-on-every-read (simple, slower) or stat-on-cache-hit + invalidate-and-refresh (faster, more cache-bookkeeping). Either is correct.
+- **The trust cache itself is read-through.** `getTrustState` and `getTrustDiff` always recompute the aggregate hash from the current overlay-file bytes, so a manual edit to `~/.claude/gan/trust-cache.json` doesn't produce a stale "approved" answer.
+
+These rules are F2's contract; R1 owns the implementation. Without them, the dogfooding failure mode is exact: a user writes an overlay, calls `trustApprove`, and `getResolvedConfig` returns pre-overlay state for the rest of the session because the server's resolver cached the old result before the write.
+
+The orchestrator's `mutated:true`-driven re-snapshot is necessary but not sufficient — it covers the case where the orchestrator can observe that a write happened, not the case where the server's internal cache survived a write because the cache's invalidation logic missed it.
+
 ### Error model
 
 All errors are structured objects:

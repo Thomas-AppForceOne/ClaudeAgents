@@ -39,7 +39,7 @@ const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   version: 'Print API version, framework version, and on-disk schemas.',
   validate: 'Run validateAll() and print a structured report.',
   config: 'Print, get, or set resolved-config splice points.',
-  stacks: 'List active stacks or scaffold a new stack file.',
+  stacks: 'Inspect active or available stacks; scaffold, customize, or reset stack files.',
   stack: 'Show or update a single stack file.',
   modules: 'List registered modules with pairing status.',
   trust: 'Approve, revoke, or inspect project trust-cache approvals.',
@@ -152,14 +152,33 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
     ],
   },
   stacks: {
-    usage: 'gan stacks <list|new> [args] [--json] [--project-root DIR]',
+    usage:
+      'gan stacks <list|available|new|where|customize|reset> [args] [--json] [--project-root DIR]',
     description:
-      'List active stacks or scaffold a new stack file.\n' +
-      '  gan stacks list                       List active stacks.\n' +
-      '  gan stacks new <name> [--tier=project]\n' +
-      '                                        Scaffold a stack file.',
-    flags: ['      --tier=project        Where to scaffold (default: project).'],
-    examples: ['  gan stacks list', '  gan stacks new ios'],
+      'Inspect active or available stacks; scaffold, customize, or reset stack files.\n' +
+      '  gan stacks list                       List ACTIVE stacks for this directory.\n' +
+      '  gan stacks available                  List ALL stacks the framework ships.\n' +
+      '  gan stacks new <name>                 Scaffold a new stub stack file.\n' +
+      '  gan stacks where [<name>]             Show where stack files resolve from.\n' +
+      '  gan stacks customize <name>           Copy a built-in stack into a writable tier.\n' +
+      '  gan stacks reset <name>               Remove a customized stack copy.\n' +
+      '\n' +
+      '  Active vs. available:\n' +
+      '    list      = stacks whose detection rules match the current directory.\n' +
+      '                In a project that matches one of the framework\'s shipped\n' +
+      '                stacks, that stack appears here; otherwise `generic`\n' +
+      '                (the fallback) is the active stack.\n' +
+      '    available = every stack file the framework has on disk.',
+    flags: [
+      '      --tier=project|user   Where to scaffold/customize/reset (default: project).',
+      '      --force               (customize) Overwrite an existing higher-tier copy.',
+    ],
+    examples: [
+      '  gan stacks list',
+      '  gan stacks available',
+      '  gan stacks new ios',
+      '  gan stacks customize `web-node`',
+    ],
     exitCodes: [
       '  0   Success',
       '  1   Generic failure (target file already exists)',

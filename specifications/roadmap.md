@@ -6,158 +6,244 @@ ClaudeAgents is a framework for AI-driven software development workflows — spr
 
 The architectural backbone is a **Configuration API** that hides storage, validation, and merging behind a small set of named functions. Agents call those functions; they do not parse files, do not know schemas, and do not enumerate tiers. Stack files declare per-ecosystem behavior; overlays apply per-user and per-project customization through a cascading merge; runtime utility libraries (modules) provide imperative helpers paired by name with their stack files. The project filesystem is split into config, durable state, and cache zones with non-overlapping lifecycles, so persistent module state cannot collide with per-run orchestration data. Configuration files are hand-editable; the API validates on read and surfaces structured errors when something is wrong.
 
-The phases below trace the implementation path from foundations outward. Each spec is sized for a single sprint of focused work.
+The plan is now **release-driven**. Phases 0–4 (foundations, configuration, reference implementation, agent integration, modules) have shipped and provide the architectural spine. The active plan is structured as **v1.0 → v1.1 → v1.2 → v2.0 → beyond**: each release ships a coherent slice that gives real-world signal before the next slice is designed in detail. Specs that depend on usage data to be authored well are deliberately deferred until that data exists.
 
 ## How to read the spec set
 
-Specs are organised by **phase code** (F = foundation, C = configuration domains, R = reference implementation, E = agent integration, M = modules, U = user-facing extensibility, O = observability and operations). Filenames carry the phase code so directory listings show the natural execution order. Foundations land before consumers; reference implementations land before refactors that use them; observability lands last.
+Specs are organised by **phase code**:
 
-The **S = stack-content** code is reserved for real-ecosystem stack files. The active plan ships exactly one real stack (`web-node`) plus a fixture-only synthetic stack used as a multi-stack guard rail (see "Cross-cutting principles" below). Authored-but-deferred S-series specs (Android, KMP, iOS Swift) live under [`specifications/deferred/`](deferred/README.md) until reactivation criteria are met; they are not part of the implementation order below.
+- **F** — foundation
+- **C** — configuration domains
+- **R** — reference implementation
+- **E** — agent integration
+- **M** — modules
+- **U** — user-facing extensibility
+- **O** — observability and operations
+- **I** — install / installer
+- **D** — diagnostics + user UX
+- **H** — framework-owned hooks
+- **W** — non-aborting warnings on user misuse
+- **A** — agent safety
+- **T** — telemetry
+- **V** — LLM-verdict verification
+- **B** — benchmarks
+- **Q** — quality signal
+- **S** — stack content (reserved for real-ecosystem stack files; deferred S-series in [`specifications/deferred/`](deferred/README.md))
 
-## Phase 0 — Foundations
+Filenames carry the phase code. The phase code groups specs by concern; release milestones below describe the order they land in.
 
-System contracts that every later spec depends on.
+The active plan ships exactly one real stack (`web-node`) plus a fixture-only synthetic stack used as a multi-stack guard rail (see "Cross-cutting principles" below). Authored-but-deferred S-series specs (Android, KMP, iOS Swift) live under [`specifications/deferred/`](deferred/README.md) until reactivation criteria are met.
 
+## Shipped phases
+
+The architectural spine has landed across five completed phases. Each phase closed with a revision-break audit before the next began; the discipline pattern carries forward to v1.0+.
+
+### Phase 0 — Foundations
 - [F1-filesystem-layout.md](F1-filesystem-layout.md) — Three project zones (`.claude/gan/`, `.gan-state/`, `.gan-cache/`) with single-owner lifecycles. Retires the old `.gan/` directory.
 - [F2-config-api-contract.md](F2-config-api-contract.md) — Black-box function surface, MCP binding, validation timing, install/restart story, error model.
 - [F3-schema-authority.md](F3-schema-authority.md) — JSON Schema location, `schemaVersion` semantics, lint integration.
-- [F4-threat-model-and-trust.md](F4-threat-model-and-trust.md) — Threat model, trust-cache contract, `UntrustedOverlay` error, `GAN_TRUST` modes, `--no-project-commands` flag, path-escape rules. Lands in Phase 0 because committed overlays + arbitrary commands is a real attack surface that needs closing before user-facing extensibility (Phase 6) opens it up.
+- [F4-threat-model-and-trust.md](F4-threat-model-and-trust.md) — Threat model, trust-cache contract, `UntrustedOverlay` error, `GAN_TRUST` modes, `--no-project-commands` flag, path-escape rules.
 
-## Phase 1 — Configuration domains
-
-Data models the API exposes.
-
+### Phase 1 — Configuration domains
 - [C1-stack-plugin-schema.md](C1-stack-plugin-schema.md) — Stack file schema, detection composites, parse contract.
 - [C2-stack-detection-and-dispatch.md](C2-stack-detection-and-dispatch.md) — Dispatch algorithm, scope filtering, generic fallback.
 - [C3-overlay-schema.md](C3-overlay-schema.md) — Overlay splice points, defaults, `discardInherited`.
 - [C4-three-tier-cascade.md](C4-three-tier-cascade.md) — default → user → project merge per splice point.
 - [C5-stack-file-resolution.md](C5-stack-file-resolution.md) — project → user → repo lookup for stack files.
 
-## Phase 2 — Reference implementation
-
-The MCP server and tooling that fulfill Phases 0–1.
-
+### Phase 2 — Reference implementation
 - [R1-config-mcp-server.md](R1-config-mcp-server.md) — Node 18+ MCP server implementing F2.
 - [R2-installer.md](R2-installer.md) — `install.sh`, MCP registration, zone preparation.
 - [R3-cli-wrapper.md](R3-cli-wrapper.md) — `gan validate`, `gan config`, `gan stacks`.
 - [R4-maintainer-tooling.md](R4-maintainer-tooling.md) — Lint script, schema publisher, evaluator-pipeline-check runner, pair-names check, CI workflows.
 - [R5-trust-cache-impl.md](R5-trust-cache-impl.md) — Reference implementation of F4: hash function, cache I/O, `validateAll()` integration, `getTrustState`/`trustApprove` MCP tools, `--no-project-commands` runtime flag routing, `PathEscape` invariant.
 
-## Revision break — post-R contract audit (incl. F4/R5 operational readiness)
+### Phase 3 — Agent integration (initial)
+- [E1-agent-integration.md](E1-agent-integration.md) — Orchestrator and agent prompt rewrites consuming the Configuration API.
+- [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extracted `web-node` and `generic` into stack files.
+- [E3-evaluator-pipeline-harness.md](E3-evaluator-pipeline-harness.md) — Deterministic-core fixture harness with hand-authored evaluator-plan goldens.
 
-The R series is the first time the F-phase contracts and C-phase data models are exercised against real code (the MCP server, installer, CLI, lint, trust cache). Before Phase 3 begins, every contract spec is re-audited against its implementation to surface gaps the spec missed.
+### Phase 4 — Modules
+- [M1-modules-architecture.md](M1-modules-architecture.md) — Module manifest, lifecycle, `pairsWith` enforcement, filesystem zone boundaries, distribution.
+- [M2-docker-module.md](M2-docker-module.md) — PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming.
+- [M3-module-surface-alignment.md](M3-module-surface-alignment.md) — Per-key state-file layout, `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, keyed-lookup `removeFromModuleState`. **Spec registered; implementation pending in v1.0** — `writes.ts` still uses M1's single-blob `state.json` layout, a known F2 contract violation tracked under v1.0 ship-blockers below.
 
-Specs to revisit, with what to verify:
+### Revision-break record
 
-- **F2** — confirm the function surface and structured-error model match what R1 actually exposes; refine signatures, error codes, and bulk-read shapes if implementation surfaced different patterns. Includes the F2 capability-binding flag (per F2's "Capability binding" subsection): is any caller surfacing user-influenced strings into `projectRoot`?
-- **F3** — confirm the JSON Schema documents at `schemas/<type>-vN.json` cover everything R1 needs to validate; add fields or invariants the implementation found necessary.
-- **F4 + R5 operational readiness** — exercise the trust prompt against at least three real PRs of varying shape (config-only change; config + script change; new project-tier stack file). Confirm: (a) the `[v]` view-the-diff branch produces output users can actually act on; (b) `getTrustDiff()`'s per-file-hash report is legible; (c) `--no-project-commands` log content names every suppressed surface including custom-stack drop-throughs; (d) `gan trust export`/`import` round-trips cleanly; (e) error texts pass the iOS-on-macOS readability check (no Node/npm leaks). This gate exists because U1 / U2 (Phase 7) are when committed overlays go mainstream — if R5's prompt UX has rough edges discovered late, the user-facing rollout in Phase 7 inherits them.
-- **C1, C2, C3, C4, C5** — confirm the algorithms and merge rules described match what R1's resolver actually does; clarify ambiguities found during implementation.
+Each shipped phase closed with an audit. Their resolutions remain load-bearing for downstream specs and are preserved here.
 
-Like the post-E1 break, this is a checkpoint: specs are revised in place; no new files. No Phase 3 work begins until the audit closes.
+- **Post-R contract audit (closed).** F2/F3/F4/R5/C1–C5 re-audited against R1–R5 implementation. F2's function surface and structured-error model refined. F4/R5 operational readiness exercised against three real PRs of varying shape.
+- **Post-E1 audit + O2 first prescriptive revision (closed).** O1's startup-log shape confirmed against E1 coordinator output. O2 reconceived from descriptive to prescriptive under F1 zones and E1's snapshot model. U3 consumption pattern validated end-to-end.
+- **Post-M module surface audit (closed 2026-05-07).** Eight items resolved:
+  - **F2** closed with a minor edit clarifying `registerModule` is a runtime probe; `manifest` argument is advisory; production registration cache is built lazily by `getRegisteredModules()`.
+  - **F3** closed with no edit; both schemas already cover what M2 declares and uses.
+  - **R1** closed with no edit; misleading registration-timing prose lived in M1 and was fixed there.
+  - **M1** closed with edits to the registration-time bullet, the `stateKeys`/`configKey` paragraph, and the persistence bullet.
+  - **C4** module configs at `.claude/gan/modules/<name>.yaml` are project-tier-only and do not participate in the three-tier cascade.
+  - **M1/F2 (stateKeys)** — `stateKeys` is the authoritative allowlist of named state blobs the module owns. Each declared key persists to its own file at `.gan-state/modules/<name>/<key>.json`. Writes to undeclared keys rejected with structured error.
+  - **F2/M1 (duplicatePolicy)** — F2 spec wins: `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` is correct.
+  - **F2/M1 (removeFromModuleState)** — F2 spec wins: removal is by entry key (keyed lookup), not by deep-equal value match.
+  - **Implementation alignment** authored separately as M3 (Phase 4 alignment).
 
-## Phase 3 — Agent integration
+## v1.0 — first release
 
-Existing agents start using the new system.
+**Goal:** ship a usable product to early users so design assumptions get tested against real prompts, real codebases, and real failures. Fifteen items in v1.0: six carryover specs (M3 implementation, O1 full surface, O2, U1, U2, U3), nine new specs (A1, T1, E5, I1, I2, I3, D1, H1, W1), plus three documentation-only chores and inline amendments to F2/F3/F4/C2/R3.
 
-- [E1-agent-integration.md](E1-agent-integration.md) — Orchestrator and agent prompt rewrites. SKILL.md, gan-planner, gan-contract-proposer, gan-generator, gan-evaluator, gan-recover all consume the Configuration API instead of parsing files. Single coordinated PR with per-agent sprint slices.
-- [E2-builtin-stack-extraction.md](E2-builtin-stack-extraction.md) — Extract `web-node` and `generic` into `stacks/<name>.md` files written via the API. Per the single-real-stack principle below, other ecosystem-specific tokens currently living in old prompts (Python, Rust, Go, Ruby, Kotlin, Gradle, etc.) are content-mining sources for the extraction audit — each must be lifted into web-node/generic, retained as synthetic-second fixture content, or explicitly retired.
-- [E3-evaluator-pipeline-harness.md](E3-evaluator-pipeline-harness.md) — Tests the evaluator's *deterministic core* (snapshot → active stacks → security surfaces → commands → keywords). Fixtures + hand-authored evaluator-plan goldens. No LLM in CI. Optional E4 (LLM-eval suite, if ever needed) is a separate, future, non-gating spec.
+The shape of the v1.0 user experience: a developer installs ClaudeAgents, edits `.claude/gan/project.md` to declare their project's quirks, runs `/gan` with a prompt, gets bounded clarifying questions on genuine ambiguities, sees a startup log telling them which stacks activated (with non-aborting warnings naming any overlay misuse), gets a sprint plan/contract/generation/evaluation cycle that won't loop forever, can `--recover` if interrupted, and can read a structured trace afterward to understand what happened.
 
-**Implementation order within Phase 3 — spec-completion order, not commit order.** Phase 3 is a single coordinated PR (per E1's "Migration approach" subsection). Within that PR, the spec-completion order is **E1 → E3 → E2**: E1 specifies what the rewritten agents do, E3 specifies the harness that gates the rewrite, E2 specifies the stack content the rewritten agents will consume. E2 is gated by E3 in correctness-verification terms; E3 cannot run against the rewrites until E1 lands.
+**Effort estimate:** ~16–22 sprints of focused work, roughly 4–6 calendar months at one full-time developer. v1.0 is not a polish release — A1, T1, E5, plus the install pipeline (I1/I2/I3), diagnostics (D1), hooks (H1), warnings (W1), and the M3 implementation gap below add up to nine substantive systems on top of six carryover items.
 
-The **commit order inside the PR**, however, is the reverse for the prompt-content path: E2's stack-extraction commits land **before** E1's rewrite-in-place commits on `agents/*.md`, so the old prompts are still present as the content reference during extraction. Once E1's commits delete the old prompt content, anything not yet lifted is unrecoverable except from git history.
+### Carryover
 
-The two orderings are compatible because they describe different things — spec-completion order describes which spec is authoritatively complete first; commit order describes which lines change first inside the implementation PR. A reader who sees "E1 first" in the implementation order should understand it as "E1's contract is finalised first (it's what E2 and E3 consume)," not "the prompts are gone before E2 starts."
+- **[M3-module-surface-alignment.md](M3-module-surface-alignment.md) implementation.** Spec landed at the post-M revision break (2026-05-07) but the runtime still uses M1's single-blob `state.json` per module — a known F2 contract violation. v1.0 closes this by implementing per-key state files, the `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, and keyed-lookup `removeFromModuleState`. Highest-priority remaining shipped-spec gap; lands first in the implementation order below.
+- **Full [O1-resolution-observability.md](O1-resolution-observability.md).** R1 already shipped the minimum-viable startup-log surface in Phase 2. v1.0 adds `gan config print`, `--print-config` JSON, and discard-array reporting. Without these, users can't debug their own setups without filing issues.
+- **[O2-recovery.md](O2-recovery.md).** Per-run state archive, `--recover`, `--list-recoverable`. Spec already had its prescriptive authoring at the post-E1 break.
+- **[U1-project-overlay-ux.md](U1-project-overlay-ux.md).** Hand-editable `.claude/gan/project.md`, validation errors, examples, mental-model guide. Project overlays are the reason the configuration API exists; v1.0 without them is a tech demo.
+- **[U2-user-overlay-ux.md](U2-user-overlay-ux.md).** `~/.claude/gan/config.md`, cross-project preferences, auto-memory integration. Ships naturally with U1 — same surface, marginal cost.
+- **[U3-additional-context-splice.md](U3-additional-context-splice.md).** `additionalContext` splice points for planner/proposer.
 
-## Revision break — post-E1 audit + O2 first prescriptive revision
+### New for v1.0
 
-E1 is the largest behavioral change in the roadmap and several downstream specs reference its outcome without yet knowing the concrete details. Before continuing past Phase 3, every spec that carries an "E1 dependency" note is re-audited against E1's actual implementation. Most are revised in place. **O2 gets its first prescriptive authoring here — not just an audit.**
+**Agent-loop safety, telemetry, and clarification (3 specs):**
 
-Specs to revisit, with what to verify:
+- **[A1](A1-loop-and-thrash-detection.md) — Loop & thrash detection.** Hard ceiling on attempts per sprint; edit-fingerprint history; halt with `LoopDetected` on oscillation. Single biggest safety gap in the current architecture; non-negotiable for v1.0. Doesn't need real-world data to design.
+- **[T1](T1-structured-run-trace.md) — Structured run trace.** Every LLM call + tool call written under `.gan-state/runs/<id>/trace/` with prompt hash, response hash, token counts, cache-hit flag, latency, tool-call sequence. Schema at `schemas/run-trace-v1.json` per F3 conventions. T1 is the substrate every later phase reads from — landing it in v1.0 makes T2/V/B/Q materially cheaper to build later.
+- **[E5](E5-spec-clarification.md) — Spec clarification phase.** New `gan-clarifier` agent role between user prompt ingestion and the planner. Identifies ambiguities and gaps, asks bounded blocker questions, declares assumptions for non-blocking gaps. Without this, v1.0 dogfooding signal is dominated by "the planner misread me" complaints, which mask everything else.
 
-- **O1** — confirm the orchestrator's startup-log shape matches what E1's coordinator actually emits; refine output format if needed.
-- **O2** — full reconception of the recovery flow under F1's zone layout and E1's snapshot model. The current spec is explicitly marked "descriptive of intent, not prescriptive"; this is where it becomes prescriptive. Real authoring work, not editing.
-- **U3** — validate that planner/proposer consumption of `additionalContext` works end-to-end via the snapshot; update the spec if the consumption pattern differs from what's currently described.
+  **Minimal first cut for v1.0:** one round, ≤ 3 blockers, no auto-promotion to project context, no confidence scoring. The clarifier reads `additionalContext` (U3) first and asks only about what's still ambiguous. Iteration on round budget, confidence model, and persistence happens in v1.1 once usage shows which ambiguities recur.
 
-Plus a general re-audit of every post-E1 spec for ambiguities E1 implementation may have surfaced.
+**Install pipeline (3 specs):**
 
-This break is a checkpoint with one substantive new authoring (O2). No Phase 4 work begins until both the audit and O2's revision close. Doing this now prevents Phases 4–8 from being built on assumptions that turn out to be wrong.
+- **[I1](I1-self-contained-install-correctness.md) — Self-contained install correctness.** Real-file copies (not symlinks back to the source repo); `prepare` script in `package.json` so `npm install -g .` auto-builds `dist/`; post-install bin verification halts the install with a structured error if `claudeagents-config-server` is not on PATH; `engines.node` upper bound lifted (`>=20.10.0` only). The correctness layer of the install pipeline.
+- **[I2](I2-install-user-facing-surfaces.md) — Install user-facing surfaces.** Post-install message names `/gan --help`; first-run welcome banner previews the trust prompt and clarifier draft preview before the user encounters them; permission-allowlist consent flow (8-category prompt with `[a]`/`[s]`/`[v]` shortcuts, atomic merge into `~/.claude/settings.json`, idempotent re-runs, surgical uninstall). The UX layer.
+- **[I3](I3-uninstall-and-version-policy.md) — Uninstall and version policy.** Symmetric uninstall (`npm uninstall -g @claudeagents/config-server` after filesystem cleanup) with post-uninstall restart hint; Node version policy (warn-not-die for the upper bound); MCP registration with absolute bin path (closes the macOS GUI-PATH bug). The cleanup + hardening layer.
 
-## Phase 4 — Modules
+**Diagnostics + UX (1 spec):**
 
-Runtime utility libraries; independent of Phases 0–3 conceptually.
+- **[D1](D1-diagnostic-clarity.md) — Diagnostic clarity.** `ConfigApiUnreachable` branching (distinguishes installed-but-needs-restart from not-installed from bin-missing); SKILL.md status markers (`[shipped-in-v1.0]` / `[deferred-to-v1.1]` / `[partial-v1.0]`) with runtime alignment (deferred flags short-circuit with "requires v1.1"); `gan stacks --help` advertises all six subcommands with an "Active vs. available" paragraph. Three diagnostic surfaces unified under a single discipline: match the diagnostic to the user's actual state, not the most-common case.
 
-- [M1-modules-architecture.md](M1-modules-architecture.md) — Module manifest, lifecycle, `pairsWith` enforcement via API, filesystem zone boundaries, distribution.
-- [M2-docker-module.md](M2-docker-module.md) — PortRegistry, PortDiscovery, ContainerHealth, PortValidator, ContainerNaming. Persists state in `.gan-state/modules/docker/`.
+**Framework-owned hooks (1 spec):**
 
-## Revision break — post-M module surface audit
+- **[H1](H1-framework-owned-confinement-hook.md) — Framework-owned filesystem-zone enforcement hook.** `gan-confine.sh` migrated from project-tier to user-tier; written by `install.sh` to `~/.claude/hooks/`; refreshed on each install. Project-tier hooks remain optional overrides. Closes the implicit cross-version coupling where every F1 zone rework silently broke every project that adopted a hook pattern.
 
-M1 + M2 are the first time F2's module surface (`registerModule`, `getModuleState`, `setModuleState`, the `pairsWith` invariant) is exercised against real modules. R1's implementation of these in Phase 2 had no concrete module to validate against. Before Phase 5, the module-related parts of F2, F3, R1, M1 are re-audited against M2's actual implementation.
+**Non-aborting warnings (1 spec):**
 
-Specs to revisit, with what to verify:
+- **[W1](W1-overlay-misuse-warnings.md) — Overlay-misuse warnings.** Two cases where the framework accepts user overlay declarations that don't have the user's apparent intent: `StackOverrideShrinkage` (when `stack.override` produces a smaller active set than detection would have); `PerStackOverrideUnsupported` (when an overlay declares per-stack command overrides, which v1.0 does not implement and v1.1 will). Both surface in the orchestrator startup log, `gan stacks list`, and `gan config print`. Non-aborting; the user's overlay IS their intent and runs as written, but the divergence between intent and effect is now visible.
 
-- **F2** — confirm the module-state functions handle the project-rooting story correctly (see post-R audit) and that registration timing is unambiguous.
-- **F3** — confirm `module-manifest-v1.json` and any module-config schemas (e.g. `module-config-docker-v1.json`) cover what M2 actually needs.
-- **R1** — confirm the `pairsWith` invariant catches the failure modes M2 surfaces; confirm `registerModule` lifecycle (when it runs, idempotency, error handling) matches what M1 needs.
-- **M1** — refine the lifecycle prose if M2 implementation surfaced timing/sequencing details the architecture spec missed. Specifically address whether barrel-runs-prerequisites-at-import scales — at two shipped modules it is fine, but the cost grows linearly in shipped-module count and is paid even when the paired stack is inactive. Audit whether prerequisites should move to lazy / paired-stack-gated execution before more modules ship.
-- **C4** — audit module-config cascade semantics: per-module config at `.claude/gan/modules/<name>.yaml` is declared in M1 and M2, but C4's splice-point catalog has no `modules.*` entries. Determine whether module configs participate in the three-tier cascade at all, and if so what merge rules apply (scalar: higher-tier wins; list: union-dedup; or fully self-defined by each module's schema with no cross-tier merging). Must be resolved before any module ships a multi-tier-aware config field.
-- **M1/F2** — clarify `stateKeys` semantics: the manifest field `stateKeys` (e.g. `["port-registry"]` in the docker manifest) is currently decorative — neither M1 nor F2 defines what it enforces or what happens if a module writes a key not in the list. F2's `setModuleState(moduleName, key, value)` signature implies per-key blobs, but M1's implementation is whole-blob. Audit: does `stateKeys` become an allowlist, documentation only, or is it removed? Resolve before a second module ships its own state keys.
-- **F2/M1** — reconcile `appendToModuleState` signature: F2 specifies `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` with explicit duplicate-handling semantics, but M1's implementation drops the `duplicatePolicy` parameter and unconditionally appends. Audit: should `duplicatePolicy` be added (and what are the valid values: `"error" | "skip" | "allow"`), or should F2 be revised to drop it? Same shape as the `stateKeys` divergence — either implement the spec or update the spec to match. Resolve before module callers come to depend on duplicate-detection behaviour.
-- **F2/M1** — reconcile `removeFromModuleState` lookup semantics: F2 specifies `removeFromModuleState(moduleName, key, entryKey)` where the `entryKey` parameter name implies keyed lookup (find the entry whose key matches and remove it). M1's implementation takes a `value` parameter and performs deep-equal removal of any matching entry instead. Distinct from the `stateKeys` question (which asks whether per-key blobs exist at all) — this asks, given the chosen storage model, whether removal targets a key or a value. Audit: align on one semantic (keyed lookup vs deep-equal match) and update either the spec or the implementation. Resolve before any module relies on the current deep-equal behaviour.
+### Implementation order
 
-### Resolutions (2026-05-07)
+Dependency-ordered sequence the v1.0 work lands in. Each item gates the items below it.
 
-- **F2** — closed with a minor edit to the `registerModule` table row clarifying that the tool is a runtime probe (not a registration trigger) and that the `manifest` argument is currently advisory; the production registration cache is built lazily by `getRegisteredModules()`.
-- **F3** — closed with no edit; both schemas already cover what M2 declares and uses.
-- **R1** — closed with no edit; the misleading registration-timing prose lived in M1 (not R1) and was fixed there.
-- **M1** — closed with edits to the registration-time bullet (clarifying lazy registration), the `stateKeys`/`configKey` paragraph (replacing the "decorative" note with the post-audit conclusion), and the persistence bullet (per-key state files). The prerequisite-scaling cost note is left in place for the next revision break — at two shipped modules the O(N) cost is still acceptable, but the question is genuinely open and the note should travel with M1 until it's answered.
-- **C4** — module configs at `.claude/gan/modules/<name>.yaml` are **project-tier-only** and do not participate in the three-tier cascade. C4 gains a "Module configurations" section codifying this. C3's splice-point catalog stays free of `modules.*` entries by design.
-- **M1/F2 (stateKeys)** — `stateKeys` is the **authoritative allowlist** of named state blobs the module owns. Each declared key persists to its own file at `.gan-state/modules/<name>/<key>.json`. The Configuration API rejects writes to undeclared keys with a structured error. The original F2 design (per-key blobs) is restored; M1's whole-blob implementation was a shortcut that silently dropped F2's `key` parameter.
-- **F2/M1 (duplicatePolicy)** — the F2 spec wins: `appendToModuleState(moduleName, key, entry, duplicatePolicy="error")` is the correct signature. The M1 implementation must add the parameter to match the existing `appendToOverlayField` / `appendToStackField` convention.
-- **F2/M1 (removeFromModuleState)** — the F2 spec wins: `removeFromModuleState(moduleName, key, entryKey)` is the correct signature. Removal is by entry key (keyed lookup), not by deep-equal value match.
+1. **M3 implementation.** Closes the known F2 contract violation; one focused sprint. No external dependencies.
+2. **I1 — Self-contained install correctness.** Copies-not-symlinks, `prepare` script, post-install bin verification. The install pipeline must be honest before any other v1.0 work lands, otherwise downstream features ship behind a misleading install. ~1 sprint. Depends only on M3 conceptually.
+3. **I3 — Uninstall and version policy.** Symmetric uninstall (npm package removal), Node version warn-not-die, MCP absolute-path registration. ~1–2 sprints. Can run in parallel with I1 (no shared code paths).
+4. **I2 — Install user-facing surfaces.** Post-install message, first-run welcome banner, permission consent flow. ~3–4 sprints. Depends on I1 (working install) and I3 (settings.json patterns).
+5. **F2 cache-coherence amendment + F3 schema-runtime alignment chore.** Resolver invalidation on writes; filter `NotImplemented` tools from advertised list. ~1 sprint combined. Closes the dogfooding session's "trustApprove cache staleness" bug.
+6. **T1 schema authoring + event-emission infrastructure.** Substrate every later v1.0 item reads from. ~2–3 sprints. Must land before A1 (which extends T1's `safetyHalt` extension point) and before E5 (which adds T1's `clarifierFinding` event class).
+7. **H1 — Framework-owned confinement hook.** `gan-confine.sh` migrated from project-tier to user-tier; `install.sh` writes and refreshes. ~1–2 sprints. Lands between install pipeline (I1–I3) and orchestrator-level v1.0 work (A1, E5) so confinement is correct before agent flows ship.
+8. **A1 implementation.** Includes new C1 stack-file fields (`commentSyntax`, `sortableLists`), web-node + generic + synthetic-second field population, fingerprint algorithm, halt contract, recovery integration. ~3–4 sprints. Depends on T1.
+9. **E5 implementation.** Includes R1 snapshot extension (bounded directory listing), SKILL.md insertion of the clarifier between user-prompt ingestion and the planner, agent prompt authoring, finding-class trace events. ~3–4 sprints. Can run in parallel with A1 once T1 is landed; must coordinate with A1 on shared sprint-budget interaction.
+10. **W1 — Overlay-misuse warnings.** Resolver-level `StackOverrideShrinkage` and `PerStackOverrideUnsupported`; surfaces in startup log, `gan stacks list`, `gan config print`. ~2 sprints. Depends on F2's structured-warning catalog extension (which lands as a small piece in W1's first sprint).
+11. **D1 — Diagnostic clarity.** `ConfigApiUnreachable` branching, SKILL.md status markers + lint, `gan stacks --help` rewrite. ~2–3 sprints. Lands late because the SKILL.md status markers depend on knowing which v1.0 sections are operative — so D1's marker pass benefits from waiting until A1, E5 are merged.
+12. **O1 full surface, O2 implementation, U1/U2/U3 implementation.** Polish on existing primitives. ~2–3 sprints across all five.
+13. **Pre-release chores** (below). README inventory, telemetry semantics doc.
 
-### Implementation alignment
+Slices 2–4 (I-series) can land in parallel where dependencies allow. Slice 5 is small and can land any time after I1. Slices 6–11 are the substantive v1.0 work and have clear dependency relationships called out above. Slice 12 is polish; slice 13 is documentation. The post-v1.0 dogfooding audit fires after slice 13.
 
-Three of the eight decisions (stateKeys allowlist, duplicatePolicy, removeFromModuleState lookup) require code changes that bring M1's module-state surface back in line with F2's per-key contract. The detailed implementation contract is authored separately as **M3** (see Phase 4 alignment below), following the precedent set by the post-E1 revision break which produced O2's first prescriptive spec inside that break.
+### Known gaps accepted at v1.0
 
-Same checkpoint discipline as the other revision breaks: spec revisions and the M3 implementation ride together; no Phase 5 work begins until M3 lands.
+Documented limitations that ship with v1.0 by design. Each is named so dogfooding signal isn't surprised by them.
 
-## Phase 4 alignment — module surface
+- **No CI test for end-to-end orchestrator flow.** The deterministic core has golden-file harness coverage; `validateAll()` and `getResolvedConfig()` are unit-tested; the trust prompt has a UX test. There is no automated test that exercises a full `/gan` invocation (validateAll → snapshot → spawn agent → re-snapshot on mutation → spawn next agent → terminate). v1.0 dogfooding is the implicit test surface for orchestrator control flow. A regression in `SKILL.md` ordering (especially around E5's clarifier insertion) would be caught by a real user, not CI. Building the orchestrator-side test harness is V1's scope in v2.0.
+- **Per-stack overlay command override returns 0 for `perStackOverridesCount`.** [`reads.ts:329–332`](../src/config-server/tools/reads.ts) carries an explicit "post-E1 work" comment; project overlays attempting to override a stack's `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` silently no-op. Most users don't override per-stack commands, so the surface is rarely exercised, but the failure mode (overlay declares an override, framework ignores it without warning) is the worst kind. [W1](W1-overlay-misuse-warnings.md) adds a `PerStackOverrideUnsupported` structured warning so the limitation is visible. Full implementation lands in v1.1.
 
-The post-M audit's resolutions imply runtime surface changes. M3 is the implementation contract that brings M1 + M2's runtime back in line with F2.
+### Pre-release chores
 
-- [M3-module-surface-alignment.md](M3-module-surface-alignment.md) — Per-key state-file layout, `key` parameter on every module-state API function, `stateKeys` allowlist enforcement, `duplicatePolicy` on `appendToModuleState`, keyed-lookup `removeFromModuleState`. PortRegistry and the M1/M2 module-state tests update accordingly.
+Small, non-spec tasks that ship as part of v1.0 and don't warrant their own phase-coded spec. Items that DID warrant a spec are listed under "New for v1.0" above.
 
-## Phase 5 — Resolution observability
+- **README v1.0 stack and module inventory.** Add two clearly-labelled inventory sections to the README: "Stacks available in v1.0" and "Modules available in v1.0". The stack section lists `web-node` (real ecosystem) and `generic` (fallback) with one-line descriptions of what each detects and what it provides. The module section lists modules that ship with v1.0 (currently only `docker`, per M2) with what each does, what stack it pairs with (`pairsWith`), and what state it persists. Both sections include a forward-looking note that additional stacks/modules may ship in later releases. Rationale: a user authoring a project overlay shouldn't have to read C / M-series specs to discover what's available. Same surface as U1's mental-model guide; lives at the top of the README.
 
-User-facing extensibility (Phase 6) leans on the provenance reporting added here, so observability lands first.
+- **Telemetry semantics, documented and bounded.** O2's run-directory layout includes a `telemetry/` subdirectory and references `--no-telemetry`, but no spec defines what telemetry collects or where it goes. Document the v1.0 contract: telemetry is **local-only**; it captures `config.json` (resolved-config snapshot at run start) and `outcome.json` (sprint disposition + summary stats) under `.gan-state/runs/<run-id>/telemetry/`; it is **never transmitted off-machine**; `--no-telemetry` skips writing the directory entirely. This codifies the existing-but-unspecified surface so the v1.0 release has a defensible privacy posture. A future spec (post-v2.0, if remote benchmarking lands) would govern any opt-in upload.
 
-- [O1-resolution-observability.md](O1-resolution-observability.md) — Startup log line, `gan config print`, discard reporting.
+- **Drop `NotImplemented` tools from the advertised tool list.** `getOverlayField` and `getStackConventions` ship as `NotImplemented` stubs but appear in the MCP `tools/list` response. Listing tools that always throw is worse than not listing them — the agent reads the schema, calls the tool, gets `NotImplemented`, and has no signal that the tool was never real in this version. One-line filter in `buildToolList()` excludes any tool whose dispatch path is `NotImplemented`. When the tools land in v1.1, they re-appear automatically. Surfaces under F3's "Schema-runtime alignment" amendment; the chore is the implementation step.
 
-R1 already ships a minimum-viable observability surface in Phase 2 (the orchestrator startup log line described in [O1's part A](O1-resolution-observability.md): which files were loaded, which stacks are active, which tier each stack came from). Phase 5 adds the richer surfaces (`gan config print`, `--print-config` JSON, `discarded` array reporting). This split lets early users debug overlay and detection issues from Phase 2 onward without waiting for the full observability suite.
+### Inline amendments to existing specs
 
-## Phase 6 — User-facing extensibility
+Cross-cutting fixes to existing specs that were folded in directly rather than promoted to standalone amendment specs. Each is a subsection edit in its parent spec.
 
-Hands-on customisation surface.
+- **F2 — Server-side cache coherence on state-mutating writes.** Resolver caches must invalidate on every state-mutating tool call (writes, `trustApprove`, `trustRevoke`); mtime-driven invalidation catches hand-edits. New "Server-side cache coherence" subsection in F2 distinguishes this from the existing orchestrator-side snapshot-freshness rule.
+- **F3 — Schema-runtime alignment for MCP tool surfaces.** Schema declarations and runtime validators must agree on tool-input shape. v1.0 surgical fixes (filter `NotImplemented` tools out of the advertised list, manual parameter-shape audit). v1.1 structural fix (generate or CI-enforce). New "Schema-runtime alignment" subsection in F3.
+- **F4 — Trust prompt is a protocol, not a server-side gate.** `trustApprove` is agent-callable; the prompt UX is a protocol the orchestrator is contracted to obey, not a hard gate the server enforces. New subsection in F4 documents the threat-model implication. v1.1 amendment will consider server-side enforcement options.
+- **C2 — `stack.override` silent-shrinkage warning.** New "Silent-shrinkage warning" subsection in C2 requires the resolver to emit a `StackOverrideShrinkage` warning when the override produces an active set smaller than detection would have. Surfaces via [W1](W1-overlay-misuse-warnings.md).
+- **R3 — `gan stacks new` tier-aware scaffold.** R3's scaffold contract becomes tier-aware: project-tier scaffolds omit `detection:` (forbidden at that tier) and include a comment pointing at `stack.override`; user-tier scaffolds keep `detection:`. Closes the first-use trap that bit the dogfooding session.
 
-- [U1-project-overlay-ux.md](U1-project-overlay-ux.md) — Hand-editable `.claude/gan/project.md`, validation errors, examples, mental-model guide.
-- [U2-user-overlay-ux.md](U2-user-overlay-ux.md) — `~/.claude/gan/config.md`, cross-project preferences, auto-memory integration.
-- [U3-additional-context-splice.md](U3-additional-context-splice.md) — `additionalContext` splice points for planner/proposer.
+### Revision break — post-v1.0 dogfooding audit
 
-## Phase 7 — Recovery
+When v1.0 has been used in real projects long enough to surface failure patterns from T1 trace data, every v1.1 spec is re-audited. Specs to revisit will include:
 
-- [O2-recovery.md](O2-recovery.md) — Per-run state archive, `--recover`, `--list-recoverable`. Reconceived for F1 zones and F2 API; lands after E1 so the agent integration pattern is in place.
+- **A1** — does the edit-fingerprint scheme catch the oscillation modes that actually appear in real runs? Refine the fingerprint algorithm if false-positive or false-negative rate is high.
+- **T1** — does the trace schema carry every field downstream phases will need? Add fields surfaced as necessary by debugging real user reports. Bump `run-trace-vN` if breaking.
+- **E5** — does one round and ≤ 3 blockers feel right? Does `--skip-clarification` get used? Are there ambiguity classes the minimal cut systematically misses?
+- **U1/U2/U3** — does the project-overlay UX hold up against real users editing the file by hand? Refine validation errors and examples against actual mistake patterns.
+- **O2** — does `--recover` hit edge cases in the prescriptive flow that weren't anticipated?
+- **M3** — does the per-key state-file layout perform as expected once a second module ships state? Audit at v1.1 with the orchestrator-test harness work below.
+- **I1/I2/I3** — does the install pipeline survive real-world variations (different Node versions, npm prefixes, GUI launch contexts)? Refine the post-install bin verification, the welcome banner content, and the permission consent flow against what users actually trip on.
+- **D1** — does `ConfigApiUnreachable` branching produce the right remediation for the cases users hit? Are SKILL.md status markers preserved across spec edits?
+- **H1** — does the user-tier hook ownership shift produce silent project-tier-override drift in practice? Audit `gan hooks status` adoption.
+- **W1** — do users find the `StackOverrideShrinkage` and `PerStackOverrideUnsupported` warnings actionable? Refine wording if confused users filed bugs against them.
+- **Orchestrator end-to-end test gap** — review whether v1.0 dogfooding produced enough orchestrator-flow regressions to motivate building the test harness in v1.1 (rather than waiting for v2.0's V1). If yes, scope an interim spec; if no, hold the line.
 
-## Deferred — additional real-ecosystem stacks
+Same checkpoint discipline as the post-R, post-E1, post-M breaks. No v1.1 work begins until the audit closes.
 
-Authored, reviewed, and intentionally postponed until the active plan has shipped and seen real use. See [`specifications/deferred/README.md`](deferred/README.md) for reactivation criteria.
+## v1.1 — first iteration on real signal
 
-- [deferred/S1-android-stack.md](deferred/S1-android-stack.md) — Android client stack file.
-- [deferred/S2-kmp-stack.md](deferred/S2-kmp-stack.md) — Kotlin Multiplatform stack file.
-- [deferred/S3-ios-swift-stack.md](deferred/S3-ios-swift-stack.md) — iOS Swift / SwiftUI stack.
+Builds on T1's trace data and v1.0 user reports. Specs land in priority order, gated by what the data actually shows is broken.
 
-The risk these specs were originally meant to mitigate — that the framework calcifies around web-node — is addressed in the active plan by the multi-stack guard rail principle below: a synthetic fixture-only stack, a `lint-no-stack-leak` script, and a cross-stack capability assertion in E3.
+- **A2 — Generator scope enforcement.** Framework-owned PreToolUse hook; sprint-declared file-glob writes only. Becomes urgent the first time a real user reports the agent touched something it shouldn't have. Glob granularity informed by v1.0 trace data.
+- **Q2 — Failure-mode taxonomy.** Structured error codes (`HallucinatedSymbol`, `TestNotRun`, `LintNotFixed`, `ScopeViolation`, `LoopDetected`, …) replacing free-form prose feedback. Vocabulary shared with E5's clarifier-gap codes. Much easier to design *after* seeing actual failures in v1.0 traces.
+- **T2 — Cost & efficiency surface.** `gan run report <run-id>` reads from T1 trace; `gan stats` aggregates across runs. Small spec; large UX win — users who can see "$0.40 / 38k tokens / 4m23s" trust the tool faster.
+- **A4 — PII / secret regex catalog.** Per-stack regex bank (cards, SSN, JWT, AWS keys, etc.) layered on top of `secretsGlob`. Failures block the sprint, not just warn.
+- **E5 round 2.** Confidence scoring per spec dimension drives adaptive round depth (replacing v1.0's fixed three-round cap); optional auto-promotion of resolved clarifications to project-tier `additionalContext` with explicit user confirmation. Multi-round clarification (initial + two evolutions) and the draft-preview interaction surface already shipped in v1.0; v1.1's work is the confidence-scored adaptation and the persistence path.
+- **Per-stack overlay command override completion.** Replaces [W1](W1-overlay-misuse-warnings.md)'s `PerStackOverrideUnsupported` warning with the real implementation. Project overlays declaring `<stack>.auditCmd` / `buildCmd` / `testCmd` / `lintCmd` flow through the snapshot to the orchestrator and evaluator-core. Closes the post-E1 work tracked at `reads.ts:329-332`.
+
+- **Schema-runtime alignment via generation or contract tests.** v1.0 ships the surgical fix (filter `NotImplemented` tools out of the advertised list). v1.1 closes the structural gap: either (a) generate `schemas/api-tools-v1.json` from the runtime validators at build time, OR (b) add CI that calls every tool with deliberately-bad input and asserts the runtime error matches the schema's `required`-field declarations. (a) is the load-bearing fix; (b) is a backstop. The dogfooding session caught two drifts in a single run; without this discipline more will accumulate.
+
+- **F4 trust-prompt enforcement.** v1.0 ships the documentation fix (acknowledge `trustApprove` is agent-callable; the orchestrator's faithful surfacing is part of the threat-model trusted base). v1.1 adds server-side enforcement options as a real F4 amendment: rate-limiting per session, content-hash echo (the call must include the hash the user just saw), structured audit log surfaced back to the user. Spec lays out trade-offs and picks one or two.
+
+- **`getMergedSplicePoints` inclusion-rule documentation.** F2 docs the rule for which fields appear in `getMergedSplicePoints` output: scalar / list / map splice points participate; reserved fields like `stack.override` (override-not-merge) are deliberately excluded and surface via `getResolvedConfig.overlay.stack.override` instead. The dogfooding session caught the terminology drift between "splice point" (data-flow term) and "override" (user-facing term) without docs to reconcile them. Documentation-only; no behavior change.
+
+- **Stack-file naming convention.** C1 publishes a one-paragraph rule for stack-file names. Pattern candidates: `<runtime>-<framework>` (matches existing `web-node`), `<language>-<framework>`, `<ecosystem-tag>`. Pick one and document. Matters more once `gan stacks list` has 5+ entries and users are scaffolding their own.
+
+## v1.2 — quality signal
+
+Once meaningful production usage exists, the system can start measuring its own diff quality.
+
+- **Q1 — Diff acceptance feedback loop.** Opt-in logging of merge / edit / revert outcomes under `.gan-state/feedback/`. `gan stats` reports acceptance / churn / revert rates per stack and per agent role. Single most valuable signal you can collect — but it requires actual production usage to be worth building.
+- **A3 — Framework-owned destructive-action guard.** No deletes outside the run worktree; no rm/reset/force-push; no network egress without an allowlist. Stops leaning on host-harness hooks.
+- **A5 — LLM-sampling reproducibility on verdict roles.** Pinned temperature/seed on evaluator and contract-reviewer. Generator stays sampled.
+- **T3 — Budget enforcement.** Per-run token / $ ceilings as overlay splice points; agent halts with structured error on breach. Ceilings derived from T2 cost-distribution data, not guessed.
+
+## v2.0 — agent evaluation
+
+The big lift: from "framework that runs agents" to "framework that *measures* agents." None of this should land before v1.x is stable and used — the test sets and adversarial cases depend on usage shape.
+
+- **V1 — LLM-verdict accuracy harness.** Curated (snapshot, evaluator-plan, expected-verdict) tuples; CI runs N times per case; verdict-accuracy and per-criterion calibration tracked. Promotes the originally-deferred E4 from optional to gating.
+- **V2 — Variance budget.** Same input × M samples; agreement-rate threshold per criterion class. Catches prompt regressions that change verdicts without changing means.
+- **V3 — Adversarial trap suite.** Hand-crafted false-positive bait — subtle bugs, plausible-but-wrong tests, security regressions disguised as fixes. Measures false-pass rate explicitly. The single most important quality metric in agentic systems isn't "did it succeed" — it's "did it falsely claim success."
+- **B1 — SWE-bench Verified integration.** Nightly, not per-commit. Resolved-rate, patch-correctness, per-language splits as tracked CI artifact. Public scoreboard published per main commit.
+- **B2 — In-house regression set.** Frozen tasks from real v1.x usage with golden-diff acceptance. Sourced from accumulated dogfooding, not hypothetical.
+- **Q3 — Coverage delta tracking.** Per-stack `coverageCmd` + threshold splice point. Sprint fails if coverage drops without justification.
+- **Q4 — Per-stack repo-convention checks.** `conventionCmd` slot for project-defined naming, layering, dependency rules. Lets a project encode "agents must not import X from Y" without patching the framework.
+
+## Beyond v2.0
+
+- **B3 — TerminalBench / Aider polyglot integration.** Reactivates once deferred S-series stacks (Android, KMP, iOS Swift) land — pre-building cross-language benchmarking before cross-language stacks exist is upside-down.
+- **Deferred S-series stacks.** Android, KMP, iOS Swift per [`specifications/deferred/README.md`](deferred/README.md). Reactivation gated by the criteria there; the active plan's multi-stack guard rail (synthetic-second fixture + `lint-no-stack-leak` + cross-stack assertion in E3) keeps the framework honest until real S-series stacks land.
+- **Additional real-ecosystem stacks.** Desktop, embedded, Python, Rust, Go follow the same template once the pattern proves on a second real ecosystem.
+
+## Revision-break discipline
+
+Every release closes with a revision-break audit. The pattern from the shipped phases holds: specs are revised in place against what implementation surfaced; new prescriptive authoring (when needed) lands inside the break, not after it; no next-release work begins until the break closes. v1.0 → v1.1 inherits this discipline; v1.1 → v1.2 and v1.2 → v2.0 likewise.
 
 ## Bite-size sizing
 
@@ -167,11 +253,11 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 
 - **The Configuration API is a black box.** Agents know function names; they do not know storage, schemas, or merge logic. Specs F2 and R1 own the contract.
 - **Maintainer tooling assumes Node 18+.** User-facing behavior is owned by the agent at runtime. iOS, embedded C++, Swift-only developers never need Node to use `/gan`.
-- **Pre-1.0 WIP project.** No backward-compatibility guarantees; any schema change bumps `schemaVersion`. No transitional dual-path windows.
+- **Pre-1.0 WIP project until v1.0 ships.** No backward-compatibility guarantees pre-v1.0; any schema change bumps `schemaVersion`. No transitional dual-path windows. **Schema discipline tightens at v1.0 cut**: from v1.0 onward, additive changes (new optional fields, new discriminator values within an existing event class, new event classes) stay on `vN`; field-rename or semantic-change forces `vN+1` with release-note treatment. Schemas affected by v1.0 work — `stack-v1.json` (A1's `commentSyntax`, `sortableLists`), `overlay-v1.json` (A1's `safety.*`, T1's `telemetry.tracePayloads`), `progress-v1.json` (O2's terminalReason additions), new `run-trace-v1.json` and `run-trace-index-v1.json` (T1) — all land in v1.0 implementation PRs and are frozen at v1.0 release.
 - **CI workflow structure** locked to one file per test category plus a shared reusable workflow: `.github/workflows/{shared-setup,test-modules,test-evaluator-pipeline,test-stack-lint,test-schemas,test-no-stack-leak,test-error-text}.yml`. New categories follow `test-<category>.yml`.
 - **Module ↔ stack name pairing** is enforced by the Configuration API at registration time. No separate lint subsystem needed.
 - **Single-canonical stacks at the repo, plural at the project.** The repo promotes exactly one stack file per ecosystem. Users who want to diverge fork the file into their project tier (`.claude/gan/stacks/<name>.md`); C5's three-tier resolution makes that a one-line operation. There is no central N-versions registry, no curation queue, no community-vote process — PRs against the canonical file are the curation pipeline. This applies to the bootstrap stacks (`web-node`, plus the synthetic guard-rail fixture) and to any future ecosystem reactivated from `specifications/deferred/`. The scaffold (`gan stacks new`) is for users authoring project-tier customisations or contributing back upstream; both paths land in the same single-canonical model.
-- **Replacement, not migration.** This spec set describes a different architecture, not a refactor of the existing implementation. The current code (5 agent prompts under `agents/`, `skills/gan/SKILL.md`, `skills/gan/schemas/*.json`, `install.sh`) shares almost nothing structural with the new system: different filesystem layout (`.gan/` → three zones), different validation model (free-form prompts → black-box API), different language (markdown prompts → Node MCP server). Trying to "migrate" means compromise; "delete and start clean" loses domain knowledge embedded in the old prompts. The pattern is **extract-and-replace**: build new from spec, mine old prompts for content during E2, retire old artifacts as the specs that supersede them land.
+- **Replacement, not migration.** This spec set described a different architecture, not a refactor of the existing implementation. The shipped Phase 0–4 work used the **extract-and-replace** pattern: build new from spec, mine old prompts for content during E2, retire old artifacts as the specs that supersede them land.
 
   **Cleanup discipline.** Every implementation PR for a spec that retires old artifacts must delete those artifacts **in the same PR**. The retirement is part of the spec, not a follow-up. Lingering legacy is forbidden — dead prompts are especially dangerous because prompts compose by inclusion (a stale agent file may be picked up by search, by future authoring, or by a tool that scans `agents/`). The "Retirement table" below names every old artifact and the spec that retires it.
 
@@ -182,139 +268,33 @@ Every spec aims to be small enough that one sprint of focused work delivers a co
 
   The three together make it physically impossible for the framework to regress to single-stack without breaking CI. When a deferred S-series spec is reactivated, the synthetic stack and its supporting machinery stay — they remain a guard rail against a post-1.0 framework drifting toward whichever stacks happen to dominate its real-world use.
 
-## Retirement table
+- **Release-driven from v1.0 forward.** Specs whose design quality depends on real-world usage data (V/B benchmarks, Q1 acceptance loop, T3 budget ceilings, A2 glob granularity, Q2 error-code vocabulary) are deliberately deferred to the release whose dogfooding produces that data. Pre-building them on speculation produces a worse spec set than waiting for signal.
 
-Single canonical inventory of every old artifact retired during the redesign. Each row names the artifact, the spec whose implementation retires it, and the retirement mechanism. Implementation PRs for the listed specs are **incomplete** if the named artifacts survive — the PR's diff must show them as `D` (deleted) or `M` (modified, full replacement).
+- **Cache coherence on state-mutating writes.** Every API call that mutates configuration files (overlay edits, stack edits, `trustApprove`, `trustRevoke`, module-state writes) must invalidate the resolver's data caches before returning, AND mtime-driven invalidation must catch hand-edits that bypass the API. F2 owns the contract; R1 owns the implementation. Without this, callers see stale state on the very next read — exactly the failure mode that bit the first dogfooding session. The orchestrator's snapshot-freshness rule (re-snapshot on `mutated:true`) is necessary but not sufficient — it covers the orchestrator's view, not the server's internal caches. Both layers must coexist.
 
-Two retirement mechanisms appear in the table:
+- **Schema-runtime alignment.** F3's "schema authority" principle is a write-time discipline today (the publish-schemas script). It is not a generation discipline — schemas at `schemas/api-tools-v1.json` and runtime validators in `src/config-server/tools/` are independent code paths and can drift. v1.0 fix: filter `NotImplemented` tools out of the advertised list so the schema doesn't promise tools the runtime won't deliver. v1.1 fix: either generate the JSON Schema from runtime validators at build time, OR add CI that exercises every tool with deliberately-bad input and asserts the runtime error matches the schema's `required`-field list. The principle is named here so future tool additions don't drift quietly.
 
-- **`M` (rewrite in place):** the file survives at the same path; its contents are fully replaced by the new spec. The implementation PR's diff shows a `M` entry for the path, with most or all of the file's content changed. Old behavior at that path is gone after the PR lands.
-- **`D` (delete):** the file is removed entirely. The implementation PR's diff shows a `D` entry. Whatever the old file did has either moved to a different path (with attribution) or been retired without replacement.
+- **Spec-vs-shipped status markers.** Specs that describe forward-looking behavior (orchestrator skill flows, agent prompts, multi-stage feature rollouts) carry per-section status markers: `[shipped-in-v<release>]` (operative now), `[deferred-to-v<release>]` (described for forward-compat, not yet operative), `[partial-v<release>]` (minimal viable shipped, full version in a later release). Without markers, an implementer reading the spec from scratch has no signal that some sections describe aspirational behavior the server can't yet deliver. SKILL.md is the load-bearing offender today (`--recover` and `--list-recoverable` reference an unshipped O2). A1, T1, E5 are the next at risk as they ship in stages. Discipline applies across all spec families post-v1.0.
 
-| Old artifact | Retired by | Mechanism |
-|---|---|---|
-| `agents/gan-planner.md` | E1 | `M` — rewritten in place. New content consumes `getResolvedConfig()` instead of reading `.gan/` files. |
-| `agents/gan-contract-proposer.md` | E1 | `M` — rewritten in place. Hardcoded checklist content lifts to stack-file `securitySurfaces` per E2; nothing remains in the prompt. |
-| `agents/gan-contract-reviewer.md` | E1 | `M` — rewritten in place. New content consumes the snapshot; old `.gan/` reads removed. |
-| `agents/gan-generator.md` | E1 | `M` — rewritten in place. |
-| `agents/gan-evaluator.md` | E1 | `M` — rewritten in place. The hardcoded stack-specific tokens are processed per E2's extraction audit: tokens belonging to a shipped stack (`npm audit`, web/Node security surfaces) move into `stacks/web-node.md`; tokens belonging to off-plan ecosystems (`kt`, `kts`, `gradle`, `pip-audit`, `cargo audit`, `govulncheck`, `bundle audit`, etc.) are either retained as synthetic-second fixture content or explicitly retired-not-lifted in E2's PR audit. The rewritten prompt contains zero stack-specific tokens, verified by R4's `lint-no-stack-leak`. |
-| `skills/gan/SKILL.md` | E1 | `M` — rewritten in place. The 557-line existing file's flow (Step 0 / 0.5 / 0.75 / 1 / 2a / 2b / 3) is replaced wholesale; the new orchestrator calls `validateAll()` first, captures the snapshot once, and consumes the API. Not a refactor — full content replacement. |
-| `skills/gan/gan` | E1 | `D` — broken symlink; dead artifact. |
-| `skills/gan/schemas/{contract,feedback,objection,progress,review,telemetry-summary}.schema.json` | E1 | `D` — these run-state schemas describe per-run state inside the old orchestrator. The rewritten orchestrator either re-authors them under a new location consistent with F1's zones (e.g. `schemas/run-state/<type>-v1.json` per F3's naming) **or** drops them if the new flow no longer validates against the same shapes. Either path requires deleting the originals: leaving them at the old path implies the old SKILL.md is still loading them. The E1 PR must commit to one of the two paths and execute it. |
-| `install.sh` (existing 138-line `.gan/`-based installer) | R2 | `M` — rewritten in place. Same path, full content replacement implementing R2's spec. No transition period. |
-| `.gan/` directory contract (in code) | F1 + E1 | F1 specifies the new zones (the contract). E1's PR removes every code reference to `.gan/` from the rewritten orchestrator and prompts. User-side `.gan/` state in user repos is documented in R2's installer (and release notes) as "delete by hand; start fresh" — pre-1.0 + no-backward-compat. |
-| Hardcoded stack-specific knowledge inside agent prompts | E1 + E2 | E1's rewrite physically removes the tokens from the prompts. E2 verifies at extraction time that every stack-specific concept has a home in `stacks/<name>.md` — anything dropped is explicitly listed as "retired, not lifted" in the E2 PR's body. R4's `lint-no-stack-leak` is the permanent backstop scanning agent prompts and core code for ecosystem tokens outside their owning stack files. |
-| `README.md` (existing 214-line description of the old `.gan/`-based architecture) | E1 | `M` — rewritten in place. The README is the most user-visible piece of legacy in the working tree (`git clone`'s first impression); after E1 the framework operates fundamentally differently and the README must reflect that. Same E1 PR that lands the orchestrator rewrite. |
-| `.gitignore` at repo root (currently lists only `.DS_Store` and review correspondence) | F1 | `M` — F1's first implementation sprint adds `.gan-state/` and `.gan-cache/` entries so the new zones are gitignored from the moment they exist. Without this, a developer's first `/gan` run on the new architecture commits zone-2 run state into git. |
+- **Framework owns user-tier hooks for filesystem-zone enforcement.** Hooks that enforce framework-defined invariants (today: `gan-confine.sh` enforcing the F1 zone boundary) are the framework's responsibility to author and update. They live at `~/.claude/hooks/` (user-tier), are written by `install.sh`, and are refreshed on each re-install. Project-tier hooks remain optional overrides for projects that need narrower or wider constraints. Without this rule, every framework filesystem rework silently breaks every project that adopted a hook pattern, with no upgrade path short of every user manually editing every project.
 
-**Note on the run-state schema decision.** Six rows above (`skills/gan/schemas/{contract,feedback,objection,progress,review,telemetry-summary}.schema.json`) defer the rewrite-or-drop choice to the E1 PR. Whichever path is chosen — re-author at `schemas/run-state/<type>-v1.json` per F3, or drop entirely — the Retirement table is amended in the same PR with the actual destination so the row reads as a finished decision rather than a TODO. Future readers see the choice that was made, not the choice that was deferred.
+## Retirements
 
-**Verification.** When the named spec lands, the PR's reviewer checks the diff against the corresponding rows. Any survival is grounds for blocking the merge until the retirement is complete. After the spec lands, a periodic audit (`grep -r 'gan-evaluator\|gan-planner\|...' .` for the old-artifact names; the survival of the symlink as a broken pointer; etc.) catches anything that crept back. Dead-code rot is the failure mode this discipline closes.
+Closed historical record of every old artifact retired during the redesign lives in [retirements.md](retirements.md). All Phase 0–4 retirements are completed; future specs that retire artifacts append to that file in the implementation PR.
 
-**Branch strategy.** Build on `feature/stack-plugin-rfc` through at least Phase 3 (the cutover). Don't merge to main mid-pivot — main on the old branch is functional, mid-pivot main would carry both architectures simultaneously. Merge to main when Phase 3 closes (the post-E1 revision break is the natural gate). At that point the old artifacts are gone from the working tree; git history retains them for archeological reference.
+**Cleanup discipline.** Every implementation PR for a spec that retires old artifacts must delete those artifacts in the same PR. Lingering legacy is forbidden — dead prompts are especially dangerous because prompts compose by inclusion. The reviewer checks the diff against the corresponding retirements.md rows; any survival blocks the merge.
 
-**O2's prescriptive revision rides the same merge.** The post-E1 revision break opens after E1's implementation lands on the feature branch and closes before Phase 3 merges to main. O2's first prescriptive authoring happens *inside* that break, not after it — so the merge to main carries both E1's cutover and O2's revised recovery flow as a unit. There is no transitional state where E1 is merged but O2 is still descriptive-only; the break does not close until O2's prescriptive revision lands.
+## Branch strategy
+
+The shipped phases built on `feature/stack-plugin-rfc` through Phase 3 (the cutover) and merged to main when Phase 3 closed. v1.0 work continues on `develop`; merges to `main` happen at release boundaries (v1.0, v1.1, v1.2, v2.0). No mid-release main carries a partially-built release.
 
 ## Out of scope for this roadmap
 
-- Cross-run learning / auto-curated project memory. `/gan` stays a reader of documented overlay files; it never writes durable project knowledge.
-- Reading arbitrary repo files (README, ARCHITECTURE, etc.) by auto-discovery. Users opt in explicitly via `additionalContext` (U3).
-- Real-ecosystem stacks beyond `web-node`. The deferred S-series specs (Android, KMP, iOS Swift) capture a starting point; reactivation is gated by the criteria in [`specifications/deferred/README.md`](deferred/README.md). Desktop and embedded stacks follow the same template if and when the pattern is proven on a second real ecosystem.
+- **Cross-run learning / auto-curated project memory.** `/gan` stays a reader of documented overlay files; it never writes durable project knowledge *unless* the user explicitly confirms promotion (e.g. E5 v1.1's offer to save resolved clarifications as project-tier `additionalContext`). The framework never auto-curates; the user always confirms.
+- **Reading arbitrary repo files (README, ARCHITECTURE, etc.) by auto-discovery.** Users opt in explicitly via `additionalContext` (U3).
+- **Real-ecosystem stacks beyond `web-node` pre-v2.0.** The deferred S-series specs (Android, KMP, iOS Swift) capture a starting point; reactivation is gated by the criteria in [`specifications/deferred/README.md`](deferred/README.md). Desktop and embedded stacks follow the same template if and when the pattern is proven on a second real ecosystem.
+- **Cross-language benchmarking pre-v2.0.** B3 (TerminalBench / Aider polyglot) waits for real cross-language stacks to exist.
 
 ## Runtime knobs
 
-Single inventory of every flag, env-var value, and prompt branch a user can hit at runtime. Authoritative — individual specs reference this table rather than restating their own surfaces. New knobs land here in the same PR that adds them.
-
-**On flag duplication.** `--help` appears in the surface table for `/gan` (E1), `install.sh` (R2), and `gan` (R3). The sigil is shared; the implementation is per-spec. There is no single authoritative `--help` — each command surface owns its own help text and exit-code contract, by design (different commands have different things to say). Where this table counts surfaces, `--help` is counted once by sigil per the surface-count rule documented at the bottom of this section.
-
-### Top-level commands
-
-| Surface | Owning spec | Effect |
-|---|---|---|
-| `/gan` (bare) | E1 | Run a sprint against the current project. |
-| `gan` (bare) | R3 | Print top-level help (alias of `gan --help`). |
-| `install.sh` (bare) | R2 | Install ClaudeAgents into the current Claude Code environment. |
-
-### `/gan` skill flags
-
-| Flag | Owning spec | Effect | Pre-`validateAll()` short-circuit? |
-|---|---|---|---|
-| `--help` / `-h` / `help` | E1 | Print help, exit. | Yes — only flag that runs before `validateAll()`. |
-| `--print-config` | O1 | Emit resolved-config snapshot via O1's surface; exit. `validateAll()` runs in **non-aborting** mode (partial snapshot + structured errors on failure). | No (validateAll runs but does not abort). |
-| `--recover` | O2 | Resume a previously-aborted run. Mechanism prescriptively authored at the post-E1 break. | No (validateAll runs in non-aborting mode). |
-| `--list-recoverable` | O2 | List archived recoverable runs; exit. | No (validateAll runs in non-aborting mode). |
-| `--no-project-commands` | F4 | Run with all project-declared commands suppressed. Recommended when reviewing someone else's branch. | No. |
-
-### `install.sh` flags
-
-| Flag | Owning spec | Effect |
-|---|---|---|
-| `--help` / `-h` | R2 | Print help, exit 0. |
-| `--uninstall` | R2 | Reverse the install (remove symlinks + MCP config entry; leave filesystem zones intact). |
-| `--no-claude-code` | R2 | Install in CI/headless environments that have Node + git but no Claude Code; `gan` CLI works, `/gan` skill is unavailable. |
-
-### `gan` CLI subcommands
-
-| Subcommand | Owning spec | Effect |
-|---|---|---|
-| `gan validate` | R3 | Run `validateAll()` and print a report. |
-| `gan config print` | R3 | Print the full resolved config (use `--json` for raw). |
-| `gan config get <path>` | R3 | Print one resolved value at a dotted path. |
-| `gan config set <path> <value>` | R3 | Update one splice point at the named tier. |
-| `gan stacks list` | R3 | List active stacks with tier provenance. |
-| `gan stacks new <name>` | R3 | Scaffold a stub stack file (DRAFT-bannered until user removes). |
-| `gan stack show <name>` | R3 | Print one stack's full data. |
-| `gan stack update <name> <field> <value>` | R3 | Update one field of a stack file. |
-| `gan modules list` | R3 | List registered modules + `pairsWith` status. |
-| `gan trust info` | R5 | Show approval status + declared command-paths. Reminder that the trust hash does not transitively cover scripts. |
-| `gan trust approve` | R5 | Approve the current content hash for the named project. Trust-mutating; `--project-root` required. |
-| `gan trust revoke` | R5 | Remove approval for the named project. Trust-mutating; `--project-root` required. |
-| `gan trust list` | R5 | List all current approvals. |
-| `gan version` | R3 | Print API version, server version, schemas in use. |
-| `gan help` / `gan --help` / `gan -h` | R3 | Print top-level help (one help surface; aliases for muscle-memory). |
-
-### `gan` CLI flags
-
-| Flag | Scope | Owning spec | Effect |
-|---|---|---|---|
-| `--help` / `-h` | every subcommand | R3 | Print subcommand help, exit 0. |
-| `--json` | reads | R3 | Emit raw API JSON instead of human format. |
-| `--project-root=<path>` | global | R3 | Project root override. Trust-mutating subcommands require this explicitly. |
-| `--tier=project\|repo` | `gan stacks new` | R3 | Scaffold target tier; default `project`. |
-| `--note=<text>` | `gan trust approve` | R5 | Note attached to approval (free text; user-visible in `gan trust list`). |
-
-### Environment variables
-
-| Var | Values | Owning spec | Effect |
-|---|---|---|---|
-| `GAN_TRUST` | unset / `strict` / `unsafe-trust-all` | F4 | Trust mode. Unset = interactive prompt on `UntrustedOverlay`. `strict` = fail closed (no prompt; CI default). `unsafe-trust-all` = bypass trust check (development convenience; never in CI). |
-
-### Trust prompt branches (interactive UI)
-
-The trust prompt has one render with two content variants (subsequent-change vs. initial-introduction), four action branches:
-
-| Branch | Action | Owning spec |
-|---|---|---|
-| `[v]` | View — diff for subsequent-change, command-list for initial-introduction. | F4 |
-| `[a]` | Approve and run; writes `(projectRoot, contentHash)` to the trust cache. | F4 |
-| `[r]` | Run with `--no-project-commands` (skip project-defined commands); does not write to cache. | F4 |
-| `[c]` | Cancel; abort the run. | F4 |
-
-### Surface-count rule and inventory
-
-**Rule.** Each unique `(surface-type, name)` pair counts once. Surface-type ∈ {command, subcommand, flag, env-var-value, prompt-branch}. Multi-word subcommands count as one (`gan trust approve` = one entry). Flags count by sigil string, deduplicated globally — `--help` appears under three commands but counts once. Aliases of the same flag (`--help` / `-h` / `help`) count as one surface, not three. Prompt branches count per unique action key, not per render variant.
-
-**Post-trim inventory (current):**
-
-| Surface-type | Count | Members |
-|---|---|---|
-| command | 3 | `/gan`, `gan`, `install.sh` |
-| subcommand | 15 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
-| flag | 11 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--no-project-commands`, `--uninstall`, `--no-claude-code`, `--json`, `--project-root`, `--tier`, `--note` |
-| env-var-value | 2 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all` |
-| prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
-| **total** | **35** | |
-
-Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
-
-When this table grows, the surface count grows with it. New knobs require explicit roadmap-table editing as part of the PR; specs do not own surfaces independently.
+User-facing surfaces (flags, subcommands, env vars, prompt branches) are inventoried in [runtime-knobs.md](runtime-knobs.md). New knobs land there in the PR that adds them.

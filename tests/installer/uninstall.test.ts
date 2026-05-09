@@ -85,9 +85,12 @@ describe('install.sh --uninstall', () => {
     const r1 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r1.exitCode).toBe(0);
 
-    // Sanity: install created links and the registration entry.
-    const skillLink = path.join(tmp.home, '.claude', 'skills', 'gan');
-    expect(lstatSync(skillLink).isSymbolicLink()).toBe(true);
+    // Sanity: install created the skill directory (real, not symlink)
+    // and the registration entry.
+    const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
+    const skillStat = lstatSync(skillTarget);
+    expect(skillStat.isSymbolicLink()).toBe(false);
+    expect(skillStat.isDirectory()).toBe(true);
     const cjBefore = JSON.parse(readFileSync(path.join(tmp.home, '.claude.json'), 'utf8')) as {
       mcpServers: Record<string, unknown>;
     };
@@ -106,18 +109,13 @@ describe('install.sh --uninstall', () => {
     expect(r2.exitCode).toBe(0);
     expect(r2.stderr).not.toMatch(/error:/);
 
-    // Symlinks gone.
-    expect(existsSync(skillLink)).toBe(false);
+    // Skill directory gone (uninstall removes the real-file copies, not
+    // just symlinks).
+    expect(existsSync(skillTarget)).toBe(false);
+    // Agent files gone — neither symlinks nor regular files survive.
     const agentsDir = path.join(tmp.home, '.claude', 'agents');
     if (existsSync(agentsDir)) {
-      const remaining = readdirSync(agentsDir).filter((name) => {
-        try {
-          const st = lstatSync(path.join(agentsDir, name));
-          return st.isSymbolicLink();
-        } catch {
-          return false;
-        }
-      });
+      const remaining = readdirSync(agentsDir).filter((name) => name.startsWith('gan-'));
       expect(remaining).toEqual([]);
     }
 
@@ -140,8 +138,11 @@ describe('install.sh --uninstall', () => {
     const backupsAfter = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.backup-'));
     expect(backupsAfter).toEqual(backupsBefore);
 
-    // Follow-up hints in backticks.
-    expect(r2.stdout).toMatch(/`npm uninstall -g @claudeagents\/config-server`/);
+    // The remaining left-in-place hint mentions per-project zone cleanup
+    // in backticks. The npm-package hint is no longer present in the
+    // success path because uninstall now actually runs `npm uninstall -g`
+    // (post symmetric-uninstall fix); it remains as a fallback warning
+    // only when the npm step fails.
     expect(r2.stdout).toMatch(/`rm -rf \.gan-state \.gan-cache`/);
   });
 
@@ -177,8 +178,8 @@ describe('install.sh --uninstall', () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toMatch(/error:/);
-    // The follow-up hints should still appear.
-    expect(result.stdout).toMatch(/`npm uninstall -g @claudeagents\/config-server`/);
+    // The per-project zone-cleanup hint always appears; the npm-package
+    // hint appears only as a fallback when `npm uninstall -g` failed.
     expect(result.stdout).toMatch(/`rm -rf \.gan-state \.gan-cache`/);
   });
 

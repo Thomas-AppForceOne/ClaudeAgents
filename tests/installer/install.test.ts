@@ -124,30 +124,48 @@ describe('install.sh — S2 happy-path install', () => {
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // Symlinks for every agent under `agents/`.
+    // Real-file copies for every agent under `agents/` (NOT symlinks —
+    // post-symlink-to-copy migration). The install must be self-contained
+    // so the source repo can be moved or deleted post-install.
     const repoRoot = repoRootDir();
     const agentSrc = path.join(repoRoot, 'agents');
     for (const name of readdirSync(agentSrc)) {
       if (!name.endsWith('.md')) continue;
-      const link = path.join(tmp.home, '.claude', 'agents', name);
-      expect(lstatSync(link).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(link)).toBe(path.join(agentSrc, name));
+      const target = path.join(tmp.home, '.claude', 'agents', name);
+      const stat = lstatSync(target);
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(stat.isFile()).toBe(true);
+      // Content matches the source.
+      expect(readFileSync(target, 'utf8')).toBe(readFileSync(path.join(agentSrc, name), 'utf8'));
     }
 
-    // Single skill symlink at `~/.claude/skills/gan`.
-    const skillLink = path.join(tmp.home, '.claude', 'skills', 'gan');
-    expect(lstatSync(skillLink).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(skillLink)).toBe(path.join(repoRoot, 'skills', 'gan'));
+    // Real-directory copy at `~/.claude/skills/gan` (NOT a symlink).
+    const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
+    const skillStat = lstatSync(skillTarget);
+    expect(skillStat.isSymbolicLink()).toBe(false);
+    expect(skillStat.isDirectory()).toBe(true);
+    // Content matches the source — at least SKILL.md.
+    expect(readFileSync(path.join(skillTarget, 'SKILL.md'), 'utf8')).toBe(
+      readFileSync(path.join(repoRoot, 'skills', 'gan', 'SKILL.md'), 'utf8'),
+    );
 
-    // `~/.claude.json` written with the registration entry.
+    // `~/.claude.json` written with the registration entry. The command
+    // is the absolute path to the bin (resolved via `command -v` at
+    // install time) so macOS GUI-launched apps that inherit a minimal
+    // PATH can still find the bin.
     const cj = readClaudeJson(tmp.home);
     expect(cj).not.toBeNull();
     const mcp = (cj!.parsed as { mcpServers: Record<string, unknown> }).mcpServers;
-    expect(mcp['claudeagents-config']).toEqual({
-      args: [],
-      command: 'claudeagents-config-server',
-      env: {},
-    });
+    const entry = mcp['claudeagents-config'] as {
+      args: unknown;
+      command: string;
+      env: unknown;
+    };
+    expect(entry.args).toEqual([]);
+    expect(entry.env).toEqual({});
+    expect(typeof entry.command).toBe('string');
+    expect(path.isAbsolute(entry.command)).toBe(true);
+    expect(entry.command.endsWith('claudeagents-config-server')).toBe(true);
 
     // No leftover atomic-write tmp files.
     assertNoTmpFiles(tmp.home);
@@ -185,9 +203,11 @@ describe('install.sh — S2 happy-path install', () => {
     expect(stateLines).toHaveLength(1);
     expect(cacheLines).toHaveLength(1);
 
-    // Symlinks still resolve.
-    const skillLink = path.join(tmp.home, '.claude', 'skills', 'gan');
-    expect(lstatSync(skillLink).isSymbolicLink()).toBe(true);
+    // Skill directory still exists as a real directory after re-run.
+    const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
+    const skillStat = lstatSync(skillTarget);
+    expect(skillStat.isSymbolicLink()).toBe(false);
+    expect(skillStat.isDirectory()).toBe(true);
 
     // No tmp leftovers from atomic writes.
     assertNoTmpFiles(tmp.home);

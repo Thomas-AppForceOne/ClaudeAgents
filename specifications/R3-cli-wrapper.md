@@ -67,7 +67,9 @@ The help surface is the user's first contact with the tool when something goes w
 
 The scaffold's job is to give a non-Node user a discoverable, low-friction starting point for authoring a stack file — without ever producing a stack that *looks* finished when it isn't. The friction of replacing the placeholders is the value: it's also the discoverable "you're not done yet."
 
-Concrete scaffold output for `gan stacks new ios`:
+**The scaffold is tier-aware.** Project-tier stack files (per C5) cannot declare `detection:` — detection patterns are only valid at the user and builtin tiers. A user copying from `web-node.md` (a builtin-tier file) to author a project-tier customisation would inherit `detection:` and trip the validator on first run; the dogfooding session caught this. The scaffold avoids the trap by emitting different content for `--tier=project` vs. `--tier=user`.
+
+Concrete scaffold output for `gan stacks new ios --tier=user` (or default tier when project-tier authoring is suppressed):
 
 ```markdown
 # DRAFT — replace TODOs and remove this banner before committing.
@@ -103,6 +105,28 @@ securitySurfaces: []
 <!-- TODO: free-form prose describing the ecosystem's conventions, idioms,
      and anything an agent should know when working in this stack. -->
 ```
+
+For `gan stacks new ios --tier=project` the scaffold OMITS the `detection:` block and includes a comment explaining why:
+
+```markdown
+# DRAFT — replace TODOs and remove this banner before committing.
+# `gan validate` and CI's lint-stacks will fail while this banner is present.
+---
+schemaVersion: 1
+name: ios
+# NOTE: project-tier stack files cannot declare `detection:`. To activate this
+# stack, set `stack.override` in your project overlay (`.claude/gan/project.md`):
+#   stack.override:
+#     - ios
+# `stack.override` REPLACES auto-detection wholesale — list every stack you want
+# active, not just this one. See C2 for details.
+scope:
+  # TODO: globs describing files this stack owns.
+  - "**/*"
+# ... (remaining fields identical to the user-tier scaffold)
+```
+
+The omission is what closes the dogfooding trap: a user copying from `web-node.md` to author a project-tier customisation gets a tier-correct starting point that doesn't carry forbidden fields.
 
 Discipline rules:
 

@@ -8,7 +8,7 @@
 2. Overlay-drift policy: **warn-and-continue** (drift surfaces in the recovery report; recovery proceeds).
 3. Cross-project recovery: **refused** (no `--project-root` override in v1; `progress.json.projectRoot` must match the current resolved root).
 4. Greenfield runs: **out of scope for v1** (recovery refuses runs whose `targetDir` is null).
-5. Recovered-run lifecycle: **same `runId`, append `recoveryHistory[]`, flip `terminal: true` on graceful end** (no copy-into-new-run-id step; no lock file).
+5. Recovered-run lifecycle: **same `runId`, append `recoveryHistory[]`, flip `terminal: true` on graceful end** (no copy-into-new-run-id step). Concurrent-run lockfile **is** present in v1.0 per Section 8; this revises decision 5's original "no lock file" stance.
 6. Garbage collection: **none in v1** (`gan run prune --keep <N>` is a Phase 7+ follow-up).
 
 ## Problem
@@ -72,6 +72,8 @@ ownership invariant. Module state belongs to modules; run-state has its own lane
 ```
 .gan-state/runs/<run-id>/
 ├── progress.json                 # orchestrator-owned; updated throughout run
+├── raw-prompt.md                 # verbatim user prompt (E5; written by orchestrator)
+├── clarified-spec.md             # E5 clarifier output (planner/proposer input)
 ├── spec.md                       # planner output
 ├── sprint-N-contract.json        # contract-proposer output (post-review)
 ├── sprint-N-contract-draft.json  # contract-proposer output (pre-review)
@@ -79,6 +81,7 @@ ownership invariant. Module state belongs to modules; run-state has its own lane
 ├── sprint-N-objection-A.json     # generator objection (when applicable)
 ├── sprint-N-base-commit.txt      # base commit SHA for sprint N
 ├── worktree/                     # the git worktree (lives here, not at <cwd>/.gan/worktree)
+├── trace/                        # T1 structured run trace (events + payloads/ + index.json)
 └── telemetry/                    # opt-in telemetry capture; honors --no-telemetry
     ├── config.json
     └── outcome.json
@@ -97,7 +100,7 @@ The post-E1 `progress.json` schema gains four fields beyond the legacy set:
 ```json
 {
   "runId": "20260503T143010-b8e1",
-  "status": "planning | negotiating | building | evaluating | complete | failed",
+  "status": "clarifying | planning | negotiating | building | evaluating | complete | failed",
   "currentSprint": 3,
   "currentAttempt": 1,
   "totalSprints": 7,
@@ -139,11 +142,16 @@ Enumerated `terminalReason` codes:
 complete                       Run finished all sprints successfully
 failed-max-attempts            Sprint exhausted maxAttempts
 failed-budget                  Hit maxAttemptsTotal or maxMinutes
-aborted-by-user                User answered N at resume prompt
+failed-loop-detected           A1 halt — see safetyHalt event for discriminator
+failed-clarifier-error         E5 clarifier itself errored (e.g. LLM call failed)
+aborted-by-user                User answered N at resume prompt OR typed [c]ancel
+                               at the E5 draft preview action menu
 aborted-planner-error          Planner failed (schema, refusal, etc.)
 aborted-contract-failed        Contract negotiation hit max revisions
 aborted-validation-failed      validateAll() failed in aborting mode
 ```
+
+`failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
 Schema lives at `schemas/run-state/progress-v1.json` per F3's naming conventions; this
 sprint adds it to the schema set if it isn't already present.
@@ -257,8 +265,13 @@ runs `validateAll()` in non-aborting mode first.
    ```
 
 7. **Fall through to the existing resume state machine.** The state machine in
-   `skills/gan/SKILL.md` already handles `planning`/`negotiating`/`building`/`evaluating`
-   resume. It does not need a recovery-specific path.
+   `skills/gan/SKILL.md` handles `clarifying`/`planning`/`negotiating`/`building`/`evaluating`
+   resume. It does not need a recovery-specific path. Specifically:
+   - `clarifying` resume: the orchestrator reads the most recent `clarified-spec.md`
+     (and any `clarified-spec.md.round-N` from the round counter on disk), re-presents
+     the draft preview with the action menu, and the user picks up where they left off.
+     Round count is preserved across recovery — a halt mid-round-2 resumes at round-2,
+     not round-1.
 
 ### 6. Forbidden territory
 
@@ -286,7 +299,29 @@ content remaining byte-identical across recovery.
 | Project moved on disk (`projectRoot` recorded vs current cwd diverge) | Refuse per Decision 3A. Future `--project-root` flag could relax. |
 | Stale `.gan/` directory at cwd from pre-E1 era | Hard error per F1's "no migration path" rule. User deletes manually. |
 
-### 8. Out of scope (v1)
+### 8. Concurrent-run lockfile (v1.0)
+
+**Decision: hard refuse on concurrent invocations against the same project root.**
+
+A user running `/gan` in two terminals against the same project would, without a lock, produce racing run-ids both writing to overlapping zone-2 paths (per-run state dirs are unique, but module state, run-branch creation, and the worktree git operations are shared resources). v1.0 needs a deterministic failure mode rather than silent race-condition corruption.
+
+Mechanism:
+
+- On `/gan` invocation (any short-circuit-or-not path), the orchestrator acquires an exclusive lock at `<projectRoot>/.gan-state/run.lock` via `flock(LOCK_EX | LOCK_NB)` before any other zone-2 work.
+- Lock contents: `{ runId, pid, startedAt, hostname }` written atomically (temp + rename) on acquisition.
+- On failure to acquire (lock held by another process):
+  - Read the lock contents.
+  - Verify the holding process is still alive (`kill -0 <pid>` on POSIX, equivalent on Windows).
+  - **If holder alive:** exit 1 with structured error `ConcurrentRunInProgress` naming the holder's `runId`, `pid`, `startedAt`, and the suggestion: "Wait for the other run to finish, or `kill <pid>` if it is stuck."
+  - **If holder dead** (stale lock from a hard-killed previous run): break the lock, log a warning to stderr, acquire fresh, proceed.
+- On orchestrator exit (success, halt, error, signal): release the lock by deleting the file.
+- The `--print-config`, `--list-recoverable`, and `--help` short-circuits do NOT acquire the lock — they are read-only and don't write zone 2. Only `--recover` and a regular `/gan` invocation acquire it.
+
+Lock semantics are best-effort cross-platform: POSIX `flock` works on local filesystems but not all network filesystems. NFS-mounted project roots will see degraded lock semantics; documented limitation.
+
+A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypassing it requires editing the lock file by hand (`rm .gan-state/run.lock`), which is a deliberate friction.
+
+### 9. Out of scope (v1)
 
 - Cross-machine recovery.
 - Cross-project recovery (`--project-root` override).
@@ -294,7 +329,6 @@ content remaining byte-identical across recovery.
 - Garbage collection.
 - Recovery via the CLI (`gan recover`); only `/gan --recover` in v1. The CLI
   command is a Phase 7 candidate.
-- Concurrent-run mutex (file lock). Best-effort heuristic only.
 
 ---
 

@@ -16,16 +16,21 @@ CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
-MAX_NODE_MAJOR=22
+MAX_NODE_MAJOR=25
 
 # STATE_LOG — append-only audit trail of state-creating steps. S3 consumes
 # this in `rollback()`. Each entry is a single line `<kind>:<payload>`:
-#   symlink:<absolute-path>
+#   copied-file:<absolute-path>
+#   copied-dir:<absolute-path>
+#   builtin-stacks-symlink:<absolute-path>
 #   claude-json-edited:NEW
 #   claude-json-edited:<preedit-path>
 #   zone-created:<absolute-path>
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
+# The `symlink:<absolute-path>` kind is retained as a legacy entry — it is
+# still recognised by `rollback()` but is no longer emitted by current
+# install paths (which copy files, not symlink them).
 STATE_LOG=()
 
 # Flag set by detect_preexisting_gan_dir; consumed by print_final_status.
@@ -77,15 +82,17 @@ Usage:
 
 Flags:
   --help, -h          Show this help and exit.
-  --uninstall         Reverse a previous install (remove symlinks and the
-                      Claude Code config entry; user data is left intact).
+  --uninstall         Reverse a previous install (remove framework files
+                      and the Claude Code config entry; user data is left
+                      intact).
   --no-claude-code    Skip the Claude Code prerequisite check. Use on CI
                       runners or headless environments that consume the
                       framework directly without Claude Code hosting it.
 
 What it does:
-  - Symlinks ClaudeAgents agents and skills into your Claude Code config
-    directory (typically `~/.claude/`).
+  - Copies ClaudeAgents agents and skills into your Claude Code config
+    directory (typically `~/.claude/`). Once install completes, the source
+    repo can be moved or deleted without breaking the install.
   - Installs the framework's config server globally so Claude Code can
     register it.
   - Registers the config-server entry in your Claude Code config
@@ -94,10 +101,10 @@ What it does:
     when run inside a git repository.
 
 Prerequisites:
-  - `node` `20.10` or newer on PATH (`node` `22` LTS is supported; `node` `23`
-    and newer is not). Install via your package manager (for example
-    `brew install` on macOS, or `nvm` on Linux). See https://nodejs.org/ for
-    full instructions.
+  - `node` `20.10` or newer on PATH. The framework is tested through `node`
+    `25`; newer majors will install but are not yet exercised. Install
+    via your package manager (for example `brew install` on macOS, or
+    `nvm` on Linux). See https://nodejs.org/ for full instructions.
   - `git` on PATH.
   - Claude Code installed and on PATH (skip with --no-claude-code).
 
@@ -107,6 +114,7 @@ Exit codes:
 
 After install:
   - Restart Claude Code to pick up the new agents, skills, and config server.
+  - After restart, type `/gan --help` in any project to get started.
   - Optional: copy `templates/claude-settings.json` to your project's
     `.claude/settings.json` (or merge it into an existing one) to suppress
     Claude Code permission prompts during `/gan` runs. The template
@@ -202,13 +210,20 @@ prune_stale_agent_symlinks() {
   done
 }
 
-# link_agents_and_skills
+# install_agents_and_skills
 #
-# Creates `$CLAUDE_HOME/agents/<name>.md` symlinks pointing at
-# `$REPO_ROOT/agents/<name>.md`, and a single `$CLAUDE_HOME/skills/gan`
-# symlink pointing at `$REPO_ROOT/skills/gan`. Uses `ln -sfn` so a
-# re-run replaces the link in place (idempotent).
-link_agents_and_skills() {
+# Copies `$REPO_ROOT/agents/*.md` into `$CLAUDE_HOME/agents/` and
+# `$REPO_ROOT/skills/gan/` into `$CLAUDE_HOME/skills/gan/` as real
+# files / directories. Idempotent: re-runs replace existing copies in
+# place. Migrates legacy symlink-based installs in the same step —
+# symlinks at the target paths are removed before the copy lands, so a
+# user who installed before the symlink-to-copy migration runs
+# `install.sh` once and ends up on the new shape.
+#
+# After install completes, the user can move or delete the source
+# repo without breaking the install — the copies under `$CLAUDE_HOME`
+# are independent of `$REPO_ROOT`.
+install_agents_and_skills() {
   mkdir -p "$CLAUDE_HOME/agents"
   mkdir -p "$CLAUDE_HOME/skills"
 
@@ -217,31 +232,30 @@ link_agents_and_skills() {
   for f in "$REPO_ROOT/agents/"*.md; do
     name="$(basename "$f")"
     target="$CLAUDE_HOME/agents/$name"
-    ln -sfn "$f" "$target"
-    STATE_LOG+=("symlink:$target")
+    # Remove any prior version (legacy symlink or stale copy) before
+    # writing the new file. `cp` would clobber a regular file but cannot
+    # replace a symlink in a single step on all platforms.
+    if [ -L "$target" ] || [ -f "$target" ]; then
+      rm -f "$target"
+    fi
+    cp "$f" "$target"
+    STATE_LOG+=("copied-file:$target")
   done
   shopt -u nullglob
 
   if [ -d "$REPO_ROOT/skills/gan" ]; then
     target="$CLAUDE_HOME/skills/gan"
-    # If the target already exists as a real (non-symlink) directory, it
-    # is leftover state from an older install pattern that copied
-    # SKILL.md / trust-prompt.md instead of symlinking. `ln -sfn` cannot
-    # replace a real directory; without intervention the symlink would
-    # land inside the directory (creating $target/gan) or be silently
-    # ignored, leaving the regular-file copies stale. Move the directory
-    # aside as a timestamped backup, then create the symlink at the
-    # canonical location.
-    if [ -d "$target" ] && [ ! -L "$target" ]; then
-      local backup
-      backup="${target}.pre-symlink-backup-$(date +%Y%m%dT%H%M%S)"
-      mv "$target" "$backup"
-      log_info "Moved legacy regular-directory $target aside to $backup."
-      log_info "Inspect or delete the backup; the framework now serves these files via the symlink at $target."
-      STATE_LOG+=("backup-skills-gan:$backup")
+    # Remove any prior version: legacy symlink, or a directory from a
+    # previous copy install (which may contain stale files removed in
+    # this version). `rm -rf` is safe here — the target path is owned
+    # by the framework per the install contract.
+    if [ -L "$target" ]; then
+      rm -f "$target"
+    elif [ -d "$target" ]; then
+      rm -rf "$target"
     fi
-    ln -sfn "$REPO_ROOT/skills/gan" "$target"
-    STATE_LOG+=("symlink:$target")
+    cp -R "$REPO_ROOT/skills/gan" "$target"
+    STATE_LOG+=("copied-dir:$target")
   fi
 }
 
@@ -263,6 +277,29 @@ version_probe_mcp() {
   out="${out## }"
   out="${out%% }"
   printf '%s' "${out#v}"
+}
+
+# verify_mcp_bin_on_path
+#
+# Confirms `claudeagents-config-server` is reachable on PATH after the
+# npm install step. `npm install -g .` can succeed logically while
+# failing to create the bin shim — for example, when `dist/` is absent
+# because `npm run build` never ran. Without this check, install
+# reports success but Claude Code's MCP launcher cannot find the
+# server, and the `/gan` skill silently fails to register.
+#
+# Wrapped in a helper (rather than inlined into main()) because
+# `return 1` from a helper triggers the ERR trap installed in main(),
+# routing through `on_error -> rollback` cleanly. `return 1` from
+# main() directly does NOT trigger ERR — the trap was set inside main
+# and expires once main returns, leaving no handler for the calling
+# site's non-zero exit.
+verify_mcp_bin_on_path() {
+  if ! command -v claudeagents-config-server >/dev/null 2>&1; then
+    log_error "ClaudeAgents installer: \`claudeagents-config-server\` is not on PATH after install."
+    log_error "The framework's npm package linked but its executable did not. This typically means the build artifact at \`dist/\` was not produced — verify \`npm run build\` runs cleanly inside $REPO_ROOT, then re-run \`./install.sh\`."
+    return 1
+  fi
 }
 
 # install_mcp_server
@@ -345,13 +382,35 @@ register_mcp_in_claude_json() {
     STATE_LOG+=("claude-json-edited:NEW")
   fi
 
+  # Resolve the absolute path to `claudeagents-config-server` and write
+  # it into the MCP registration. On macOS, Claude Code is launched as a
+  # GUI app from Finder / Dock / Spotlight and inherits a minimal `PATH`
+  # like `/usr/bin:/bin:/usr/sbin:/sbin` — it does NOT pick up Homebrew's
+  # `/opt/homebrew/bin/`, npm's prefix, or whatever shell mods the user
+  # has set in `.zshrc`. Registering with a bare command name (`command:
+  # "claudeagents-config-server"`) makes Claude Code fail to spawn the
+  # MCP server because it can't resolve the binary against its restricted
+  # PATH. Using the absolute path bypasses the issue entirely.
+  local mcp_bin_abs
+  if ! mcp_bin_abs="$(command -v claudeagents-config-server 2>/dev/null)" \
+       || [ -z "$mcp_bin_abs" ]; then
+    log_error "ClaudeAgents installer: cannot resolve absolute path for \`claudeagents-config-server\`. The bin verification earlier should have caught this."
+    return 1
+  fi
+
   local tmp="$CLAUDE_CONFIG_JSON.tmp.$$"
   CLAUDE_CONFIG_JSON_PATH="$CLAUDE_CONFIG_JSON" \
   CLAUDE_CONFIG_TMP_PATH="$tmp" \
+  CLAUDE_MCP_BIN_ABS="$mcp_bin_abs" \
   node -e '
     const fs = require("fs");
     const src = process.env.CLAUDE_CONFIG_JSON_PATH;
     const dst = process.env.CLAUDE_CONFIG_TMP_PATH;
+    const binAbs = process.env.CLAUDE_MCP_BIN_ABS;
+    if (!binAbs) {
+      console.error("install.sh: CLAUDE_MCP_BIN_ABS not set.");
+      process.exit(1);
+    }
     let data = {};
     if (fs.existsSync(src)) {
       const raw = fs.readFileSync(src, "utf8");
@@ -372,7 +431,7 @@ register_mcp_in_claude_json() {
       data.mcpServers = {};
     }
     data.mcpServers["claudeagents-config"] = {
-      command: "claudeagents-config-server",
+      command: binAbs,
       args: [],
       env: {},
     };
@@ -540,7 +599,8 @@ create_builtin_stacks_symlink() {
 print_final_status() {
   log_info ""
   log_info "ClaudeAgents installer: install complete."
-  log_info "  - Agent and skill links written under $CLAUDE_HOME/."
+  log_info "  - Agent and skill files copied under $CLAUDE_HOME/."
+  log_info "  - Config server installed and verified on PATH."
   log_info "  - Claude Code registration written to $CLAUDE_CONFIG_JSON (skipped under --no-claude-code)."
   log_info "  - Repository zones \`.gan-state/\` and \`.gan-cache/\` prepared (when run inside a git repo)."
 
@@ -563,6 +623,7 @@ print_final_status() {
 
   log_info ""
   log_info "Restart Claude Code to pick up the new agents, skills, and config server."
+  log_info "After restart, type \`/gan --help\` in any project to get started."
 }
 
 # ---------------------------------------------------------------------------
@@ -594,10 +655,26 @@ rollback() {
     fi
 
     case "$kind" in
+      copied-file)
+        # Remove a regular file the install copied into ~/.claude/.
+        # Only remove if it's still a regular file at the recorded path —
+        # if a third party replaced it with a symlink or directory, we
+        # leave it alone (rollback should not destroy unrelated state).
+        if [ -f "$payload" ] && [ ! -L "$payload" ]; then
+          rm -f "$payload" 2>/dev/null || true
+        fi
+        ;;
+      copied-dir)
+        # Remove a directory the install copied. Same defensive check —
+        # only remove if it's still a real directory (not a symlink, not
+        # gone). `rm -rf` is bounded to the recorded path.
+        if [ -d "$payload" ] && [ ! -L "$payload" ]; then
+          rm -rf "$payload" 2>/dev/null || true
+        fi
+        ;;
       symlink)
-        # Remove the symlink only if it still exists as a symlink. We do
-        # not chase the target; a target swap by a third party would be
-        # undone by deleting the link, which is what we want.
+        # Legacy entry kind from pre-copy installs. Retained so a
+        # rollback during an upgrade run cleans up older state too.
         if [ -L "$payload" ]; then
           rm -f "$payload" 2>/dev/null || true
         fi
@@ -723,34 +800,36 @@ feature_branch_warning() {
 uninstall_main() {
   log_info "ClaudeAgents installer: uninstalling."
 
-  local removed_links=0
-  local agents_root="$REPO_ROOT/agents"
-  local skills_root="$REPO_ROOT/skills"
+  local removed_count=0
+  local entry name agent_target
 
-  # Walk `~/.claude/agents/` and remove any symlink whose target lives
-  # inside `$REPO_ROOT/agents/`. We compare by string prefix on the
-  # symlink's target value — `readlink` returns the literal target the
-  # link was created with, which (per `link_agents_and_skills`) is the
-  # absolute path under `$REPO_ROOT`.
-  local dir entry target
-  for dir in "$CLAUDE_HOME/agents:$agents_root" "$CLAUDE_HOME/skills:$skills_root"; do
-    local d="${dir%%:*}"
-    local r="${dir#*:}"
-    [ -d "$d" ] || continue
-    shopt -s nullglob dotglob
-    for entry in "$d"/*; do
-      if [ -L "$entry" ]; then
-        target="$(readlink "$entry" 2>/dev/null || true)"
-        case "$target" in
-          "$r"/*|"$r")
-            rm -f "$entry"
-            removed_links=$(( removed_links + 1 ))
-            ;;
-        esac
+  # Remove any framework agent files at `~/.claude/agents/<name>.md`
+  # whose name matches a file in `$REPO_ROOT/agents/`. We use the
+  # source-repo file list as the authoritative inventory of what the
+  # framework owns; this avoids guessing prefixes. Both real-file
+  # (post-copy install) and legacy-symlink entries are removed.
+  if [ -d "$CLAUDE_HOME/agents" ] && [ -d "$REPO_ROOT/agents" ]; then
+    shopt -s nullglob
+    for entry in "$REPO_ROOT/agents/"*.md; do
+      name="$(basename "$entry")"
+      agent_target="$CLAUDE_HOME/agents/$name"
+      if [ -L "$agent_target" ] || [ -f "$agent_target" ]; then
+        rm -f "$agent_target"
+        removed_count=$(( removed_count + 1 ))
       fi
     done
-    shopt -u nullglob dotglob
-  done
+    shopt -u nullglob
+  fi
+
+  # Remove `~/.claude/skills/gan/` whether it is a directory copy
+  # (post-copy install) or a legacy symlink.
+  if [ -L "$CLAUDE_HOME/skills/gan" ]; then
+    rm -f "$CLAUDE_HOME/skills/gan"
+    removed_count=$(( removed_count + 1 ))
+  elif [ -d "$CLAUDE_HOME/skills/gan" ]; then
+    rm -rf "$CLAUDE_HOME/skills/gan"
+    removed_count=$(( removed_count + 1 ))
+  fi
 
   # Strip `mcpServers.claudeagents-config` from `~/.claude.json` if it
   # is present. Atomic temp+rename, sorted keys. If the file does not
@@ -824,14 +903,39 @@ uninstall_main() {
     fi
   fi
 
+  # Remove the globally installed npm package. The package is namespaced
+  # (`@claudeagents/config-server`) and ships only the framework's two
+  # bins (`claudeagents-config-server`, `gan`); nothing outside the
+  # framework can reasonably depend on it. Leaving it in place after
+  # uninstall would mean `gan` and `claudeagents-config-server` stay on
+  # PATH — directly contradicting the user's intent to uninstall.
+  #
+  # If `npm uninstall -g` fails (permissions, npm not on PATH, network
+  # registry unreachable), we warn but do not fail the uninstall — the
+  # filesystem state is already cleaned up; the leftover npm package is
+  # the smaller residual.
+  local npm_pkg="@claudeagents/config-server"
+  local npm_removed=0
+  if command -v npm >/dev/null 2>&1; then
+    if npm uninstall -g "$npm_pkg" >/dev/null 2>&1; then
+      npm_removed=1
+    else
+      log_warn "Could not remove the globally installed package \`$npm_pkg\`. Run \`npm uninstall -g $npm_pkg\` by hand to clean up."
+    fi
+  else
+    log_warn "\`npm\` is not on PATH; cannot remove the globally installed package \`$npm_pkg\`. Run \`npm uninstall -g $npm_pkg\` once npm is available."
+  fi
+
   log_info ""
   log_info "ClaudeAgents installer: uninstall complete."
-  log_info "  - Removed $removed_links framework symlink(s) from $CLAUDE_HOME/."
+  log_info "  - Removed $removed_count framework file(s) from $CLAUDE_HOME/."
   log_info "  - Cleared the framework entry from $CLAUDE_CONFIG_JSON (when present)."
+  if [ "$npm_removed" -eq 1 ]; then
+    log_info "  - Removed the globally installed package \`$npm_pkg\` (\`gan\` and \`claudeagents-config-server\` are no longer on PATH)."
+  fi
   log_info ""
-  log_info "Left in place (clean up by hand if you want them gone):"
-  log_info "  - The framework's globally installed package: \`npm uninstall -g @claudeagents/config-server\`."
-  log_info "  - Per-project zones: \`rm -rf .gan-state .gan-cache\` (run from each repo)."
+  log_info "Left in place:"
+  log_info "  - Per-project zones: \`rm -rf .gan-state .gan-cache\` (run from each repo) if you want them gone."
   log_info "  - Project overlays under \`.claude/gan/\` and the once-per-machine \`~/.claude.json\` backup are untouched."
 }
 
@@ -896,12 +1000,16 @@ main() {
   package_version="$(read_mcp_server_version)"
 
   prune_stale_agent_symlinks
-  link_agents_and_skills
+  install_agents_and_skills
 
   probe_version="$(version_probe_mcp)"
   if [ -z "$probe_version" ] || [ "$probe_version" != "$package_version" ]; then
     install_mcp_server
   fi
+
+  # Verify the bin shim landed on PATH. See `verify_mcp_bin_on_path`'s
+  # docstring for why this is a helper (rather than inlined here).
+  verify_mcp_bin_on_path
 
   if [ "$skip_claude_code" -eq 0 ]; then
     backup_claude_json_once

@@ -52,6 +52,24 @@ Result: active set = {web-node, docker}. Auto-detection is skipped.
 
 `stack.override` cannot be additive to detection — it is all-or-nothing. Users who want "auto-detected stacks plus one extra" must list the full set explicitly.
 
+### Silent-shrinkage warning
+
+The "all-or-nothing" semantic is a sharp edge: a user authoring an overlay with `stack.override: [my-custom]` to **add** their custom stack will instead **suppress** every stack auto-detection would have activated. The dogfooding case: a user authored `php-grav` with prose describing coexistence with `web-node`, and `stack.override: [php-grav]` silently dropped `web-node`. The user's prose became a lie with no warning.
+
+**The resolver MUST emit a structured warning when `stack.override` shrinks the active set vs. detection.** Specifically: when the cascade-resolved active set produced by `stack.override` is strictly smaller than the auto-detection result that would have applied, a `StackOverrideShrinkage` warning fires, naming the suppressed stacks. The warning is non-aborting (the override IS the user's stated intent and must be honoured), but it is surfaced:
+
+- In the orchestrator's startup log (per O1 part A) — a non-suppressible line.
+- In `gan stacks list` output — `active = [...]` is annotated with `detection-only = [...] (suppressed by stack.override)` so the user sees what they lost.
+- In `gan config print` JSON — under a top-level `warnings` array alongside the merged splice points.
+
+Detecting shrinkage requires the resolver to compute auto-detection even when `stack.override` is non-empty — it normally short-circuits. The cost is modest (detection is fast) and the user-protection is real.
+
+Wording for the warning:
+
+> Your overlay's `stack.override` set [`php-grav`] is smaller than the auto-detection result [`php-grav`, `web-node`]. Stacks suppressed by your override: [`web-node`]. If you want to KEEP the suppressed stacks alongside `php-grav`, list them in `stack.override`: `[php-grav, web-node]`. `stack.override` is a replacement, not an addition.
+
+The warning fires once per `validateAll()`; the orchestrator surfaces it at startup-log time, not per-sprint.
+
 ## `stacks/generic.md` fallback definition
 
 `stacks/generic.md` ships with the repo (at tier 3, per spec C5) and is the activated stack when auto-detection finds zero matches and no overlay provides `stack.override`. Its body YAML:

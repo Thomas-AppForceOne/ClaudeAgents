@@ -19,8 +19,12 @@ The rewritten installer makes a particular point of cleanup: any pre-existing `.
 ### Responsibilities
 
 1. **Prerequisite checks.** Verify Node 20.10+ and git are installed. By default also verify Claude Code is installed; bail with a clear actionable error on each missing prerequisite (include the install command for that platform). Pass `--no-claude-code` to skip the Claude Code check — used by CI runners and headless environments that consume the MCP server / `gan` CLI directly without going through Claude Code.
-2. **Symlink agents and skills.** Link `agents/*.md` and `skills/gan/` into the user's Claude Code config directory. Use symlinks so updates to the repo are reflected immediately.
+2. **Copy agents and skills into the user's Claude Code config directory.** Copy `agents/*.md` to `~/.claude/agents/` and `skills/gan/` to `~/.claude/skills/gan/` as real files / directories. Once install completes, the user can move or delete the source repo without breaking the install — copies under `~/.claude/` are independent of the source location. Idempotent: re-runs replace existing copies in place. A legacy install with symlinks at the target paths is migrated in the same step (symlinks are removed before the copy lands), so a user who installed before this change runs `install.sh` once and ends up on the new shape. Recorded in STATE_LOG as `copied-file:<path>` / `copied-dir:<path>` so partial-failure rollback can undo cleanly.
 3. **Install the MCP server (R1).** Run `npm install -g @claudeagents/config-server` (pinned to the version this repo declares in a `MCP_SERVER_VERSION` constant). Until `@claudeagents/config-server` is published to a public registry, `install.sh` instead runs `npm install -g .` from the repo root (the **local-install-only rule** documented in `PROJECT_CONTEXT.md`); the published-registry path lights up automatically once the package is released.
+
+   `package.json` declares a `prepare` script (`"prepare": "npm run build"`) so `npm install -g .` automatically compiles `dist/` before the bin shim is created. Without the `prepare` script, npm "succeeds" logically while skipping the bin shim (because its target file is absent), and the install reports success on a setup that cannot run.
+
+3a. **Verify the bin shim landed on PATH.** After step 3, the installer runs `command -v claudeagents-config-server` and aborts with a structured error if the bin is not on PATH. This catches the silent-failure mode where the npm install succeeded logically but the bin shim is missing (e.g. because the `prepare` build failed but npm didn't propagate the error). Without this check, the install would report success but Claude Code's MCP launcher would fail to start the server, causing `/gan` to silently fail to register.
 4. **Create the built-in stacks symlink** at `~/.claude/gan/builtin-stacks/` pointing at `<packageRoot>/stacks/` (where `<packageRoot>` is `<npm-root-g>/@claudeagents/config-server`). The symlink is a user-tier convenience handle for browsing the framework's canonical stack files; the resolver itself reaches `<packageRoot>` directly via `import.meta.url` and does not depend on this symlink. Idempotent: a re-run that finds the same symlink already pointing at the right target is a no-op; a stale symlink pointing somewhere else is replaced atomically (`ln -sfn`); a real file or directory at the link path is left alone with a warning. Skipped on Windows shells (MSYS / Cygwin / MinGW). Best-effort: a missing `npm root -g` resolution or absent `<packageRoot>/stacks/` directory logs a warning and continues. Recorded in STATE_LOG so partial-failure rollback can undo it; removed by `--uninstall` only when the symlink still points into the framework install (user-redirected symlinks are left alone).
 5. **Register the MCP server in Claude Code's config.** Append a `claudeagents-config` entry to the user's MCP config (typically `~/.claude.json` or the path Claude Code's docs name). Idempotent: re-running detects an existing entry and updates the version pin without duplicating.
 6. **Prepare filesystem zones for the current project (if `install.sh` is run inside a git repo).** Create `.gan-state/` and `.gan-cache/` and add them to `.gitignore` if not already present. `.claude/gan/` is left alone (created lazily when the user first authors an overlay).
@@ -41,7 +45,7 @@ Both are one-time. Subsequent runs are friction-free.
 Running `install.sh` twice in a row is safe. The second run:
 
 - Re-verifies prerequisites.
-- Re-applies symlinks (no-op if already present).
+- Re-copies agent and skill files (overwrites existing copies; legacy symlinks at those paths are migrated to copies on first re-run).
 - Updates the MCP server version pin if it changed in the repo.
 - Validates the existing project config.
 - Reports "already installed (versions match)" or "upgraded from <old> to <new>".
@@ -63,7 +67,7 @@ Bare `install.sh` runs the install (this is the primary verb and changing it wou
 
 `install.sh --uninstall` reverses the install:
 
-- Removes the agent and skill symlinks.
+- Removes the framework's agent files at `~/.claude/agents/<name>.md` whose names match files in the source repo's `agents/` directory, and the `~/.claude/skills/gan/` directory. Both copies (post-migration) and legacy symlinks (pre-migration) are removed.
 - Removes the MCP server entry from Claude Code's config (does not uninstall the npm package, since other tools may depend on it).
 - Removes the `~/.claude/gan/builtin-stacks/` symlink **only when** it still points into the globally-installed framework package (`<npm-root-g>/@claudeagents/config-server/...`). User-redirected symlinks are left alone with a warning so a deliberate user override is never silently destroyed.
 - Leaves filesystem zones intact (they contain user state; the user opts in to their removal).
@@ -84,8 +88,11 @@ Any failure halts the installer with a non-zero exit code, an error message nami
 - A clean machine with prerequisites installed reaches "ready to run `/gan` after one Claude Code restart" with one execution of `install.sh`.
 - `install.sh` exits non-zero with a clear message when any prerequisite is missing, naming the prerequisite and an install hint.
 - `install.sh --no-claude-code` succeeds on a CI runner that has Node and git but no Claude Code; the resulting install lets `gan validate` and other CLI commands run, but `/gan` is not available (no Claude Code to host the skill).
-- Running `install.sh` twice does not duplicate MCP config entries, does not create duplicate symlinks, and does not reinstall an already-current npm package.
-- `install.sh --uninstall` removes the symlinks and MCP config entry; subsequent `/gan` invocations report "ClaudeAgents not installed".
+- Running `install.sh` twice does not duplicate MCP config entries, overwrites copied files in place without duplicating, and does not reinstall an already-current npm package.
+- After install completes, the source repo can be moved or deleted without breaking the install — copies under `~/.claude/` are independent of the source location. (The `builtin-stacks` symlink targets the globally-installed npm package and is not affected by source-repo moves either.)
+- A user who installed before the symlink-to-copy migration runs `install.sh` once and ends up on the new shape — legacy symlinks are silently removed and replaced with file/directory copies.
+- After install, `command -v claudeagents-config-server` returns a path on the user's PATH. If it does not, `install.sh` halts with a structured error before reporting success.
+- `install.sh --uninstall` removes the framework files (copies and any legacy symlinks) and MCP config entry; subsequent `/gan` invocations report "ClaudeAgents not installed".
 - A failure mid-install (simulated by killing the npm step) leaves the system either fully pre-install or fully post-install, never half-configured.
 - The installer does not touch `.claude/gan/`, `.gan-state/runs/`, or any user data not created by itself.
 - `install.sh --help` and `install.sh -h` print the help text to stdout and exit 0; the text lists every flag, the prerequisites, and a summary of what the installer creates. Unknown flags exit non-zero with a pointer to `--help`.
