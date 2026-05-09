@@ -155,7 +155,7 @@ Slices 2–4 (I-series) can land in parallel where dependencies allow. Slice 5 i
 Documented limitations that ship with v1.0 by design. Each is named so dogfooding signal isn't surprised by them.
 
 - **No CI test for end-to-end orchestrator flow.** The deterministic core has golden-file harness coverage; `validateAll()` and `getResolvedConfig()` are unit-tested; the trust prompt has a UX test. There is no automated test that exercises a full `/gan` invocation (validateAll → snapshot → spawn agent → re-snapshot on mutation → spawn next agent → terminate). v1.0 dogfooding is the implicit test surface for orchestrator control flow. A regression in `SKILL.md` ordering (especially around E5's clarifier insertion) would be caught by a real user, not CI. Building the orchestrator-side test harness is V1's scope in v2.0.
-- **Per-stack overlay command override returns 0 for `perStackOverridesCount`.** [`reads.ts:329–332`](../src/config-server/tools/reads.ts) carries an explicit "post-E1 work" comment; project overlays attempting to override a stack's `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` silently no-op. Most users don't override per-stack commands, so the surface is rarely exercised, but the failure mode (overlay declares an override, framework ignores it without warning) is the worst kind. The Pre-release chores below add a structured warning so the limitation is visible. Full implementation lands in v1.1.
+- **Per-stack overlay command override returns 0 for `perStackOverridesCount`.** [`reads.ts:329–332`](../src/config-server/tools/reads.ts) carries an explicit "post-E1 work" comment; project overlays attempting to override a stack's `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` silently no-op. Most users don't override per-stack commands, so the surface is rarely exercised, but the failure mode (overlay declares an override, framework ignores it without warning) is the worst kind. [W1](W1-overlay-misuse-warnings.md) adds a `PerStackOverrideUnsupported` structured warning so the limitation is visible. Full implementation lands in v1.1.
 
 ### Pre-release chores
 
@@ -187,8 +187,11 @@ When v1.0 has been used in real projects long enough to surface failure patterns
 - **U1/U2/U3** — does the project-overlay UX hold up against real users editing the file by hand? Refine validation errors and examples against actual mistake patterns.
 - **O2** — does `--recover` hit edge cases in the prescriptive flow that weren't anticipated?
 - **M3** — does the per-key state-file layout perform as expected once a second module ships state? Audit at v1.1 with the orchestrator-test harness work below.
+- **I1/I2/I3** — does the install pipeline survive real-world variations (different Node versions, npm prefixes, GUI launch contexts)? Refine the post-install bin verification, the welcome banner content, and the permission consent flow against what users actually trip on.
+- **D1** — does `ConfigApiUnreachable` branching produce the right remediation for the cases users hit? Are SKILL.md status markers preserved across spec edits?
+- **H1** — does the user-tier hook ownership shift produce silent project-tier-override drift in practice? Audit `gan hooks status` adoption.
+- **W1** — do users find the `StackOverrideShrinkage` and `PerStackOverrideUnsupported` warnings actionable? Refine wording if confused users filed bugs against them.
 - **Orchestrator end-to-end test gap** — review whether v1.0 dogfooding produced enough orchestrator-flow regressions to motivate building the test harness in v1.1 (rather than waiting for v2.0's V1). If yes, scope an interim spec; if no, hold the line.
-- **Per-stack overlay override warning** — confirm v1.0 users actually saw the warning when they tried the override. Refine wording if confused users filed bugs against it.
 
 Same checkpoint discipline as the post-R, post-E1, post-M breaks. No v1.1 work begins until the audit closes.
 
@@ -201,7 +204,7 @@ Builds on T1's trace data and v1.0 user reports. Specs land in priority order, g
 - **T2 — Cost & efficiency surface.** `gan run report <run-id>` reads from T1 trace; `gan stats` aggregates across runs. Small spec; large UX win — users who can see "$0.40 / 38k tokens / 4m23s" trust the tool faster.
 - **A4 — PII / secret regex catalog.** Per-stack regex bank (cards, SSN, JWT, AWS keys, etc.) layered on top of `secretsGlob`. Failures block the sprint, not just warn.
 - **E5 round 2.** Confidence scoring per spec dimension drives adaptive round depth (replacing v1.0's fixed three-round cap); optional auto-promotion of resolved clarifications to project-tier `additionalContext` with explicit user confirmation. Multi-round clarification (initial + two evolutions) and the draft-preview interaction surface already shipped in v1.0; v1.1's work is the confidence-scored adaptation and the persistence path.
-- **Per-stack overlay command override completion.** Replaces the v1.0 warning chore with the real implementation. Project overlays declaring `<stack>.auditCmd` / `buildCmd` / `testCmd` / `lintCmd` flow through the snapshot to the orchestrator and evaluator-core. Closes the post-E1 work tracked at `reads.ts:329-332`.
+- **Per-stack overlay command override completion.** Replaces [W1](W1-overlay-misuse-warnings.md)'s `PerStackOverrideUnsupported` warning with the real implementation. Project overlays declaring `<stack>.auditCmd` / `buildCmd` / `testCmd` / `lintCmd` flow through the snapshot to the orchestrator and evaluator-core. Closes the post-E1 work tracked at `reads.ts:329-332`.
 
 - **Schema-runtime alignment via generation or contract tests.** v1.0 ships the surgical fix (filter `NotImplemented` tools out of the advertised list). v1.1 closes the structural gap: either (a) generate `schemas/api-tools-v1.json` from the runtime validators at build time, OR (b) add CI that calls every tool with deliberately-bad input and asserts the runtime error matches the schema's `required`-field declarations. (a) is the load-bearing fix; (b) is a backstop. The dogfooding session caught two drifts in a single run; without this discipline more will accumulate.
 
