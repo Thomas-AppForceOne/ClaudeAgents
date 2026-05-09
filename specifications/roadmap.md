@@ -103,6 +103,12 @@ The shape of the v1.0 user experience: a developer installs ClaudeAgents, edits 
 
   **Minimal first cut for v1.0:** one round, ≤ 3 blockers, no auto-promotion to project context, no confidence scoring. The clarifier reads `additionalContext` (U3) first and asks only about what's still ambiguous. Iteration on round budget, confidence model, and persistence happens in v1.1 once usage shows which ambiguities recur.
 
+### Pre-release chores
+
+Small, non-spec tasks that ship as part of v1.0 and don't warrant their own phase-coded spec.
+
+- **Node version policy.** Verify the framework runs on the current latest Node major (and every LTS line back to Node 20.10). Convert `install.sh`'s upper-bound Node check from a hard `die` to a `warn` that prints "Node X is newer than tested through (Node Y.x); continuing — please report issues." Lift the matching `engines` upper bound in `package.json`. Keep the lower bound (Node 20.10) as a hard error. Rationale: pre-v1.0 the cap was tested-against discipline; v1.0 needs to accept the audience most likely to file useful bug reports rather than block them at install time.
+
 ### Revision break — post-v1.0 dogfooding audit
 
 When v1.0 has been used in real projects long enough to surface failure patterns from T1 trace data, every v1.1 spec is re-audited. Specs to revisit will include:
