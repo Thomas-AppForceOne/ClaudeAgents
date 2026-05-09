@@ -13,6 +13,7 @@
  * real modules).
  */
 
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -590,9 +591,29 @@ export async function runStdio(): Promise<void> {
 const invokedAsBin = (() => {
   if (typeof process.argv[1] !== 'string') return false;
   try {
-    const entry = path.resolve(process.argv[1]);
+    // `process.argv[1]` may be a symlink (npm bin shims always are), so
+    // `path.resolve` alone is not enough — Node's module loader resolves
+    // `import.meta.url` to the realpath, which means a naive
+    // path-equality check returns `false` for every symlinked invocation
+    // and the server silently exits without ever starting. `realpathSync`
+    // on both sides equalises the comparison.
+    //
+    // If realpath fails (file missing, permissions), fall back to the
+    // path.resolve form — it's no worse than the original.
     const here = fileURLToPath(import.meta.url);
-    return entry === here;
+    let entry = path.resolve(process.argv[1]);
+    try {
+      entry = realpathSync(entry);
+    } catch {
+      // Leave entry as path.resolve(process.argv[1]).
+    }
+    let canonicalHere = here;
+    try {
+      canonicalHere = realpathSync(here);
+    } catch {
+      // Leave canonicalHere as fileURLToPath(import.meta.url).
+    }
+    return entry === canonicalHere;
   } catch {
     return false;
   }
