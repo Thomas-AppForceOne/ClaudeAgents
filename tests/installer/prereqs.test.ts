@@ -115,19 +115,23 @@ describe('install.sh prerequisite checks', () => {
     expect(result.stderr).toContain('20.10');
   });
 
-  it('F-AC8: rejects Node 23.0.0 with a stderr error naming Node and the supported range', async () => {
+  it('F-AC8: rejects a Node major above the current ceiling with a stderr error naming Node and the supported range', async () => {
+    // The ceiling lives in install.sh's `MAX_NODE_MAJOR` constant. Test
+    // a Node major that is comfortably above any plausible value (`v99`)
+    // so this test does not need to track ceiling bumps. Whatever the
+    // ceiling is, v99 is above it.
     const { tmp, pathOverride } = setup({
-      nodeVersion: 'v23.0.0',
+      nodeVersion: 'v99.0.0',
       withGit: true,
       withClaude: true,
     });
     const result = await runInstall([], { home: tmp.home, pathOverride });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain('Node');
-    // Either the lower bound or the upper bound must appear so the user
-    // can reason about the supported range.
-    const namesRange = result.stderr.includes('20.10') || result.stderr.includes('22');
-    expect(namesRange).toBe(true);
+    // The lower bound (`20.10`) must appear so the user can reason
+    // about the supported range. The upper bound is intentionally not
+    // pinned in this assertion because it bumps over time.
+    expect(result.stderr).toContain('20.10');
   });
 
   it('F-AC5: rejects when git is missing with a stderr error naming git', async () => {

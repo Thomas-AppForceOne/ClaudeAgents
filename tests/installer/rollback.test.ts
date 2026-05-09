@@ -73,12 +73,19 @@ function packageVersion(): string {
   return (JSON.parse(raw) as { version: string }).version;
 }
 
+/**
+ * List any framework-owned agent files (real files post copy migration,
+ * symlinks pre migration). Used by rollback tests to assert the install
+ * cleaned up every agent entry it created.
+ */
 function listAgentSymlinks(home: string): string[] {
   const dir = path.join(home, '.claude', 'agents');
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => {
+    if (!name.startsWith('gan-')) return false;
     try {
-      return lstatSync(path.join(dir, name)).isSymbolicLink();
+      const st = lstatSync(path.join(dir, name));
+      return st.isSymbolicLink() || st.isFile();
     } catch {
       return false;
     }

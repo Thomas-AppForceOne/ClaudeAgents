@@ -101,10 +101,10 @@ What it does:
     when run inside a git repository.
 
 Prerequisites:
-  - `node` `20.10` or newer on PATH. The framework is tested through Node
-    `25`; newer majors will install but are not yet exercised. Install via
-    your package manager (for example `brew install` on macOS, or `nvm`
-    on Linux). See https://nodejs.org/ for full instructions.
+  - `node` `20.10` or newer on PATH. The framework is tested through `node`
+    `25`; newer majors will install but are not yet exercised. Install
+    via your package manager (for example `brew install` on macOS, or
+    `nvm` on Linux). See https://nodejs.org/ for full instructions.
   - `git` on PATH.
   - Claude Code installed and on PATH (skip with --no-claude-code).
 
@@ -277,6 +277,29 @@ version_probe_mcp() {
   out="${out## }"
   out="${out%% }"
   printf '%s' "${out#v}"
+}
+
+# verify_mcp_bin_on_path
+#
+# Confirms `claudeagents-config-server` is reachable on PATH after the
+# npm install step. `npm install -g .` can succeed logically while
+# failing to create the bin shim — for example, when `dist/` is absent
+# because `npm run build` never ran. Without this check, install
+# reports success but Claude Code's MCP launcher cannot find the
+# server, and the `/gan` skill silently fails to register.
+#
+# Wrapped in a helper (rather than inlined into main()) because
+# `return 1` from a helper triggers the ERR trap installed in main(),
+# routing through `on_error -> rollback` cleanly. `return 1` from
+# main() directly does NOT trigger ERR — the trap was set inside main
+# and expires once main returns, leaving no handler for the calling
+# site's non-zero exit.
+verify_mcp_bin_on_path() {
+  if ! command -v claudeagents-config-server >/dev/null 2>&1; then
+    log_error "ClaudeAgents installer: \`claudeagents-config-server\` is not on PATH after install."
+    log_error "The framework's npm package linked but its executable did not. This typically means the build artifact at \`dist/\` was not produced — verify \`npm run build\` runs cleanly inside $REPO_ROOT, then re-run \`./install.sh\`."
+    return 1
+  fi
 }
 
 # install_mcp_server
@@ -984,19 +1007,9 @@ main() {
     install_mcp_server
   fi
 
-  # Verify the bin shim landed on PATH. `npm install -g .` can succeed
-  # logically (it links the package) while failing to create the bin
-  # symlink — for example, when `dist/` is absent because `npm run build`
-  # never ran. Without this check the install reports success but Claude
-  # Code's MCP launcher cannot find `claudeagents-config-server`, so the
-  # `/gan` skill silently fails to register. Detect this here so the
-  # error fires while we are still in the install branch and the rollback
-  # trap can clean up.
-  if ! command -v claudeagents-config-server >/dev/null 2>&1; then
-    log_error "ClaudeAgents installer: \`claudeagents-config-server\` is not on PATH after install."
-    log_error "The framework's npm package linked but its executable did not. This typically means the build artifact at \`dist/\` was not produced — verify \`npm run build\` runs cleanly inside $REPO_ROOT, then re-run \`./install.sh\`."
-    return 1
-  fi
+  # Verify the bin shim landed on PATH. See `verify_mcp_bin_on_path`'s
+  # docstring for why this is a helper (rather than inlined here).
+  verify_mcp_bin_on_path
 
   if [ "$skip_claude_code" -eq 0 ]; then
     backup_claude_json_once

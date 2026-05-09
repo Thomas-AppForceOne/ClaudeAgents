@@ -165,7 +165,9 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
       '\n' +
       '  Active vs. available:\n' +
       '    list      = stacks whose detection rules match the current directory.\n' +
-      '                In a Node project: `web-node`. Outside one: `generic` (fallback).\n' +
+      '                In a project that matches one of the framework\'s shipped\n' +
+      '                stacks, that stack appears here; otherwise `generic`\n' +
+      '                (the fallback) is the active stack.\n' +
       '    available = every stack file the framework has on disk.',
     flags: [
       '      --tier=project|user   Where to scaffold/customize/reset (default: project).',
@@ -175,7 +177,7 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
       '  gan stacks list',
       '  gan stacks available',
       '  gan stacks new ios',
-      '  gan stacks customize web-node',
+      '  gan stacks customize `web-node`',
     ],
     exitCodes: [
       '  0   Success',
