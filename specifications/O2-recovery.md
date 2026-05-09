@@ -72,6 +72,8 @@ ownership invariant. Module state belongs to modules; run-state has its own lane
 ```
 .gan-state/runs/<run-id>/
 ├── progress.json                 # orchestrator-owned; updated throughout run
+├── raw-prompt.md                 # verbatim user prompt (E5; written by orchestrator)
+├── clarified-spec.md             # E5 clarifier output (planner/proposer input)
 ├── spec.md                       # planner output
 ├── sprint-N-contract.json        # contract-proposer output (post-review)
 ├── sprint-N-contract-draft.json  # contract-proposer output (pre-review)
@@ -79,6 +81,7 @@ ownership invariant. Module state belongs to modules; run-state has its own lane
 ├── sprint-N-objection-A.json     # generator objection (when applicable)
 ├── sprint-N-base-commit.txt      # base commit SHA for sprint N
 ├── worktree/                     # the git worktree (lives here, not at <cwd>/.gan/worktree)
+├── trace/                        # T1 structured run trace (events + payloads/ + index.json)
 └── telemetry/                    # opt-in telemetry capture; honors --no-telemetry
     ├── config.json
     └── outcome.json
@@ -136,14 +139,19 @@ The post-E1 `progress.json` schema gains four fields beyond the legacy set:
 Enumerated `terminalReason` codes:
 
 ```
-complete                       Run finished all sprints successfully
-failed-max-attempts            Sprint exhausted maxAttempts
-failed-budget                  Hit maxAttemptsTotal or maxMinutes
-aborted-by-user                User answered N at resume prompt
-aborted-planner-error          Planner failed (schema, refusal, etc.)
-aborted-contract-failed        Contract negotiation hit max revisions
-aborted-validation-failed      validateAll() failed in aborting mode
+complete                                  Run finished all sprints successfully
+failed-max-attempts                       Sprint exhausted maxAttempts
+failed-budget                             Hit maxAttemptsTotal or maxMinutes
+failed-loop-detected                      A1 halt — see safetyHalt event for discriminator
+aborted-by-user                           User answered N at resume prompt OR typed
+                                          "cancel" at E5 clarifier prompt
+aborted-planner-error                     Planner failed (schema, refusal, etc.)
+aborted-contract-failed                   Contract negotiation hit max revisions
+aborted-validation-failed                 validateAll() failed in aborting mode
+aborted-clarifier-blockers-unanswered     E5 clarifier received empty response
 ```
+
+`failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. `aborted-clarifier-blockers-unanswered` is written when E5's clarifier prompts the user and receives an empty response; "cancel" responses use the existing `aborted-by-user`.
 
 Schema lives at `schemas/run-state/progress-v1.json` per F3's naming conventions; this
 sprint adds it to the schema set if it isn't already present.
