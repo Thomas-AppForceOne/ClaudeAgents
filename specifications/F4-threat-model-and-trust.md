@@ -159,6 +159,28 @@ This flag is the answer to "I want to review someone's PR locally without runnin
 - Per-command sandboxing beyond the existing PreToolUse confinement to the worktree. Out of scope; Linux/macOS process-level sandboxing of arbitrary commands is platform-specific and a real spec on its own.
 - Network egress restrictions during `/gan` runs. Out of scope.
 
+### Trust ladder — named operational modes
+
+Trust in F4 is graded, not binary. The mechanisms above (`--no-project-commands`, the interactive prompt, the trust-cache hash, `GAN_TRUST=unsafe-trust-all`) implement discrete points on a five-rung ladder. Naming the rungs explicitly clarifies what the user is choosing at the prompt and reserves the vocabulary for future rungs without re-litigating the protocol later.
+
+| Rung | Name | What the framework does | v1.0 surface |
+|---|---|---|---|
+| 1 | **read** | No project-declared command runs. The framework reads committed config (so `getResolvedConfig`, `gan stacks list`, etc. work) but every `evaluator.additionalChecks`, project-tier `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` is skipped or falls back to tier-3 defaults. | `--no-project-commands` flag; the `[r]` branch at the trust prompt. |
+| 2 | **suggest** | Show the user what *would* run without executing. | **Reserved — deferred to v1.1.** The current `[v]` view branch is the closest precursor (it shows the declared commands or a diff against the prior approval); a true rung-2 mode runs the full plan dry and surfaces the call graph but never invokes the commands. |
+| 3 | **draft** | Stage the run for per-step user confirmation: every project-declared command pauses for explicit consent before executing. | **Reserved — deferred to v1.1.** Finer-grained than v1.0's per-config-change approval; would require orchestrator support for mid-sprint confirmation prompts. |
+| 4 | **act-with-confirmation** | Run project-declared commands after a single explicit approval that covers the full committed config (gated by content hash). Any byte change to a hashed file invalidates the approval and re-prompts. | **v1.0 default.** The `[a]` approve branch + the trust-cache hash mechanism. |
+| 5 | **autonomous** | Run project-declared commands with no approval check. Logged loudly. Self-hosted CI on a trusted branch only. | `GAN_TRUST=unsafe-trust-all`. |
+
+Rung 1 (read) and rungs 4–5 ship in v1.0. Rungs 2–3 are reserved names: the protocol vocabulary is fixed at v1.0 freeze so v1.1+ can implement them without renaming the existing rungs or restructuring the prompt UX. The interactive prompt's options ([a], [r], [v], [c]) are the user-visible projection of the ladder for v1.0; rung-2 / rung-3 implementations in v1.1 add new prompt branches without disturbing the current ones.
+
+The `GAN_TRUST=strict` CI mode is orthogonal to the ladder: it forces "fail closed" rather than presenting any rung. Strict mode is the absence of interactive consent, not a rung itself.
+
+The ladder is documented here so:
+
+- The user reading the prompt knows what each option implies (which rung).
+- A future spec adding rung 2 or rung 3 references the existing rung names and slots in cleanly.
+- The threat model can talk about "rung 1 vs rung 4" instead of conflating "no commands ran" (a runtime fact) with "user explicitly chose read-only mode" (an intent fact).
+
 ### Trust prompt is a protocol, not a server-side gate
 
 `trustApprove` is a regular MCP tool. The agent (running inside Claude Code) can call it directly without any prompt being shown to the user, because the MCP server has no reliable way to distinguish "agent is calling because the user pressed `[a]`pprove at an interactive prompt" from "agent is calling on its own initiative."

@@ -79,7 +79,14 @@ The JSON structure must be exactly:
       "name": "criterion_name",
       "description": "Specific, testable description of what must be true",
       "threshold": 7,
-      "rationale": "Why this criterion exists (stack-surface provenance or splice-point provenance, when applicable)"
+      "rationale": "Why this criterion exists (stack-surface provenance or splice-point provenance, when applicable)",
+      "referenceArtifacts": [
+        {
+          "path": "tests/fixtures/expected-output.json",
+          "kind": "golden",
+          "purpose": "the generated handler's response shape must match this file"
+        }
+      ]
     }
   ]
 }
@@ -94,6 +101,33 @@ Rules:
 - If you received a revision-notes payload, address every note and re-write the draft.
 - If you received an objection payload, either remove the challenged criterion or restate it so the objection's `proposedChange` could plausibly satisfy it.
 - If you received a blocking-concern payload, add new criteria that explicitly cover each concern.
+
+### Reference artifacts (optional, per criterion)
+
+A criterion may carry a `referenceArtifacts` array pointing at concrete, in-repo files the generator should read for guidance and the evaluator can use as ground truth. The field exists because the generator floor rises sharply when it has a concrete target rather than having to invent shape from prose.
+
+Each entry is `{path, kind, purpose}`:
+
+| Field | Required | Shape |
+|---|---|---|
+| `path` | yes | repo-relative POSIX path (no leading separator). Must exist in the worktree at contract time. |
+| `kind` | yes | enum: `"golden"` (output should match this artifact byte-for-byte or by shape contract) \| `"fixture"` (input the generated code should handle) \| `"exemplar"` (style/structure to follow; not a strict match) \| `"contract"` (interface, schema, or type the output must conform to) \| `"banned-pattern"` (regex or file demonstrating what the output must NOT look like). |
+| `purpose` | yes | one-line prose stating what the generator should take from the artifact. |
+
+When to attach reference artifacts:
+
+- **Output shape is structural and known** — attach a `golden`. Generator floors rise; evaluator gets an exact-match check almost for free.
+- **Style is project-specific** — attach an `exemplar` from elsewhere in the codebase. Avoids the "generic Claude style" drift.
+- **Interface is fixed** — attach a `contract` (a TypeScript type, a JSON Schema, an OpenAPI fragment). Pin the surface; let the generator implement.
+- **A class of bug recurs** — attach a `banned-pattern`. Cheaper than re-writing the criterion's prose to forbid every variant.
+
+When NOT to attach:
+
+- The criterion is fundamentally about judgement (readability, naming sense, error-message tone). Reference artifacts cannot encode taste; do not pretend.
+- The artifact does not yet exist in the repo. Reference artifacts must point at files present at contract time. A criterion that *requires* the artifact to exist (e.g. "produce the golden") cannot reference it as a `golden`.
+- Multiple artifacts would conflict. Pick one canonical artifact per criterion; if more than one is genuinely needed, the criterion is too broad — split it.
+
+The field is optional. Most criteria will not have reference artifacts; the field is empty or omitted. Criteria that do carry artifacts measurably tighten the generator → evaluator handshake — they are the strongest tool the proposer has for raising the floor on a sprint's output quality.
 
 After writing the file, print: `CONTRACT DRAFT written for sprint {N}: {X} criteria`.
 

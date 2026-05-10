@@ -12,6 +12,16 @@ The first dogfooding session caught three diagnostic surfaces producing the wron
 
 All three are diagnostic-surface failures: the framework had the data to guide the user well, and didn't. D1 covers all three because they share a discipline — match the diagnostic to the user's actual state, not to the most-common case.
 
+### Why this matters for v1.0 (and beyond polish)
+
+D1 reads like a polish pass — better error messages, marker tokens, fuller help text. It is not. Diagnostic clarity is **agent-readiness investment** with a direct line to evaluator quality:
+
+- **Cleaner human diagnostics produce cleaner trace data.** When the orchestrator's preflight check emits a `subReason` discriminator (per the `ConfigApiUnreachable` branching below), the trace records that discriminator alongside the run's other events. Aggregated across many runs, the trace data answers questions like "what fraction of new-user friction is `notLoadedInSession` vs. `binMissing`?" Without the discriminator the data is unstructured prose; with it the data is queryable.
+- **Cleaner trace data produces better evaluator feedback.** T1's evidence bundle (per T1's "Evaluator evidence bundle" subsection) joins criterion verdicts to trace events via `traceEventRefs`. When diagnostic events carry structured fields, the evaluator can cite specific events as evidence; when diagnostics are prose, the evaluator's `deltaFromContract` falls back to paraphrase.
+- **Cleaner status markers prevent silent drift between what the spec promises and what the orchestrator does.** The `[shipped-in-vN]` / `[deferred-to-vN]` / `[partial-vN]` discipline is the same idea applied to spec-vs-runtime alignment. A spec that promises behavior the runtime doesn't deliver is the diagnostic-clarity failure mode at spec scale.
+
+The investment is small (the three changes below) and the leverage is large — every later evaluator-side spec (V1, V2, V3 in v2.0; the Q-series in v1.2) reads cleaner data because of it. Treating D1 as polish under-prices the work and risks deferring it for "real" features that benefit from D1 having shipped first.
+
 D1 is the first spec under the **D** (diagnostics + user UX) phase code.
 
 ## Proposed change
