@@ -16,7 +16,15 @@ CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
-MAX_NODE_MAJOR=25
+# Highest Node major the framework's CI has been exercised through. Above
+# this ceiling, `check_node` warns and continues; it does not refuse to
+# install. Bump this constant when CI gains coverage on a new major.
+TESTED_THROUGH_NODE_MAJOR=25
+# Where users are pointed when the installer asks for a bug report (today:
+# only the tested-through Node-version warning). Surfaced as a constant so
+# downstream prose surfaces (uninstall failure paths, future rollback
+# messages) can consume the same URL without each path hardcoding it.
+BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 
 # STATE_LOG — append-only audit trail of state-creating steps. S3 consumes
 # this in `rollback()`. Each entry is a single line `<kind>:<payload>`:
@@ -127,7 +135,7 @@ HELP
 
 check_node() {
   if ! command -v node >/dev/null 2>&1; then
-    die "Node is not on PATH. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer (and Node <=${MAX_NODE_MAJOR}). See https://nodejs.org/."
+    die "Node is not on PATH. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer. See https://nodejs.org/."
   fi
 
   local raw stripped
@@ -153,14 +161,28 @@ check_node() {
       ;;
   esac
 
+  # Lower-bound rejection text — shared between the major-too-old and the
+  # major-OK-minor-too-old branches so the user sees identical, actionable
+  # remediation regardless of which condition tripped. Matches the spec
+  # example in `specifications/I3-uninstall-and-version-policy.md` § "Node
+  # version policy" (modulo the `v` prefix that `$stripped` drops).
+  local lower_bound_error
+  lower_bound_error="Node $stripped is below the framework's required minimum (Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}). Install Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer via your package manager (for example \`brew install node\` on macOS, or \`nvm install ${MIN_NODE_MAJOR}\` on Linux). See https://nodejs.org/ for details."
+
   if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then
-    die "Node $stripped is too old. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer."
+    die "$lower_bound_error"
   fi
   if [ "$major" -eq "$MIN_NODE_MAJOR" ] && [ "$minor" -lt "$MIN_NODE_MINOR" ]; then
-    die "Node $stripped is too old. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer."
+    die "$lower_bound_error"
   fi
-  if [ "$major" -gt "$MAX_NODE_MAJOR" ]; then
-    die "Node $stripped is newer than ClaudeAgents supports. The supported range is Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} through Node ${MAX_NODE_MAJOR}.x."
+  if [ "$major" -gt "$TESTED_THROUGH_NODE_MAJOR" ]; then
+    # Warn-not-die per `specifications/I3-uninstall-and-version-policy.md`.
+    # The constant is a tested-through ceiling, not a known-incompatibility
+    # cap; locking out users on a newer major produced no functional benefit
+    # and silenced exactly the dogfooding population most likely to file
+    # useful bug reports. Bump `TESTED_THROUGH_NODE_MAJOR` once CI gains
+    # coverage on the new major.
+    log_warn "Node $stripped is newer than this framework version has been tested through (Node ${TESTED_THROUGH_NODE_MAJOR}.x). The install will continue. If you encounter issues, please report them at ${BUG_REPORT_URL} so the tested-through ceiling can be raised."
   fi
 }
 

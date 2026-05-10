@@ -143,27 +143,27 @@ $ which claudeagents-config-server
 claudeagents-config-server not found
 ```
 
-A Node version warning:
+A Node version warning. The version numbers in the example reflect the current `TESTED_THROUGH_NODE_MAJOR=25` constant in `install.sh`; the rendered text tracks that constant as it bumps, so an example showing `26.0.0` over a `25.x` ceiling becomes (say) `27.0.0` over a `26.x` ceiling once the constant moves.
 
 ```
 $ node --version
-v25.6.1
+v26.0.0
 
 $ ./install.sh
 ClaudeAgents installer: prerequisites verified.
-warning: Node v25.6.1 is newer than this framework version has been tested through (Node 24.x). The install will continue. If you encounter issues, please report them so the tested-through ceiling can be raised.
+warning: Node 26.0.0 is newer than this framework version has been tested through (Node 25.x). The install will continue. If you encounter issues, please report them at https://github.com/Thomas-AppForceOne/ClaudeAgents/issues so the tested-through ceiling can be raised.
 
 [install proceeds normally]
 ```
 
-A Node version below the lower bound:
+A Node version below the lower bound. The numbers in the example reflect the current `MIN_NODE_MAJOR=20` and `MIN_NODE_MINOR=10` constants in `install.sh`; both interpolate into the rendered text and the `nvm install N` hint, so an example referencing `Node 20.10` and `nvm install 20` becomes (say) `Node 22.10` and `nvm install 22` if the floor moves.
 
 ```
 $ node --version
 v18.19.0
 
 $ ./install.sh
-error: Node v18.19.0 is below the framework's required minimum (Node 20.10). Install Node 20.10 or newer via your package manager (for example `brew install node` on macOS, or `nvm install 20` on Linux). See https://nodejs.org/ for details.
+error: Node 18.19.0 is below the framework's required minimum (Node 20.10). Install Node 20.10 or newer via your package manager (for example `brew install node` on macOS, or `nvm install 20` on Linux). See https://nodejs.org/ for details.
 ```
 
 ## Acceptance criteria

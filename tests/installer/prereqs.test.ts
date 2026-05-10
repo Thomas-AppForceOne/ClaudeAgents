@@ -115,23 +115,111 @@ describe('install.sh prerequisite checks', () => {
     expect(result.stderr).toContain('20.10');
   });
 
-  it('F-AC8: rejects a Node major above the current ceiling with a stderr error naming Node and the supported range', async () => {
-    // The ceiling lives in install.sh's `MAX_NODE_MAJOR` constant. Test
-    // a Node major that is comfortably above any plausible value (`v99`)
-    // so this test does not need to track ceiling bumps. Whatever the
-    // ceiling is, v99 is above it.
+  it('I3 slice 2: a Node major above the tested-through ceiling warns on stderr and the install proceeds', async () => {
+    // Per `specifications/I3-uninstall-and-version-policy.md` § "Node
+    // version policy: warn-not-die for the upper bound", an install on a
+    // Node major above install.sh's `TESTED_THROUGH_NODE_MAJOR` constant
+    // emits a one-line stderr warning and continues. The constant is a
+    // tested-through ceiling, not a known-incompatibility cap; locking
+    // out users on newer majors silenced the dogfooding population most
+    // likely to file useful bug reports.
+    //
+    // Test with v99.0.0 — comfortably above any plausible ceiling so the
+    // test does not need to track bumps. The install path is exercised
+    // under `--no-claude-code` with `withInstallStubs` so the run reaches
+    // a successful exit, which is the load-bearing assertion.
     const { tmp, pathOverride } = setup({
       nodeVersion: 'v99.0.0',
+      withGit: true,
+      withClaude: true,
+      withInstallStubs: true,
+    });
+    const result = await runInstall(['--no-claude-code'], {
+      home: tmp.home,
+      pathOverride,
+    });
+    expect(result.exitCode).toBe(0);
+    // Warning must surface on stderr (where `log_warn` writes), naming
+    // both the user's version and the tested-through ceiling, and must
+    // signal that the install is continuing.
+    expect(result.stderr).toContain('warning:');
+    // The version is rendered with the `v` prefix stripped, matching the
+    // existing `Node $stripped is too old` pattern in `check_node`. The
+    // assertion checks for the bare numeric version so it is not coupled
+    // to that rendering choice's specifics.
+    expect(result.stderr).toContain('99.0.0');
+    expect(result.stderr).toContain('newer than');
+    expect(result.stderr).toContain('tested through');
+    expect(result.stderr).toContain('install will continue');
+    // The warning routes the user to a concrete reporting destination
+    // (the install.sh `BUG_REPORT_URL` constant). Loose match on the
+    // hostname so the assertion does not lock the org/repo path against
+    // future moves.
+    expect(result.stderr).toContain('github.com');
+  });
+
+  it('I3 slice 2: Node at the tested-through ceiling passes without firing the warning', async () => {
+    // Boundary-condition guard. The warning fires on `major > ceiling`,
+    // not `major >= ceiling`; a regression that flipped the comparison
+    // (or accidentally lowered the constant) would silently start
+    // warning users on the tested major. This test pins `25.x` is silent.
+    //
+    // NOTE: this test couples to `TESTED_THROUGH_NODE_MAJOR=25`. When the
+    // constant bumps, the `nodeVersion` literal here must bump in lockstep.
+    const { tmp, pathOverride } = setup({
+      nodeVersion: 'v25.6.1',
+      withGit: true,
+      withClaude: true,
+      withInstallStubs: true,
+    });
+    const result = await runInstall(['--no-claude-code'], {
+      home: tmp.home,
+      pathOverride,
+    });
+    expect(result.exitCode).toBe(0);
+    // Unrelated install-time warnings (e.g. "Could not resolve npm
+    // global root") may still fire — assert only that the
+    // tested-through warning specifically does not.
+    expect(result.stderr).not.toContain('tested through');
+    expect(result.stderr).not.toContain('newer than');
+  });
+
+  it('I3 slice 2: warn-not-die does not break the full install path with JSON registration', async () => {
+    // End-to-end coverage gap that the slice-2 first cut left: the
+    // earlier warn-not-die test runs under `--no-claude-code`, which
+    // skips `register_mcp_in_claude_json`. This test fires the warning
+    // AND lets the JSON registration path run, asserting both that the
+    // exit is 0 and that `~/.claude.json` is written. The risk hedged is
+    // a latent control-flow assumption that the warning text might
+    // interact with the rest of `main()` — purely additive in v1, but
+    // worth a regression guard.
+    const { tmp, pathOverride } = setup({
+      nodeVersion: 'v99.0.0',
+      withGit: true,
+      withClaude: true,
+      withInstallStubs: true,
+    });
+    const result = await runInstall([], { home: tmp.home, pathOverride });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('tested through');
+    expect(existsSync(path.join(tmp.home, '.claude.json'))).toBe(true);
+  });
+
+  it('I3 slice 2: missing-`node` error does not reference an upper-bound ceiling', async () => {
+    // The constant rename also dropped the "and Node <=N" phrasing from
+    // the missing-Node prereq error: a tested-through ceiling has no
+    // meaning when there is no `node` on PATH, and naming an upper bound
+    // in that error reintroduces the old hard-fail mental model.
+    const { tmp, pathOverride } = setup({
+      // No nodeVersion → `node` is not on PATH.
       withGit: true,
       withClaude: true,
     });
     const result = await runInstall([], { home: tmp.home, pathOverride });
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain('Node');
-    // The lower bound (`20.10`) must appear so the user can reason
-    // about the supported range. The upper bound is intentionally not
-    // pinned in this assertion because it bumps over time.
-    expect(result.stderr).toContain('20.10');
+    expect(result.stderr).toContain('Node is not on PATH');
+    expect(result.stderr).not.toContain('<=');
+    expect(result.stderr).not.toContain('Node <=');
   });
 
   it('F-AC5: rejects when git is missing with a stderr error naming git', async () => {
