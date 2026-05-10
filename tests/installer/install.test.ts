@@ -400,6 +400,97 @@ describe('install.sh — S2 happy-path install', () => {
     expect(errorLines).toMatch(/`npm install -g \.`/);
   });
 
+  it('I2 sprint 3a: non-TTY install adds only category 1 (framework MCP) to permissions.allow', async () => {
+    // Per `specifications/I2-install-user-facing-surfaces.md` § "Non-TTY
+    // behavior": when stdin/stdout are not a TTY (CI, scripted
+    // invocations, every test in this file), `configure_permissions`
+    // skips the prompt sequence and adds only category 1 — the
+    // framework MCP server, the only category whose absence would
+    // break /gan entirely. Other categories stay unset; the user can
+    // re-run install.sh interactively to add them.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    expect(existsSync(settingsPath)).toBe(true);
+    const raw = readFileSync(settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { permissions: { allow: string[] } };
+
+    // Category 1 is present.
+    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
+    // Categories 2+ are NOT present (sample assertions on entries that
+    // would be added if the merge over-fired).
+    expect(parsed.permissions.allow).not.toContain('Read');
+    expect(parsed.permissions.allow).not.toContain('Write');
+    expect(parsed.permissions.allow).not.toContain('Bash(git status:*)');
+    expect(parsed.permissions.allow).not.toContain('Bash(npm install:*)');
+  });
+
+  it('I2 sprint 3a: settings.json is written sorted-key + 2-space-indent + trailing newline', async () => {
+    // Mirror of the existing `~/.claude.json` write contract (S2-AC6),
+    // applied to the new `~/.claude/settings.json` path. Keys must be
+    // sorted; indentation must be 2 spaces; the file must end with a
+    // single newline.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    const raw = readFileSync(settingsPath, 'utf8');
+    expect(raw.endsWith('\n')).toBe(true);
+    expect(raw.endsWith('\n\n')).toBe(false); // exactly one trailing newline.
+    // 2-space indent: the first nested key after the opening brace
+    // should be preceded by exactly two spaces.
+    expect(raw).toMatch(/\n  "permissions":/);
+    // Sorted keys: re-stringify with sortedness and confirm match.
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    assertSortedKeys(raw);
+    expect(typeof parsed['permissions']).toBe('object');
+  });
+
+  it('I2 sprint 3a: pre-existing user entries in permissions.allow survive the merge', async () => {
+    // The merge must be additive, not destructive. A user who
+    // pre-authored their own `permissions.allow` entry — say, a
+    // project-specific tool the framework knows nothing about — must
+    // see that entry preserved after install. Otherwise the install
+    // would silently destroy user customisation, the worst kind of
+    // failure mode.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    // Pre-seed a settings.json with a user entry the framework would
+    // not add on its own.
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    mkdirSync(path.dirname(settingsPath), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ permissions: { allow: ['MyOwnTool'] } }, null, 2) + '\n',
+      'utf8',
+    );
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const raw = readFileSync(settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { permissions: { allow: string[] } };
+    expect(parsed.permissions.allow).toContain('MyOwnTool');
+    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
+  });
+
   it('I2 sprint 1: post-install success message contains both the restart hint and the `/gan --help` hint', async () => {
     // Per `specifications/I2-install-user-facing-surfaces.md` § "Post-
     // install message: name the next step", the success message must

@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
+CLAUDE_SETTINGS_JSON="$HOME/.claude/settings.json"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 # Highest Node major the framework's CI has been exercised through. Above
@@ -33,6 +34,8 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   builtin-stacks-symlink:<absolute-path>
 #   claude-json-edited:NEW
 #   claude-json-edited:<preedit-path>
+#   claude-settings-edited:NEW
+#   claude-settings-edited:<preedit-path>
 #   zone-created:<absolute-path>
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
@@ -57,6 +60,11 @@ BUILTIN_STACKS_LINKED=0
 # of `main()` cleans this up after every other step succeeds; rollback
 # uses it to restore the file on failure.
 PREEDIT_CLAUDE_JSON=""
+
+# Per-run pre-edit copy of `~/.claude/settings.json` (if any). Symmetric
+# with PREEDIT_CLAUDE_JSON above. Cleaned up by main() on success;
+# consumed by rollback() on failure.
+PREEDIT_CLAUDE_SETTINGS=""
 
 log_info() {
   printf '%s\n' "$*"
@@ -378,6 +386,327 @@ backup_claude_json_once() {
   dest="$HOME/.claude.json.backup-$stamp"
   cp "$CLAUDE_CONFIG_JSON" "$dest"
   STATE_LOG+=("backup:$dest")
+}
+
+# I2 sprint 3a — Permission consent flow.
+#
+# Permission category catalog. Authored as a JSON document so both bash
+# (loop / prompt) and node (JSON merge into ~/.claude/settings.json)
+# read from the same source of truth. Single-quoted bash string so `$`
+# tokens (none here, but defensive) are not interpolated.
+#
+# Each category has:
+#   - name: human-readable label shown in the prompt
+#   - summary: one-line gloss, also shown in the prompt
+#   - required: when true, declining aborts the install (today: only
+#     category 1, the framework MCP server, since /gan cannot function
+#     without it)
+#   - tools: the literal entries written into `permissions.allow` if
+#     the category is approved. The strings match Claude Code's
+#     permission-pattern syntax verbatim.
+#
+# The catalog matches `specifications/I2-install-user-facing-surfaces.md`
+# § "The eight categories" verbatim for `name` + `tools`. Sprint 3b's
+# idempotency relies on exact-string matches between this catalog and
+# whatever is already in `permissions.allow`.
+CATEGORIES_JSON='[
+  {
+    "name": "Framework MCP server",
+    "summary": "mcp__claudeagents-config__*",
+    "required": true,
+    "tools": ["mcp__claudeagents-config__*"]
+  },
+  {
+    "name": "File operations",
+    "summary": "Read, Write, Edit, Glob, Grep",
+    "required": false,
+    "tools": ["Read", "Write", "Edit", "Glob", "Grep"]
+  },
+  {
+    "name": "Sub-agents",
+    "summary": "Agent, TodoWrite",
+    "required": false,
+    "tools": ["Agent", "TodoWrite"]
+  },
+  {
+    "name": "Git read",
+    "summary": "git status, diff, log, show, branch, rev-parse, worktree list",
+    "required": false,
+    "tools": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git worktree list:*)"
+    ]
+  },
+  {
+    "name": "Git write",
+    "summary": "git add, commit, checkout, worktree add/remove/prune",
+    "required": false,
+    "tools": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git worktree prune:*)"
+    ]
+  },
+  {
+    "name": "Build & test",
+    "summary": "npm test, npm run, npm audit",
+    "required": false,
+    "tools": [
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(npm audit:*)"
+    ]
+  },
+  {
+    "name": "Dependency install",
+    "summary": "npm install",
+    "required": false,
+    "tools": ["Bash(npm install:*)"]
+  },
+  {
+    "name": "Filesystem helpers",
+    "summary": "ls, cat, mkdir, realpath, test, echo",
+    "required": false,
+    "tools": [
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Bash(realpath:*)",
+      "Bash(test:*)",
+      "Bash(echo:*)"
+    ]
+  }
+]'
+
+# configure_permissions
+#
+# Walks the 8 permission categories above and merges approved tool
+# patterns into `~/.claude/settings.json` `permissions.allow`. The merge
+# is atomic (temp + sorted-key + trailing newline + mv) and additive
+# (existing user-authored entries are preserved).
+#
+# Behaviour by mode:
+#   - **Non-TTY** (CI, scripted invocations, every test in
+#     `tests/installer/`). Skips the prompt sequence entirely. Adds
+#     ONLY category 1 (the framework MCP server) — without that the
+#     server cannot register. Other categories stay unset; the user can
+#     re-run `install.sh` interactively to add them. This default-
+#     minimal behaviour is the contract that lets the existing test
+#     harness keep passing without each test having to thread a flag.
+#   - **TTY**. Prompts for each category in turn (default `[Y]`).
+#     `[a]` = approve all remaining; `[s]` = skip all remaining;
+#     `[v]` = view the literal tool patterns, then re-prompt the same
+#     category. Decline of category 1 (the only required one) aborts
+#     the install with a structured error.
+#
+# Sprint 3b will add `--approve-all-permissions`, `--minimal-
+# permissions`, `--reconfigure-permissions` flags; idempotent re-runs
+# (skip already-granted categories); and the uninstall integration that
+# removes only the framework's added entries.
+configure_permissions() {
+  PREEDIT_CLAUDE_SETTINGS="$HOME/.claude/settings.json.preedit-$$"
+
+  # Decide which categories to approve.
+  local approved_indices_csv=""
+
+  if [ ! -t 0 ]; then
+    # Non-TTY default: minimal (category 0 only — index is 0-based here
+    # so the JSON merge step below can pass it straight to node).
+    approved_indices_csv="0"
+  else
+    # TTY interactive prompt sequence.
+    log_info ""
+    log_info "ClaudeAgents installer: configuring Claude Code permissions for /gan runs."
+    log_info ""
+    log_info "Each category corresponds to operations the framework needs during a sprint."
+    log_info "Approving up-front means the operation runs without prompting mid-sprint."
+    log_info "Declining means Claude Code prompts for each call (loud, but full per-call review)."
+    log_info ""
+    log_info "Press [a] to approve all remaining, [s] to skip all remaining, or [v] to view"
+    log_info "the exact tools/commands a category covers before deciding."
+    log_info ""
+
+    # Resolve category metadata once via node.
+    local cat_count
+    cat_count="$(printf '%s' "$CATEGORIES_JSON" | node -e '
+      const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      console.log(data.length);
+    ')"
+
+    local approve_all=0 skip_all=0 i name summary required answer
+    local approved=()
+    for ((i = 0; i < cat_count; i++)); do
+      name="$(printf '%s' "$CATEGORIES_JSON" | node -e "
+        const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+        process.stdout.write(d[$i].name);
+      ")"
+      summary="$(printf '%s' "$CATEGORIES_JSON" | node -e "
+        const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+        process.stdout.write(d[$i].summary);
+      ")"
+      required="$(printf '%s' "$CATEGORIES_JSON" | node -e "
+        const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+        process.stdout.write(d[$i].required ? 'true' : 'false');
+      ")"
+
+      if [ "$skip_all" -eq 1 ] && [ "$required" != "true" ]; then
+        log_info "[$((i+1))/$cat_count] $name  ($summary) — skipped"
+        continue
+      fi
+      if [ "$approve_all" -eq 1 ]; then
+        log_info "[$((i+1))/$cat_count] $name  ($summary) — approved"
+        approved+=("$i")
+        continue
+      fi
+
+      log_info "[$((i+1))/$cat_count] $name  ($summary)"
+      if [ "$required" = "true" ]; then
+        log_info "      Required for /gan to function at all. Declining here aborts install."
+      fi
+
+      while true; do
+        if [ "$required" = "true" ]; then
+          printf '      Approve? [Y/n] '
+        else
+          printf '      Approve? [Y/n/v] '
+        fi
+        IFS= read -r answer || answer=""
+        case "$answer" in
+          ''|y|Y) approved+=("$i"); break ;;
+          n|N)
+            if [ "$required" = "true" ]; then
+              die "Permission category '$name' is required; cannot install. Re-run \`install.sh\` and approve category 1 to continue."
+            fi
+            break
+            ;;
+          a|A) approve_all=1; approved+=("$i"); break ;;
+          s|S)
+            skip_all=1
+            if [ "$required" = "true" ]; then
+              # Required category cannot be skipped via [s] either.
+              die "Permission category '$name' is required; cannot install. Re-run \`install.sh\` and approve category 1 to continue."
+            fi
+            break
+            ;;
+          v|V)
+            if [ "$required" = "true" ]; then
+              log_warn "      [v] is not available for required categories."
+              continue
+            fi
+            log_info "      Tools/commands this category covers:"
+            printf '%s' "$CATEGORIES_JSON" | node -e "
+              const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+              for (const t of d[$i].tools) console.log('        ' + t);
+            "
+            ;;
+          *) log_warn "      Unrecognised input. Please type Y, n, a, s, or v." ;;
+        esac
+      done
+    done
+
+    # Build CSV from `approved` array (bash 3.x-friendly: avoid IFS join).
+    local idx
+    for idx in "${approved[@]:-}"; do
+      [ -z "$idx" ] && continue
+      if [ -z "$approved_indices_csv" ]; then
+        approved_indices_csv="$idx"
+      else
+        approved_indices_csv="$approved_indices_csv,$idx"
+      fi
+    done
+  fi
+
+  # Skip the merge entirely if nothing was approved (e.g. user typed `n`
+  # at every non-required category and category 1 was somehow not
+  # required — defensive; should not happen with the current catalog).
+  if [ -z "$approved_indices_csv" ]; then
+    return 0
+  fi
+
+  # Snapshot the existing settings.json (if any) for rollback.
+  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    cp "$CLAUDE_SETTINGS_JSON" "$PREEDIT_CLAUDE_SETTINGS"
+    STATE_LOG+=("claude-settings-edited:$PREEDIT_CLAUDE_SETTINGS")
+  else
+    STATE_LOG+=("claude-settings-edited:NEW")
+    # Ensure parent directory exists for the atomic-write rename target.
+    mkdir -p "$(dirname "$CLAUDE_SETTINGS_JSON")"
+  fi
+
+  # Atomic merge via node. Preserves existing `permissions.allow`
+  # entries; appends the approved categories' tool patterns; sorts
+  # `permissions.allow` alphabetically; emits sorted-key + 2-space-indent
+  # + trailing-newline JSON to a temp sibling, then `mv`s into place.
+  local tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+  CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+  CLAUDE_SETTINGS_TMP="$tmp" \
+  CLAUDE_CATEGORIES_JSON="$CATEGORIES_JSON" \
+  CLAUDE_APPROVED_CSV="$approved_indices_csv" \
+  node -e '
+    const fs = require("fs");
+    const src = process.env.CLAUDE_SETTINGS_PATH;
+    const dst = process.env.CLAUDE_SETTINGS_TMP;
+    const cats = JSON.parse(process.env.CLAUDE_CATEGORIES_JSON);
+    const approved = process.env.CLAUDE_APPROVED_CSV.split(",")
+      .filter((s) => s.length > 0)
+      .map((s) => Number(s));
+    let data = {};
+    if (fs.existsSync(src)) {
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+    }
+    if (typeof data.permissions !== "object" || data.permissions === null || Array.isArray(data.permissions)) {
+      data.permissions = {};
+    }
+    if (!Array.isArray(data.permissions.allow)) {
+      data.permissions.allow = [];
+    }
+    const existing = new Set(data.permissions.allow.map(String));
+    for (const i of approved) {
+      const cat = cats[i];
+      if (!cat || !Array.isArray(cat.tools)) continue;
+      for (const t of cat.tools) {
+        if (!existing.has(t)) {
+          existing.add(t);
+        }
+      }
+    }
+    data.permissions.allow = Array.from(existing).sort();
+    function sortedStringify(value, indent) {
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === "object") {
+          const out = {};
+          for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return JSON.stringify(sortKeys(value), null, indent);
+    }
+    const out = sortedStringify(data, 2) + "\n";
+    fs.writeFileSync(dst, out, "utf8");
+  '
+  mv "$tmp" "$CLAUDE_SETTINGS_JSON"
 }
 
 # register_mcp_in_claude_json
@@ -717,6 +1046,17 @@ rollback() {
           fi
         fi
         ;;
+      claude-settings-edited)
+        # Symmetric with claude-json-edited above. Created-by-us =
+        # remove; pre-existing = restore from preedit copy.
+        if [ "$payload" = "NEW" ]; then
+          rm -f "$CLAUDE_SETTINGS_JSON" 2>/dev/null || true
+        else
+          if [ -f "$payload" ]; then
+            mv "$payload" "$CLAUDE_SETTINGS_JSON" 2>/dev/null || true
+          fi
+        fi
+        ;;
       zone-created)
         # Only remove if empty — never blow away user data that landed
         # inside the zone after the installer created it.
@@ -1036,6 +1376,7 @@ main() {
   if [ "$skip_claude_code" -eq 0 ]; then
     backup_claude_json_once
     register_mcp_in_claude_json
+    configure_permissions
   fi
 
   detect_preexisting_gan_dir
@@ -1045,10 +1386,14 @@ main() {
   create_builtin_stacks_symlink
 
   # Every state-creating step has succeeded — disarm the rollback trap
-  # and remove the per-run preedit copy of `~/.claude.json` (if any).
+  # and remove the per-run preedit copies of `~/.claude.json` and
+  # `~/.claude/settings.json` (if any).
   trap - ERR
   if [ -n "$PREEDIT_CLAUDE_JSON" ] && [ -f "$PREEDIT_CLAUDE_JSON" ]; then
     rm -f "$PREEDIT_CLAUDE_JSON"
+  fi
+  if [ -n "$PREEDIT_CLAUDE_SETTINGS" ] && [ -f "$PREEDIT_CLAUDE_SETTINGS" ]; then
+    rm -f "$PREEDIT_CLAUDE_SETTINGS"
   fi
 
   print_final_status
