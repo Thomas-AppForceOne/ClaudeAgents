@@ -24,10 +24,27 @@ Parse arguments from the user's message before doing anything else. The five fla
 | `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. |
 | `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, prints recoverable runs, exits. |
 | `--no-project-commands` | false | Skip every command sourced from `project` and `user` tier files for this run; falls back to `builtin` tier defaults (per F4). |
+| `--skip-welcome` | false | Skip the first-run welcome banner. The marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip the banner. Idempotent — passing this flag on an already-welcomed system is a no-op. See "Welcome banner" below. |
 
 Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring. Help includes at least one realistic invocation example.
 
 The remaining text after flags is the user prompt passed to the planner (when a regular run is invoked).
+
+## Welcome banner
+
+The first time `/gan` is invoked **as a regular sprint invocation** (not as a `--help`, `--print-config`, `--list-recoverable`, or `--recover` short-circuit), the orchestrator prints a multi-paragraph welcome banner before doing any other work, then continues with the requested action. Per `specifications/I2-install-user-facing-surfaces.md` § "First-run welcome banner".
+
+**Detection.** The marker file at `~/.claude/gan/welcomed` is the welcomed-state signal. Its presence — not its content — is what counts. The file is a zero-byte sentinel and lives under `~/.claude/gan/` (zone 1, configuration tier per F1). The orchestrator checks for the file at startup; absence triggers the banner.
+
+**Short-circuit exemption.** The banner does NOT fire on `--help`, `--print-config`, `--list-recoverable`, or `--recover`. A user running `--help` for orientation should see help text, not a banner. A user running `--print-config` to debug is already debugging and needs the print output. The banner fires only when the orchestrator is about to spawn agents on a first-run system.
+
+**Banner content** covers the bullets named in `specifications/I2-install-user-facing-surfaces.md` § "Banner content": what ClaudeAgents is, the pipeline shape (clarifier → planner → contract → generator → evaluator), what trust prompts and the clarifier draft preview look like, what `.gan-state/` accumulates, when to use `--no-project-commands`, where to find docs, and that both `gan` and `/gan` exist with separate purposes. The orchestrator renders this as prose that obeys the F4 prose-discipline rule (the bare ecosystem tokens enumerated under F4 — including the package-manager and runtime names — must appear inside backticks; see F4 for the canonical list).
+
+**Marker-write timing.** The marker is written **after** the banner finishes printing but **before** any downstream agent fires. Ctrl-C during banner display does not write the marker — the user gets a re-show on next run. A user who wants to re-read the banner can `rm ~/.claude/gan/welcomed`.
+
+**`--skip-welcome` flag.** Passing this flag writes the marker without printing the banner. Useful for scripted invocations that don't want even the informational banner output. Idempotent — the marker write is a no-op when the file already exists.
+
+**Non-TTY behavior.** When stdin/stdout are not a TTY (CI, automated scripts), the banner is skipped silently and the marker is created. The first-run experience is shaped for interactive humans; non-interactive contexts should not hit prose output they cannot read.
 
 ## Help short-circuit
 
@@ -49,25 +66,26 @@ No sprint work runs in any of these paths.
 The orchestrator follows this order on every regular `/gan` invocation:
 
 1. **Parse args.** Build the flag table from the user's message.
-2. **`validateAll()` (aborting).** This is the orchestrator's first action on a regular run. Failure aborts the run with the F2 structured error report — no worktree is created, no agent is spawned, and no zone-2 or zone-3 writes occur. The structured error fields (`code`, `file`, `field`, `line`, `message`) are surfaced verbatim. The user-facing remediation hint (when present) is forwarded as-is; the orchestrator does not paraphrase or interpret API errors.
-3. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
+2. **Welcome banner.** Check for `~/.claude/gan/welcomed`. If absent, the user did not pass `--skip-welcome`, and stdin/stdout are TTY, render the welcome banner described in the "Welcome banner" section above. After the banner finishes printing, create the marker (`mkdir -p ~/.claude/gan && touch ~/.claude/gan/welcomed`). On non-TTY invocations the marker is created without rendering the banner. With `--skip-welcome`, the marker is created without rendering the banner regardless of TTY status. If the marker already exists, this step is a no-op.
+3. **`validateAll()` (aborting).** Failure aborts the run with the F2 structured error report — no worktree is created, no agent is spawned, and no zone-2 or zone-3 writes occur. The structured error fields (`code`, `file`, `field`, `line`, `message`) are surfaced verbatim. The user-facing remediation hint (when present) is forwarded as-is; the orchestrator does not paraphrase or interpret API errors.
+4. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
 
    **Enrich the snapshot with active-stack bodies before spawn.** The F2 `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Without this enrichment step, agents see undefined per-stack commands and silently degrade to graceful-fallback paths even when the stack file declared the command. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
-4. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
+5. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
 
    **First-run nudge.** When the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line. The verbatim text of the contract is reproduced here so the orchestrator can match the spec exactly:
 
    > 6. **Print the startup log.** Per O1's part A, emit one structured log line summarising the snapshot. **First-run nudge:** when the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line: `No recognised ecosystem stack — running with generic defaults. For richer behaviour, run \`gan stacks new <name>\` to scaffold a stack file, or fork an existing one from \`stacks/\` as a starting point.` The note appears even when log verbosity is reduced; it is part of the contract that the framework tells non-Node users *something* useful on first run. (A friendlier prose authoring guide is a known follow-up; today the canonical reference is C1's schema spec plus existing stack files.)
 
-5. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
-6. **Spawn the sprint loop.** For each sprint:
+6. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
+7. **Spawn the sprint loop.** For each sprint:
    - Pass the snapshot to `gan-contract-proposer` (proposes the sprint contract — every security criterion sourced from the active stacks' `securitySurfaces` per C1 template instantiation).
    - Pass the snapshot and the contract to `gan-generator`.
    - Pass the snapshot, the contract, and the worktree state to `gan-evaluator`.
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
-7. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
+8. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
 
 ## Snapshot freshness rule
 
