@@ -57,6 +57,15 @@ The contract:
 
 Any future change to F1's zone layout updates the hook's content in lockstep. The hook is regenerated from a single template inside the framework's source; install.sh writes the rendered template.
 
+### Relationship to F4's trust ladder
+
+The confinement hook and F4's trust ladder are orthogonal layers, both load-bearing for the framework's safety story:
+
+- **The hook (this spec) gates *where* a sprint can write.** It fires on every PreToolUse regardless of which trust rung the run is at — even a rung-5 (`unsafe-trust-all`) run is still confined to `.gan-state/runs/<run-id>/worktree/` and the run's per-sprint artifact paths. The hook's allow/deny logic does not consult the trust state.
+- **F4's trust ladder gates *whether* committed project-declared commands run at all.** A rung-1 (`--no-project-commands`) run still spawns agents, still writes to the worktree, still gets confined by this hook — it just skips `evaluator.additionalChecks`, project-tier `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` per F4's runtime-flag specification.
+
+Both layers must hold for the framework's per-sprint safety guarantee. A failure of either is a failure of the guarantee. F4 documents the trust ladder; H1 documents the confinement contract; neither relies on the other for its own correctness.
+
 ### Project-tier override pattern
 
 A project that needs different confinement (narrower OR wider) can declare its own hook at `<project>/.claude/hooks/gan-confine.sh`. Claude Code's hook resolution picks the project-tier hook over the user-tier hook when both are present. The project-tier hook is the project's responsibility — the framework does not maintain or update it, and `install.sh` does not touch it.

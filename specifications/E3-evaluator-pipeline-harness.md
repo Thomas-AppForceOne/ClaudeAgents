@@ -113,6 +113,28 @@ No timestamps, PIDs, or token counts appear in the evaluator plan — those belo
 
 CI invokes via a workflow named `test-evaluator-pipeline.yml` (replaces `test-capability.yml` from earlier roadmap drafts; the new name matches the harness's actual scope).
 
+### Relationship to T1's evidence bundle
+
+The deterministic core produces the **plan** (what should be checked, in what order, against which files); the LLM portion produces the **verdict** (per-criterion pass/fail with evidence). T1 pins the verdict's structure as the **evaluator evidence bundle** (`schemas/evaluator-evidence-bundle-v1.json`). The two artifacts are joined by criterion `name`:
+
+- E3's deterministic plan emits `securitySurfacesInstantiated[].id` (and equivalent identifiers for `auditCommands`, `evaluatorAdditionalChecks`, etc.). Each id becomes a criterion `name` in the contract that the planner / contract-proposer issues for the sprint.
+- T1's evidence bundle emits one `criteria[]` entry per criterion `name` with verdict + evidence (trace-event refs, reproduction command, delta from contract).
+- A consumer reading `sprint-{N}-feedback-{attempt-letter}.json` can re-derive *why* a criterion existed in the first place by joining `name` back to E3's plan output.
+
+This separation is load-bearing. E3 is testable with golden files (deterministic in, deterministic out) precisely because the LLM portion is excluded; T1's evidence bundle is the LLM portion's structural output. Future verdict-accuracy work (V1 in v2.0) reads both: E3's plan defines the expected check surface, T1's bundle records what the LLM actually produced for each. Without the join key, V1 has no way to align expected with actual.
+
+### Hygiene-check coverage
+
+A practical discipline note for stack-file authors and for the gan-evaluator agent prompt: the deterministic core treats hygiene-class checks (legibility, naming, layering, banned-pattern enforcement) as first-class entries in the plan, not afterthoughts. Concretely:
+
+- `lintCmd` is a primary surface for hygiene enforcement, not an optional add-on. A stack file that ships an `auditCmd` (security) without a `lintCmd` (hygiene) is incomplete; the multi-stack guard rail surfaces this gap.
+- `securitySurfaces` covers structural-hygiene rules adjacent to security (input validation, prototype pollution, cookie flags) — not solely "is this exploitable." The web-node `securitySurfaces` set is the reference shape: ~half of the entries are hygiene-adjacent rather than direct exploit detection.
+- `evaluator.additionalChecks` is the splice point a project uses to extend hygiene coverage beyond the stack defaults (typecheck commands, dead-code scanners, dependency-graph linters). Stack authors should expect projects to layer hygiene on top of the base stack.
+
+The consequence for evaluator scoring (which lives outside E3's deterministic-core scope but is informed by it): hygiene-class criteria carry weight comparable to functional criteria when the evaluator's LLM portion produces verdicts. A run that passes every functional criterion but fails three hygiene criteria is not a passing run. The evaluator agent prompt is the implementation source for this weighting; this subsection is the discipline rule the prompt and any future scoring spec must respect.
+
+This rule does not change E3's harness behavior — the deterministic core is unchanged. It pins the *reading* of the plan: hygiene entries are not subordinate to security or functional entries.
+
 ### What this harness does not test
 
 - LLM verdicts on actual criteria. The deterministic core decides *what* to check; the LLM decides *whether* the change passes. The harness asserts the former and not the latter.

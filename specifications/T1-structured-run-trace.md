@@ -64,6 +64,8 @@ Fields: `safetyClass` (discriminator: `loopDetected` | `scopeViolation` | future
 
 A1 owns the `loopDetected` discriminator and its payload shape; A2 (v1.1) owns `scopeViolation`. T1 reserves the class and provides the extension point.
 
+A1's `loopDetected` payload further reserves the `reason` discriminator values `tokenBudgetExceeded` and `wallClockBudgetExceeded` for T3 (v1.2) implementation per A1's "Quantitative budget extension point" subsection. T3 adds those values via the additive-discriminator rule below — no `run-trace-vN` bump.
+
 **6. `trustEvent`** — F4 trust-prompt outcomes.
 
 Captures: which prompt fired, which branch the user picked.
@@ -93,6 +95,56 @@ Field-rename or semantic-change forces v2.
 **Readers MUST tolerate unknown discriminator values within a known event class AND unknown event-class types** — this is the forward-compat invariant that lets later specs extend the trace without bumping the schema version. A reader implementing only v1 knowledge encounters an unfamiliar event class by skipping the event with a structured warning, not erroring.
 
 The index file (`index.json`) is a separate schema, `schemas/run-trace-index-v1.json`, kept simple: total event count, count per class, first and last timestamp, run disposition (set when the run terminates).
+
+### Evaluator evidence bundle
+
+The evaluator agent's output artifact (recorded as `agentAttempt.outputArtifactPath` when `role = gan-evaluator`) is not free prose. T1 pins it as a structured **evidence bundle** so per-criterion verdicts are reconstructable post-hoc without re-running the evaluator.
+
+The artifact lives at `.gan-state/runs/<run-id>/sprint-{N}-feedback-{attempt-letter}.json`. Its top-level shape:
+
+```json
+{
+  "sprintNumber": 2,
+  "attemptLetter": "A",
+  "criteria": [
+    {
+      "name": "tls_required_for_sensitive_traffic",
+      "verdict": "pass",
+      "evidence": {
+        "traceEventRefs": ["llmCall:42", "toolCall:43"],
+        "reproductionCommand": "rg -n 'http://' src/handler.ts src/auth.ts",
+        "deltaFromContract": {
+          "expected": "no plaintext HTTP for credentialed traffic",
+          "observed": "all credentialed callers use https:// (verified at src/handler.ts:142, src/auth.ts:88)"
+        }
+      }
+    }
+  ],
+  "verdictSummary": {
+    "totalCriteria": 8,
+    "passed": 6,
+    "failed": 1,
+    "blocked": 1,
+    "skipped": 0
+  }
+}
+```
+
+Per-criterion contract:
+
+| Field | Required | Shape |
+|---|---|---|
+| `name` | yes | matches a criterion `name` in the corresponding `sprint-{N}-contract.json`. The join key. |
+| `verdict` | yes | enum: `"pass"` \| `"fail"` \| `"blocked"` \| `"skipped"`. |
+| `evidence.traceEventRefs` | yes | array of `<eventType>:<sequenceNumber>` strings pointing into the run's trace. May be empty for `verdict = "skipped"`. |
+| `evidence.reproductionCommand` | yes for `pass` and `fail`; optional for `blocked`/`skipped` | a shell command a human can run to re-derive the verdict. Must be deterministic given the worktree state. |
+| `evidence.deltaFromContract` | yes for `fail`; optional otherwise | `{expected, observed}` strings. `expected` paraphrases the criterion's `description`; `observed` is what the evaluator found. For `pass` verdicts the field is informational and may be omitted. |
+
+The bundle is the contract a future tool reads to render evaluator output to a user, drive a v1.1+ verdict-accuracy harness (V1), or reproduce a failing criterion outside the agent loop. Without the structured bundle, evaluator failures produce prose that is human-readable but neither machine-replayable nor cross-run-comparable.
+
+The schema is pinned at `schemas/evaluator-evidence-bundle-v1.json` per F3 conventions and is part of the v1.0 schema-freeze set. Pre-1.0 the bundle ships in the v1.0 implementation PR alongside `run-trace-v1.json`. Adding new fields after v1.0 follows T1's "additive stays on v1" rule (new optional fields, new verdict enum values via the discriminator-tolerance contract).
+
+The agent prompt (`agents/gan-evaluator.md`) is the implementation source of truth for *how* the evaluator produces the bundle (which surfaces it consults, how `traceEventRefs` are gathered, how `reproductionCommand` is chosen). T1 owns the *shape* of the result, decoupled from prompt evolution. A prompt rewrite that preserves the bundle shape does not break downstream readers; a prompt rewrite that changes the shape is a `vN+1` bump.
 
 ### Hash boundary
 
@@ -319,6 +371,10 @@ A `safetyHalt` event for an A1 oscillation halt:
 - Two LLM calls differing only in temperature or seed produce identical `promptRef` hashes (hash-boundary correctness).
 - Setting `telemetry.tracePayloads: hashed` in the user overlay produces a trace with hashes but no payload files.
 - An A1 halt writes a `safetyHalt` event with `safetyClass = "loopDetected"`.
+- The evaluator agent's output artifact at `.gan-state/runs/<run-id>/sprint-{N}-feedback-{attempt-letter}.json` validates against `schemas/evaluator-evidence-bundle-v1.json`.
+- Every `criteria[].name` in an evaluator evidence bundle matches a `criteria[].name` in the corresponding `sprint-{N}-contract.json` (join-key invariant).
+- Every `evidence.traceEventRefs` entry resolves to an event present in the same run's trace directory.
+- A `verdict = "fail"` criterion in the bundle has both `reproductionCommand` and `deltaFromContract` populated.
 - An F4 trust prompt resolution writes a `trustEvent` event with the correct `userChoice`.
 - A `validateAll()` failure that aborts the run writes a `validationAbort` event.
 - An O2 archive of a halted sprint includes the trace directory; `--recover` reads it and resumes attempt-counter state without an external counter file.
@@ -347,7 +403,7 @@ A `safetyHalt` event for an A1 oscillation halt:
 
 Sprintable as:
 
-1. (one sprint) Schema authoring (`run-trace-v1.json` and `run-trace-index-v1.json`) for envelope and seven event classes including extension-point design for `safetyHalt`.
+1. (one sprint) Schema authoring (`run-trace-v1.json`, `run-trace-index-v1.json`, and `evaluator-evidence-bundle-v1.json`) for envelope and seven event classes including extension-point design for `safetyHalt`, plus the per-criterion bundle shape.
 2. (one sprint) Orchestrator emission of `orchestratorMilestone` and `agentAttempt` events.
 3. (one sprint) `llmCall` event emission with payload references and hash-boundary contract.
 4. (one sprint) `toolCall` event emission and `payloads/` storage layout.

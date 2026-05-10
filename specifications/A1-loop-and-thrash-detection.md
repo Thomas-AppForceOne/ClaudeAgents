@@ -66,6 +66,22 @@ Two distinct triggers fire `editOscillation` halts, both halting independently:
 
 False-positive avoidance: the trigger only counts repeats that occurred *after* an evaluator rejection. A second attempt that legitimately reverts a partial edit because the evaluator said "undo that" is not oscillation — it's instructed behavior, and the trace records the rejection that motivated the revert.
 
+### Quantitative budget extension point — reserved for T3 (v1.2)
+
+A1's halt path is the framework-owned safety layer for "the run has spent more than it should without converging." v1.0 implements the attempt-count and oscillation dimensions of that judgement. T3 (v1.2) adds the quantitative dimensions — tokens spent and wall-clock elapsed — that complete the picture: attempt-count alone is a poor proxy for cost when individual attempts vary by 10x in token usage.
+
+A1 reserves the architectural slot for T3's enforcement so the v1.2 spec is a feature addition, not a structural rework:
+
+- **Same halt contract.** A quantitative-budget halt produces a `LoopDetected` structured error and a `safetyHalt` trace event. T3 does not invent a new error code or a new event class; the user-facing posture is "the framework halted because the sprint exceeded a configured budget."
+- **Reserved `reason` discriminator values.** The values `"tokenBudgetExceeded"` and `"wallClockBudgetExceeded"` are reserved in A1's `LoopDetected.reason` namespace. T3's implementation PR adds them as new discriminator values inside the existing `loopDetected` payload (per T1's "additive changes stay on v1" rule for discriminator additions); no schema bump.
+- **Reserved overlay splice-point family.** New fields land under the existing `safety.*` namespace (e.g. `safety.sprintTokenBudget`, `safety.sprintWallClockSec`). C3's catalog gains entries in T3's PR. The family scope (`safety.*`) is committed here so cost-budget enforcement does not accrete a parallel namespace (`budget.*`, `cost.*`, etc.).
+- **Reserved `evidence` payload shape.** For `tokenBudgetExceeded`: `{ tokensSpent, ceiling, perRoleBreakdown: { <role>: <int>, ... } }`. For `wallClockBudgetExceeded`: `{ wallClockMsElapsed, ceiling, sprintStartedAt }`. T3's PR formalises the schema; A1 commits to the field names so callers reading the trace mid-development can rely on the shape.
+- **Default disabled in v1.2.** Like A1's defaults, T3 will ship the budgets unset by default and tune ceilings against trace data after v1.0 dogfooding produces a token-cost distribution. No "guess the right ceiling" before usage data exists.
+
+What A1 does NOT reserve: the actual halt-trigger logic, the cost-tracking accountancy (T1's `llmCall` events already carry `tokensInput` / `tokensCached` / `tokensOutput` / `latencyMs`; aggregating them is T3's work), or any v1.0 user-visible behavior around tokens or wall-clock. Pre-T3, no quantitative-budget halt fires regardless of what the trace contains.
+
+This subsection exists so the v1.0 release commits to "A1 owns the safety-halt namespace, T3 extends it" rather than letting T3 in v1.2 spawn a parallel halt path that competes with A1. The naming and shape commitments here are cheap; un-doing a structural divergence in v1.2 would not be.
+
 ### Halt contract
 
 When any of the three triggers fires, the orchestrator:
@@ -129,7 +145,7 @@ A1 emits `safetyHalt` events with discriminator `loopDetected` when a halt fires
 ### What A1 does not do
 
 - Detect *semantic* loops where outputs are different but functionally equivalent (deferred to V3 in v2.0).
-- Impose token or wall-clock budgets (deferred to T3 in v1.2).
+- Enforce token or wall-clock budgets in v1.0. A1 *reserves* the architectural slot for these halts (see "Quantitative budget extension point" above) — same halt contract, same `LoopDetected` error code, same `safety.*` overlay namespace, named `tokenBudgetExceeded` / `wallClockBudgetExceeded` discriminators. T3 (v1.2) adds the actual halt logic against A1's reserved shape; no halt fires before then.
 - Modify any agent's behavior — clarifier, planner, generator, evaluator are oblivious to A1; the check happens in the orchestrator at attempt boundaries (out of scope per the "framework-owned safety layer" principle).
 - Provide mid-attempt cancellation (deferred — predictable boundaries chosen over fine-grained control for v1.0).
 - Cross-language stack support for fingerprint normalization beyond what `commentSyntax` and `sortableLists` declare (deferred per stack; absent fields are no-ops).
