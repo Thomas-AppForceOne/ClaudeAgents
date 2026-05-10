@@ -491,6 +491,175 @@ describe('install.sh — S2 happy-path install', () => {
     expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
   });
 
+  it('I2 sprint 3b: --approve-all-permissions adds every catalog tool to permissions.allow', async () => {
+    // Per `specifications/I2-install-user-facing-surfaces.md` § "Override
+    // flags": `--approve-all-permissions` grants categories 1-8 without
+    // prompting. Useful for CI runners that test the framework end-to-
+    // end.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall(['--approve-all-permissions'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
+    expect(result.exitCode).toBe(0);
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    const raw = readFileSync(settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { permissions: { allow: string[] } };
+
+    // Spot-check entries from each non-required category.
+    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*'); // cat 1
+    expect(parsed.permissions.allow).toContain('Read'); // cat 2
+    expect(parsed.permissions.allow).toContain('Agent'); // cat 3
+    expect(parsed.permissions.allow).toContain('Bash(git status:*)'); // cat 4
+    expect(parsed.permissions.allow).toContain('Bash(git commit:*)'); // cat 5
+    expect(parsed.permissions.allow).toContain('Bash(npm test:*)'); // cat 6
+    expect(parsed.permissions.allow).toContain('Bash(npm install:*)'); // cat 7
+    expect(parsed.permissions.allow).toContain('Bash(ls:*)'); // cat 8
+  });
+
+  it('I2 sprint 3b: --minimal-permissions adds only category 1', async () => {
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall(['--minimal-permissions'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
+    expect(result.exitCode).toBe(0);
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      permissions: { allow: string[] };
+    };
+    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
+    expect(parsed.permissions.allow).not.toContain('Read');
+    expect(parsed.permissions.allow).not.toContain('Bash(git status:*)');
+  });
+
+  it('I2 sprint 3b: --approve-all-permissions and --minimal-permissions are mutually exclusive', async () => {
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall(
+      ['--approve-all-permissions', '--minimal-permissions'],
+      { home: tmp.home, pathOverride, cwd },
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('--approve-all-permissions');
+    expect(result.stderr).toContain('--minimal-permissions');
+    expect(result.stderr).toContain('mutually exclusive');
+  });
+
+  it('I2 sprint 3b: idempotent re-run after categories already granted adds no duplicates', async () => {
+    // Pre-seed settings.json with categories 1 + 2 entries already
+    // present. A re-run (non-TTY default = minimal, which is just
+    // category 1) must not duplicate them and must not add anything
+    // further: the additive merge sees every approved entry is already
+    // present and the file content is preserved.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const preExisting = [
+      'mcp__claudeagents-config__*',
+      'Edit',
+      'Glob',
+      'Grep',
+      'Read',
+      'Write',
+    ].sort();
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ permissions: { allow: preExisting } }, null, 2) + '\n',
+      'utf8',
+    );
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      permissions: { allow: string[] };
+    };
+    // No duplicates: each entry appears exactly once.
+    const counts = new Map<string, number>();
+    for (const t of parsed.permissions.allow) counts.set(t, (counts.get(t) ?? 0) + 1);
+    for (const [, n] of counts) expect(n).toBe(1);
+    // Pre-existing entries preserved exactly.
+    for (const t of preExisting) expect(parsed.permissions.allow).toContain(t);
+    // Category 3+ entries still absent (re-run did not add new categories).
+    expect(parsed.permissions.allow).not.toContain('Agent');
+    expect(parsed.permissions.allow).not.toContain('Bash(git status:*)');
+  });
+
+  it('I2 sprint 3b: --uninstall strips framework-added entries but preserves user-authored entries', async () => {
+    // Per the I2 acceptance criterion: "removes only the entries
+    // matching the framework's category templates; user-authored entries
+    // in `permissions.allow` are left intact." Pre-seed a mix of
+    // framework + user entries; uninstall; assert the result.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    mkdirSync(path.dirname(settingsPath), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          permissions: {
+            allow: [
+              'MyOwnTool', // user-authored
+              'mcp__claudeagents-config__*', // framework cat 1
+              'Read', // framework cat 2
+              'AnotherUserTool', // user-authored
+            ].sort(),
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+
+    const result = await runInstall(['--uninstall'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
+    expect(result.exitCode).toBe(0);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      permissions?: { allow?: string[] };
+    };
+    const remaining = parsed.permissions?.allow ?? [];
+    // User entries preserved.
+    expect(remaining).toContain('MyOwnTool');
+    expect(remaining).toContain('AnotherUserTool');
+    // Framework entries gone.
+    expect(remaining).not.toContain('mcp__claudeagents-config__*');
+    expect(remaining).not.toContain('Read');
+  });
+
   it('I2 sprint 1: post-install success message contains both the restart hint and the `/gan --help` hint', async () => {
     // Per `specifications/I2-install-user-facing-surfaces.md` § "Post-
     // install message: name the next step", the success message must

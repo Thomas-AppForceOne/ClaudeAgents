@@ -104,6 +104,21 @@ Flags:
   --no-claude-code    Skip the Claude Code prerequisite check. Use on CI
                       runners or headless environments that consume the
                       framework directly without Claude Code hosting it.
+  --approve-all-permissions
+                      Approve every permission category without prompting.
+                      Useful for CI runners that test the framework
+                      end-to-end. Mutually exclusive with
+                      `--minimal-permissions`.
+  --minimal-permissions
+                      Approve only the framework MCP category (the
+                      minimum). Other categories stay unset; Claude Code
+                      will prompt for each call mid-sprint. Mutually
+                      exclusive with `--approve-all-permissions`.
+  --reconfigure-permissions
+                      Re-run the permission prompt sequence even when
+                      categories are already granted. Useful for
+                      revoking a previously approved category by
+                      declining now.
 
 What it does:
   - Copies ClaudeAgents agents and skills into your Claude Code config
@@ -517,7 +532,63 @@ configure_permissions() {
   # Decide which categories to approve.
   local approved_indices_csv=""
 
-  if [ ! -t 0 ]; then
+  # Compute the list of categories whose tools are ALL already in the
+  # existing `permissions.allow`. Idempotent re-runs skip these (one
+  # log line per skipped category) unless `--reconfigure-permissions`
+  # was passed. The result is a CSV of 0-based indices that should be
+  # treated as "already granted" — they are not re-prompted, not re-
+  # added (no-op duplicates the merge would deduplicate anyway), and
+  # NOT removed from approved_indices_csv at the end (the existing
+  # entries are simply preserved by the additive merge).
+  local already_granted_csv=""
+  if [ -f "$CLAUDE_SETTINGS_JSON" ] && [ "${RECONFIGURE_PERMISSIONS:-0}" -ne 1 ]; then
+    already_granted_csv="$(
+      CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+      CLAUDE_CATEGORIES_JSON="$CATEGORIES_JSON" \
+      node -e '
+        const fs = require("fs");
+        let data = {};
+        try { data = JSON.parse(fs.readFileSync(process.env.CLAUDE_SETTINGS_PATH, "utf8") || "{}"); }
+        catch (_e) { data = {}; }
+        const have = new Set(
+          (data && data.permissions && Array.isArray(data.permissions.allow))
+            ? data.permissions.allow.map(String)
+            : []
+        );
+        const cats = JSON.parse(process.env.CLAUDE_CATEGORIES_JSON);
+        const out = [];
+        cats.forEach((cat, i) => {
+          if (Array.isArray(cat.tools) && cat.tools.length > 0 && cat.tools.every((t) => have.has(t))) {
+            out.push(i);
+          }
+        });
+        process.stdout.write(out.join(","));
+      '
+    )"
+  fi
+
+  # `is_already_granted` shell helper: returns 0 (true) if `$1` (a
+  # numeric category index) appears in already_granted_csv.
+  is_already_granted() {
+    local idx="$1"
+    case ",$already_granted_csv," in
+      *",$idx,"*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  # Flag-driven non-interactive modes (these win over TTY detection):
+  if [ "${PERMISSION_MODE:-}" = "approve-all" ]; then
+    # Build CSV of all category indices via node.
+    approved_indices_csv="$(
+      printf '%s' "$CATEGORIES_JSON" | node -e '
+        const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+        process.stdout.write(d.map((_c, i) => String(i)).join(","));
+      '
+    )"
+  elif [ "${PERMISSION_MODE:-}" = "minimal" ]; then
+    approved_indices_csv="0"
+  elif [ ! -t 0 ]; then
     # Non-TTY default: minimal (category 0 only — index is 0-based here
     # so the JSON merge step below can pass it straight to node).
     approved_indices_csv="0"
@@ -557,6 +628,14 @@ configure_permissions() {
         process.stdout.write(d[$i].required ? 'true' : 'false');
       ")"
 
+      # Idempotency: a category whose tools are ALL already in
+      # ~/.claude/settings.json is silently skipped (one log line).
+      # `--reconfigure-permissions` (which clears already_granted_csv
+      # at the top of the function) overrides this.
+      if is_already_granted "$i"; then
+        log_info "[$((i+1))/$cat_count] $name  ($summary) — already granted; skipping."
+        continue
+      fi
       if [ "$skip_all" -eq 1 ] && [ "$required" != "true" ]; then
         log_info "[$((i+1))/$cat_count] $name  ($summary) — skipped"
         continue
@@ -1244,6 +1323,66 @@ uninstall_main() {
     mv "$tmp" "$CLAUDE_CONFIG_JSON"
   fi
 
+  # Strip framework-added entries from `~/.claude/settings.json`'s
+  # `permissions.allow` array. Only entries that match the catalog
+  # (CATEGORIES_JSON's tools across every category) are removed; any
+  # user-authored entry that happens to coexist is preserved. The
+  # surgical removal closes the I2 acceptance criterion: "removes only
+  # the entries matching the framework's category templates".
+  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    local settings_tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+    CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+    CLAUDE_SETTINGS_TMP="$settings_tmp" \
+    CLAUDE_CATEGORIES_JSON="$CATEGORIES_JSON" \
+    node -e '
+      const fs = require("fs");
+      const src = process.env.CLAUDE_SETTINGS_PATH;
+      const dst = process.env.CLAUDE_SETTINGS_TMP;
+      const cats = JSON.parse(process.env.CLAUDE_CATEGORIES_JSON);
+      const owned = new Set();
+      for (const cat of cats) {
+        if (Array.isArray(cat.tools)) for (const t of cat.tools) owned.add(t);
+      }
+      let data = {};
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+      if (
+        data &&
+        typeof data.permissions === "object" &&
+        data.permissions !== null &&
+        Array.isArray(data.permissions.allow)
+      ) {
+        data.permissions.allow = data.permissions.allow.filter((t) => !owned.has(String(t)));
+      }
+      function sortedStringify(value, indent) {
+        const sortKeys = (v) => {
+          if (Array.isArray(v)) return v.map(sortKeys);
+          if (v && typeof v === "object") {
+            const out = {};
+            for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+            return out;
+          }
+          return v;
+        };
+        return JSON.stringify(sortKeys(value), null, indent);
+      }
+      const out = sortedStringify(data, 2) + "\n";
+      fs.writeFileSync(dst, out, "utf8");
+    '
+    mv "$settings_tmp" "$CLAUDE_SETTINGS_JSON"
+  fi
+
   # Remove the built-in stacks symlink only when it points into the
   # globally-installed framework package. Symlinks the user has redirected
   # somewhere else are left alone.
@@ -1304,6 +1443,11 @@ uninstall_main() {
 main() {
   local mode="install"
   local skip_claude_code=0
+  # Permission-flow flags consumed by `configure_permissions`. Globals
+  # rather than parameters because configure_permissions also reads
+  # CATEGORIES_JSON / CLAUDE_SETTINGS_JSON from globals.
+  PERMISSION_MODE=""
+  RECONFIGURE_PERMISSIONS=0
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1316,6 +1460,21 @@ main() {
         ;;
       --no-claude-code)
         skip_claude_code=1
+        ;;
+      --approve-all-permissions)
+        if [ "$PERMISSION_MODE" = "minimal" ]; then
+          die "\`--approve-all-permissions\` and \`--minimal-permissions\` are mutually exclusive. Pass at most one."
+        fi
+        PERMISSION_MODE="approve-all"
+        ;;
+      --minimal-permissions)
+        if [ "$PERMISSION_MODE" = "approve-all" ]; then
+          die "\`--approve-all-permissions\` and \`--minimal-permissions\` are mutually exclusive. Pass at most one."
+        fi
+        PERMISSION_MODE="minimal"
+        ;;
+      --reconfigure-permissions)
+        RECONFIGURE_PERMISSIONS=1
         ;;
       *)
         log_error "install.sh: unknown flag: $1"
