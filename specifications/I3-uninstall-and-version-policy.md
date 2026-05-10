@@ -143,7 +143,7 @@ $ which claudeagents-config-server
 claudeagents-config-server not found
 ```
 
-A Node version warning:
+A Node version warning. The version numbers in the example reflect the current `TESTED_THROUGH_NODE_MAJOR=25` constant in `install.sh`; the rendered text tracks that constant as it bumps, so an example showing `26.0.0` over a `25.x` ceiling becomes (say) `27.0.0` over a `26.x` ceiling once the constant moves.
 
 ```
 $ node --version
@@ -156,7 +156,7 @@ warning: Node 26.0.0 is newer than this framework version has been tested throug
 [install proceeds normally]
 ```
 
-A Node version below the lower bound:
+A Node version below the lower bound. The numbers in the example reflect the current `MIN_NODE_MAJOR=20` and `MIN_NODE_MINOR=10` constants in `install.sh`; both interpolate into the rendered text and the `nvm install N` hint, so an example referencing `Node 20.10` and `nvm install 20` becomes (say) `Node 22.10` and `nvm install 22` if the floor moves.
 
 ```
 $ node --version
