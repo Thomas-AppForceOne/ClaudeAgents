@@ -399,4 +399,27 @@ describe('install.sh — S2 happy-path install', () => {
     // The retry-command hint must appear in backticks.
     expect(errorLines).toMatch(/`npm install -g \.`/);
   });
+
+  it('I2 sprint 1: post-install success message contains both the restart hint and the `/gan --help` hint', async () => {
+    // Per `specifications/I2-install-user-facing-surfaces.md` § "Post-
+    // install message: name the next step", the success message must
+    // tell the user (a) to restart Claude Code and (b) what to type
+    // first after restart. The `/gan --help` hint is significant because
+    // it short-circuits before validation, giving a fresh user something
+    // concrete to run before they have authored an overlay or a sprint.
+    //
+    // Loose substring assertions so trivial wording adjustments do not
+    // break the test, but tight enough to catch either line being
+    // dropped wholesale.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Restart Claude Code');
+    expect(result.stdout).toContain('gan --help');
+  });
 });
