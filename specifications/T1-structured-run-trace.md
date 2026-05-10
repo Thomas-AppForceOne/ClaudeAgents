@@ -88,7 +88,7 @@ T1 ships **v1**. The post-v1.0 audit will examine fields surfaced by real debugg
 
 - New optional fields on an existing event class.
 - New discriminator values within an existing event class (e.g. A2's future `scopeViolation` under `safetyHalt`).
-- New event classes entirely (e.g. E5's `clarifierFinding`, added in E5's implementation PR).
+- New event classes entirely (e.g. E5's `clarifierFinding`, added in E5's implementation PR; E6's `humanReview`, added in E6's v1.2 implementation PR for the pluggable-evaluator-role substitution slot — see [E6](E6-pluggable-evaluator-role.md)).
 
 Field-rename or semantic-change forces v2.
 

@@ -181,6 +181,38 @@ The ladder is documented here so:
 - A future spec adding rung 2 or rung 3 references the existing rung names and slots in cleanly.
 - The threat model can talk about "rung 1 vs rung 4" instead of conflating "no commands ran" (a runtime fact) with "user explicitly chose read-only mode" (an intent fact).
 
+### Capability tokens [deferred-to-v1.1]
+
+> Status: described here for forward-compatibility; not operative in v1.0. The mechanism below ships in the v1.1 F4 amendment alongside the other server-side enforcement options (rate-limiting, content-hash echo, audit log).
+
+The trust-cache mechanism above is a binary gate: a `(project-root, content-hash)` pair is either approved or it isn't. This serves rungs 4–5 of the trust ladder but underspecifies the *grant*: there is no expiration, no per-run audit, no per-call binding. v1.1 strengthens approval into a **capability token** model that preserves the cache's UX while making the grant finer-grained.
+
+A capability token is the durable form of an approval. It carries:
+
+- `tokenId` — opaque identifier, surrendered after consumption.
+- `contentHash` — the aggregate hash that was approved.
+- `projectRoot` — canonicalised path the approval applies to.
+- `issuedAt` — RFC 3339 UTC timestamp.
+- `expiresAt` — RFC 3339 UTC timestamp; `null` for non-expiring tokens (preserves v1.0-equivalent UX).
+- `runsRemaining` — integer; `null` for unlimited (preserves v1.0-equivalent UX). Decrements on each `/gan` invocation that consumes it.
+- `auditLogEntryId` — references the audit-log row recording issuance.
+
+`trustApprove` returns a token; the trust cache stores tokens (one or more per `(project-root, content-hash)` pair) instead of bare hashes. `validateAll()` consumes a token by reading the cache and matching the current `(project-root, content-hash)` against an unexpired, unexhausted token. Consumption decrements `runsRemaining` and updates the audit log.
+
+The default token shape is `{expiresAt: null, runsRemaining: null}` — preserving v1.0 UX where one approval covers all subsequent runs against the same content hash. Power users opt into bounded tokens via `gan trust approve --expires 7d` or `gan trust approve --runs 10`. Strict-mode CI environments (`GAN_TRUST=strict`) may default to bounded tokens via configuration.
+
+Three operational improvements over the v1.0 binary cache:
+
+- **Audit trail.** Every approval and consumption appears in the audit log surfaced via `gan trust list`. A user reviewing past approvals sees when they were issued, when consumed, and on what content hash.
+- **Bounded grants for review-mode use.** A reviewer auditing someone else's branch issues a token bounded to one run; the token surrenders itself after consumption. No lingering approval the user forgot they granted.
+- **Revocation by token, not just by hash.** `gan trust revoke --token <id>` invalidates one token without removing the underlying hash approval. Useful when a CI machine's token is compromised but the local development token should remain valid.
+
+Capability tokens are the implementation form of trust ladder rungs 4 (act-with-confirmation) and 5 (autonomous). Rung 1 (`--no-project-commands`) does not consume tokens — it bypasses the trust path entirely. Rungs 2–3 (suggest, draft) are reserved for v1.1+ implementation; their interaction with capability tokens is specified at that time.
+
+The token model preserves the existing `UntrustedOverlay` error contract: a missing or expired token produces the same structured error as an untrusted hash today. The interactive prompt's options ([a], [r], [v], [c]) remain unchanged from the user's perspective; the v1.1 server-side mechanism is invisible to non-power-users.
+
+A future spec (placeholder **F6 — Token federation**) may extend the model to support tokens issued by an external authority for organisation-wide approval policies. Out of scope for v1.1.
+
 ### Trust prompt is a protocol, not a server-side gate
 
 `trustApprove` is a regular MCP tool. The agent (running inside Claude Code) can call it directly without any prompt being shown to the user, because the MCP server has no reliable way to distinguish "agent is calling because the user pressed `[a]`pprove at an interactive prompt" from "agent is calling on its own initiative."
