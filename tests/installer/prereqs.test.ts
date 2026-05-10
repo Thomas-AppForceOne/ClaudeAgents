@@ -151,6 +151,58 @@ describe('install.sh prerequisite checks', () => {
     expect(result.stderr).toContain('newer than');
     expect(result.stderr).toContain('tested through');
     expect(result.stderr).toContain('install will continue');
+    // The warning routes the user to a concrete reporting destination
+    // (the install.sh `BUG_REPORT_URL` constant). Loose match on the
+    // hostname so the assertion does not lock the org/repo path against
+    // future moves.
+    expect(result.stderr).toContain('github.com');
+  });
+
+  it('I3 slice 2: Node at the tested-through ceiling passes without firing the warning', async () => {
+    // Boundary-condition guard. The warning fires on `major > ceiling`,
+    // not `major >= ceiling`; a regression that flipped the comparison
+    // (or accidentally lowered the constant) would silently start
+    // warning users on the tested major. This test pins `25.x` is silent.
+    //
+    // NOTE: this test couples to `TESTED_THROUGH_NODE_MAJOR=25`. When the
+    // constant bumps, the `nodeVersion` literal here must bump in lockstep.
+    const { tmp, pathOverride } = setup({
+      nodeVersion: 'v25.6.1',
+      withGit: true,
+      withClaude: true,
+      withInstallStubs: true,
+    });
+    const result = await runInstall(['--no-claude-code'], {
+      home: tmp.home,
+      pathOverride,
+    });
+    expect(result.exitCode).toBe(0);
+    // Unrelated install-time warnings (e.g. "Could not resolve npm
+    // global root") may still fire — assert only that the
+    // tested-through warning specifically does not.
+    expect(result.stderr).not.toContain('tested through');
+    expect(result.stderr).not.toContain('newer than');
+  });
+
+  it('I3 slice 2: warn-not-die does not break the full install path with JSON registration', async () => {
+    // End-to-end coverage gap that the slice-2 first cut left: the
+    // earlier warn-not-die test runs under `--no-claude-code`, which
+    // skips `register_mcp_in_claude_json`. This test fires the warning
+    // AND lets the JSON registration path run, asserting both that the
+    // exit is 0 and that `~/.claude.json` is written. The risk hedged is
+    // a latent control-flow assumption that the warning text might
+    // interact with the rest of `main()` — purely additive in v1, but
+    // worth a regression guard.
+    const { tmp, pathOverride } = setup({
+      nodeVersion: 'v99.0.0',
+      withGit: true,
+      withClaude: true,
+      withInstallStubs: true,
+    });
+    const result = await runInstall([], { home: tmp.home, pathOverride });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('tested through');
+    expect(existsSync(path.join(tmp.home, '.claude.json'))).toBe(true);
   });
 
   it('I3 slice 2: missing-`node` error does not reference an upper-bound ceiling', async () => {

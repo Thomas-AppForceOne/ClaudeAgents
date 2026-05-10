@@ -147,11 +147,11 @@ A Node version warning:
 
 ```
 $ node --version
-v25.6.1
+v26.0.0
 
 $ ./install.sh
 ClaudeAgents installer: prerequisites verified.
-warning: Node v25.6.1 is newer than this framework version has been tested through (Node 24.x). The install will continue. If you encounter issues, please report them so the tested-through ceiling can be raised.
+warning: Node 26.0.0 is newer than this framework version has been tested through (Node 25.x). The install will continue. If you encounter issues, please report them at https://github.com/Thomas-AppForceOne/ClaudeAgents/issues so the tested-through ceiling can be raised.
 
 [install proceeds normally]
 ```

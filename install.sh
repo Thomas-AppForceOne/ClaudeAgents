@@ -20,6 +20,11 @@ MIN_NODE_MINOR=10
 # this ceiling, `check_node` warns and continues; it does not refuse to
 # install. Bump this constant when CI gains coverage on a new major.
 TESTED_THROUGH_NODE_MAJOR=25
+# Where users are pointed when the installer asks for a bug report (today:
+# only the tested-through Node-version warning). Surfaced as a constant so
+# downstream prose surfaces (uninstall failure paths, future rollback
+# messages) can consume the same URL without each path hardcoding it.
+BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 
 # STATE_LOG — append-only audit trail of state-creating steps. S3 consumes
 # this in `rollback()`. Each entry is a single line `<kind>:<payload>`:
@@ -169,7 +174,7 @@ check_node() {
     # and silenced exactly the dogfooding population most likely to file
     # useful bug reports. Bump `TESTED_THROUGH_NODE_MAJOR` once CI gains
     # coverage on the new major.
-    log_warn "Node $stripped is newer than this framework version has been tested through (Node ${TESTED_THROUGH_NODE_MAJOR}.x). The install will continue. If you encounter issues, please report them so the tested-through ceiling can be raised."
+    log_warn "Node $stripped is newer than this framework version has been tested through (Node ${TESTED_THROUGH_NODE_MAJOR}.x). The install will continue. If you encounter issues, please report them at ${BUG_REPORT_URL} so the tested-through ceiling can be raised."
   fi
 }
 
