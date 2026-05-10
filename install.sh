@@ -161,11 +161,19 @@ check_node() {
       ;;
   esac
 
+  # Lower-bound rejection text — shared between the major-too-old and the
+  # major-OK-minor-too-old branches so the user sees identical, actionable
+  # remediation regardless of which condition tripped. Matches the spec
+  # example in `specifications/I3-uninstall-and-version-policy.md` § "Node
+  # version policy" (modulo the `v` prefix that `$stripped` drops).
+  local lower_bound_error
+  lower_bound_error="Node $stripped is below the framework's required minimum (Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}). Install Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer via your package manager (for example \`brew install node\` on macOS, or \`nvm install ${MIN_NODE_MAJOR}\` on Linux). See https://nodejs.org/ for details."
+
   if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then
-    die "Node $stripped is too old. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer."
+    die "$lower_bound_error"
   fi
   if [ "$major" -eq "$MIN_NODE_MAJOR" ] && [ "$minor" -lt "$MIN_NODE_MINOR" ]; then
-    die "Node $stripped is too old. ClaudeAgents requires Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer."
+    die "$lower_bound_error"
   fi
   if [ "$major" -gt "$TESTED_THROUGH_NODE_MAJOR" ]; then
     # Warn-not-die per `specifications/I3-uninstall-and-version-policy.md`.

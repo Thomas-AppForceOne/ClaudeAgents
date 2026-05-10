@@ -163,7 +163,7 @@ $ node --version
 v18.19.0
 
 $ ./install.sh
-error: Node v18.19.0 is below the framework's required minimum (Node 20.10). Install Node 20.10 or newer via your package manager (for example `brew install node` on macOS, or `nvm install 20` on Linux). See https://nodejs.org/ for details.
+error: Node 18.19.0 is below the framework's required minimum (Node 20.10). Install Node 20.10 or newer via your package manager (for example `brew install node` on macOS, or `nvm install 20` on Linux). See https://nodejs.org/ for details.
 ```
 
 ## Acceptance criteria
