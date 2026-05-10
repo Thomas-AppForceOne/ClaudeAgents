@@ -660,6 +660,53 @@ describe('install.sh — S2 happy-path install', () => {
     expect(remaining).not.toContain('Read');
   });
 
+  it('I2 sprint 4: --reconfigure-permissions runs cleanly in non-TTY mode (no prompt; no error)', async () => {
+    // The interactive re-prompt is only useful in TTY mode; in non-TTY
+    // the flag is a no-op (the default-minimal branch fires regardless).
+    // This test confirms the flag does not crash, error, or change the
+    // result vs. a default install — a regression that left the flag
+    // unparsed would surface as an "unknown flag" exit-2 error.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall(['--reconfigure-permissions'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
+    expect(result.exitCode).toBe(0);
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    expect(existsSync(settingsPath)).toBe(true);
+  });
+
+  it('I2 sprint 4: --no-claude-code skips configure_permissions (no settings.json written)', async () => {
+    // Regression guard for the wiring: configure_permissions lives
+    // inside the `if [ "$skip_claude_code" -eq 0 ]` block in main(),
+    // so --no-claude-code must skip it entirely. The original
+    // --no-claude-code test only asserted `~/.claude.json` is absent;
+    // this asserts the symmetric `~/.claude/settings.json` is also
+    // absent. Without the guard, a refactor that moved the call out
+    // of the block would silently start writing settings.json on CI
+    // installs that opted out of Claude Code entirely.
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall(['--no-claude-code'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
+    expect(result.exitCode).toBe(0);
+    const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
+    expect(existsSync(settingsPath)).toBe(false);
+  });
+
   it('I2 sprint 1: post-install success message contains both the restart hint and the `/gan --help` hint', async () => {
     // Per `specifications/I2-install-user-facing-surfaces.md` § "Post-
     // install message: name the next step", the success message must
