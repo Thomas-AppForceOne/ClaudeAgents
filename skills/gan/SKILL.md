@@ -126,7 +126,7 @@ OUTPUT
 - **USAGE**: one line per invocation form, with `[optional]` markers around modifier flags. Where the default behaviour is non-obvious (e.g. `--recover` without `--run-id` targets the most recent non-terminal run), state the default at the end of the USAGE line in parens. Required values appear as `<placeholder>`; alternation is shown with `|` if needed.
 - **FLAGS**: one line per flag, default in parens at the end of the description. `(none)` for flags with no implicit value; `(off)` for boolean flags that default to off; the literal default value otherwise. Booleans never need a `<value>` placeholder.
 - **EXAMPLES**: realistic invocations covering at least one sprint form, one recovery form, one cleanup form, one inspection form, and one project-commands-skip form. Examples never reference maintainer-only scripts.
-- **CONFIGURATION**: point the user at the `gan` CLI for configuration management (`gan stacks new`, `gan config print`, `gan trust info`) and at `.claude/gan/project.md` for overlay authoring. Never references `npm`, `node`, or other ecosystem tokens outside backticks (per F4 prose discipline).
+- **CONFIGURATION**: point the user at the `gan` CLI for configuration management (`gan stacks new`, `gan config print`, `gan trust info`) and at `.claude/gan/project.md` for overlay authoring. Obey the F4 prose-discipline rule: ecosystem-specific package-manager and runtime tokens are forbidden in this file (the F4 spec carries the canonical list).
 - **OUTPUT**: where per-run state lives and how branches are named. Mention the `--base-branch` override.
 
 ## Inspection and recovery short-circuits
