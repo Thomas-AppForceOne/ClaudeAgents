@@ -37,3 +37,34 @@ Today `--spec` accepts only a local file path. Users who track work in Jira / Gi
 ### Likely target spec
 
 A new `U4-external-spec-sources.md` under the U-prefix (user-experience surfaces), or an amendment to `E5-spec-clarification.md`. About 1 spec sprint to author, 1–2 to implement (SKILL.md + planner agent + integration tests with mocked MCP responses).
+
+---
+
+## 2. Repository-level secret scanning (gitleaks / GitHub secret-scanning)
+
+**Status:** idea · **Added:** 2026-05-11
+
+### Motivation
+
+The framework currently has no real secret-detection check on its own repository. The `lint-no-stack-leak` script's name reads like a security check at first glance but is purely an architecture-discipline guard (ecosystem-token retargetability). The evaluator-core helper at `src/agents/evaluator-core/secrets-scans.ts` produces file lists per stack's `secretsGlob`, but the actual content scan for secret patterns (AWS keys, GitHub PATs, private keys, etc.) happens at the agent layer, not via a deterministic scanner. A `.env` accidentally committed to this framework's own repo would land without alarm.
+
+### Sketch
+
+Two layers, both gated on real pattern-matching, not glob-shape:
+
+1. **CI gate** — add `gitleaks` (Apache 2.0; runs as a single Go binary) as a workflow under `.github/workflows/test-secrets.yml`, hooked to `pull_request` and `push` to `main`/`develop`. Failure blocks merge. Same shape as the existing `test-no-stack-leak.yml`. Configure via a checked-in `.gitleaks.toml` listing allowlisted strings (test fixtures with intentionally-fake secrets, e.g. `tests/fixtures/.../trust-cache-stub.json`).
+
+2. **Pre-commit hook (optional, opt-in)** — a `gitleaks protect --staged` invocation wired through `.husky/` or `lefthook.yml`. Catches secrets before they leave the user's machine. Opt-in because the framework currently has no pre-commit hook infrastructure of its own.
+
+Bonus consideration: extending the evaluator-core's `secrets-scans.ts` from "list files to scan" to "list files plus pattern set" so the evaluator agent calls gitleaks or trufflehog on the generated worktree rather than running an LLM-judged check. Deterministic, faster, and the result is a structured finding the evaluator can include in feedback verbatim.
+
+### Open questions
+
+- Allowlist authoring vs. `forbidden.json` style: gitleaks uses TOML allowlists with regex; the framework's existing lint scripts use JSON allowlists with path keys. Different shape; do we standardise or keep them separate?
+- False-positive cost: secret-pattern scanners flag things like UUIDs and bcrypt hashes. Do we tune for low recall (only the high-confidence patterns) to avoid noise, or accept some noise as the price of safety?
+- Should GitHub's native secret-scanning (free for public repos) be enabled as a belt-and-braces second layer? It's set-and-forget at the org level; no repo changes needed.
+- For the evaluator extension: do we ship gitleaks as a hard dependency of the framework, or invoke it via a `securityScanCmd` splice point in the active stack so each ecosystem can pick its own scanner (gitleaks, trufflehog, detect-secrets, etc.)?
+
+### Likely target spec
+
+A new `F5-secret-scanning.md` under the F-prefix (foundational/framework-wide surfaces), or an amendment to `F4-threat-model-and-trust.md`. About 1 spec sprint to author, 1 to wire the CI gate, 1 to land the evaluator-core extension if scoped in.
