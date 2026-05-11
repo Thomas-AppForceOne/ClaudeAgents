@@ -232,16 +232,40 @@ If you are working on the framework itself rather than using it, see [`PROJECT_C
 
 These are not part of the user-facing surface; they exist for repository maintainers and CI.
 
-- `npm run build` — compile TypeScript to `dist/`.
-- `npm test` — Vitest run.
-- `npm run lint` — ESLint.
-- `npm run format:check` — Prettier check.
+The common workflow is wrapped in a `Makefile` — run `make` (or `make help`) to see the targets, or invoke the underlying npm scripts directly.
+
+**Make targets:**
+
+- `make build` — compile TypeScript to `dist/`.
+- `make test` — Vitest run (stubbed install/uninstall via fake binaries).
+- `make lint` — ESLint.
+- `make typecheck` — `tsc --noEmit`.
+- `make format-check` — Prettier check.
+- `make check` — full pre-release gate: build → typecheck → lint → format-check → test.
+- `make test-install-live` — pre-release-only live install round-trip; exercises the real `npm install -g .`, the real installed binary, and every flag combination on disk. Not part of `make test` (or `npm test`). See [`tests/installer/live-install.sh`](tests/installer/live-install.sh).
+- `make clean` — remove `dist/`.
+
+**Underlying npm scripts** (used directly when you want flag forwarding, or invoked by Make):
+
+- `npm run build`, `npm test`, `npm run lint`, `npm run typecheck`, `npm run format:check`.
+- `npm run test:install:live` — same as `make test-install-live`.
 - `npm run lint-stacks` — schema and discipline checks for `stacks/*.md`.
 - `npm run lint-no-stack-leak` — guards against ecosystem-token leakage outside owning stack files.
 - `npm run lint-error-text` — checks user-facing error strings for the iOS-developer-on-macOS readability rule.
 - `npm run publish-schemas` — publish JSON Schemas under `schemas/`.
 - `npm run pair-names` — verifies module ↔ stack pairing.
 - `npm run evaluator-pipeline-check` — the deterministic core of the evaluator pipeline (no LLM in CI).
+
+### Pre-release verification
+
+Before cutting a release, run both gates:
+
+```
+make check                   # static + unit verification (~30s)
+make test-install-live       # live install round-trip (~70s; reinstalls the global package on exit)
+```
+
+`make check` covers the vitest suite (stubbed `npm` / fake binaries). `make test-install-live` is the missing piece: it actually places the package on PATH, invokes the real binary, and verifies disk-state side effects of every flag combination under an isolated `HOME`. It auto-cleans sandboxes and restores the global package when finished.
 
 ---
 

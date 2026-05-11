@@ -25,6 +25,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",
+    "test:install:live": "bash tests/installer/live-install.sh",
     "format:check": "prettier --check .",
     "lint-stacks": "node dist/scripts/lint-stacks/index.js",
     "pair-names": "node dist/scripts/pair-names/index.js",
