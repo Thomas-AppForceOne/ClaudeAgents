@@ -18,9 +18,15 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 |---|---|---|---|
 | `--help` / `-h` / `help` | E1 | Print help, exit. | Yes — only flag that runs before `validateAll()`. |
 | `--print-config` | O1 | Emit resolved-config snapshot via O1's surface; exit. `validateAll()` runs in **non-aborting** mode (partial snapshot + structured errors on failure). | No (validateAll runs but does not abort). |
-| `--recover` | O2 | Resume a previously-aborted run. Mechanism prescriptively authored at the post-E1 break. | No (validateAll runs in non-aborting mode). |
+| `--recover` | O2 | Resume a previously-aborted run. Mechanism prescriptively authored at the post-E1 break. Without `--run-id`, targets the most recent non-terminal run; combine with `--run-id <id>` for a specific run. | No (validateAll runs in non-aborting mode). |
 | `--list-recoverable` | O2 | List archived recoverable runs; exit. | No (validateAll runs in non-aborting mode). |
+| `--cleanup` | O2 | Symmetric to `--recover` but destructive: delete the target run(s) from `.gan-state/runs/`, drop the run worktree, drop the run branch. Default target is the most recent non-terminal run; combine with `--run-id <id>` for a specific run, `--all` for every non-terminal run, `--all --include-terminal` for everything. Confirmation prompt unless `--yes`. Refuses to delete an active run. | No (validateAll runs in non-aborting mode). |
+| `--run-id <id>` | O2 | Scope modifier for `--recover` and `--cleanup`. Names the specific run id to act on; the id format is `<YYYYMMDDTHHMMSS>-<4 hex>` (the directory name under `.gan-state/runs/`). Use `--list-recoverable` to list available ids. | n/a — modifier. |
+| `--all` | O2 | Scope modifier for `--cleanup`. Targets every recoverable (non-terminal) run rather than just the most recent. | n/a — modifier. |
+| `--include-terminal` | O2 | Scope modifier for `--cleanup --all` (and `--list-recoverable`): also includes runs whose `progress.json.terminal` is true. | n/a — modifier. |
+| `--yes` | O2 | Bypasses the `--cleanup` confirmation prompt. The preview table is still printed for the audit trail. | n/a — modifier. |
 | `--no-project-commands` | F4 | Run with all project-declared commands suppressed. Recommended when reviewing someone else's branch. | No. |
+| `--skip-welcome` | I2 | Skip the first-run welcome banner; the marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip. Idempotent on already-welcomed systems. | No. |
 
 ## `install.sh` flags
 
@@ -87,10 +93,10 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 |---|---|---|
 | command | 3 | `/gan`, `gan`, `install.sh` |
 | subcommand | 15 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
-| flag | 11 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--no-project-commands`, `--uninstall`, `--no-claude-code`, `--json`, `--project-root`, `--tier`, `--note` |
+| flag | 17 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--uninstall`, `--no-claude-code`, `--json`, `--project-root`, `--tier`, `--note` |
 | env-var-value | 2 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all` |
 | prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
-| **total** | **35** | |
+| **total** | **41** | |
 
 Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
 

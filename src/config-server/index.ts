@@ -543,12 +543,7 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       out['entryKeyPresent'] = typeof args[k] === 'string';
       continue;
     }
-    if (
-      k === 'projectRoot' ||
-      k === 'name' ||
-      k === 'tier' ||
-      k === 'fieldPath'
-    ) {
+    if (k === 'projectRoot' || k === 'name' || k === 'tier' || k === 'fieldPath') {
       out[k] = args[k];
       continue;
     }
@@ -588,6 +583,46 @@ export async function runStdio(): Promise<void> {
   });
 }
 
+/**
+ * CLI dispatch. With no recognised flag, runs as an MCP server over
+ * stdio. Recognised short-circuits:
+ *
+ *   --version        Print the package version and exit 0.
+ *   --validate-all   Run the full validation pipeline against `cwd` and
+ *                    exit 0 (no issues) or 1 (one or more issues).
+ *
+ * `install.sh` invokes both as short-circuit probes; their absence here
+ * caused the binary to enter MCP mode and block on stdin, which appeared
+ * as an install hang on TTY (see install.sh `version_probe_mcp` /
+ * `run_validate_all_best_effort`).
+ */
+export async function runCli(): Promise<void> {
+  const argv = process.argv.slice(2);
+
+  if (argv.includes('--version')) {
+    const meta = await readPackageMeta();
+    process.stdout.write(meta.version + '\n');
+    return;
+  }
+
+  if (argv.includes('--validate-all')) {
+    const { issues } = runValidateAll({ projectRoot: process.cwd() });
+    if (issues.length === 0) {
+      process.stdout.write('validate-all: no issues\n');
+      return;
+    }
+    process.stdout.write(`validate-all: ${issues.length} issue(s)\n`);
+    for (const i of issues) {
+      const where = i.path ? ` ${i.path}` : '';
+      const field = i.field ? ` ${i.field}` : '';
+      process.stdout.write(`  [${i.code}]${where}${field}: ${i.message}\n`);
+    }
+    process.exit(1);
+  }
+
+  await runStdio();
+}
+
 const invokedAsBin = (() => {
   if (typeof process.argv[1] !== 'string') return false;
   try {
@@ -620,7 +655,7 @@ const invokedAsBin = (() => {
 })();
 
 if (invokedAsBin) {
-  runStdio().catch((e) => {
+  runCli().catch((e) => {
     process.stderr.write(
       JSON.stringify({
         level: 'error',
