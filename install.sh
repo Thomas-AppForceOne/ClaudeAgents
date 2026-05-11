@@ -316,7 +316,7 @@ version_probe_mcp() {
     return 0
   fi
   local out
-  out="$(claudeagents-config-server --version 2>/dev/null || true)"
+  out="$(claudeagents-config-server --version </dev/null 2>/dev/null || true)"
   # Strip trailing newline / whitespace and a leading `v` if present.
   out="${out%%$'\n'*}"
   out="${out## }"
@@ -894,7 +894,15 @@ detect_preexisting_gan_dir() {
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [ -n "$top" ] || return 0
   if [ -d "$top/.gan" ]; then
-    PREEXISTING_GAN_DIR="$top/.gan"
+    # An empty `.gan/` is no data risk and the "Delete it by hand once
+    # you have copied anything you still need" hint would be misleading —
+    # there is nothing to copy. Silently skip the warning in that case.
+    # `find -mindepth 1 -print -quit` prints the first entry (file or
+    # subdir, hidden included) and exits, returning empty for an empty
+    # directory.
+    if [ -n "$(find "$top/.gan" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+      PREEXISTING_GAN_DIR="$top/.gan"
+    fi
   fi
 }
 
@@ -947,7 +955,7 @@ run_validate_all_best_effort() {
     return 0
   fi
 
-  if ! claudeagents-config-server --validate-all >/dev/null 2>&1; then
+  if ! claudeagents-config-server --validate-all </dev/null >/dev/null 2>&1; then
     log_warn "ClaudeAgents installer: post-install validate reported issues. Run \`claudeagents-config-server --validate-all\` for details."
   fi
 }
@@ -1031,7 +1039,11 @@ print_final_status() {
   log_info "ClaudeAgents installer: install complete."
   log_info "  - Agent and skill files copied under $CLAUDE_HOME/."
   log_info "  - Config server installed and verified on PATH."
-  log_info "  - Claude Code registration written to $CLAUDE_CONFIG_JSON (skipped under --no-claude-code)."
+  if [ "${SKIP_CLAUDE_CODE:-0}" = "1" ]; then
+    log_info "  - Claude Code registration: skipped under \`--no-claude-code\`."
+  else
+    log_info "  - Claude Code registration written to $CLAUDE_CONFIG_JSON."
+  fi
   log_info "  - Repository zones \`.gan-state/\` and \`.gan-cache/\` prepared (when run inside a git repo)."
 
   if [ "${BUILTIN_STACKS_LINKED:-0}" = "1" ]; then
@@ -1442,7 +1454,10 @@ uninstall_main() {
 
 main() {
   local mode="install"
-  local skip_claude_code=0
+  # Globals (not locals) because `print_final_status` reads them after
+  # `main()` has handed control off; using a local would force a
+  # parameter-threading rewrite of the whole final-status block.
+  SKIP_CLAUDE_CODE=0
   # Permission-flow flags consumed by `configure_permissions`. Globals
   # rather than parameters because configure_permissions also reads
   # CATEGORIES_JSON / CLAUDE_SETTINGS_JSON from globals.
@@ -1459,7 +1474,7 @@ main() {
         mode="uninstall"
         ;;
       --no-claude-code)
-        skip_claude_code=1
+        SKIP_CLAUDE_CODE=1
         ;;
       --approve-all-permissions)
         if [ "$PERMISSION_MODE" = "minimal" ]; then
@@ -1509,7 +1524,7 @@ main() {
 
   check_node
   check_git
-  if [ "$skip_claude_code" -eq 0 ]; then
+  if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
     check_claude_code
   fi
 
@@ -1532,7 +1547,7 @@ main() {
   # docstring for why this is a helper (rather than inlined here).
   verify_mcp_bin_on_path
 
-  if [ "$skip_claude_code" -eq 0 ]; then
+  if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
     backup_claude_json_once
     register_mcp_in_claude_json
     configure_permissions

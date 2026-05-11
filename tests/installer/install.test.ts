@@ -28,7 +28,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  readlinkSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -348,6 +347,27 @@ describe('install.sh — S2 happy-path install', () => {
     expect(result.stdout).toMatch(/`rm -rf [^`]+\.gan`/);
   });
 
+  it('S2-AC8 follow-up: an empty `.gan/` does NOT produce a warning (no data to preserve)', async () => {
+    const v = packageVersion();
+    const { tmp, pathOverride, cwd } = setup({
+      configServer: { version: v },
+      npm: { exitCode: 0 },
+    });
+    // Create an EMPTY .gan/ at the repo top (no README, no nested files).
+    mkdirSync(path.join(cwd, '.gan'), { recursive: true });
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    // The empty directory must NOT be flagged: no "legacy `.gan/`" hint,
+    // no `rm -rf` remediation, no mention of the .gan path in the
+    // final-status block. The directory itself remains on disk
+    // (installer never deletes user content).
+    expect(result.stdout).not.toContain('legacy `.gan/`');
+    expect(result.stdout).not.toMatch(/`rm -rf [^`]+\.gan`/);
+    expect(existsSync(path.join(cwd, '.gan'))).toBe(true);
+  });
+
   it('S2-AC9: outside a git repo — zones not created, validate skipped, symlinks + MCP still happen', async () => {
     const v = packageVersion();
     const { tmp, pathOverride } = setup({
@@ -554,10 +574,11 @@ describe('install.sh — S2 happy-path install', () => {
       npm: { exitCode: 0 },
     });
 
-    const result = await runInstall(
-      ['--approve-all-permissions', '--minimal-permissions'],
-      { home: tmp.home, pathOverride, cwd },
-    );
+    const result = await runInstall(['--approve-all-permissions', '--minimal-permissions'], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+    });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain('--approve-all-permissions');
     expect(result.stderr).toContain('--minimal-permissions');

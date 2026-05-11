@@ -125,6 +125,19 @@ Multiple Claude Code clients connecting to the same long-lived server work concu
 
 `getApiVersion()` returns the current contract version. The version is bumped in lockstep with F2 changes. Per-file schema versions are independent.
 
+### CLI short-circuits
+
+`claudeagents-config-server` is primarily an MCP server (stdio transport), but the binary also recognises two CLI flags before entering server mode:
+
+- `--version` — prints the package version (e.g. `0.1.0`) on a single stdout line and exits 0. Does not open the MCP transport.
+- `--validate-all` — runs the full validation pipeline against the current working directory and exits 0 (no issues) or 1 (one or more issues). Issues are printed one per line as `[code] path field: message`. Does not open the MCP transport.
+
+Both flags are invoked by R2's installer: `--version` as a version probe to decide whether `npm install -g .` needs to re-run, and `--validate-all` as a post-install best-effort check. They are exposed at the CLI layer (rather than only as MCP tools) so the installer can call them without an MCP handshake — and so they are usable from shell scripts and CI without a Claude Code client.
+
+Argv that does not include a recognised flag falls through to the MCP server. Unknown flags are not rejected at the CLI layer — they are forwarded into MCP mode unchanged, which lets the server be invoked under MCP clients that pass implementation-specific arguments without breaking the contract.
+
+The short-circuits read no input from stdin. The MCP-server fallback opens stdin and resolves only on stdin close; calling either CLI flag without closing stdin (e.g. from a TTY context where the parent never sends EOF) used to hang because the binary always entered MCP mode. The CLI dispatch fixes this: `--version` and `--validate-all` always exit promptly regardless of stdin state.
+
 ### Distribution
 
 Published to npm as `@claudeagents/config-server`. R2's installer runs `npm install -g @claudeagents/config-server` (or pinned version) and registers the binary as the MCP server in Claude Code's config.
