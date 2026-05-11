@@ -21,8 +21,10 @@ Parse arguments from the user's message before doing anything else. The five fla
 |---|---|---|
 | `--help` (also `-h`, `help`) | n/a | Print help text and exit 0. Runs BEFORE validation; no worktree, no agents. |
 | `--print-config` | n/a | Inspection short-circuit. Calls validation in non-aborting mode, prints the resolved view (plus any structured errors), exits. No worktree, no agents. |
-| `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. |
+| `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. Without `--run-id`, targets the most recent non-terminal run; combine with `--run-id <id>` for a specific run. |
 | `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, prints recoverable runs, exits. |
+| `--cleanup` | n/a | Destructive symmetric to `--recover`: deletes the target run(s) from `.gan-state/runs/`, drops the run worktree and run branch. Default targets the most recent non-terminal run. Combine with `--run-id <id>`, `--all`, `--all --include-terminal`, or `--yes` (bypass prompt). Refuses to delete an active run. See "Cleanup" below. |
+| `--run-id <id>` | n/a | Modifier for `--recover` and `--cleanup`. Names the specific run id to act on; the id format is `<YYYYMMDDTHHMMSS>-<4 hex>` (the directory name under `.gan-state/runs/`). Use `/gan --list-recoverable` to list available ids. |
 | `--no-project-commands` | false | Skip every command sourced from `project` and `user` tier files for this run; falls back to `builtin` tier defaults (per F4). |
 | `--skip-welcome` | false | Skip the first-run welcome banner. The marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip the banner. Idempotent — passing this flag on an already-welcomed system is a no-op. See "Welcome banner" below. |
 
@@ -30,13 +32,26 @@ Help output never references maintainer-only scripts. Help text points the user 
 
 The remaining text after flags is the user prompt passed to the planner (when a regular run is invoked).
 
+**Bare invocation (`/gan` with no prompt and no flags).** Do not spawn agents, do not run validation, do not print the welcome banner. Render a short message asking for a prompt, one realistic invocation example, and the `--help` hint. The exact rendering:
+
+```
+No prompt supplied. What would you like to build or work on? For example:
+
+  /gan "add a contact form to the workshop page"
+  /gan --spec specifications/some-feature.md
+
+Run `/gan --help` to see every flag (recovery, cleanup, config inspection, and more).
+```
+
+Exit 0 after rendering. The `--help` hint is mandatory — a user typing `/gan` blind is asking "what does this thing do?", and the answer must point them at the discovery surface.
+
 ## Welcome banner
 
-The first time `/gan` is invoked **as a regular sprint invocation** (not as a `--help`, `--print-config`, `--list-recoverable`, or `--recover` short-circuit), the orchestrator prints a multi-paragraph welcome banner before doing any other work, then continues with the requested action. Per `specifications/I2-install-user-facing-surfaces.md` § "First-run welcome banner".
+The first time `/gan` is invoked **as a regular sprint invocation** (not as a `--help`, `--print-config`, `--list-recoverable`, `--recover`, or `--cleanup` short-circuit), the orchestrator prints a multi-paragraph welcome banner before doing any other work, then continues with the requested action. Per `specifications/I2-install-user-facing-surfaces.md` § "First-run welcome banner".
 
 **Detection.** The marker file at `~/.claude/gan/welcomed` is the welcomed-state signal. Its presence — not its content — is what counts. The file is a zero-byte sentinel and lives under `~/.claude/gan/` (zone 1, configuration tier per F1). The orchestrator checks for the file at startup; absence triggers the banner.
 
-**Short-circuit exemption.** The banner does NOT fire on `--help`, `--print-config`, `--list-recoverable`, or `--recover`. A user running `--help` for orientation should see help text, not a banner. A user running `--print-config` to debug is already debugging and needs the print output. The banner fires only when the orchestrator is about to spawn agents on a first-run system.
+**Short-circuit exemption.** The banner does NOT fire on `--help`, `--print-config`, `--list-recoverable`, `--recover`, or `--cleanup`. A user running `--help` for orientation should see help text, not a banner. A user running `--print-config` to debug is already debugging and needs the print output. A user running `--cleanup` is reclaiming disk space, not asking for a tutorial. The banner fires only when the orchestrator is about to spawn agents on a first-run system.
 
 **Banner content** covers the bullets named in `specifications/I2-install-user-facing-surfaces.md` § "Banner content": what ClaudeAgents is, the pipeline shape (clarifier → planner → contract → generator → evaluator), what trust prompts and the clarifier draft preview look like, what `.gan-state/` accumulates, when to use `--no-project-commands`, where to find docs, and that both `gan` and `/gan` exist with separate purposes. The orchestrator renders this as prose that obeys the F4 prose-discipline rule (the bare ecosystem tokens enumerated under F4 — including the package-manager and runtime names — must appear inside backticks; see F4 for the canonical list).
 
@@ -50,16 +65,110 @@ The first time `/gan` is invoked **as a regular sprint invocation** (not as a `-
 
 `--help` runs **before** `validateAll()`. The orchestrator prints the help text to stdout and exits 0. There is no validation, no snapshot, no worktree, and no agent is spawned. A user with a broken project configuration can still discover how to inspect or recover it without first fixing validation. This is the only flag that skips validation entirely.
 
+### Help text template
+
+The orchestrator renders the help text in the following shape. The USAGE section gives each invocation's accepted shape with `[optional]` markers for modifiers; the FLAGS section gives each flag's description with its default value in parens at the end of the line.
+
+```
+GAN — Adversarial Development Loop
+
+USAGE
+  /gan "<prompt>" [SPRINT-OPTS]                            Run a sprint against the given prompt
+  /gan --spec <path> [SPRINT-OPTS]                         Run a sprint from an existing spec
+  /gan --help                                              Show this help text
+  /gan --print-config                                      Print resolved configuration and exit
+  /gan --list-recoverable [--include-terminal]             List runs eligible for recovery
+  /gan --recover [--run-id <id>]                           Resume an interrupted run (default: most recent non-terminal)
+  /gan --cleanup [--run-id <id>] [--yes]                   Delete one run (default: most recent non-terminal)
+  /gan --cleanup --all [--include-terminal] [--yes]        Delete every non-terminal run (or every run with --include-terminal)
+
+  SPRINT-OPTS = [--target <path>] [--max-attempts <n>] [--threshold <0-100>]
+                [--branch-name <name>] [--base-branch <name>] [--label <text>]
+                [--no-project-commands] [--skip-welcome]
+
+FLAGS  (defaults shown in parens)
+  --spec <path>                 Use an existing spec file instead of planning from scratch (none)
+  --target <path>               Override the repo root (current repo top)
+  --max-attempts <n>            Maximum generator/evaluator cycles per sprint (3)
+  --threshold <0-100>           Minimum evaluator score to pass a sprint (from resolved config)
+  --branch-name <name>          Override the generated branch name (gan/<run-id>)
+  --base-branch <name>          Override the base branch (develop)
+  --label <text>                Tag this run for grouping in progress reports (none)
+  --run-id <id>                 Target a specific run for --recover or --cleanup (most recent non-terminal)
+  --all                         With --cleanup: target every non-terminal run (off)
+  --include-terminal            Also include terminal (complete or failed) runs (off)
+  --yes                         Skip the --cleanup confirmation prompt (off; prompt fires)
+  --no-project-commands         Skip project- and user-tier overlay commands; use builtin defaults only (off)
+  --skip-welcome                Write the first-run welcome marker without printing the banner (off)
+
+EXAMPLES
+  /gan "add a contact form to the homepage"
+  /gan --spec specifications/roadmap-vote.md
+  /gan --recover
+  /gan --recover --run-id 20260511T191658-7c43
+  /gan --cleanup --all --yes
+  /gan --print-config
+  /gan --no-project-commands "review the deploy scripts"
+
+CONFIGURATION
+  Manage stacks:     gan stacks new <name>
+  Inspect config:    gan config print
+  Trust info:        gan trust info
+  Overlay authoring: .claude/gan/project.md in your repo root
+
+OUTPUT
+  Per-run state lives in .gan-state/runs/<run-id>/
+  Branches are named gan/<run-id> and target develop (or the --base-branch override)
+```
+
+**Rendering rules:**
+
+- **USAGE**: one line per invocation form, with `[optional]` markers around modifier flags. Where the default behaviour is non-obvious (e.g. `--recover` without `--run-id` targets the most recent non-terminal run), state the default at the end of the USAGE line in parens. Required values appear as `<placeholder>`; alternation is shown with `|` if needed.
+- **FLAGS**: one line per flag, default in parens at the end of the description. `(none)` for flags with no implicit value; `(off)` for boolean flags that default to off; the literal default value otherwise. Booleans never need a `<value>` placeholder.
+- **EXAMPLES**: realistic invocations covering at least one sprint form, one recovery form, one cleanup form, one inspection form, and one project-commands-skip form. Examples never reference maintainer-only scripts.
+- **CONFIGURATION**: point the user at the `gan` CLI for configuration management (`gan stacks new`, `gan config print`, `gan trust info`) and at `.claude/gan/project.md` for overlay authoring. Never references `npm`, `node`, or other ecosystem tokens outside backticks (per F4 prose discipline).
+- **OUTPUT**: where per-run state lives and how branches are named. Mention the `--base-branch` override.
+
 ## Inspection and recovery short-circuits
 
-`--print-config`, `--recover`, and `--list-recoverable` call `validateAll()` in **non-aborting mode**: any structured errors are captured and surfaced alongside the partial resolved view (for `--print-config`) or in the recovery report (for `--recover` / `--list-recoverable`). The user can inspect a known-broken project's configuration or recover its run archive without first fixing validation — this is exactly when fail-open behaviour is most useful.
+`--print-config`, `--recover`, `--list-recoverable`, and `--cleanup` call `validateAll()` in **non-aborting mode**: any structured errors are captured and surfaced alongside the partial resolved view (for `--print-config`) or in the recovery / cleanup report (for `--recover` / `--list-recoverable` / `--cleanup`). The user can inspect a known-broken project's configuration or reclaim its run state without first fixing validation — this is exactly when fail-open behaviour is most useful.
 
 Specifics:
 
 - `--print-config` calls `getResolvedConfig()` and emits an O1-shaped object on stdout. When validation captured errors, both the partial `resolvedConfig` and the `validationErrors` are emitted as top-level keys; exit code reflects validation status.
 - `--recover` and `--list-recoverable` dispatch to the recovery flow (per O2's revision). Recovery refuses to touch `.gan-state/modules/` (zone-2 module-state ownership rule).
+- `--cleanup` dispatches to the cleanup flow described in the "Cleanup" section below. Like recovery, it never touches `.gan-state/modules/`, `.claude/gan/`, or `.gan-cache/`.
 
 No sprint work runs in any of these paths.
+
+## Cleanup
+
+Per `specifications/O2-recovery.md` § "`--cleanup`". The flag is destructive — it deletes the resolved run(s) from disk along with their worktrees and run branches. The orchestrator executes the following steps without spawning agents.
+
+1. **Run `validateAll()` in non-aborting mode** so a known-broken project can still be cleaned up. Surface captured errors in the cleanup report; do not abort on them.
+2. **Resolve target runs.** Symmetric to `--recover`:
+   - `--run-id X` → exactly that run.
+   - `--all` → every run with `progress.json.terminal: false` (or missing).
+   - `--all --include-terminal` → every run regardless of terminal flag.
+   - Default (no `--run-id` and no `--all`) → most recent run by mtime with `terminal: false` (same selection as `--recover`).
+   - Empty resolve → print `No non-terminal runs found at <projectRoot>/.gan-state/runs/.` Exit 0.
+3. **Active-run guard.** Read `<projectRoot>/.gan-state/run.lock` if present. If its `runId` is in the resolved target set AND its `pid` is still alive (`kill -0 <pid>` on POSIX), refuse: `Cannot clean up <runId>; it is currently active (pid <pid>). Stop the run first.` Exit 1. Stale locks (dead pid) are ignored.
+4. **Preview + confirm.** Print a table of the resolved runs (run id, status, sprint, started-at, on-disk size). Sum the count and bytes. Prompt `Delete these runs? [y/N] ` and read one line from stdin. `y` / `Y` proceeds; anything else exits 0 with `Cancelled.` If `--yes` was passed, skip the prompt — still print the table. Non-TTY stdin without `--yes` refuses: `Refusing to delete <N> runs without confirmation. Pass --yes to bypass the prompt.` Exit 1.
+5. **Per-run teardown.** For each confirmed run, in order:
+   - `git worktree remove <projectRoot>/.gan-state/runs/<runId>/worktree --force` (silent if the worktree is not registered).
+   - `git branch -D <runBranch>` (silent if the branch is missing). `<runBranch>` is read from `progress.json.runBranch`; if absent, the orchestrator falls back to the convention `gan/run/<runId>`.
+   - `rm -rf <projectRoot>/.gan-state/runs/<runId>`.
+   - Per-step failures other than the final `rm` are logged as a per-run warning and do not abort the batch. A failed `rm` aborts the batch with exit 1 and the run id of the failure.
+6. **Single `git worktree prune`** at the end of the batch (not per-run).
+7. **Report.** Print one summary line: `Cleaned up <N> runs. Freed <X> MB.` If any per-run warnings fired, append `<M> run(s) had teardown warnings; see above.`
+
+**Forbidden writes during cleanup** (same as recovery):
+
+- `.gan-state/modules/` — read-only.
+- `.claude/gan/` — read-only.
+- `.gan-cache/` — left untouched (regenerable but not run-state).
+
+The orchestrator's only writes are inside `.gan-state/runs/<runId>/` (deletion) and the git worktree / branch operations. Anything else is a bug.
 
 ## Regular invocation flow
 

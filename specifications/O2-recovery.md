@@ -273,9 +273,54 @@ runs `validateAll()` in non-aborting mode first.
      Round count is preserved across recovery — a halt mid-round-2 resumes at round-2,
      not round-1.
 
+### 5.5. `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`
+
+New top-level flag. Parsed at SKILL.md flag-table dispatch. Symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
+
+Per E1's recovery contract, runs `validateAll()` in non-aborting mode first. Does **not** acquire the run lock (it operates on non-active runs; an attempt to clean up an active run is refused per the active-run check below).
+
+1. **Resolve target run(s).** Mirrors `--recover`:
+   - `--run-id X`: target a single run by id. Missing → `Run <X> not found at <projectRoot>/.gan-state/runs/X/.` Exit 1.
+   - `--all`: target every non-terminal run.
+   - `--all --include-terminal`: target every run regardless of terminal flag.
+   - Default (no `--run-id` and no `--all`): the most recent non-terminal run (same selection as `--recover`). None found → `No non-terminal runs found at <projectRoot>/.gan-state/runs/.` Exit 0 (not an error — nothing to do).
+
+2. **Active-run guard.** For each resolved target:
+   - If `<projectRoot>/.gan-state/run.lock` exists, parse it for `runId` + `pid`.
+   - If `runId` matches a target AND `pid` is still alive (`kill -0 <pid>`): refuse — `Cannot clean up <runId>; it is currently active (pid <pid>). Stop the run first.` Exit 1.
+   - Stale locks (dead pid) are ignored; the target run is included.
+
+3. **Preview + confirmation.**
+   - Print a table of what will be deleted:
+     ```
+     RUN ID                    STATE      SPRINT  STARTED AT            SIZE
+     20260503T143010-b8e1      building   3/7     2026-05-03T14:30:10Z  42 MB
+     20260502T210000-a9f2      failed     5/7     2026-05-02T21:00:00Z  17 MB
+     Total: 2 runs, 59 MB
+     ```
+   - Prompt `Delete these runs? [y/N] ` and read one line from stdin.
+   - On `y` / `Y`: proceed. On anything else (including `<empty>`): abort with exit 0.
+   - `--yes` bypasses the prompt (still prints the table for the audit trail).
+   - On non-TTY stdin without `--yes`: refuse — `Refusing to delete <N> runs without confirmation. Pass --yes to bypass the prompt.` Exit 1.
+
+4. **Per-run cleanup.** For each confirmed target:
+   - `git worktree remove <projectRoot>/.gan-state/runs/<runId>/worktree --force` (silent if not registered).
+   - `git worktree prune` (runs once at the end of the batch, not per-run).
+   - `git branch -D <runBranch>` (silent if branch missing).
+   - `rm -rf <projectRoot>/.gan-state/runs/<runId>`.
+   - On any step failing: log a per-run warning naming the step and the run, continue with the next run. The rm is the only step whose failure escalates to exit 1 for the whole batch (the directory is the source-of-truth artefact).
+
+5. **Final report.**
+   ```
+   Cleaned up 2 runs. Freed 59 MB.
+   ```
+   If any per-run warnings fired, summarise: `1 run had teardown warnings; see above.`
+
+**Run-branch policy.** O2's recovery design leaves run branches in git "for inspection" after terminal teardown. `--cleanup` explicitly removes them — the user's expectation when invoking cleanup is full reclamation, not partial archive.
+
 ### 6. Forbidden territory
 
-`--recover` and `--list-recoverable` are forbidden from:
+`--recover`, `--list-recoverable`, and `--cleanup` are forbidden from:
 
 - Reading or writing `.gan-state/modules/` (per F1 zone-2 invariant).
 - Reading or writing `.claude/gan/` (configuration belongs to the user; recovery is
@@ -329,6 +374,9 @@ A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypass
 - Garbage collection.
 - Recovery via the CLI (`gan recover`); only `/gan --recover` in v1. The CLI
   command is a Phase 7 candidate.
+- Cleanup via the CLI (`gan cleanup`); only `/gan --cleanup` in v1. The CLI
+  command is a Phase 7 candidate, paired with the `gan run prune --keep <N>`
+  garbage-collection follow-up.
 
 ---
 
@@ -394,7 +442,44 @@ Each criterion concrete and testable.
     project with a pre-existing `.gan/` halts with a hard error instructing manual
     deletion. `--recover` and `--list-recoverable` honor this rule.
 
-Tests cover at minimum: success path for 1-4, 6, 11, 13-16; failure path for 7-10, 17.
+18. **`--cleanup --run-id X` removes a single run.** After cleanup,
+    `.gan-state/runs/X/` is gone, `git branch -l 'gan/run/X*'` is empty, and
+    `git worktree list` does not include the run's worktree path.
+
+19. **`--cleanup` (no flags) targets most recent non-terminal run.** Two non-terminal
+    runs; older one stays on disk, newer one is removed.
+
+20. **`--cleanup --all` removes every non-terminal run.** Three runs (1 non-terminal,
+    1 terminal-complete, 1 terminal-failed) → only the non-terminal one is removed; the
+    two terminal ones remain.
+
+21. **`--cleanup --all --include-terminal` removes everything.** Same three-run
+    fixture → `.gan-state/runs/` is empty afterwards.
+
+22. **`--cleanup` refuses an active run.** A live `run.lock` whose `pid` is alive and
+    whose `runId` matches a target → exit 1 with `Cannot clean up <runId>; it is
+    currently active (pid <pid>).` Nothing on disk changes.
+
+23. **`--cleanup` ignores stale lock.** `run.lock` referencing a dead pid → cleanup
+    proceeds, lock file is deleted as part of the rm of `.gan-state/runs/<runId>/`.
+
+24. **`--cleanup` confirmation gate.** Non-TTY stdin without `--yes` → exit 1, refuses
+    to delete; the preview table is still printed for audit.
+
+25. **`--cleanup --yes` bypasses the prompt.** Same fixture as 18; with `--yes`, no
+    prompt is shown but the preview table is still printed.
+
+26. **`--cleanup` of a non-existent `--run-id`.** Exit 1, message names
+    `<projectRoot>/.gan-state/runs/X/`.
+
+27. **`--cleanup` empty case.** Project with no runs → `No non-terminal runs found at
+    <projectRoot>/.gan-state/runs/.` Exit 0 (not an error — nothing to do).
+
+28. **`--cleanup` is read-only against `.gan-state/modules/`.** Regression test seeds
+    `tests/fixtures/<fixture>/.gan-state/modules/dummy/state.json` and asserts the file
+    is byte-identical after `--cleanup --all --include-terminal`.
+
+Tests cover at minimum: success path for 1-4, 6, 11, 13-16, 18-21, 23, 25, 27; failure path for 7-10, 17, 22, 24, 26.
 
 ---
 
@@ -410,8 +495,8 @@ Tests cover at minimum: success path for 1-4, 6, 11, 13-16; failure path for 7-1
 ## Implementation notes
 
 - **SKILL.md changes only.** No new agent file. The flag-dispatch table
-  in SKILL.md gains two short-circuit handlers (`--list-recoverable`, `--recover
-  [--run-id X]`).
+  in SKILL.md gains three short-circuit handlers (`--list-recoverable`, `--recover
+  [--run-id X]`, `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`).
 - **No external archive root.** `--telemetry-dir` and `--no-telemetry` no longer affect
   recovery; telemetry is a separate concern. (Telemetry directories may still receive
   copies of `progress.json` etc. for outcome tracking, but recovery does not depend on

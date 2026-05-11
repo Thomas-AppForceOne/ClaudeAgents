@@ -180,15 +180,21 @@ The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.
 
 ---
 
-## Inspecting and recovering a run
+## Inspecting, recovering, and cleaning up runs
 
 ```
-/gan --print-config           # Inspect the resolved configuration. Fail-open.
-/gan --list-recoverable       # List previously-archived runs that can be resumed.
-/gan --recover --run-id <id>  # Resume an archived run.
+/gan --print-config             # Inspect the resolved configuration. Fail-open.
+/gan --list-recoverable         # List previously-archived runs that can be resumed.
+/gan --recover --run-id <id>    # Resume an archived run.
+/gan --cleanup                  # Delete the most recent non-complete run.
+/gan --cleanup --run-id <id>    # Delete one specific run.
+/gan --cleanup --all            # Delete every non-complete run.
+/gan --cleanup --all --include-terminal  # Delete every run (terminal included).
 ```
 
-The inspection and recovery short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected.
+The inspection, recovery, and cleanup short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected or cleaned up.
+
+`--cleanup` prints a preview table (run id, status, sprint, size) and prompts `[y/N]` before deleting; pass `--yes` to skip the prompt. Active runs (with a live `run.lock`) are refused. The cleanup never touches `.gan-state/modules/`, `.claude/gan/`, or `.gan-cache/`.
 
 ---
 
