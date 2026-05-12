@@ -1,8 +1,10 @@
 # Project context
 
-_Last verified: 2026-05-08 by spec-validator (M1+M2 module conventions persisted: JSON manifests, vitest test runner override, module-config schema minimal-now-extend-later, soft-OK pairsWith; M1+M2 implementation has landed on this branch — see `src/config-server/storage/module-loader.ts` + `module-config-loader.ts` and `src/modules/docker/`. M3 spec authored — adds `UnknownStateKey` error code and per-key module-state file layout `.gan-state/modules/<name>/<key>.json`; pending implementation on `feature/m3-module-surface-alignment`.)_
+_Last verified: 2026-05-12. Phases 0–4 shipped (F1–F4, C1–C5, R1–R5, E1–E3, M1–M3). v1.0 work in flight: I1 (PR #9), I3 (PR #9 + #10), I2 (PR #13) merged to `develop`. F5 next per `specifications/roadmap.md`._
 
-This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" redesign. It is currently spec-only — implementation has not started. Phase 0 (foundations: F1–F4) is the first work to land.
+ClaudeAgents is a generator-discriminator framework for AI-driven software development. The architectural spine (Phases 0–4) has shipped; v1.0 work continues on `develop` per the roadmap's implementation order. Single-writer rule: only spec-validator writes this file; other agents read.
+
+This file is authoritative for **conventions** (how we work). `specifications/roadmap.md` is authoritative for **order** (what comes next). Each spec file is authoritative for **what its spec governs**.
 
 ## Platform priority
 
@@ -13,9 +15,9 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
 
 ## Tech stack
 
-- **Spec authoring:** Markdown only. Specs live under `specifications/` with phase-coded filenames (F/C/R/E/M/U/O + S deferred).
+- **Spec authoring:** Markdown only. Specs live under `specifications/` with phase-coded filenames. Phase codes: F (foundation), C (configuration), R (reference implementation), E (agent integration), M (modules), U (user-facing extensibility), O (observability), I (install), D (diagnostics), H (hooks), W (warnings), A (agent safety), T (telemetry), V (LLM-verdict verification), B (benchmarks), Q (quality signal), S (deferred ecosystem stacks).
 - **Runtime tooling (R1-locked):**
-  - **Node engine:** `>=20.10.0 <23` (Node 20 LTS + Node 22 LTS; Node 18 EOL'd 2025-04).
+  - **Node engine:** `>=20.10.0` (no upper bound; tested-through ceiling lives in `install.sh`'s `TESTED_THROUGH_NODE_MAJOR` constant per I3, currently `25`).
   - **Language:** TypeScript with real build step (`tsc -> dist/`); the published package is consumed by E1 / R3 / R4.
   - **Module system:** ESM (`"type": "module"`).
   - **Test runner:** vitest (ESM-first, fast, modern).
@@ -27,13 +29,12 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
 - **Package identifiers (R1-locked):**
   - Package name: `@claudeagents/config-server`.
   - Bin name: `claudeagents-config-server`.
-- **Installer (R2-locked):** Bash (`install.sh`). The current 138-line `.gan/`-based installer is legacy and is rewritten in place by R2.
+- **Installer (R2-locked):** Bash (`install.sh`). Covers install + uninstall + the I2 permission-consent flow.
   - **Install pattern:** local-install-only until the package is published — `npm install -g .` from the repo root (or `npm pack && npm install -g <tgz>`). Outside-repo registry fallback is a future task.
   - **`MCP_SERVER_VERSION` source of truth:** `install.sh` reads `package.json` at runtime via `node -p` (no hardcoded constant). A maintainer lint that pins the version-source pattern is an R4 follow-up.
-  - **`~/.claude.json` write rules:** single backup to `~/.claude.json.backup-<timestamp>` before the first edit on a given machine (not per run); JSON manipulation via `node -e` (no `jq` dependency); atomic temp-file + rename. No detection of running Claude Code instances — restart-once already covers post-install.
-  - **Idempotency check pattern:** version-probe first (`claudeagents-config-server --version`); only run `npm install -g .` if the binary is missing or the version mismatches `package.json`.
+  - **`~/.claude.json` + `~/.claude/settings.json` write rules:** single backup per machine before the first edit; JSON manipulation via `node -e` (no `jq` dependency); atomic temp-file + rename with sorted-key + two-space-indent + trailing newline. Per-run preedit copies under STATE_LOG drive rollback on partial failure.
+  - **Idempotency check pattern:** version-probe first (`claudeagents-config-server --version`); only run `npm install -g .` if the binary is missing or the version mismatches `package.json`. Re-runs of `configure_permissions` skip categories whose tools are all already in `permissions.allow` (I2 sprint 3b).
   - **Zones created by installer:** `.gan-state/` and `.gan-cache/` only. Zone 1 (`.claude/gan/`) is left alone (created lazily on first overlay authoring).
-  - **Feature-branch warning:** while on `feature/stack-plugin-rfc`, `install.sh` prints a "non-functional mid-pivot" warning. Trigger is hardcoded against `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc`; the check is removed at the post-E1 merge to main.
 - **Bash testing pattern (R2-locked):** vitest + `child_process.spawn` shelling out to `install.sh`. Tests live under `tests/installer/`. No new CI workflow file (the installer rides the existing test harness).
 - **CLI wrapper (R3-locked):**
   - **Bin name:** `gan` (registered in the existing `@claudeagents/config-server` package's `bin` map, alongside the existing `claudeagents-config-server`).
@@ -46,13 +47,11 @@ This repo is the RFC + implementation work for ClaudeAgents' "stack plugin" rede
   - **Help-output rule:** all help (top-level + per-subcommand + bare `gan`) goes to stdout and exits 0; help text never references maintainer-only scripts (per the user-facing-error-text discipline).
   - **Scaffold owner:** `gan stacks new` builds the DRAFT-bannered scaffold via a single helper (`src/cli/lib/scaffold.ts`); the verbatim banner string and the per-field placeholder strings live there. R4's `lint-stacks` reads the same banner constant when implemented.
   - **No new CI workflow file:** R3 rides the existing test harness (same pattern R2 set).
-  - **R3 does NOT own the trust subcommands:** `gan trust info|approve|revoke|list` are R5's territory (per the roadmap's Runtime knobs table). R3 ships the bin and the dispatcher; R5 adds the trust subcommands as additional dispatch arms.
-- **Schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` (M1) lands when M1 ships. F3 is meta-only; concrete schemas are authored by their owning domain spec.
-- **Branch strategy:** Build on `feature/stack-plugin-rfc` through at least Phase 3. Do not merge to `main` mid-pivot. Merge gate is the post-E1 revision break (which also carries O2's prescriptive revision).
+  - **R3 does NOT own the trust subcommands:** `gan trust info|approve|revoke|list` are R5's territory (per `specifications/runtime-knobs.md`). R3 ships the bin and the dispatcher; R5 adds the trust subcommands as additional dispatch arms.
+- **Schemas:** JSON Schema documents at `schemas/<type>-vN.json` (per F3). `stack-v1.json` (C1), `overlay-v1.json` (C3), `module-manifest-v1.json` (M1), `progress-v1.json` (O2), `api-tools-v1.json` (R1) are on disk. F3 is meta-only; concrete schemas are authored by their owning domain spec. v1.0 adds `run-trace-v1.json` + `run-trace-index-v1.json` (T1), `evaluator-evidence-bundle-v1.json` (T1), `telemetry-config-v1.json` + `telemetry-outcome-v1.json` (O3).
+- **Branch strategy:** branches and worktrees cut from `develop`, named `feature/<spec-name>` after the spec they implement. Implementation merges back to `develop`; `develop` merges to `main` at release boundaries only.
 
 ## Architecture
-
-End-state architecture (not yet implemented):
 
 - **Configuration API as black box.** Agents call named functions (`getResolvedConfig`, `validateAll`, `setOverlayField`, `registerModule`, …); they never parse files, know schemas, or enumerate tiers. F2 + R1 own the contract.
 - **Three project zones with single-owner lifecycles** (F1):
@@ -65,39 +64,32 @@ End-state architecture (not yet implemented):
 
 ## Code organization
 
-Current working tree (legacy, mostly slated for retirement):
-
-- `agents/` — five legacy agent prompts (`gan-planner.md`, `gan-contract-proposer.md`, `gan-contract-reviewer.md`, `gan-generator.md`, `gan-evaluator.md`). All retired in place by E1 (`M`).
-- `skills/gan/` — legacy SKILL.md + a broken `gan` symlink + run-state JSON schemas. Retired by E1 (mix of `M` and `D`).
-- `install.sh` — legacy `.gan/`-based installer. Rewritten in place by R2 (`M`).
-- `README.md` — describes the legacy architecture. Rewritten in place by E1 (`M`).
-- `specifications/` — the spec set. Authoritative. Phase-coded filenames give natural execution order.
+- `specifications/` — the spec set. Authoritative; phase-coded filenames give natural execution order. Implementation order lives in `roadmap.md`.
 - `specifications/deferred/` — authored-but-deferred S-series stack specs (Android, KMP, iOS Swift). Reactivation gated by criteria in `deferred/README.md`.
-
-End-state directories (R1 introduces `src/config-server/` and `tests/`; others not yet created):
-
+- `agents/` — `gan-planner.md`, `gan-contract-proposer.md`, `gan-contract-reviewer.md`, `gan-generator.md`, `gan-evaluator.md` (authored by E1, consumed by the orchestrator at sprint time).
+- `skills/gan/` — `SKILL.md` (the orchestrator prompt) and `trust-prompt.md`.
+- `install.sh` — covers install (R2 + I1 + I2 + I3) and uninstall.
+- `README.md` — top-level overview.
 - `src/config-server/` — R1 MCP server. Internal layout (R1-locked):
-  - `src/config-server/tools/` — MCP tool wrappers (one file per public API function).
-  - `src/config-server/storage/` — zone 1/2/3 file I/O.
-  - `src/config-server/resolution/` — overlay cascade (C4) and stack file resolution (C5).
-  - `src/config-server/invariants/` — one file per F3-cataloged cross-file invariant; single point of implementation (R4 imports, never re-implements).
-  - `src/config-server/determinism/` — centralized determinism pins (picomatch glob, `realpathSync.native` canonicalisation, sorted-key JSON, locale-sensitive sort). No duplicate implementations elsewhere.
-  - `src/config-server/logging/` — per-run log routing (`GAN_RUN_ID` env var routes to `.gan-state/runs/<id>/logs/config-server.log`; otherwise stderr).
-  - `src/config-server/errors.ts` — error factory; every error code from F2's enum is built here, no inline error construction. Code set includes the F2 baseline (`SchemaMismatch` / `InvalidYAML` / `MissingFile` / `UnknownStack` / `UnknownSplicePoint` / `InvariantViolation` / `ValidationFailed` / `UnknownApiVersion` / `UntrustedOverlay` / `TrustCacheCorrupt` / `PathEscape` / `NotImplemented` / `MalformedInput` / `CacheEnvConflict`) plus M1/M2/M3 codes (`ModuleManifestInvalid` / `ModuleCollision` / `ModulePrerequisiteFailed` / `PlatformNotSupported` / `TimeoutError` / `PortInUse` / `PortNotDiscovered` / `UnknownStateKey`).
-- `src/modules/<name>/` — runtime utility libraries (M1, M2).
-- `stacks/<name>.md` — repo-tier stack files (created by E2: `web-node` + `generic`).
+  - `tools/` — MCP tool wrappers (one file per public API function).
+  - `storage/` — zone 1/2/3 file I/O.
+  - `resolution/` — overlay cascade (C4) and stack file resolution (C5).
+  - `invariants/` — one file per F3-cataloged cross-file invariant; single point of implementation (R4 imports, never re-implements).
+  - `determinism/` — centralized determinism pins (picomatch glob, `realpathSync.native` canonicalisation, sorted-key JSON, locale-sensitive sort). No duplicate implementations elsewhere.
+  - `logging/` — per-run log routing (`GAN_RUN_ID` env var routes to `.gan-state/runs/<id>/logs/config-server.log`; otherwise stderr).
+  - `errors.ts` — error factory; every error code from F2's enum is built here, no inline error construction. Current code set: `SchemaMismatch`, `InvalidYAML`, `MissingFile`, `UnknownStack`, `UnknownSplicePoint`, `InvariantViolation`, `ValidationFailed`, `UnknownApiVersion`, `UntrustedOverlay`, `TrustCacheCorrupt`, `PathEscape`, `NotImplemented`, `MalformedInput`, `CacheEnvConflict`, `ModuleManifestInvalid`, `ModuleCollision`, `ModulePrerequisiteFailed`, `PlatformNotSupported`, `TimeoutError`, `PortInUse`, `PortNotDiscovered`, `UnknownStateKey`.
+- `src/cli/` — R3 CLI wrapper (`gan` bin).
+- `src/modules/<name>/` — runtime utility libraries (M1, M2; today: `docker`).
+- `stacks/<name>.md` — repo-tier stack files (`web-node`, `generic`; E2-authored).
 - `schemas/<type>-vN.json` — published JSON Schemas (F3, populated by R4's `publish-schemas`).
 - `scripts/{lint-stacks,publish-schemas,evaluator-pipeline-check,pair-names,lint-no-stack-leak}/` — R4 maintainer tooling.
 - `tests/config-server/{tools,resolution,invariants,integration}/` — R1 test layout (vitest).
-- `tests/fixtures/stacks/` — fixtures. Bootstrap set (R1 first slice):
-  - `tests/fixtures/stacks/js-ts-minimal/` — clean web-node.
-  - `tests/fixtures/stacks/synthetic-second/.claude/gan/stacks/synthetic-second.md` — synthetic alone (multi-stack guard rail seed).
-  - `tests/fixtures/stacks/polyglot-webnode-synthetic/` — polyglot multi-stack (web-node + synthetic-second).
-- `.github/workflows/` — seven workflow files locked by the roadmap (see "Tooling").
+- `tests/fixtures/stacks/` — fixture set: `js-ts-minimal/` (clean web-node), `synthetic-second/.claude/gan/stacks/synthetic-second.md` (multi-stack guard-rail seed), `polyglot-webnode-synthetic/` (polyglot).
+- `.github/workflows/` — locked CI inventory (see "Testing").
 
 ## Testing
 
-Test categories planned, none yet on disk. Each gets exactly one workflow file:
+Tests run via vitest. CI is one workflow file per category:
 
 - `test-modules.yml` — module-side unit/integration tests.
 - `test-evaluator-pipeline.yml` — runs `scripts/evaluator-pipeline-check/` (E3 harness, deterministic core only, no LLM in CI).
@@ -107,7 +99,7 @@ Test categories planned, none yet on disk. Each gets exactly one workflow file:
 - `test-error-text.yml` — error-message readability check (no Node/npm leaks into user-facing output).
 - Plus a shared `shared-setup.yml` reusable workflow.
 
-New test categories follow `test-<category>.yml`. The set is locked by the roadmap; expansion requires roadmap edit.
+New test categories follow `test-<category>.yml`. The set is locked; expansion requires a coordinated edit. Current suite: ~95 test files, 800+ tests, all green on `develop`.
 
 ## Tooling
 
@@ -126,8 +118,25 @@ CI workflow inventory is locked (see Testing).
 - **Phase-coded spec filenames** (`F1-…md`, `R4-…md`). Filenames carry execution order.
 - **One spec ≈ one sprint** of focused work. Sprint-level slicing is noted in each spec's "Bite-size note".
 - **Acceptance criteria can be deferred-by-design.** A spec may list ACs whose enforcement lands in a downstream spec; the wording must name the consuming spec and say "verified when X ships". F1's AC #1, #4, #6 are examples.
-- **Specs reference the roadmap's Runtime knobs table** rather than restating their own surfaces. New flags / env-var values land in the roadmap table in the same PR that introduces them.
+- **Specs reference [`specifications/runtime-knobs.md`](specifications/runtime-knobs.md)** rather than restating their own user-facing surfaces. New flags, env-var values, subcommands, or prompt branches land in `runtime-knobs.md` in the same PR that introduces them.
+- **Schemas are the canonical inventory.** `schemas/<type>-vN.json` files (overlay, stack, run-trace, telemetry-*, evaluator-evidence-bundle, etc.) are the single source of truth for "what fields exist." A spec that introduces new fields, splice points, event classes, or error codes documents the *behaviour* of each new entry in its body, then lists the schema additions in a brief "Schema additions" section that names the entry and its shape (type, default, tier scope for splice points). The implementation PR lands the schema change. Specs do not maintain parallel field-inventory tables; readers cross-reference field shape via the schema, behaviour via the introducing spec.
 - **The Retirement table is authoritative** for what dies when. An implementation PR that touches a row must show the named artifact as `D` or `M` in the diff. Survival blocks the merge.
+- **Implemented specs are immutable.** Once a specification has shipped (implementation merged to `develop` and then released), no further edits to that spec's prose are accepted. Regressions, new ideas, refinements, or behaviour additions that touch a shipped spec's surface must be expressed in one of two ways: (1) author a wholly-new spec under the next free phase-coded slot, OR (2) fold the change into an unimplemented spec that already touches the same code. This rule applies to every shipped phase (F1–F4 from Phase 0, R1–R5 from Phase 2, E1–E3 from Phase 3, M1–M3 from Phase 4) and to every v1.0 spec the moment its implementation PR merges. Inline-amendment-to-shipped-spec is retired as a pattern.
+  - **Why:** shipped specs are the contract the implementation already honours. Editing them after the fact creates a window where the spec describes behaviour the code doesn't yet match, and reviewers can no longer tell "what was always in the spec" from "what was added later." A new spec carries its own authoring discipline (problem statement, AC, dependencies) and its own implementation PR; an inline amendment short-circuits both.
+  - **Effect on cross-spec references:** the roadmap stays the cross-reference layer. A reader of F2 looking for cache-coherence behaviour will not find it in F2 — they find F5 via the roadmap entry, which is authoritative.
+  - **Effect on dependencies:** a new spec that builds on a shipped spec's foundation lists the shipped spec under "Dependencies" but does not propose edits to it.
+  - **Exception path:** none for normal work. A truly-broken contract in a shipped spec (e.g. F2's `setOverlayField` signature describes behaviour the code never actually had) is a `BUG` that the orchestrator may need to short-circuit around; the fix is still a new spec, not an edit to the shipped one. The orchestrator's behaviour in the interim window is captured in a follow-up spec, not by quietly correcting the spec it was supposed to honour.
+- **Schema discipline tightens at v1.0 cut.** Pre-v1.0, any schema change bumps `schemaVersion`; no backward-compatibility shims, no transitional dual-path windows. From v1.0 onward: additive changes (new optional fields, new discriminator values within an existing event class, new event classes) stay on `vN`; field-rename or semantic-change forces `vN+1` with release-note treatment.
+- **Release-driven from v1.0 forward.** Specs whose design quality depends on real-world usage data (V/B benchmarks, Q-series quality signal, T3 budget ceilings, A2 glob granularity, Q2 error-code vocabulary) are deliberately deferred to the release whose dogfooding produces that data. Pre-building them on speculation produces a worse spec set than waiting for signal.
+- **Spec-vs-shipped status markers.** Specs that describe forward-looking behaviour (orchestrator skill flows, agent prompts, multi-stage feature rollouts) carry per-section status markers: `[shipped-in-v<release>]` (operative now), `[deferred-to-v<release>]` (described for forward-compat, not yet operative), `[partial-v<release>]` (minimal viable shipped, full version in a later release). Without markers, an implementer reading the spec from scratch has no signal that some sections describe aspirational behaviour the runtime can't yet deliver.
+- **Five-question relevance filter for new capabilities.** Any proposed primitive, splice point, runtime knob, or agent-surface addition is triaged against five questions before it earns a spec slot:
+  1. Does it plug into the framework's existing primitives (Configuration API, stacks, overlays, modules, hooks, trace), or does it reach around them?
+  2. Can other agents, plugins, or future specs build on top of it without re-implementing its logic? (composability test)
+  3. Does it own or access durable, structured state (zone 2 artifacts, configuration, trace), or is it ephemeral chat-style behaviour?
+  4. Does it fit existing ecosystem boundaries (stack/module pairing, three-zone discipline, three-tier overlay cascade, schema-versioning rules), or does it require carving a new ownership lane?
+  5. Can it be stacked or composed with other capabilities, or is it a terminal feature whose use case is exhausted by its first invocation?
+
+  A proposal that fails three of the five is a feature, not infrastructure. Features are not rejected — they are deferred until either the failing dimensions are closed by other infrastructure work, or release-driven dogfooding shows the feature compounds into something more general. New specs include the answers in their "Problem" section; reviewers use the answers to challenge whether the work belongs in this release or a later one.
 
 ## Do's and don'ts
 
@@ -160,8 +169,6 @@ CI workflow inventory is locked (see Testing).
 - Honor the **error factory rule** (R1-locked): every error code from F2's enum is built via `src/config-server/errors.ts`. No inline error construction anywhere in the codebase.
 - Honor the **dual-callable surface rule** (R1-locked): every public API function is callable both via the MCP tool wrapper (`src/config-server/tools/`) and via direct library import — same underlying function, never two implementations.
 - Honor the **centralized determinism rule** (R1-locked): F3's determinism pins live in `src/config-server/determinism/` (picomatch glob, `realpathSync.native` path canonicalisation, sorted-key JSON, locale-sensitive sort). No duplicate implementations elsewhere. Changing a pin is still a coordinated edit across every dependent spec (see existing Don't on F3 pins).
-- Honor the **trust loud-stub contract** (R1-locked, OQ1): until R5 ships, `getTrustState`/`getTrustDiff` return `{approved: true, reason: "trust-not-yet-implemented"}` and log a warning per call; `trustApprove`/`trustRevoke` return `{mutated: false}` no-op + warning. The `trust.approved` invariant is omitted from `validateAll` until R5. Do not implement real trust logic in R1.
-- Honor the **module surface no-op contract** (R1-locked, OQ4): `registerModule`/`getModuleState`/`setModuleState`/`appendToModuleState`/`removeFromModuleState`/`listModules` are registered in R1; module discovery is a no-op (zero modules) until M1 ships `module-manifest-v1.json`. The surface exists so E1/R3/R4 can be authored against it; behavior arrives with M1.
 - Honor the **per-key module-state rule** (M3-locked): every module-state write/read takes a `key: string` parameter validated against the manifest's `stateKeys` allowlist before any I/O. Each declared key persists to its own file at `.gan-state/modules/<name>/<key>.json`; there is no whole-blob `state.json`. An undeclared `key` on a write rejects with `ConfigServerError` whose `code === "UnknownStateKey"` and whose message names both the module and the offending key; an undeclared `key` on a read returns `null` (consistent with "no file"). A module whose manifest omits `stateKeys` cannot persist any state. `appendToModuleState` honours `duplicatePolicy: "error" | "skip" | "allow"` (default `"error"`) with the same semantics as `appendToOverlayField`/`appendToStackField`. `removeFromModuleState` removes by `entryKey: string` (matches map property name, or list-member `key` field); non-existent `entryKey` is a no-op `{mutated: false, reason: 'entry-not-found'}`. Pre-M3 `state.json` files in zone 2 are orphaned, never auto-migrated.
 - Honor the **per-run log routing rule** (R1-locked): when `GAN_RUN_ID` is set, the config server routes logs to `.gan-state/runs/<id>/logs/config-server.log`; otherwise it logs to stderr. Implementation lives in `src/config-server/logging/`.
 - Honor the **local-install-only rule** (R2-locked): until `@claudeagents/config-server` is published to npm, the installer uses `npm install -g .` from the repo root. Specs and docs do not promise a published-registry install path; the registry fallback is a future task.
@@ -170,7 +177,6 @@ CI workflow inventory is locked (see Testing).
 - Honor the **JSON-manipulation pattern** (R2-locked, applies to R3/R4 too): shell scripts that read or write JSON use `node -e`. `jq` is not a dependency.
 - Honor the **idempotency-via-version-probe rule** (R2-locked): before invoking `npm install -g .`, the installer probes `claudeagents-config-server --version` and only installs if the binary is missing or its version mismatches `package.json`. Re-running `install.sh` on an up-to-date machine is a no-op for npm.
 - Honor the **bash-test pattern** (R2-locked): `install.sh` is tested via vitest + `child_process.spawn`. Tests live under `tests/installer/`. No new CI workflow file — the installer rides the existing test harness.
-- Honor the **feature-branch warning lifecycle** (R2-locked): the installer's mid-pivot warning is triggered by a hardcoded `git rev-parse --abbrev-ref HEAD == feature/stack-plugin-rfc` check. The check ships in R2 and is removed in the post-E1 merge to main. Generalising the trigger is out of scope.
 - Honor the **CLI-imports-library rule** (R3-locked): `gan` calls R1's library functions in-process via the package's main entry. It does not spawn `claudeagents-config-server` as a subprocess. R3's `bin` lives next to R1's bin in the same `package.json`; both are produced by the same `tsc` build.
 - Honor the **CLI exit-code map** (R3-locked): every user-visible exit code maps from an F2 structured-error `code` (or "no error → 0") through one table in `src/cli/lib/exit-codes.ts`. New error codes added in F2 require a same-PR addition to the table; the default for unmapped error codes is `1` (generic failure) so new codes never accidentally surface as `0`.
 - Honor the **CLI `--json` round-trip rule** (R3-locked): on read subcommands, `gan <cmd> --json` emits a single JSON document on stdout — sorted keys, two-space indent, trailing newline (per F3 determinism). On error, `--json` emits the F2 structured-error object as JSON on stdout (so `gan ... --json | jq` works in both success and failure paths). Without `--json`, success renders human-readable on stdout, errors render on stderr.
@@ -190,20 +196,15 @@ CI workflow inventory is locked (see Testing).
 - Don't diverge from F3's determinism pins ad hoc. Glob = picomatch (pinned in R1's `package.json`); paths canonicalised via `fs.realpathSync.native` + trailing-slash strip + case-insensitive comparison; JSON output = sorted keys, two-space indent, trailing newline; file enumeration sorted via `localeCompare(other, undefined, { sensitivity: 'variant', numeric: false })`; regex = Node's V8 RegExp with Node engine pinned. Changing any pin is a coordinated edit across every dependent spec, plus `--update-goldens` and an R5 trust-cache invalidation.
 - Don't write to zone 1 (`.claude/gan/`) outside the F2 sanctioned write channels.
 - Don't let `/gan` per-run state bleed into `.claude/gan/` or `.gan-cache/`.
-- Don't merge to `main` mid-pivot (before the post-E1 revision break closes).
+- Don't merge to `main` outside release boundaries. `develop` is the integration branch; `main` only carries tagged releases.
 - Don't add ecosystem-specific tokens (`npm`, `gradle`, `pip-audit`, etc.) outside their owning stack file or an allowlisted path. `lint-no-stack-leak` is the permanent backstop.
-- Don't expand the runtime-knob surface count without editing the roadmap's Runtime knobs table in the same PR.
+- Don't expand the runtime-knob surface count without editing [`specifications/runtime-knobs.md`](specifications/runtime-knobs.md) in the same PR.
 - Don't author new top-level project directories for gan data without amending F1 first.
 
 ## Known gaps
 
-- No `package.json` and no Node code on disk yet. R1 (Phase 2) introduces them; tooling and engine are locked (see Tech stack / Tooling).
-- Schemas: `stack-v1.json` (C1) and `overlay-v1.json` (C3) are on disk; `module-manifest-v1.json` lands when M1 ships, and `module-config-docker-v1.json` (minimal: `containerPattern`, `fallbackPort`, `healthCheck.{path,expectStatus,timeoutSeconds}`) lands when M2 ships.
-- No CI workflows on disk yet. R4 introduces them.
-- No tests, no fixtures, no synthetic-second stack on disk yet. R1's first sprint slice introduces the bootstrap fixture set (`js-ts-minimal`, `synthetic-second`, `polyglot-webnode-synthetic`).
-- No `stacks/` directory yet. E2 introduces `web-node` + `generic`.
-- **R5 (trust) not yet implemented** — R1 ships loud-stubs for `getTrustState`/`getTrustDiff`/`trustApprove`/`trustRevoke`; `trust.approved` invariant is omitted from `validateAll` until R5.
-- **M1 (modules) implemented on `feature/modules-m1-m2`** — `loadModules()` / `getRegisteredModules()` discover + ajv-validate `manifest.json` under `src/modules/<name>/`; the production registry caller in `tools/reads.ts` (`listModules`) and `tools/writes.ts` (`registerModule`) currently has no `modulesRoot` injection seam, so tests that need the non-empty path either operate on the real `src/modules/` tree (Docker prereq required) or must use `loadModules(scratch)` directly to assert discovery. M2's docker module ships under `src/modules/docker/` with a `docker --version` prerequisite.
-- **M3 (module surface alignment) — spec authored, implementation pending** on `feature/m3-module-surface-alignment`. Restores F2's per-key module-state contract: `setModuleState`/`appendToModuleState`/`removeFromModuleState`/`getModuleState` gain a `key: string` parameter; the on-disk layout switches from one `state.json` per module to one `<key>.json` per declared `stateKeys` entry; the manifest's `stateKeys` array becomes an authoritative allowlist enforced on every write. New error code `UnknownStateKey` is added to F2's enum and built via `src/config-server/errors.ts`. `appendToModuleState` honours `duplicatePolicy: "error" | "skip" | "allow"` (default `"error"`); `removeFromModuleState` switches from deep-equal `value` match to keyed `entryKey: string` lookup. `api-tools-v1.json` already declares the F2 shape; the implementation in `tools/writes.ts` + `tools/reads.ts` + `storage/module-loader.ts` is what drifts.
-- **R3 (CLI wrapper) — implementation in progress.** Skeleton + bin entry + arg parser + help and read subcommands land first; writes and `gan stacks new` follow. R5's trust subcommands (`gan trust *`) are NOT R3's territory; they ship with R5.
-- README still describes the legacy `.gan/`-based architecture. E1 rewrites it; do not touch it before then.
+Open items at the time of this verification:
+
+- **No CI test for end-to-end orchestrator flow.** v1.0 dogfooding is the implicit test surface for the SKILL.md → agent-spawn → snapshot → re-snapshot path. The orchestrator-side test harness is v2.0's V1 scope.
+- **Per-stack overlay command override is a no-op.** Project overlays attempting to override a stack's `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` silently no-op (see `reads.ts:329–332`). W1 surfaces a `PerStackOverrideUnsupported` warning so the gap is visible; full implementation lands in v1.1.
+- **F5, F6, R6 spec files don't exist on disk yet.** Authored as part of v1.0 implementation order slots 5–7. F5 is in flight on the current branch.

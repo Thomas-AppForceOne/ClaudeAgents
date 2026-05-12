@@ -99,35 +99,15 @@ The default glob granularity for `writeScope` and `roleScopes` is informed by v1
 - Read-side enforcement. v1.1 enforces `write` only — read enforcement requires deeper Claude Code integration (read-time hooks) that the current PreToolUse surface does not support cleanly. The `read` field on `roleScopes` is recorded in the trace but not gated; it documents intent and prepares for a future v2.0+ enforcement pass.
 - Replace H1's confinement hook. A2 augments H1; H1 still gates the worktree boundary, A2 gates inside the worktree.
 
-## C1 amendments
+## Schema additions
 
-A2 introduces one new optional stack-file field:
+A2's implementation PR adds:
 
-| Field | Type | Default | Purpose |
-|---|---|---|---|
-| `roleScopes` | map of `<role>` (kebab-case) to `{write?: string[], read?: string[]}` | absent | Per-role narrowing of the stack's scope. Absent = all roles see the stack's full `scope`. Both `write` and `read` are individually optional within a role declaration; an absent inner field inherits from the stack's main `scope`. |
+- One entry to `schemas/stack-v1.json`: `roleScopes` (optional; map of `<role>` (kebab-case) to `{write?: string[], read?: string[]}`; default absent). Per-role narrowing of the stack's `scope`. Absent = all roles see the stack's full `scope`. Both `write` and `read` are individually optional within a role declaration; an absent inner field inherits from the stack's main `scope`. Role keys match the existing agent IDs (`gan-clarifier`, `gan-planner`, `gan-contract-proposer`, `gan-generator`, `gan-contract-reviewer`, `gan-evaluator`).
+- One entry to `schemas/overlay-v1.json`: `safety.scopeEnforcement` (enum `"halt" | "warn" | "off"`, default `"halt"`, both tiers, scalar cascade). Falls under the `safety.*` namespace reserved by A1.
+- One sprint-level field on the contract artifact (per `agents/gan-contract-proposer.md`): `writeScope` (optional array of POSIX repo-relative glob strings; absent = no sprint-scope enforcement, only role-scope). Sprint-level promise of which paths the generator will touch. Per-criterion `referenceArtifacts` is unchanged.
 
-The role keys are the same agent-role IDs used elsewhere (`gan-clarifier`, `gan-planner`, `gan-contract-proposer`, `gan-generator`, `gan-contract-reviewer`, `gan-evaluator`).
-
-## C3 amendments
-
-A2 introduces one new overlay splice point:
-
-| Splice point | Type | Default | Tier scope |
-|---|---|---|---|
-| `safety.scopeEnforcement` | enum — `"halt"` \| `"warn"` \| `"off"` | `"halt"` | both tiers |
-
-Follows C4's scalar cascade rule. Falls under the `safety.*` namespace reserved by A1 for the safety-halt family.
-
-## Contract-schema amendments
-
-A2 introduces one new optional sprint-level field on the contract artifact (per `agents/gan-contract-proposer.md`):
-
-| Field | Type | Default | Purpose |
-|---|---|---|---|
-| `writeScope` | array of glob strings | absent (= no sprint-scope enforcement, only role-scope) | Sprint-level promise of which paths the generator will touch. Globs are POSIX, repo-relative. |
-
-Per criterion `referenceArtifacts` (added in v1.0) remains unchanged; `writeScope` is sprint-level, not per-criterion.
+The schemas are the canonical inventory.
 
 ## Field encodings
 

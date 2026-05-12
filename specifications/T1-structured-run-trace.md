@@ -267,15 +267,9 @@ If a run is unrecoverable per the criterion above, `--list-recoverable` filters 
 - Record agent intermediate reasoning beyond what the LLM API exposes in the response payload (out of scope; T1 records what the API returned, nothing more).
 - Provide automatic rotation, retention, or cleanup (deferred to T2).
 
-## C3 amendments
+## Schema additions
 
-T1 introduces one new overlay splice point. C3's splice-point catalog gains an entry for it in T1's implementation PR.
-
-| Splice point | Type | Default | Tier scope |
-|---|---|---|---|
-| `telemetry.tracePayloads` | enum — `"full"` \| `"hashed"` | `"full"` | both tiers |
-
-Follows C4's scalar cascade rule. The setting is read at `validateAll()` time and applied to every event the orchestrator and agents emit during the run.
+T1's implementation PR adds one entry to `schemas/overlay-v1.json`: `telemetry.tracePayloads` (enum `"full" | "hashed"`, default `"full"`, both tiers, scalar cascade). The setting is read at `validateAll()` time and applied to every event the orchestrator and agents emit during the run. The schema is the canonical inventory; this paragraph documents the addition for navigation.
 
 ## Field encodings
 

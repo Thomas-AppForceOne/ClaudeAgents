@@ -300,15 +300,9 @@ The clarifier is a single-attempt agent; A1's per-role ceilings do not apply to 
 - Read arbitrary file contents (out of scope per the additionalContext-only context rule).
 - Re-prompt the user mid-round on parse failure (deferred; v1.0 falls through to assumptions).
 
-## C3 amendments
+## Schema additions
 
-E5 introduces one new overlay splice point. C3's splice-point catalog gains an entry for it in E5's implementation PR.
-
-| Splice point | Type | Default | Tier scope |
-|---|---|---|---|
-| `clarifier.draftTimeoutSeconds` | integer (range `[10, 600]`) | `60` | both tiers |
-
-Follows C4's scalar cascade rule. Setting `0` is rejected at validation time with `InvalidTimeoutValue`; the dedicated `--skip-clarification` flag exists for the bypass case.
+E5's implementation PR adds one entry to `schemas/overlay-v1.json`: `clarifier.draftTimeoutSeconds` (integer in `[10, 600]`, default `60`, both tiers, scalar cascade). Setting `0` is rejected at validation time with `InvalidTimeoutValue`; the dedicated `--skip-clarification` flag exists for the bypass case. The schema is the canonical inventory.
 
 ## Field encodings
 
