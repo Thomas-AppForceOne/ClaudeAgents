@@ -355,6 +355,11 @@ export function trustApprove(
   const newCache = upsertApproval(cache, record);
   writeCache(homeDir, newCache);
 
+  // F5 slice 2 — invalidate the resolved-config cache synchronously so
+  // the next `getResolvedConfig` reflects the approval. Closes the
+  // dogfooded bug where the trust prompt re-fired after `[a]`.
+  invalidateCache(canonRoot);
+
   logTrustEvent({
     action: 'approve',
     projectRoot: input.projectRoot,
@@ -394,6 +399,11 @@ export function trustRevoke(
   const newCache = removeApprovals(cache, input.projectRoot);
   writeCache(homeDir, newCache);
   const mutated = newCache.approvals.length !== beforeLength;
+
+  // F5 slice 2 — invalidate only on real state change; a no-op revoke
+  // (no matching approval for this project) leaves the resolved
+  // config unchanged, so the cache stays correct.
+  if (mutated) invalidateForProject(input.projectRoot);
 
   logTrustEvent({
     action: 'revoke',
@@ -457,6 +467,12 @@ export function setModuleState(
   const filePath = moduleStatePath(root, input.name, input.key);
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(input.state));
+  // F5 slice 2 — uniform invalidation discipline across every state-
+  // mutating tool. Module state is not part of the resolved-config
+  // snapshot today, but the contract is "no stale reads after a
+  // mutation" and invalidating here future-proofs the surface for
+  // the day module state surfaces into resolved config.
+  invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
@@ -586,11 +602,13 @@ export function appendToModuleState(
 
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(data));
+  // F5 slice 2 — invalidate on successful append (see setModuleState).
+  invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
 /**
- * Validate `policy` shape and resolve to a concrete
+ * Resolve duplicate-policy shape and return a concrete
  * `DuplicatePolicy`. `undefined` falls through to the default
  * `'error'`. Any other non-recognised value throws
  * `MalformedInput` so unknown policy strings (e.g. `"replace"`) can
@@ -710,6 +728,8 @@ export function removeFromModuleState(
     const next = stored.slice();
     next.splice(idx, 1);
     atomicWriteFile(filePath, stableStringify(next));
+    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+    invalidateCache(root);
     return { mutated: true, path: filePath };
   }
 
@@ -720,6 +740,8 @@ export function removeFromModuleState(
     const next: Record<string, unknown> = { ...stored };
     delete next[input.entryKey];
     atomicWriteFile(filePath, stableStringify(next));
+    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+    invalidateCache(root);
     return { mutated: true, path: filePath };
   }
 
@@ -753,12 +775,16 @@ export function registerModule(
   _ctx: WriteToolContext = {},
 ): WriteResult {
   void input.manifest;
-  void input.projectRoot;
   const registry = getRegisteredModules();
   const found = registry.find((r) => r.name === input.name);
   if (!found) {
     return { mutated: false, reason: `unknown-module:${input.name}` };
   }
+  // F5 slice 2 — invalidate on every `mutated: true` return. Today
+  // the registry is package-scoped and the probe is advisory, but
+  // honouring the contract here means the surface stays honest the
+  // day `registerModule` writes durable state.
+  invalidateForProject(input.projectRoot);
   return { mutated: true, path: found.manifestPath };
 }
 
@@ -965,10 +991,30 @@ function buildOverlaySource(input: {
   });
 }
 
-/** Drop the resolved-config cache entry for a project root after a write. */
+/**
+ * Drop the resolved-config cache entry for `canonicalRoot` after a
+ * successful state-mutating write. F5 § Server-side cache coherence
+ * requires this fire **before** the write tool returns, so a caller
+ * that issues a write immediately followed by a read sees the post-
+ * mutation state (the dogfooded `trustApprove` bug).
+ *
+ * Callers must pass an already-canonicalised root; the
+ * `invalidateForProject` helper below covers the input-shape case.
+ */
 function invalidateCache(canonicalRoot: string): void {
   const cache = getResolvedConfigCache();
   cache.invalidate(cacheKeyForProjectRoot(canonicalRoot));
+}
+
+/**
+ * Convenience wrapper that canonicalises a write tool's input
+ * `projectRoot` before invalidating. Used by the trust and module
+ * write paths, which receive un-canonicalised `projectRoot` from
+ * MCP callers; the overlay / stack write paths already canonicalise
+ * upstream so they call `invalidateCache(root)` directly.
+ */
+function invalidateForProject(projectRoot: string): void {
+  invalidateCache(canonicalizePath(projectRoot));
 }
 
 // ---- field-path helpers --------------------------------------------------

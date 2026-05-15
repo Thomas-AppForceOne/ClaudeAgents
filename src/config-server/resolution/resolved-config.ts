@@ -34,7 +34,11 @@ import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import { _runPhase1ForTests, validateAll, type Issue } from '../tools/validate.js';
 import { cascadeOverlays } from './cascade.js';
 import { detectActiveStacks } from './detection.js';
-import { getResolvedConfigCache, cacheKeyForProjectRoot } from './cache.js';
+import {
+  getResolvedConfigCache,
+  cacheKeyForProjectRoot,
+  backingFileMtime,
+} from './cache.js';
 import { resolveStackFile, type ResolveStackOptions } from './stack-resolution.js';
 
 /**
@@ -294,11 +298,113 @@ export function composeResolvedConfigSync(
   // Round-trip through stableStringify so every nested key order is
   // canonicalised.
   const canonical = JSON.parse(stableStringify(resolved)) as ResolvedConfig;
-  cache.set(canonRoot, canonical);
+
+  // F5 slice 3 — collect the per-backing-file state snapshot the cache
+  // compares against on every subsequent read. A hand-edit to any of
+  // these files invalidates the entry the next time someone calls
+  // `getResolvedConfig` / `getActiveStacks` / `getMergedSplicePoints`.
+  const backingFileStates = collectBackingFileStates({
+    canonRoot,
+    userHome: ctx.userHome,
+    activeStackNames: detection.active.slice(),
+    activeStackPaths: Object.values(byName).map((entry) => entry.path),
+    moduleNames: snapshot.modules.map((m) => m.name),
+  });
+  cache.set(canonRoot, canonical, backingFileStates);
   return canonical;
 }
 
 // ---- helpers --------------------------------------------------------------
+
+/**
+ * F5 slice 3 — assemble the per-backing-file state snapshot the cache
+ * uses for hand-edit detection. Tracks:
+ *
+ *  - **Overlay tier paths.** The three well-known overlay paths
+ *    (`default.md`, `project.md`, `user.md`). All three are stat'd
+ *    whether or not the loader returned data — a `null` recorded
+ *    state means "this file was absent when we cached," and a brand-
+ *    new overlay appearing flips the state and busts the cache on
+ *    the next read. The user tier is resolved via the same env-var
+ *    fallback the loader uses (`GAN_USER_HOME` → `HOME` →
+ *    `USERPROFILE`); when none of those resolve, the user-tier path
+ *    is omitted.
+ *  - **Per active-stack tier paths.** For every active stack, every
+ *    tier the resolver consults (project shadow → user shadow →
+ *    builtin) is stat'd. Tracking the higher-tier shadow paths even
+ *    when they were absent at compose time closes the case where a
+ *    user adds a shadow file mid-session: the absent path flips from
+ *    `null` to a real mtime and the cache invalidates on the next
+ *    read. The lower-tier paths (which still exist as the active
+ *    resolution) are stat'd too, so hand-edits at the active tier
+ *    are caught the same way.
+ *  - **Per-module config paths.** Each registered module's per-project
+ *    config YAML at `<canonRoot>/.claude/gan/modules/<name>.yaml`.
+ *    Hand-edits to a module config bust the cache; absent-but-
+ *    expected configs are tracked as `null`.
+ *
+ * For a typical project (one stack, no modules, with a `userHome`
+ * configured), this is 3 (overlays) + 3 (stack tiers) = 6 stat calls
+ * per read — still in the microsecond range, well within the spec's
+ * "stat is cheap" budget.
+ */
+function collectBackingFileStates(input: {
+  canonRoot: string;
+  userHome: string | undefined;
+  activeStackNames: string[];
+  activeStackPaths: string[];
+  moduleNames: string[];
+}): Map<string, number | null> {
+  const states = new Map<string, number | null>();
+
+  // Resolve the effective user-home for path-derivation.
+  const userHome =
+    input.userHome ??
+    process.env['GAN_USER_HOME'] ??
+    process.env['HOME'] ??
+    process.env['USERPROFILE'];
+  const hasUserHome = typeof userHome === 'string' && userHome.length > 0;
+
+  // Overlay tier paths.
+  states.set(
+    path.join(input.canonRoot, '.claude', 'gan', 'default.md'),
+    null,
+  );
+  states.set(
+    path.join(input.canonRoot, '.claude', 'gan', 'project.md'),
+    null,
+  );
+  if (hasUserHome) {
+    states.set(path.join(userHome, '.claude', 'gan', 'user.md'), null);
+  }
+
+  // Active stack paths (current resolution).
+  for (const p of input.activeStackPaths) states.set(p, null);
+
+  // Higher-tier stack shadows for every active stack — even when they
+  // do not exist today, so a newly-appearing shadow busts the cache.
+  // The resolver checks tiers in this order; tracking all of them
+  // makes the cache honest about tier shifts.
+  for (const name of input.activeStackNames) {
+    states.set(path.join(input.canonRoot, '.claude', 'gan', 'stacks', `${name}.md`), null);
+    if (hasUserHome) {
+      states.set(path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`), null);
+    }
+  }
+
+  // Per-module config paths.
+  for (const name of input.moduleNames) {
+    states.set(path.join(input.canonRoot, '.claude', 'gan', 'modules', `${name}.yaml`), null);
+  }
+
+  // Final pass: stat every path once. Doing it in one pass after the
+  // path-set is fully assembled means a given path is only stat'd
+  // once even if multiple tier rules name it.
+  for (const p of states.keys()) {
+    states.set(p, backingFileMtime(p));
+  }
+  return states;
+}
 
 function readStackOverride(merged: Record<string, unknown>): string[] | undefined {
   if (!isObject(merged)) return undefined;

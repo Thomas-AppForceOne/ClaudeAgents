@@ -139,25 +139,53 @@ export async function getApiVersion(): Promise<{ apiVersion: string }> {
 }
 
 /**
- * Build an MCP `tools/list` payload from the bundled `api-tools-v1` schema.
- * The shape: each tool has a `name`, a `description`, and an `inputSchema`
- * (a JSON Schema object). MCP clients use this to validate tool calls.
+ * One entry in the introspection list. Carries both the schema's
+ * `inputSchema` (the documented contract) and the runtime's `required`
+ * declaration (the dispatched contract). F5 § Parameter-shape
+ * consistency uses the pair to assert alignment: a contract test
+ * (see `tests/config-server/integration/f5-coherence.test.ts`) iterates
+ * this list and asserts `entry.required` matches
+ * `entry.inputSchema.required` for every advertised tool — without
+ * needing any export that exists only to support tests.
  */
-export function buildToolList(): Array<{
+export interface ToolListEntry {
   name: string;
   description: string;
+  /** Runtime-required input fields per the dispatch handler's spec. */
+  required: readonly string[];
+  /** Schema-declared input shape from `schemas/api-tools-v1.json`. */
   inputSchema: Record<string, unknown>;
-}> {
+}
+
+/**
+ * Build the introspection list of every wired tool. Returns one entry
+ * per F2 tool whose runtime dispatch is actually implemented — tools
+ * that ship as `NotImplemented` stubs in this release are simply absent
+ * from `TOOL_HANDLERS` and therefore absent from the returned list.
+ *
+ * F5 slice 1 contract: the filter is keyed off `TOOL_HANDLERS`. When a
+ * future release wires a previously-NotImplemented tool by adding a
+ * handler spec, the tool appears in this list (and therefore in MCP
+ * `tools/list`) with no other code change required.
+ *
+ * The MCP `tools/list` payload is a strict projection of this result:
+ * see `createMcpServer` for the `{name, description, inputSchema}`
+ * subset MCP clients receive.
+ */
+export function buildToolList(): ToolListEntry[] {
   const props = (apiToolsV1.properties ?? {}) as Record<string, { inputSchema?: unknown }>;
-  return F2_TOOL_NAMES.map((name) => {
-    const entry = props[name];
+  return F2_TOOL_NAMES.filter((name) =>
+    Object.prototype.hasOwnProperty.call(TOOL_HANDLERS, name),
+  ).map((name) => {
+    const schemaEntry = props[name];
     const inputSchema =
-      entry && typeof entry === 'object' && entry.inputSchema
-        ? (entry.inputSchema as Record<string, unknown>)
+      schemaEntry && typeof schemaEntry === 'object' && schemaEntry.inputSchema
+        ? (schemaEntry.inputSchema as Record<string, unknown>)
         : { type: 'object', additionalProperties: false, properties: {} };
     return {
       name,
       description: `ClaudeAgents config-server tool: ${name}`,
+      required: TOOL_HANDLERS[name].required,
       inputSchema,
     };
   });
@@ -181,7 +209,16 @@ export async function createMcpServer(): Promise<Server> {
   const logger = getLogger();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: buildToolList() };
+    // MCP `tools/list` payload only needs the client-facing fields;
+    // the runtime-`required` declaration on each entry is internal to
+    // the framework's introspection surface. (It rides inside
+    // `inputSchema.required` for clients that validate.)
+    const tools = buildToolList().map(({ name, description, inputSchema }) => ({
+      name,
+      description,
+      inputSchema,
+    }));
+    return { tools };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -249,154 +286,259 @@ function errorResponse(err: ConfigServerError): {
 const UNHANDLED = Symbol('unhandled');
 type Unhandled = typeof UNHANDLED;
 
+/** Per-dispatch context passed to every handler. */
+interface HandlerContext {
+  logger: ReturnType<typeof getLogger>;
+}
+
 /**
- * Dispatch every wired F2 tool — reads (S2 + S5), writes (S6), and the
- * three validate paths (S3 + S4). Returns the tool result, or the
- * `UNHANDLED` sentinel for the two reads still deferred past S2
- * (`getStackConventions` / `getOverlayField`); the caller turns
- * `UNHANDLED` into a `NotImplemented` error. Input validation throws via
- * `createError('MalformedInput', …)` and is caught upstream.
+ * One wired tool: takes the raw arguments dict (validated inside the
+ * handler via the `require*` helpers) plus a logger context, returns
+ * the tool's structured result. Handlers may be sync or async; the
+ * dispatch wrapper awaits them uniformly.
  */
-async function dispatchRead(
-  toolName: string,
+type ToolHandler = (
   args: Record<string, unknown>,
-  logger: ReturnType<typeof getLogger>,
-): Promise<unknown | Unhandled> {
-  switch (toolName) {
-    case 'getApiVersion': {
-      return getApiVersion();
-    }
-    case 'getResolvedConfig': {
-      const projectRoot = requireProjectRoot(args, toolName);
+  ctx: HandlerContext,
+) => Promise<unknown> | unknown;
+
+/**
+ * A single tool's full dispatch spec — the runtime contract co-located
+ * with the runtime implementation. `required` lists the input fields
+ * the handler will reject as missing (via the `require*` helpers); it
+ * is the authoritative answer to "what does the runtime require?", and
+ * `buildToolList` surfaces it on every entry so the documented schema
+ * (`schemas/api-tools-v1.json`) can be verified against the same
+ * structure that drives dispatch.
+ */
+interface ToolHandlerSpec {
+  readonly required: readonly string[];
+  readonly handler: ToolHandler;
+}
+
+/**
+ * The single source of truth for which F2 / R5 tools the MCP server
+ * actually serves. F5 slice 1: a tool's presence in this table ⇔
+ * `tools/list` advertises it AND `dispatchRead` honours it. A tool
+ * whose runtime is not implemented yet is absent here; `buildToolList`
+ * filters it out automatically (so MCP clients never see a tool they
+ * cannot call) and `dispatchRead` returns `UNHANDLED` for it, which
+ * the MCP wrapper converts to `NotImplemented`. When v1.1 ships
+ * `getOverlayField` or `getStackConventions`, the only change required
+ * is adding the matching entry here — no edits in `buildToolList`, no
+ * denylist to maintain.
+ *
+ * Each entry carries its `required` field list alongside its handler;
+ * the two are co-located so the runtime contract cannot drift from the
+ * implementation. `buildToolList` exposes the `required` declaration
+ * on every entry so the schema-runtime parity test can read both
+ * sides from the same surface.
+ */
+const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
+  getApiVersion: {
+    required: [],
+    handler: () => getApiVersion(),
+  },
+  getResolvedConfig: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getResolvedConfig');
       return readGetResolvedConfig({ projectRoot });
-    }
-    case 'getStack': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
+    },
+  },
+  getStack: {
+    required: ['projectRoot', 'name'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getStack');
+      const name = requireName(args, 'getStack');
       return readGetStack({ projectRoot, name });
-    }
-    case 'getActiveStacks': {
-      const projectRoot = requireProjectRoot(args, toolName);
+    },
+  },
+  getActiveStacks: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getActiveStacks');
       return readGetActiveStacks({ projectRoot });
-    }
-    case 'getOverlay': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const tier = requireOverlayTier(args, toolName);
+    },
+  },
+  getOverlay: {
+    required: ['projectRoot', 'tier'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getOverlay');
+      const tier = requireOverlayTier(args, 'getOverlay');
       return readGetOverlay({ projectRoot, tier });
-    }
-    case 'getMergedSplicePoints': {
-      const projectRoot = requireProjectRoot(args, toolName);
+    },
+  },
+  getMergedSplicePoints: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getMergedSplicePoints');
       return readGetMergedSplicePoints({ projectRoot });
-    }
-    case 'getStackResolution': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
+    },
+  },
+  getStackResolution: {
+    required: ['projectRoot', 'name'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getStackResolution');
+      const name = requireName(args, 'getStackResolution');
       return readGetStackResolution({ projectRoot, name });
-    }
-    case 'getTrustState': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      return readGetTrustState({ projectRoot }, { logger });
-    }
-    case 'getTrustDiff': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      return readGetTrustDiff({ projectRoot }, { logger });
-    }
-    case 'trustList': {
-      return readTrustList({}, { logger });
-    }
-    case 'getModuleState': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const key = requireStateKey(args, toolName);
+    },
+  },
+  getTrustState: {
+    required: ['projectRoot'],
+    handler: (args, ctx) => {
+      const projectRoot = requireProjectRoot(args, 'getTrustState');
+      return readGetTrustState({ projectRoot }, { logger: ctx.logger });
+    },
+  },
+  getTrustDiff: {
+    required: ['projectRoot'],
+    handler: (args, ctx) => {
+      const projectRoot = requireProjectRoot(args, 'getTrustDiff');
+      return readGetTrustDiff({ projectRoot }, { logger: ctx.logger });
+    },
+  },
+  trustList: {
+    required: [],
+    handler: (_args, ctx) => readTrustList({}, { logger: ctx.logger }),
+  },
+  getModuleState: {
+    required: ['projectRoot', 'name', 'key'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getModuleState');
+      const name = requireName(args, 'getModuleState');
+      const key = requireStateKey(args, 'getModuleState');
       return readGetModuleState({ projectRoot, name, key });
-    }
-    case 'listModules': {
-      const projectRoot = requireProjectRoot(args, toolName);
+    },
+  },
+  listModules: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'listModules');
       return readListModules({ projectRoot });
-    }
-    case 'validateAll': {
-      const projectRoot = requireProjectRoot(args, toolName);
+    },
+  },
+  validateAll: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'validateAll');
       return runValidateAll({ projectRoot });
-    }
-    case 'validateStack': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
+    },
+  },
+  validateStack: {
+    required: ['projectRoot', 'name'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'validateStack');
+      const name = requireName(args, 'validateStack');
       return runValidateStack({ projectRoot, name });
-    }
-    case 'validateOverlay': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const tier = requireOverlayTier(args, toolName);
+    },
+  },
+  validateOverlay: {
+    required: ['projectRoot', 'tier'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'validateOverlay');
+      const tier = requireOverlayTier(args, 'validateOverlay');
       return runValidateOverlay({ projectRoot, tier });
-    }
-    case 'setOverlayField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const tier = requireOverlayTier(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  setOverlayField: {
+    required: ['projectRoot', 'tier', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'setOverlayField');
+      const tier = requireOverlayTier(args, 'setOverlayField');
+      const fieldPath = requireFieldPath(args, 'setOverlayField');
+      const value = requirePresentValue(args, 'setOverlayField', 'value');
       return runSetOverlayField({ projectRoot, tier, fieldPath, value });
-    }
-    case 'appendToOverlayField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const tier = requireOverlayTier(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  appendToOverlayField: {
+    required: ['projectRoot', 'tier', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'appendToOverlayField');
+      const tier = requireOverlayTier(args, 'appendToOverlayField');
+      const fieldPath = requireFieldPath(args, 'appendToOverlayField');
+      const value = requirePresentValue(args, 'appendToOverlayField', 'value');
       return runAppendToOverlayField({ projectRoot, tier, fieldPath, value });
-    }
-    case 'removeFromOverlayField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const tier = requireOverlayTier(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  removeFromOverlayField: {
+    required: ['projectRoot', 'tier', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'removeFromOverlayField');
+      const tier = requireOverlayTier(args, 'removeFromOverlayField');
+      const fieldPath = requireFieldPath(args, 'removeFromOverlayField');
+      const value = requirePresentValue(args, 'removeFromOverlayField', 'value');
       return runRemoveFromOverlayField({ projectRoot, tier, fieldPath, value });
-    }
-    case 'updateStackField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  updateStackField: {
+    required: ['projectRoot', 'name', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'updateStackField');
+      const name = requireName(args, 'updateStackField');
+      const fieldPath = requireFieldPath(args, 'updateStackField');
+      const value = requirePresentValue(args, 'updateStackField', 'value');
       return runUpdateStackField({ projectRoot, name, fieldPath, value });
-    }
-    case 'appendToStackField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  appendToStackField: {
+    required: ['projectRoot', 'name', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'appendToStackField');
+      const name = requireName(args, 'appendToStackField');
+      const fieldPath = requireFieldPath(args, 'appendToStackField');
+      const value = requirePresentValue(args, 'appendToStackField', 'value');
       return runAppendToStackField({ projectRoot, name, fieldPath, value });
-    }
-    case 'removeFromStackField': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
+    },
+  },
+  removeFromStackField: {
+    required: ['projectRoot', 'name', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'removeFromStackField');
+      const name = requireName(args, 'removeFromStackField');
+      const fieldPath = requireFieldPath(args, 'removeFromStackField');
+      const value = requirePresentValue(args, 'removeFromStackField', 'value');
       return runRemoveFromStackField({ projectRoot, name, fieldPath, value });
-    }
-    case 'trustApprove': {
-      const projectRoot = requireProjectRoot(args, toolName);
+    },
+  },
+  trustApprove: {
+    required: ['projectRoot'],
+    handler: (args, ctx) => {
+      const projectRoot = requireProjectRoot(args, 'trustApprove');
       const contentHash = optionalContentHash(args);
       const note = optionalNote(args);
-      return runTrustApprove({ projectRoot, contentHash, note }, { logger });
-    }
-    case 'trustRevoke': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      return runTrustRevoke({ projectRoot }, { logger });
-    }
-    case 'setModuleState': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const key = requireStateKey(args, toolName);
-      const state = readValue(args, 'state');
+      return runTrustApprove({ projectRoot, contentHash, note }, { logger: ctx.logger });
+    },
+  },
+  trustRevoke: {
+    required: ['projectRoot'],
+    handler: (args, ctx) => {
+      const projectRoot = requireProjectRoot(args, 'trustRevoke');
+      return runTrustRevoke({ projectRoot }, { logger: ctx.logger });
+    },
+  },
+  setModuleState: {
+    required: ['projectRoot', 'name', 'key', 'state'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'setModuleState');
+      const name = requireName(args, 'setModuleState');
+      const key = requireStateKey(args, 'setModuleState');
+      const state = requirePresentValue(args, 'setModuleState', 'state');
       return runSetModuleState({ projectRoot, name, key, state });
-    }
-    case 'appendToModuleState': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const key = requireStateKey(args, toolName);
-      const fieldPath = requireFieldPath(args, toolName);
-      const value = readValue(args);
-      // The library's `appendToModuleState` validates
-      // `duplicatePolicy` itself (throws `MalformedInput` on
-      // unknown strings) so the dispatcher passes the raw value
-      // through and the validation stays single-sourced.
+    },
+  },
+  appendToModuleState: {
+    required: ['projectRoot', 'name', 'key', 'fieldPath', 'value'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'appendToModuleState');
+      const name = requireName(args, 'appendToModuleState');
+      const key = requireStateKey(args, 'appendToModuleState');
+      const fieldPath = requireFieldPath(args, 'appendToModuleState');
+      const value = requirePresentValue(args, 'appendToModuleState', 'value');
+      // The library's `appendToModuleState` validates `duplicatePolicy`
+      // itself (throws `MalformedInput` on unknown strings) so the
+      // dispatcher passes the raw value through and the validation stays
+      // single-sourced.
       const duplicatePolicy = optionalDuplicatePolicy(args) as
         | 'error'
         | 'skip'
@@ -410,23 +552,45 @@ async function dispatchRead(
         value,
         ...(duplicatePolicy !== undefined ? { duplicatePolicy } : {}),
       });
-    }
-    case 'removeFromModuleState': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
-      const key = requireStateKey(args, toolName);
-      const entryKey = requireEntryKey(args, toolName);
+    },
+  },
+  removeFromModuleState: {
+    required: ['projectRoot', 'name', 'key', 'entryKey'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'removeFromModuleState');
+      const name = requireName(args, 'removeFromModuleState');
+      const key = requireStateKey(args, 'removeFromModuleState');
+      const entryKey = requireEntryKey(args, 'removeFromModuleState');
       return runRemoveFromModuleState({ projectRoot, name, key, entryKey });
-    }
-    case 'registerModule': {
-      const projectRoot = requireProjectRoot(args, toolName);
-      const name = requireName(args, toolName);
+    },
+  },
+  registerModule: {
+    required: ['projectRoot', 'name'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'registerModule');
+      const name = requireName(args, 'registerModule');
       const manifest = readValue(args, 'manifest');
       return runRegisterModule({ projectRoot, name, manifest });
-    }
-    default:
-      return UNHANDLED;
-  }
+    },
+  },
+};
+
+/**
+ * Dispatch a tool call. Returns the wired handler's result, or the
+ * `UNHANDLED` sentinel for any tool name that has no entry in
+ * `TOOL_HANDLERS`. The MCP wrapper turns `UNHANDLED` into a
+ * `NotImplemented` error. Input validation throws via
+ * `createError('MalformedInput', …)` from inside each handler and is
+ * caught upstream.
+ */
+async function dispatchRead(
+  toolName: string,
+  args: Record<string, unknown>,
+  logger: ReturnType<typeof getLogger>,
+): Promise<unknown | Unhandled> {
+  const spec = TOOL_HANDLERS[toolName];
+  if (spec === undefined) return UNHANDLED;
+  return spec.handler(args, { logger });
 }
 
 /** Validate that `fieldPath` is a non-empty string; throw `MalformedInput` otherwise. */
@@ -435,6 +599,7 @@ function requireFieldPath(args: Record<string, unknown>, tool: string): string {
   if (typeof fp !== 'string' || fp.length === 0) {
     throw createError('MalformedInput', {
       tool,
+      field: 'fieldPath',
       message: `Tool '${tool}' requires a non-empty 'fieldPath' string in its input.`,
     });
   }
@@ -452,6 +617,7 @@ function requireStateKey(args: Record<string, unknown>, tool: string): string {
   if (typeof k !== 'string' || k.length === 0) {
     throw createError('MalformedInput', {
       tool,
+      field: 'key',
       message: `Tool '${tool}' requires a non-empty 'key' string in its input.`,
     });
   }
@@ -470,6 +636,7 @@ function requireEntryKey(args: Record<string, unknown>, tool: string): string {
   if (typeof k !== 'string' || k.length === 0) {
     throw createError('MalformedInput', {
       tool,
+      field: 'entryKey',
       message: `Tool '${tool}' requires a non-empty 'entryKey' string in its input.`,
     });
   }
@@ -478,6 +645,29 @@ function requireEntryKey(args: Record<string, unknown>, tool: string): string {
 
 function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
   return args[key];
+}
+
+/**
+ * Validate that a payload field (`value`, `state`, etc.) is present in
+ * the input. Distinct from `readValue` because the write-class tools
+ * MUST receive a payload — passing `undefined` would otherwise
+ * silently propagate into the on-disk shape. Throws `MalformedInput`
+ * with a structured `field` so callers (including the schema-runtime
+ * parity test) can match the missing field by name.
+ */
+function requirePresentValue(
+  args: Record<string, unknown>,
+  tool: string,
+  fieldName: string,
+): unknown {
+  if (!Object.prototype.hasOwnProperty.call(args, fieldName) || args[fieldName] === undefined) {
+    throw createError('MalformedInput', {
+      tool,
+      field: fieldName,
+      message: `Tool '${tool}' requires a '${fieldName}' payload in its input.`,
+    });
+  }
+  return args[fieldName];
 }
 
 /**

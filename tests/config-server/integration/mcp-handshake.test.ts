@@ -208,7 +208,11 @@ describe('integration: MCP handshake (subprocess)', () => {
     const init = await rpc.awaitId(1);
     expect(init.error).toBeUndefined();
 
-    // 2. tools/list — assert every F2 tool name present.
+    // 2. tools/list — behavioural assertion: every advertised name is a
+    //    known F2 tool, and the two F5-slice-1-filtered NotImplemented
+    //    stubs are absent. Not coupled to the filter's implementation:
+    //    the test still passes when the filter logic changes, as long
+    //    as the surface contract holds.
     rpc.send({
       jsonrpc: '2.0',
       id: 2,
@@ -218,8 +222,12 @@ describe('integration: MCP handshake (subprocess)', () => {
     const list = (await rpc.awaitId(2)) as JsonRpcResponse & {
       result: { tools: Array<{ name: string; inputSchema: unknown }> };
     };
-    const names = list.result.tools.map((t) => t.name).sort();
-    expect(names).toEqual([...F2_TOOL_NAMES].sort());
+    const names = list.result.tools.map((t) => t.name);
+    expect(names).not.toContain('getOverlayField');
+    expect(names).not.toContain('getStackConventions');
+    for (const name of names) {
+      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+    }
 
     // 3a. Representative read tool: getResolvedConfig.
     rpc.send({
