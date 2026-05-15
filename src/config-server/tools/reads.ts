@@ -460,6 +460,7 @@ export function requireProjectRoot(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.projectRoot !== 'string' || input.projectRoot.length === 0) {
     throw createError('MalformedInput', {
       tool,
+      field: 'projectRoot',
       message: `Tool '${tool}' requires a non-empty 'projectRoot' string in its input.`,
     });
   }
@@ -471,6 +472,7 @@ export function requireName(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.name !== 'string' || input.name.length === 0) {
     throw createError('MalformedInput', {
       tool,
+      field: 'name',
       message: `Tool '${tool}' requires a non-empty 'name' string in its input.`,
     });
   }
@@ -482,6 +484,7 @@ export function requireOverlayTier(input: unknown, tool: string): OverlayTier {
   if (!isObject(input) || typeof input.tier !== 'string') {
     throw createError('MalformedInput', {
       tool,
+      field: 'tier',
       message: `Tool '${tool}' requires a 'tier' string in its input.`,
     });
   }
@@ -489,6 +492,7 @@ export function requireOverlayTier(input: unknown, tool: string): OverlayTier {
   if (tier !== 'default' && tier !== 'user' && tier !== 'project') {
     throw createError('MalformedInput', {
       tool,
+      field: 'tier',
       message: `Tool '${tool}' received unknown tier '${tier}'; expected 'default' | 'user' | 'project'.`,
     });
   }

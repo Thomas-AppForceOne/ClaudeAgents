@@ -2,7 +2,7 @@
   "$id": "https://claudeagents.dev/schemas/api-tools-v1.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool takes at minimum `projectRoot: string`. Immutable.",
+  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool except `getApiVersion` takes at minimum `projectRoot: string`. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
   "properties": {
     "appendToModuleState": {
       "inputSchema": {
@@ -16,25 +16,30 @@
             ],
             "type": "string"
           },
-          "entry": {},
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
           "key": {
             "minLength": 1,
             "type": "string"
           },
-          "moduleName": {
+          "name": {
             "minLength": 1,
             "type": "string"
           },
           "projectRoot": {
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "value": {}
         },
         "required": [
           "projectRoot",
-          "moduleName",
+          "name",
           "key",
-          "entry"
+          "fieldPath",
+          "value"
         ],
         "type": "object"
       }
@@ -43,14 +48,6 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "duplicatePolicy": {
-            "enum": [
-              "error",
-              "skip",
-              "allow"
-            ],
-            "type": "string"
-          },
           "fieldPath": {
             "minLength": 1,
             "type": "string"
@@ -71,6 +68,7 @@
         },
         "required": [
           "projectRoot",
+          "tier",
           "fieldPath",
           "value"
         ],
@@ -81,15 +79,7 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "duplicatePolicy": {
-            "enum": [
-              "error",
-              "skip",
-              "allow"
-            ],
-            "type": "string"
-          },
-          "field": {
+          "fieldPath": {
             "minLength": 1,
             "type": "string"
           },
@@ -106,7 +96,7 @@
         "required": [
           "projectRoot",
           "name",
-          "field",
+          "fieldPath",
           "value"
         ],
         "type": "object"
@@ -130,15 +120,8 @@
     "getApiVersion": {
       "inputSchema": {
         "additionalProperties": false,
-        "properties": {
-          "projectRoot": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "projectRoot"
-        ],
+        "properties": {},
+        "required": [],
         "type": "object"
       }
     },
@@ -165,7 +148,7 @@
             "minLength": 1,
             "type": "string"
           },
-          "moduleName": {
+          "name": {
             "minLength": 1,
             "type": "string"
           },
@@ -176,7 +159,7 @@
         },
         "required": [
           "projectRoot",
-          "moduleName",
+          "name",
           "key"
         ],
         "type": "object"
@@ -189,10 +172,19 @@
           "projectRoot": {
             "minLength": 1,
             "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
           }
         },
         "required": [
-          "projectRoot"
+          "projectRoot",
+          "tier"
         ],
         "type": "object"
       }
@@ -360,7 +352,7 @@
             ],
             "type": "object"
           },
-          "moduleName": {
+          "name": {
             "minLength": 1,
             "type": "string"
           },
@@ -371,8 +363,7 @@
         },
         "required": [
           "projectRoot",
-          "moduleName",
-          "manifest"
+          "name"
         ],
         "type": "object"
       }
@@ -382,69 +373,6 @@
         "additionalProperties": false,
         "properties": {
           "entryKey": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "key": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "moduleName": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "projectRoot": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "projectRoot",
-          "moduleName",
-          "key",
-          "entryKey"
-        ],
-        "type": "object"
-      }
-    },
-    "removeFromOverlayField": {
-      "inputSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "fieldPath": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "key": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "projectRoot": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "tier": {
-            "enum": [
-              "default",
-              "user",
-              "project"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "projectRoot",
-          "fieldPath",
-          "key"
-        ],
-        "type": "object"
-      }
-    },
-    "removeFromStackField": {
-      "inputSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "field": {
             "minLength": 1,
             "type": "string"
           },
@@ -464,8 +392,66 @@
         "required": [
           "projectRoot",
           "name",
-          "field",
-          "key"
+          "key",
+          "entryKey"
+        ],
+        "type": "object"
+      }
+    },
+    "removeFromOverlayField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "default",
+              "user",
+              "project"
+            ],
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "tier",
+          "fieldPath",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "removeFromStackField": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fieldPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "projectRoot",
+          "name",
+          "fieldPath",
+          "value"
         ],
         "type": "object"
       }
@@ -478,7 +464,7 @@
             "minLength": 1,
             "type": "string"
           },
-          "moduleName": {
+          "name": {
             "minLength": 1,
             "type": "string"
           },
@@ -486,13 +472,13 @@
             "minLength": 1,
             "type": "string"
           },
-          "value": {}
+          "state": {}
         },
         "required": [
           "projectRoot",
-          "moduleName",
+          "name",
           "key",
-          "value"
+          "state"
         ],
         "type": "object"
       }
@@ -521,6 +507,7 @@
         },
         "required": [
           "projectRoot",
+          "tier",
           "fieldPath",
           "value"
         ],
@@ -544,8 +531,7 @@
           }
         },
         "required": [
-          "projectRoot",
-          "contentHash"
+          "projectRoot"
         ],
         "type": "object"
       }
@@ -569,7 +555,7 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "field": {
+          "fieldPath": {
             "minLength": 1,
             "type": "string"
           },
@@ -586,7 +572,7 @@
         "required": [
           "projectRoot",
           "name",
-          "field",
+          "fieldPath",
           "value"
         ],
         "type": "object"

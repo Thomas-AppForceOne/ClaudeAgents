@@ -150,28 +150,19 @@ A1 emits `safetyHalt` events with discriminator `loopDetected` when a halt fires
 - Provide mid-attempt cancellation (deferred — predictable boundaries chosen over fine-grained control for v1.0).
 - Cross-language stack support for fingerprint normalization beyond what `commentSyntax` and `sortableLists` declare (deferred per stack; absent fields are no-ops).
 
-## C1 amendments
+## Schema additions
 
-A1's fingerprint normalization contract requires two new optional C1 stack-file fields. Both ride with A1's implementation PR and amend C1 in place per the existing extract-and-replace discipline.
+A1's implementation PR adds:
 
-| Field | Type | Default | Purpose |
-|---|---|---|---|
-| `commentSyntax` | object — `{ line: string?, block: { open: string, close: string }? }` | absent | Declares the stack's comment syntax so fingerprint normalization rule 2 (comment-only differences) can ignore comment-only edits. Absent = rule 2 is a no-op for the stack. |
-| `sortableLists` | array of objects — `[{ pathGlob: string, lineRangePattern: string }, ...]` | empty array | Declares regions of source files where line ordering is normalized away (e.g. import blocks). Absent / empty = rule 3 is a no-op for the stack. |
+- Two entries to `schemas/stack-v1.json`, both optional:
+  - `commentSyntax` (object `{line?: string, block?: {open: string, close: string}}`, default absent). Declares the stack's comment syntax so fingerprint normalization rule 2 (comment-only differences) can ignore comment-only edits. Absent = rule 2 is a no-op for the stack.
+  - `sortableLists` (array of `{pathGlob: string, lineRangePattern: string}`, default empty). Declares regions of source files where line ordering is normalized away (e.g. import blocks). Empty = rule 3 is a no-op for the stack. A stack that declares neither participates in fingerprint detection only via rule 1 (whitespace-only differences), which is language-agnostic.
+- Three entries to `schemas/overlay-v1.json`, all scalar-cascade:
+  - `safety.attemptCeilings.<role>` (positive integer, per-role defaults per "Per-role attempt ceilings" above, both tiers).
+  - `safety.sprintBudget` (positive integer, default `12`, both tiers).
+  - `safety.oscillationDetection` (boolean, default `true`, both tiers).
 
-Both fields are optional. A stack that declares neither participates in fingerprint detection only via rule 1 (whitespace-only differences), which is language-agnostic.
-
-## C3 amendments
-
-A1 introduces three new overlay splice points. C3's splice-point catalog gains entries for each in A1's implementation PR.
-
-| Splice point | Type | Default | Tier scope |
-|---|---|---|---|
-| `safety.attemptCeilings.<role>` | integer (positive) | per-role default from the table above | both tiers |
-| `safety.sprintBudget` | integer (positive) | 12 | both tiers |
-| `safety.oscillationDetection` | boolean | `true` | both tiers |
-
-All three follow C4's scalar cascade rule (higher-tier wins). `discardInherited` semantics apply per C3's standard rules.
+The schemas are the canonical inventory.
 
 ## Field encodings
 

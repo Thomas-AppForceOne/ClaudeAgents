@@ -99,26 +99,14 @@ A sprint paused at the human-review boundary is recoverable via O2's `--recover`
 
 A completed human-reviewed sprint is replayable in the same way as an LLM-reviewed sprint. The trace's `humanReview` event records the bundle's identity; replay reads the bundle the same way it reads an LLM-produced one.
 
-## C3 amendments
+## Schema additions
 
-E6 introduces two new overlay splice points:
+E6's implementation PR adds:
 
-| Splice point | Type | Default | Tier scope |
-|---|---|---|---|
-| `humanEval.editorFallback` | string | platform-aware (see "Editor integration") | both tiers |
-| `humanEval.maxValidationRetries` | integer (positive) | 5 | both tiers |
+- Two entries to `schemas/overlay-v1.json`: `humanEval.editorFallback` (string, platform-aware default per "Editor integration", both tiers, scalar cascade); `humanEval.maxValidationRetries` (integer positive, default `5`, both tiers, scalar cascade).
+- One trace-event class in `schemas/run-trace-v1.json`: `humanReview` with discriminator `disposition: "completed" | "abandoned" | "validationRetried"`. T1's discriminator-tolerance contract permits this without a `run-trace-v1.json` major bump; readers built for v1.0 tolerate the unknown event type. If T1 has not yet shipped when E6 is authored, E6 may fold this class into T1's authoring; once T1 ships, the class lives in E6 alone.
 
-Follows C4's scalar cascade rule.
-
-## T1 amendments
-
-E6 introduces one new trace event class. T1's discriminator-tolerance contract permits this without a `run-trace-v1.json` schema bump — readers built for v1.0 tolerate the unknown event type per T1's forward-compat invariant.
-
-| Event class | Discriminators | Owner |
-|---|---|---|
-| `humanReview` | `disposition`: `"completed"` \| `"abandoned"` \| `"validationRetried"` | E6 |
-
-T1's spec text gains a forward-reference to E6 in the event-taxonomy section in the same PR that lands E6's implementation.
+The schemas are the canonical inventory.
 
 ## Field encodings
 

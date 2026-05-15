@@ -220,16 +220,16 @@ A `gan config print --json` excerpt with warnings:
 - Warning prose obeys the F4 prose-discipline rule.
 - Warning prose names the user's exact declaration in the overlay (so they can find and edit it).
 - Warning prose names the remediation (what to add / remove to fix).
-- The C2 spec is updated to reference W1's `StackOverrideShrinkage` warning as the surface for the silent-shrinkage case.
 - The roadmap's v1.0 chore for "per-stack overlay override warning" is replaced with a one-line pointer to W1.
+- Per the "Implemented specs are immutable" rule, W1 does not edit C2, F2, C3, O1, or R3. W1 owns the structured-warning catalog extension, the two warning codes, and the surfacing rules; readers find the warning behaviour via W1 and the roadmap cross-references, not via in-place edits to the shipped specs.
 
 ## Dependencies
 
-- **F2** — structured-error model is extended with a structured-warning catalog. W1's two codes are the initial entries; future warnings get appended.
-- **C2** — stack detection and dispatch; W1's `StackOverrideShrinkage` is the warning surface for C2's "override is replacement, not addition" semantic.
-- **C3** — overlay schema; the per-stack command override fields are declared in C3 and W1 fires the warning when they appear.
-- **O1** — observability; the warning emission in startup log and `gan config print` rides O1's existing surfaces.
-- **R3** — CLI wrapper; `gan stacks list` and `gan config print` outputs are R3's contract; W1 amends them.
+- **F2** — structured-error model. W1 builds on F2's model by introducing a structured-warning catalog under F2's existing contract; F2 itself is shipped and is not edited. The warning catalog lives in W1.
+- **C2** — stack detection and dispatch. W1's `StackOverrideShrinkage` is the warning surface for C2's "override is replacement, not addition" semantic; C2 itself is shipped and is not edited.
+- **C3** — overlay schema. C3 declares the per-stack command override fields; W1 fires the warning when they appear. C3 itself is shipped and is not edited.
+- **O1** — observability. The warning emission in startup log and `gan config print` rides O1's existing surfaces.
+- **R3** — CLI wrapper. `gan stacks list` and `gan config print` outputs are R3's contract; W1 extends their content with the new warning rendering. R3 itself is shipped and is not edited; the extension is via W1's authoring of what those outputs should contain when warnings are present.
 - **E1** — orchestrator; the startup log warning lines are emitted by the orchestrator after `getResolvedConfig()` returns.
 
 ## Bite-size note

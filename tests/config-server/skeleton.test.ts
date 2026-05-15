@@ -13,7 +13,11 @@ import {
   localeSort,
 } from '../../src/config-server/determinism/index.js';
 import { getLogger } from '../../src/config-server/logging/logger.js';
-import { buildToolList, F2_TOOL_NAMES, getApiVersion } from '../../src/config-server/index.js';
+import {
+  buildToolList,
+  F2_TOOL_NAMES,
+  getApiVersion,
+} from '../../src/config-server/index.js';
 import { apiToolsV1, stackV1, overlayV1 } from '../../src/config-server/schemas-bundled.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -164,24 +168,38 @@ describe('schemas-bundled', () => {
 });
 
 describe('buildToolList', () => {
-  it('produces one entry per F2 tool name', () => {
-    const list = buildToolList();
-    expect(list.length).toBe(F2_TOOL_NAMES.length);
-    const names = list.map((t) => t.name).sort();
-    const expected = [...F2_TOOL_NAMES].sort();
-    expect(names).toEqual(expected);
+  it('omits the NotImplemented stubs (F5 slice 1 filter)', () => {
+    // F5 slice 1: `tools/list` advertises only tools whose runtime
+    // dispatch is wired. `getOverlayField` and `getStackConventions`
+    // remain `NotImplemented` stubs in v1.0 and must be absent from the
+    // advertised list — the assertion is behavioural, not implementation-
+    // coupled: any future wiring that picks them up would land them in
+    // the list automatically.
+    const names = buildToolList().map((t) => t.name);
+    expect(names).not.toContain('getOverlayField');
+    expect(names).not.toContain('getStackConventions');
   });
 
-  it('every entry has an inputSchema', () => {
+  it('every advertised tool is a known F2 tool', () => {
+    // Sanity check that the filter narrows F2_TOOL_NAMES rather than
+    // synthesising names from elsewhere.
+    const advertised = new Set(buildToolList().map((t) => t.name));
+    for (const name of advertised) {
+      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+    }
+  });
+
+  it('every entry has both inputSchema and the runtime required list', () => {
     for (const tool of buildToolList()) {
       expect(tool.inputSchema).toBeTruthy();
       expect(tool.inputSchema.type).toBe('object');
+      expect(Array.isArray(tool.required)).toBe(true);
     }
   });
 });
 
 describe('MCP handshake (subprocess)', () => {
-  it('responds to tools/list with every F2 tool name', async () => {
+  it('responds to tools/list with every wired F2 tool name (F5 slice 1)', async () => {
     const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
     if (!existsSync(distEntry)) {
       // The build is the discriminator's job; skip if it has not yet run.
@@ -254,8 +272,13 @@ describe('MCP handshake (subprocess)', () => {
       },
     );
     expect(listResp).toBeTruthy();
-    const names = listResp!.result.tools.map((t) => t.name).sort();
-    const expected = [...F2_TOOL_NAMES].sort();
-    expect(names).toEqual(expected);
+    const names = listResp!.result.tools.map((t) => t.name);
+    // Behavioural assertion: the two NotImplemented stubs are absent.
+    expect(names).not.toContain('getOverlayField');
+    expect(names).not.toContain('getStackConventions');
+    // Every advertised name is a known F2 tool.
+    for (const name of names) {
+      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+    }
   });
 });

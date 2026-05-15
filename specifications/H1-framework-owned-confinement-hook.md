@@ -182,9 +182,8 @@ Project-tier override: ./.claude/hooks/gan-confine.sh
 
 - The hook's content includes the "do not edit by hand" comment and references the framework version that wrote it.
 - The user-tier-override warning text obeys the F4 prose-discipline rule.
-- The R2 spec is updated to document the hook write as a step in `install.sh`'s sequence.
-- The R3 spec is updated to document the new `gan hooks status` subcommand.
 - The framework's release notes for v1.0 name the migration step for users with legacy project-tier hooks.
+- Per the "Implemented specs are immutable" rule, neither R2 nor R3 is edited by H1. H1 owns its new behaviour (the hook write step in `install.sh`'s sequence; the `gan hooks status` subcommand); readers find these surfaces via H1 and the roadmap cross-references, not via in-place edits to R2 or R3.
 
 ## Dependencies
 
@@ -193,8 +192,8 @@ Project-tier override: ./.claude/hooks/gan-confine.sh
 - **I1** — install correctness. H1 builds on a working install pipeline.
 - **I2** — install user-facing surfaces. The hook write is part of `install.sh`'s atomic-write discipline (same STATE_LOG mechanism as I2's permission-allowlist merge).
 - **I3** — uninstall and version policy. Uninstall removes the hook and its registration.
-- **R2** — installer spec. H1 amends R2 to include the hook-write step.
-- **R3** — CLI wrapper spec. H1 adds the `gan hooks status` subcommand.
+- **R2** — installer spec. H1 builds on R2's existing `install.sh` sequence by adding the hook-write step; R2 itself is shipped and is not edited.
+- **R3** — CLI wrapper spec. H1 introduces the `gan hooks status` subcommand alongside R3's existing dispatch; R3 itself is shipped and is not edited.
 
 ## Bite-size note
 

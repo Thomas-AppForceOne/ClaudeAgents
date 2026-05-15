@@ -8,29 +8,63 @@
  * `invalidate(projectRoot)` after persisting, otherwise entries live for
  * the lifetime of the server process.
  *
- * Per F2 and the C5 freshness contract:
- *  - User-side disk edits do **not** invalidate the cache. The orchestra-
- *    tor's snapshot is intentionally frozen across sprints. The next
- *    `/gan` invocation gets a fresh process and a fresh cache.
+ * F5 slice 3 extends the contract: every read path stats every backing
+ * file before returning a cached value, so a hand-edit to an overlay or
+ * a stack file bypasses the in-process invalidation path but is still
+ * detected by the next read. The mtime check is unconditional on read;
+ * stat is cheap (~microseconds) and the alternative is the dogfooding
+ * bug F5 is closing.
+ *
  *  - Cache key: canonical project root (per `determinism.canonicalizePath`).
+ *  - Per-entry backing-file state: a `Map<absPath, mtimeMs | null>`
+ *    captured at cache-write time. `null` records "file was absent when
+ *    we computed this entry"; an appearance flips that to a number and
+ *    triggers invalidation. The reverse (file disappears) is detected
+ *    identically — stat throws and the state is recorded as `null`.
  *
  * Construction is via `getResolvedConfigCache()` which returns a
  * module-level singleton. Tests that need isolation can call
  * `clearResolvedConfigCache()` between cases.
  */
 
+import { statSync } from 'node:fs';
+
 import { canonicalizePath } from '../determinism/index.js';
+
+/**
+ * Per-backing-file state captured at cache-write time. The cache stats
+ * each path on read and invalidates when any value here disagrees with
+ * the current on-disk state. `null` means "file was absent when we
+ * cached"; a non-null value is `mtimeMs` from `fs.statSync`.
+ */
+export type BackingFileStates = ReadonlyMap<string, number | null>;
 
 /** Cache contract. The shape is intentionally narrow. */
 export interface ResolvedConfigCacheLike<T> {
-  /** Read a cached entry by canonical project root. */
+  /**
+   * Read a cached entry by canonical project root. F5 slice 3: a read
+   * that finds an entry whose recorded backing-file states disagree
+   * with the current disk state drops the entry and returns
+   * `undefined` (so the caller recomputes).
+   */
   get(canonicalRoot: string): T | undefined;
-  /** Insert or replace an entry. */
-  set(canonicalRoot: string, value: T): void;
+  /**
+   * Insert or replace an entry. The optional `backingFileStates`
+   * argument is the snapshot of per-file state that the read path
+   * compares against on subsequent calls. When omitted (test-only
+   * callers that stash arbitrary values), no mtime guard is recorded
+   * and the entry survives until explicit invalidation.
+   */
+  set(canonicalRoot: string, value: T, backingFileStates?: BackingFileStates): void;
   /** Drop a single project's cache entry (called by writes per S6). */
   invalidate(canonicalRoot: string): void;
   /** Drop every entry. Tests use this to isolate cases. */
   clear(): void;
+}
+
+interface CacheEntry<T> {
+  readonly value: T;
+  readonly states: BackingFileStates;
 }
 
 /**
@@ -39,18 +73,27 @@ export interface ResolvedConfigCacheLike<T> {
  * narrowed to the resolved-config JSON shape via the factory below.
  */
 export class ResolvedConfigCache<T> implements ResolvedConfigCacheLike<T> {
-  private readonly entries: Map<string, T>;
+  private readonly entries: Map<string, CacheEntry<T>>;
 
   constructor() {
     this.entries = new Map();
   }
 
   get(canonicalRoot: string): T | undefined {
-    return this.entries.get(canonicalRoot);
+    const entry = this.entries.get(canonicalRoot);
+    if (entry === undefined) return undefined;
+    if (backingFilesHaveChanged(entry.states)) {
+      // F5 slice 3 — hand-edit detected via mtime check. Drop the
+      // entry so the next read recomputes from disk.
+      this.entries.delete(canonicalRoot);
+      return undefined;
+    }
+    return entry.value;
   }
 
-  set(canonicalRoot: string, value: T): void {
-    this.entries.set(canonicalRoot, value);
+  set(canonicalRoot: string, value: T, backingFileStates?: BackingFileStates): void {
+    const states: BackingFileStates = backingFileStates ?? new Map();
+    this.entries.set(canonicalRoot, { value, states });
   }
 
   invalidate(canonicalRoot: string): void {
@@ -94,4 +137,39 @@ export function clearResolvedConfigCache(): void {
  */
 export function cacheKeyForProjectRoot(projectRoot: string): string {
   return canonicalizePath(projectRoot);
+}
+
+/**
+ * Stat one path and return its `mtimeMs`, or `null` when the file is
+ * absent or the stat fails for any reason. The cache treats any failure
+ * mode identically — "we couldn't observe the file" — so a transient
+ * permissions error invalidates the cache, which is the conservative
+ * behaviour for v1.0 (worst case: an extra recompute).
+ */
+export function backingFileMtime(absolutePath: string): number | null {
+  try {
+    const s = statSync(absolutePath);
+    return s.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Return `true` when any path in `states` has a different on-disk
+ * state than the one recorded. Detects all four transitions:
+ *  - `present → still present, mtime advanced`
+ *  - `present → absent`
+ *  - `absent → present`
+ *  - `absent → still absent` (no change; returns false)
+ *
+ * Stops on the first divergence so a small overlay change does not
+ * stat the entire backing set unnecessarily.
+ */
+function backingFilesHaveChanged(states: BackingFileStates): boolean {
+  for (const [absolutePath, recorded] of states) {
+    const current = backingFileMtime(absolutePath);
+    if (current !== recorded) return true;
+  }
+  return false;
 }
