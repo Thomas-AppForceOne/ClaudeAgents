@@ -10,9 +10,29 @@
 #     Claude Code (e.g. `git worktree add` in a terminal). Links on the
 #     first session in an unlinked worktree, then stays quiet.
 #
+# DEVELOPER OPT-IN — this hook is committed (it travels with the repo so
+# it reaches every dev worktree), so it MUST be inert on an end user's
+# machine. The framework repo's own package.json IS
+# @claudeagents/config-server, so the "is this a framework checkout?"
+# guard below is true for the repo itself and cannot, on its own,
+# distinguish a developer's feature worktree from an end user who merely
+# opened the source. The deciding signal is an explicit, per-machine
+# opt-in that lives OUTSIDE the repo (so it can never be committed and an
+# end user never has it):
+#
+#   * env  CLAUDEAGENTS_DEV=1                  (handy for CI / one-offs)
+#   * file ~/.claude/claudeagents-dev          (persistent; covers every
+#                                               worktree on this machine)
+#
+# Absent both, this script exits 0 immediately and does NOTHING. End
+# users — who never create that marker — get the one global install,
+# project-independent, exactly as intended. A framework developer opts
+# the machine in once and every worktree auto-links thereafter.
+#
 # Contract (per the update-config skill flow):
-#   * Silent exit 0 for any directory that is not a @claudeagents/
-#     config-server checkout — never interferes with normal projects.
+#   * Silent exit 0 unless the dev opt-in is present AND the directory is
+#     a @claudeagents/config-server checkout — never interferes with
+#     normal projects or end-user machines.
 #   * Never blocks: a missing node_modules prints a one-line reminder
 #     instead of running a multi-minute `npm install` inline.
 #   * Idempotent + non-spammy: once a worktree is linked, a per-worktree
@@ -30,6 +50,12 @@ set -uo pipefail
 # the session's project dir so SessionStart always works even if the
 # WorktreeCreate payload shape differs.
 STDIN_JSON="$(cat 2>/dev/null || true)"
+
+# --- developer opt-in gate: end-user machines have neither signal ------
+DEV_MARKER="${HOME:-/nonexistent}/.claude/claudeagents-dev"
+if [ "${CLAUDEAGENTS_DEV:-}" != "1" ] && [ ! -f "$DEV_MARKER" ]; then
+  exit 0
+fi
 
 resolve_dir() {
   # 1. A path field in the hook payload (WorktreeCreate).
