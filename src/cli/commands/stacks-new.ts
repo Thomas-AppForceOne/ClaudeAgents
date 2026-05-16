@@ -1,20 +1,21 @@
 /**
  * R3 sprint 4 — `gan stacks new <name> [--tier=project] [--project-root DIR]`.
  *
- * Scaffolds a DRAFT-bannered stack file at the project tier (writes to
- * `<root>/.claude/gan/stacks/<name>.md`). `--tier` accepts only `project`
- * (the default); any other value — including the legacy `repo`, the
- * cascade-only `user` tier, or unknown strings — exits 64 with a
- * structured `MalformedInput` error. There is no end-user-facing repo
- * scaffold target: built-in stacks ship inside the published npm package
- * and are surfaced via `gan stacks customize`.
+ * Scaffolds a DRAFT-bannered stack file. `--tier=project` (the default)
+ * writes to `<root>/.claude/gan/stacks/<name>.md`; `--tier=user` writes to
+ * `<userHome>/.claude/gan/stacks/<name>.md` (the user-tier path per C5).
+ * Any other value — including the legacy `repo`, `builtin`, or unknown
+ * strings — exits 64 with a structured `MalformedInput` error whose
+ * message names both supported values. There is no end-user-facing
+ * builtin/repo scaffold target: built-in stacks ship inside the published
+ * npm package and are surfaced via `gan stacks customize`.
  *
  * Refuses to overwrite an existing file (the scaffold-no-overwrite rule):
  * exits 1 with a clear stderr message naming the absolute path. The CLI
  * never exposes a `--force` flag in v1.
  *
  * Persistence flows through R1's `atomicWriteFile` so the write is
- * atomic-by-rename. Bytes written equal `buildScaffold(name)`
+ * atomic-by-rename. Bytes written equal `buildScaffold(name, tier)`
  * byte-for-byte; tests assert that property.
  *
  * Exit codes flow through `lib/exit-codes.ts`; no numeric literals here.
@@ -28,7 +29,7 @@ import { ConfigServerError, createError } from '../../config-server/errors.js';
 import { renderError, renderErrorJson } from '../lib/errors.js';
 import { emitJson } from '../lib/json-output.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
-import { buildScaffold } from '../lib/scaffold.js';
+import { buildScaffold, type ScaffoldTier } from '../lib/scaffold.js';
 import {
   errorResult,
   readSharedFlags,
@@ -38,21 +39,22 @@ import {
 import { EXIT_BAD_ARGS, EXIT_GENERIC, EXIT_OK } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
-type ScaffoldTier = 'project';
-
-const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>(['project']);
+const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>([
+  'project',
+  'user',
+]);
 
 /**
  * Read and validate `--tier`. Returns the resolved tier (default `project`)
  * or a `ConfigServerError` describing the failure (rendered as exit 64).
  *
- * Only `project` is supported. The user tier exists for cascade mechanics
- * (C3/C4) and shadow stacks (C5), not scaffolding; the legacy repo tier
- * has no end-user-facing scaffold target either — built-in stacks ship
- * inside the npm package (per E2's distribution model) and are surfaced
- * via `gan stacks customize`. Any value other than `project` (including
- * the legacy/deprecated tiers and unknown strings) flows through the same
- * generic rejection path that names the supported value.
+ * Both `project` and `user` are supported (R6 slice 2). Any other value —
+ * including the legacy/deprecated `repo`/`builtin` tiers and unknown
+ * strings, as well as the value-less / bare-boolean forms of `--tier` —
+ * flows through the same `MalformedInput` rejection path, whose message
+ * names BOTH supported values. There is no end-user-facing builtin/repo
+ * scaffold target: built-in stacks ship inside the npm package (per E2's
+ * distribution model) and are surfaced via `gan stacks customize`.
  */
 function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   const raw = parsed.flags['tier'];
@@ -60,27 +62,56 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   if (raw === true) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: '--tier requires a value (`project`).',
+      message: "--tier must be 'project' or 'user' (got '').",
     });
   }
   if (typeof raw !== 'string' || raw.length === 0) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: '--tier requires a value (`project`).',
+      message: "--tier must be 'project' or 'user' (got '').",
     });
   }
   if (!ALLOWED_TIERS.has(raw as ScaffoldTier)) {
     return createError('MalformedInput', {
       field: '--tier',
-      message: `--tier must be 'project' (got '${raw}').`,
+      message: `--tier must be 'project' or 'user' (got '${raw}').`,
     });
   }
   return raw as ScaffoldTier;
 }
 
-/** Resolve the absolute target path for the named stack at the given tier. */
-function targetPathFor(projectRoot: string, _tier: ScaffoldTier, name: string): string {
-  return path.join(projectRoot, '.claude', 'gan', 'stacks', `${name}.md`);
+/**
+ * Resolve the user home directory using the same convention the rest of
+ * the CLI uses for user-tier paths (see `stacks-customize` / `stacks-reset`):
+ * `GAN_USER_HOME` (test injection) → `HOME` → `USERPROFILE`.
+ */
+function resolveUserHome(): string | null {
+  const v = process.env.GAN_USER_HOME ?? process.env.HOME ?? process.env.USERPROFILE;
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/**
+ * Resolve the absolute target path for the named stack at the given tier.
+ * Project tier resolves under `projectRoot`; user tier resolves under the
+ * user home `.claude/gan/stacks` directory (C5 user-tier path), independent
+ * of `--project-root`.
+ */
+function targetPathFor(
+  projectRoot: string,
+  tier: ScaffoldTier,
+  name: string,
+): string | ConfigServerError {
+  if (tier === 'project') {
+    return path.join(projectRoot, '.claude', 'gan', 'stacks', `${name}.md`);
+  }
+  const userHome = resolveUserHome();
+  if (userHome === null) {
+    return createError('MalformedInput', {
+      message:
+        'gan stacks new --tier=user requires a user home directory. Set the HOME environment variable and re-run.',
+    });
+  }
+  return path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`);
 }
 
 function renderHumanSuccess(name: string, tier: ScaffoldTier, target: string): string {
@@ -125,6 +156,10 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
 
   const target = targetPathFor(projectRoot, tier, name);
+  if (target instanceof ConfigServerError) {
+    if (wantJson) return { stdout: renderErrorJson(target), stderr: '', code: EXIT_BAD_ARGS };
+    return { stdout: '', stderr: renderError(target), code: EXIT_BAD_ARGS };
+  }
 
   // No-overwrite rule: refuse to clobber an existing file. Exit code is the
   // canonical "generic failure" so scripts can distinguish overwrite
@@ -138,7 +173,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(err), code: EXIT_GENERIC };
   }
 
-  const body = buildScaffold(name);
+  const body = buildScaffold(name, tier);
   try {
     atomicWriteFile(target, body);
   } catch (e) {
