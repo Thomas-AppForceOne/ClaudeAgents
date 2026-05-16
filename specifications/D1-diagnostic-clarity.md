@@ -178,6 +178,10 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
   gan stacks customize <name>           Copy a built-in stack into a writable tier.
   gan stacks reset <name>               Remove a customized stack copy.
 
+  Options:
+      --tier=project|user   Where to scaffold/customize/reset (default: project).
+      --force               (customize) Overwrite an existing higher-tier copy.
+
   Active vs. available:
     list      = stacks whose detection rules match the current directory.
                 In a project that matches one of the framework's shipped
@@ -198,6 +202,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - The lint script rejects markers referencing releases not present in the roadmap (e.g. `[shipped-in-v9.9]`).
 - The `gan stacks --help` output advertises all six `stacks` subcommands.
 - The `gan stacks --help` output contains an "Active vs. available" paragraph distinguishing the two reads.
+- The `gan stacks --help` output contains an "Options:" section documenting `--tier=project|user` (default `project`) and `--force`. This line predates D1 in shipped `help.ts`; D1's rewrite must preserve it. (R6 — tier-aware stack scaffold — makes the `--tier=user` value truthful for `gan stacks new`; the help line must not be dropped. See [R6](R6-tier-aware-stack-scaffold.md).)
 - The `gan stacks list` runtime output format is unchanged (one stack name per line, `(none)` on empty set; existing tests still pass).
 
 ### Manual review checks
