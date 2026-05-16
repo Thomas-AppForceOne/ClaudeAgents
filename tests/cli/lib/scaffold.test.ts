@@ -9,12 +9,21 @@ import { describe, expect, it } from 'vitest';
 
 import { buildScaffold, DRAFT_BANNER as SCAFFOLD_BANNER } from '../../../src/cli/lib/scaffold.js';
 import { DRAFT_BANNER as SOURCE_BANNER } from '../../../src/config-server/scaffold-banner.js';
+import { parseYamlBlock } from '../../../src/config-server/storage/yaml-block-parser.js';
+import {
+  validateStackBodyAgainstSchema,
+  type Issue,
+} from '../../../src/config-server/validation/schema-check.js';
+import { checkDetectionTier3Only } from '../../../src/config-server/invariants/detection-tier3-only.js';
+import type { ValidationSnapshot } from '../../../src/config-server/tools/validate.js';
 
 const EXPECTED_SECOND_LINE =
   "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
 
+// R6: `detection` is intentionally NO LONGER a scaffold key at
+// project/user tier (C5 / F3 detection.tier3_only). Every other stubbed
+// field is unchanged.
 const REQUIRED_KEYS = [
-  'detection',
   'scope',
   'secretsGlob',
   'auditCmd',
@@ -24,8 +33,49 @@ const REQUIRED_KEYS = [
   'securitySurfaces',
 ];
 
+const TIERS = ['project', 'user'] as const;
+
 function nonBlankLines(text: string): string[] {
   return text.split('\n').filter((l) => l.trim().length > 0);
+}
+
+/**
+ * Parse the YAML frontmatter of a scaffold, tolerating the DRAFT banner
+ * and comment prose before/after the block (parseYamlBlock handles that).
+ */
+function frontmatter(text: string): Record<string, unknown> {
+  const parsed = parseYamlBlock(text);
+  return (parsed.data ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * Programmatically perform the documented first-edit pass: replace every
+ * TODO-marked stub with a schema-valid value and remove the DRAFT banner.
+ * Returns the parsed body ready for schema + invariant validation.
+ */
+function editedBody(name: string, tier: (typeof TIERS)[number]): Record<string, unknown> {
+  const body = frontmatter(buildScaffold(name, tier));
+  return {
+    ...body,
+    scope: ['src/**/*'],
+    buildCmd: 'echo build',
+    testCmd: 'echo test',
+    lintCmd: 'echo lint',
+    auditCmd: { command: 'echo audit', absenceSignal: 'silent' },
+    secretsGlob: ['**/*.pem'],
+    securitySurfaces: [],
+  };
+}
+
+function validateEdited(name: string, tier: (typeof TIERS)[number]): Issue[] {
+  const data = editedBody(name, tier);
+  const issues: Issue[] = [];
+  validateStackBodyAgainstSchema(`/virtual/${name}.md`, data, issues);
+  const snapshot = {
+    stackFiles: new Map([[`${tier}:/virtual/${name}.md`, { tier, path: `/virtual/${name}.md`, data }]]),
+  } as unknown as ValidationSnapshot;
+  issues.push(...checkDetectionTier3Only(snapshot));
+  return issues;
 }
 
 describe('buildScaffold — banner identity', () => {
@@ -103,5 +153,104 @@ describe('buildScaffold — output shape', () => {
     const a = buildScaffold('web-node');
     const b = buildScaffold('web-node');
     expect(a).toBe(b);
+  });
+});
+
+describe('buildScaffold — R6 tier-aware, detection-free body', () => {
+  it('signature accepts both `project` and `user` tiers', () => {
+    expect(typeof buildScaffold('acme-svc', 'project')).toBe('string');
+    expect(typeof buildScaffold('acme-svc', 'user')).toBe('string');
+    // Default (no tier arg) keeps the legacy call site compiling.
+    expect(typeof buildScaffold('acme-svc')).toBe('string');
+  });
+
+  for (const tier of TIERS) {
+    it(`emits no \`detection:\` key in YAML frontmatter (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      const fm = frontmatter(out);
+      expect('detection' in fm).toBe(false);
+      // Defence in depth: no bare `detection:` line anywhere in the body.
+      expect(out).not.toMatch(/^\s*detection\s*:/m);
+    });
+
+    it(`activation comment names stack.override + both activation paths (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      expect(out).toContain('stack.override');
+      // Same-name shadow path.
+      expect(out).toMatch(/same `name:` shadows\/replaces it/);
+      // Forced-activation path.
+      expect(out).toContain('being forced via `stack.override`');
+      // Without one of the two it never activates.
+      expect(out).toContain('this');
+      expect(out).toMatch(/Without one of those, this\s+# stack never becomes active/);
+    });
+
+    it(`activation comment states override is wholesale/replacement (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      expect(out).toContain('`stack.override` REPLACES auto-detection');
+      expect(out).toContain('it is not additive');
+      expect(out).toContain('every detected stack and the `generic` fallback');
+      expect(out).toMatch(/list `generic` and any/);
+    });
+
+    it(`activation comment sources the decision to C5 / F3 detection.tier3_only (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      expect(out).toContain('C5 / F3 detection.tier3_only');
+    });
+
+    it(`scope: stays a TODO stub (not removed alongside detection) (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      expect(out).toMatch(/scope:\n\s*- "TODO\/\*\*\/\*"/);
+    });
+
+    it(`is pure & deterministic: same (name, '${tier}') is byte-identical`, () => {
+      const a = buildScaffold('acme-svc', tier);
+      const b = buildScaffold('acme-svc', tier);
+      expect(a).toBe(b);
+    });
+
+    it(`edited scaffold (TODOs replaced, banner removed) validates with zero errors (${tier} tier)`, () => {
+      const issues = validateEdited('acme-svc', tier);
+      expect(
+        issues,
+        `expected zero validation issues, got: ${JSON.stringify(issues, null, 2)}`,
+      ).toEqual([]);
+      expect(issues.some((i) => i.code === 'InvariantViolation')).toBe(false);
+    });
+
+    it(`intentional friction preserved: DRAFT banner + CI warning + TODO stubs (${tier} tier)`, () => {
+      const out = buildScaffold('acme-svc', tier);
+      const lines = nonBlankLines(out);
+      expect(lines[0]).toBe(SOURCE_BANNER);
+      expect(lines[1]).toBe(EXPECTED_SECOND_LINE);
+      expect(out).toContain('"TODO/**/*"');
+      expect(out).toContain('false  # TODO: replace before committing');
+      // The un-edited scaffold must still fail schema validation (TODO
+      // stubs produce schema-violating shapes) — R6 narrows the failure
+      // set, it does not make the raw scaffold spuriously valid.
+      const issues: Issue[] = [];
+      validateStackBodyAgainstSchema(
+        `/virtual/acme-svc.md`,
+        frontmatter(out),
+        issues,
+      );
+      expect(issues.length).toBeGreaterThan(0);
+    });
+  }
+
+  it('project and user tiers emit the same body except the overlay named in the override hint', () => {
+    const proj = buildScaffold('acme-svc', 'project');
+    const user = buildScaffold('acme-svc', 'user');
+    expect(proj).not.toBe(user);
+    expect(proj).toContain('your project overlay (.claude/gan/project.md)');
+    expect(user).toContain('your user overlay (~/.claude/gan/user.md)');
+    // Everything outside the overlay-hint line is identical.
+    const normalise = (s: string): string =>
+      s
+        .replace('your project overlay (.claude/gan/project.md)', 'OVERLAY')
+        .replace('your user overlay (~/.claude/gan/user.md)', 'OVERLAY')
+        .replace('# This stack is project-tier:', '# This stack is TIER:')
+        .replace('# This stack is user-tier:', '# This stack is TIER:');
+    expect(normalise(proj)).toBe(normalise(user));
   });
 });
