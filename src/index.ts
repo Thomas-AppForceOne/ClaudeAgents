@@ -74,6 +74,20 @@ export {
   eventsDir,
   payloadsDir,
   indexPath,
+  // Sprint 3 helpers
+  reconstructRecoveryState,
+  nextRecoverySequence,
+  buildTrustEventBody,
+  buildValidationAbortBody,
+  buildValidationAbortFromCode,
+  formatHeartbeat,
+  formatLlmCallSummary,
+  formatWallclock,
+  aggregateSprintSummary,
+  formatSprintSummary,
+  formatSprintSummaryFromEvents,
+  verifyEvidenceBundle,
+  checkFailCompleteness,
 } from './trace/index.js';
 
 export type {
@@ -83,6 +97,21 @@ export type {
   TraceEvent,
   TraceIndex,
   PayloadClass,
+  // Sprint 3 helper types
+  RecoveryState,
+  RoleAttemptState,
+  TrustResolution,
+  TrustEventBody,
+  ValidationAbortBody,
+  ValidationStage,
+  F2ErrorLike,
+  LlmCallMetrics,
+  SprintSummaryAggregate,
+  EvidenceBundleVerifyResult,
+  EvidenceBundleFailure,
+  EvidenceBundleCheck,
+  ContractCriterionLike,
+  BundleCriterion,
 } from './trace/index.js';
 
 // ---- shared types --------------------------------------------------------

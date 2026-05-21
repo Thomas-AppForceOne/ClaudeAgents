@@ -249,3 +249,94 @@ export function isUnrecoverable(traceRoot: string): boolean {
   const { malformedEnvelopeCount, missingSequenceCount } = scanEvents(traceRoot);
   return malformedEnvelopeCount > 0 || missingSequenceCount > 1;
 }
+
+/**
+ * The per-role attempt-counter state for one agent role, reconstructed purely
+ * from the `agentAttempt` events in the trace (F3.8). No external counter
+ * file is consulted — the trace IS the counter store, which is the property
+ * that lets `--recover` resume A1's ceilings after O2 archives the run.
+ */
+export interface RoleAttemptState {
+  /** Number of `agentAttempt` events recorded for this role. */
+  attemptCount: number;
+  /** Highest `attemptNumber` seen for this role (the current attempt). */
+  highestAttemptNumber: number;
+}
+
+/**
+ * The recovery state reconstructed from an existing trace (F3.8):
+ *
+ *  - `nextSequence` — the sequence number to resume with, continuing
+ *    GAPLESSLY from where the trace ended (one more than the highest
+ *    `sequenceNumber` present; 0 for an empty/never-started trace). Feeding
+ *    this as `TraceEmitter.startSequence` continues emission without a gap or
+ *    a collision.
+ *  - `attemptStateByRole` — per-role attempt-counter state, reconstructed
+ *    purely from the `agentAttempt` events (no counter file on disk).
+ */
+export interface RecoveryState {
+  nextSequence: number;
+  attemptStateByRole: Record<string, RoleAttemptState>;
+}
+
+/**
+ * Reconstruct the recovery state from an EXISTING trace (F3.8). Reuses the
+ * Sprint-2 `scanEvents` so the prototype-pollution guard and untrusted-input
+ * handling are shared — a malformed archived event is dropped by the scan and
+ * never folds into the reconstructed counters (web-node.prototype_pollution),
+ * and the result is built only from schema-valid events.
+ *
+ * Sequence resumption is gapless: the next sequence is `highest + 1` across
+ * every present event (events are authoritative, so the index is irrelevant
+ * here). Attempt reconstruction tallies the `agentAttempt` events per role,
+ * recording both the COUNT and the HIGHEST `attemptNumber` seen, with no
+ * reliance on any external counter file.
+ *
+ * The reconstructed `attemptStateByRole` is built on a null-prototype map and
+ * keyed only via own-property assignment, so a role string drawn from a
+ * (schema-validated) event cannot reach `Object.prototype`.
+ */
+export function reconstructRecoveryState(traceRoot: string): RecoveryState {
+  const { events } = scanEvents(traceRoot);
+
+  let highestSequence = -1;
+  const attemptStateByRole: Record<string, RoleAttemptState> = Object.create(
+    null,
+  ) as Record<string, RoleAttemptState>;
+
+  for (const ev of events) {
+    if (ev.sequenceNumber > highestSequence) highestSequence = ev.sequenceNumber;
+
+    if (ev.eventType === 'agentAttempt') {
+      const role = ev.role;
+      // Defence in depth: never let a forbidden key reach the prototype chain
+      // of the reconstructed counter map (the role comes from a schema-valid
+      // event, but the kebab-case role pattern already excludes these; this
+      // keeps the guard explicit on the recovery fold).
+      if (role === '__proto__' || role === 'constructor' || role === 'prototype') {
+        continue;
+      }
+      const prior = Object.prototype.hasOwnProperty.call(attemptStateByRole, role)
+        ? attemptStateByRole[role]!
+        : { attemptCount: 0, highestAttemptNumber: 0 };
+      attemptStateByRole[role] = {
+        attemptCount: prior.attemptCount + 1,
+        highestAttemptNumber: Math.max(prior.highestAttemptNumber, ev.attemptNumber),
+      };
+    }
+  }
+
+  return {
+    nextSequence: highestSequence + 1,
+    attemptStateByRole,
+  };
+}
+
+/**
+ * Convenience for the recovery caller (F3.8): reconstruct the recovery state
+ * and return the next sequence number to resume with. Equivalent to
+ * `reconstructRecoveryState(traceRoot).nextSequence`.
+ */
+export function nextRecoverySequence(traceRoot: string): number {
+  return reconstructRecoveryState(traceRoot).nextSequence;
+}

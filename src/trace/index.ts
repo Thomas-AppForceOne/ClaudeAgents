@@ -54,9 +54,48 @@ export {
   writeIndex,
   isUnrecoverable,
   safeMergeParsedObject,
+  reconstructRecoveryState,
+  nextRecoverySequence,
   type TraceIndex,
   type ScanResult,
+  type RecoveryState,
+  type RoleAttemptState,
 } from './reconcile.js';
+
+// ---- Sprint 3: integration-event builders (F3.3, F3.4) ------------------
+export {
+  buildTrustEventBody,
+  buildValidationAbortBody,
+  buildValidationAbortFromCode,
+  type TrustResolution,
+  type TrustEventBody,
+  type ValidationAbortBody,
+  type ValidationStage,
+  type F2ErrorLike,
+} from './integration.js';
+
+// ---- Sprint 3: stderr progress-line formatters (F3.5, F3.6, F3.7) -------
+export {
+  formatHeartbeat,
+  formatLlmCallSummary,
+  formatWallclock,
+  aggregateSprintSummary,
+  formatSprintSummary,
+  formatSprintSummaryFromEvents,
+  type LlmCallMetrics,
+  type SprintSummaryAggregate,
+} from './progress.js';
+
+// ---- Sprint 3: evidence-bundle verifier (F3.2) --------------------------
+export {
+  verifyEvidenceBundle,
+  checkFailCompleteness,
+  type EvidenceBundleVerifyResult,
+  type EvidenceBundleFailure,
+  type EvidenceBundleCheck,
+  type ContractCriterionLike,
+  type BundleCriterion,
+} from './evidence-bundle.js';
 
 export {
   eventsDir,
