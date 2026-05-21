@@ -27,6 +27,7 @@ import { ConfigServerError, createError } from '../../config-server/errors.js';
 import { renderError, renderErrorJson } from '../lib/errors.js';
 import { emitJson } from '../lib/json-output.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
+import { resolveUserHome } from '../lib/user-home.js';
 import {
   errorResult,
   readSharedFlags,
@@ -62,11 +63,6 @@ function readTier(parsed: ParsedArgs): ResetTier | ConfigServerError {
     });
   }
   return raw as ResetTier;
-}
-
-function resolveUserHome(): string | null {
-  const v = process.env.GAN_USER_HOME ?? process.env.HOME ?? process.env.USERPROFILE;
-  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 function targetPathFor(

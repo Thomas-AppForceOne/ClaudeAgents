@@ -36,29 +36,24 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { buildScaffold, DRAFT_BANNER } from '../../../src/cli/lib/scaffold.js';
-import { parseYamlBlock } from '../../../src/config-server/storage/yaml-block-parser.js';
 import {
   validateStackBodyAgainstSchema,
   type Issue,
 } from '../../../src/config-server/validation/schema-check.js';
 import { checkDetectionTier3Only } from '../../../src/config-server/invariants/detection-tier3-only.js';
 import type { ValidationSnapshot } from '../../../src/config-server/tools/validate.js';
+import {
+  SCAFFOLD_SECOND_LINE as SECOND_LINE,
+  scaffoldFrontmatter as frontmatter,
+  editedScaffoldBody as editedBody,
+  stripScaffoldBanner as stripBannerBlock,
+} from '../helpers/scaffold-edit.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
 const TIERS = ['project', 'user'] as const;
 type Tier = (typeof TIERS)[number];
-
-const SECOND_LINE =
-  "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
-
-/** Parse the YAML frontmatter of a scaffold (parseYamlBlock tolerates the
- * leading DRAFT banner / comment prose). */
-function frontmatter(text: string): Record<string, unknown> {
-  const parsed = parseYamlBlock(text);
-  return (parsed.data ?? {}) as Record<string, unknown>;
-}
 
 /**
  * Run the full structural validation surface against a parsed stack body
@@ -102,44 +97,6 @@ function hasC1DetectionParseRejection(issues: Issue[]): boolean {
       i.code === 'SchemaMismatch' &&
       (i.field ?? '').startsWith('/detection'),
   );
-}
-
-/**
- * Programmatically perform the documented first-edit pass on a freshly
- * built scaffold:
- *
- *  - replace EVERY TODO-marked stub (scope, buildCmd, testCmd, lintCmd,
- *    auditCmd, secretsGlob, securitySurfaces) with a schema-valid value;
- *  - the DRAFT banner + second-line CI warning are dropped implicitly
- *    (we validate the parsed frontmatter body, and additionally assert
- *    below that a textual banner+second-line strip yields a banner-free
- *    document).
- *
- * The transformation is mechanical — driven by the documented edit pass,
- * not a hand-authored valid file.
- */
-function editedBody(name: string, tier: Tier): Record<string, unknown> {
-  const body = frontmatter(buildScaffold(name, tier));
-  return {
-    ...body,
-    scope: ['src/**/*'],
-    buildCmd: 'echo build',
-    testCmd: 'echo test',
-    lintCmd: 'echo lint',
-    auditCmd: { command: 'echo audit', absenceSignal: 'silent' },
-    secretsGlob: ['**/*.pem'],
-    securitySurfaces: [],
-  };
-}
-
-/** Textually strip the DRAFT banner block (banner line + the second-line
- * CI warning that belongs to the banner block) from a scaffold, the way
- * the documented first-edit pass tells the author to. */
-function stripBannerBlock(text: string): string {
-  return text
-    .split('\n')
-    .filter((l) => l !== DRAFT_BANNER && l !== SECOND_LINE)
-    .join('\n');
 }
 
 describe('R6 closing guard — un-edited scaffold still fails (narrowed, not removed)', () => {
@@ -233,8 +190,8 @@ describe('R6 closing guard — tier→body selection stays centralised in buildS
     expect(proj).not.toBe(user);
     const normalise = (s: string): string =>
       s
-        .replace('your project overlay (.claude/gan/project.md)', 'OVERLAY')
-        .replace('your user overlay (~/.claude/gan/user.md)', 'OVERLAY')
+        .replace('project overlay (.claude/gan/project.md)', 'OVERLAY')
+        .replace('user overlay (~/.claude/gan/user.md)', 'OVERLAY')
         .replace('# This stack is project-tier:', '# This stack is TIER:')
         .replace('# This stack is user-tier:', '# This stack is TIER:');
     expect(normalise(proj)).toBe(normalise(user));

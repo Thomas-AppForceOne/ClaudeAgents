@@ -32,6 +32,7 @@ import { packageRoot as resolvePackageRoot } from '../../config-server/package-r
 import { renderError, renderErrorJson } from '../lib/errors.js';
 import { emitJson } from '../lib/json-output.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
+import { resolveUserHome } from '../lib/user-home.js';
 import {
   errorResult,
   readSharedFlags,
@@ -78,11 +79,6 @@ function readTier(parsed: ParsedArgs): CustomizeTier | ConfigServerError {
     });
   }
   return raw as CustomizeTier;
-}
-
-function resolveUserHome(): string | null {
-  const v = process.env.GAN_USER_HOME ?? process.env.HOME ?? process.env.USERPROFILE;
-  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 function targetPathFor(

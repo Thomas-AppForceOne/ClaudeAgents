@@ -70,14 +70,14 @@ export type ScaffoldTier = 'project' | 'user';
 function activationComment(tier: ScaffoldTier): string[] {
   const overlayPhrase =
     tier === 'project'
-      ? 'your project overlay (.claude/gan/project.md)'
-      : 'your user overlay (~/.claude/gan/user.md)';
+      ? 'project overlay (.claude/gan/project.md)'
+      : 'user overlay (~/.claude/gan/user.md)';
   const tierWord = tier === 'project' ? 'project-tier' : 'user-tier';
   return [
     `# This stack is ${tierWord}: it cannot declare \`detection:\` (that is`,
     '# builtin-tier only — see C5 / F3 detection.tier3_only). It activates by',
     '# EITHER naming a builtin stack (same `name:` shadows/replaces it when that',
-    "# stack's detection fires) OR being forced via `stack.override` in",
+    "# stack's detection fires) OR being forced via `stack.override` in your",
     `# ${overlayPhrase}. Without one of those, this`,
     '# stack never becomes active. `stack.override` REPLACES auto-detection',
     '# wholesale — it is not additive. If you list only this stack you suppress',

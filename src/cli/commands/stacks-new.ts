@@ -30,6 +30,7 @@ import { renderError, renderErrorJson } from '../lib/errors.js';
 import { emitJson } from '../lib/json-output.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
 import { buildScaffold, type ScaffoldTier } from '../lib/scaffold.js';
+import { resolveUserHome } from '../lib/user-home.js';
 import {
   errorResult,
   readSharedFlags,
@@ -60,12 +61,15 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
   if (raw === true) {
+    // Bare `--tier` with no value. The arg parser normally intercepts this
+    // (the flag is registered as value-requiring), but defend it here too.
     return createError('MalformedInput', {
       field: '--tier',
-      message: "--tier must be 'project' or 'user' (got '').",
+      message: "--tier requires a value: 'project' or 'user'.",
     });
   }
   if (typeof raw !== 'string' || raw.length === 0) {
+    // `--tier=` with an empty value: "got ''" is accurate here.
     return createError('MalformedInput', {
       field: '--tier',
       message: "--tier must be 'project' or 'user' (got '').",
@@ -78,16 +82,6 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
     });
   }
   return raw as ScaffoldTier;
-}
-
-/**
- * Resolve the user home directory using the same convention the rest of
- * the CLI uses for user-tier paths (see `stacks-customize` / `stacks-reset`):
- * `GAN_USER_HOME` (test injection) → `HOME` → `USERPROFILE`.
- */
-function resolveUserHome(): string | null {
-  const v = process.env.GAN_USER_HOME ?? process.env.HOME ?? process.env.USERPROFILE;
-  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 /**

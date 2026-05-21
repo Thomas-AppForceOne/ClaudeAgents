@@ -9,16 +9,17 @@ import { describe, expect, it } from 'vitest';
 
 import { buildScaffold, DRAFT_BANNER as SCAFFOLD_BANNER } from '../../../src/cli/lib/scaffold.js';
 import { DRAFT_BANNER as SOURCE_BANNER } from '../../../src/config-server/scaffold-banner.js';
-import { parseYamlBlock } from '../../../src/config-server/storage/yaml-block-parser.js';
 import {
   validateStackBodyAgainstSchema,
   type Issue,
 } from '../../../src/config-server/validation/schema-check.js';
 import { checkDetectionTier3Only } from '../../../src/config-server/invariants/detection-tier3-only.js';
 import type { ValidationSnapshot } from '../../../src/config-server/tools/validate.js';
-
-const EXPECTED_SECOND_LINE =
-  "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
+import {
+  SCAFFOLD_SECOND_LINE as EXPECTED_SECOND_LINE,
+  scaffoldFrontmatter as frontmatter,
+  editedScaffoldBody as editedBody,
+} from '../helpers/scaffold-edit.js';
 
 // R6: `detection` is intentionally NO LONGER a scaffold key at
 // project/user tier (C5 / F3 detection.tier3_only). Every other stubbed
@@ -37,34 +38,6 @@ const TIERS = ['project', 'user'] as const;
 
 function nonBlankLines(text: string): string[] {
   return text.split('\n').filter((l) => l.trim().length > 0);
-}
-
-/**
- * Parse the YAML frontmatter of a scaffold, tolerating the DRAFT banner
- * and comment prose before/after the block (parseYamlBlock handles that).
- */
-function frontmatter(text: string): Record<string, unknown> {
-  const parsed = parseYamlBlock(text);
-  return (parsed.data ?? {}) as Record<string, unknown>;
-}
-
-/**
- * Programmatically perform the documented first-edit pass: replace every
- * TODO-marked stub with a schema-valid value and remove the DRAFT banner.
- * Returns the parsed body ready for schema + invariant validation.
- */
-function editedBody(name: string, tier: (typeof TIERS)[number]): Record<string, unknown> {
-  const body = frontmatter(buildScaffold(name, tier));
-  return {
-    ...body,
-    scope: ['src/**/*'],
-    buildCmd: 'echo build',
-    testCmd: 'echo test',
-    lintCmd: 'echo lint',
-    auditCmd: { command: 'echo audit', absenceSignal: 'silent' },
-    secretsGlob: ['**/*.pem'],
-    securitySurfaces: [],
-  };
 }
 
 function validateEdited(name: string, tier: (typeof TIERS)[number]): Issue[] {
@@ -242,13 +215,16 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
     const proj = buildScaffold('acme-svc', 'project');
     const user = buildScaffold('acme-svc', 'user');
     expect(proj).not.toBe(user);
-    expect(proj).toContain('your project overlay (.claude/gan/project.md)');
-    expect(user).toContain('your user overlay (~/.claude/gan/user.md)');
-    // Everything outside the overlay-hint line is identical.
+    expect(proj).toContain('project overlay (.claude/gan/project.md)');
+    expect(user).toContain('user overlay (~/.claude/gan/user.md)');
+    // The activation comment now byte-matches the spec Examples block: the
+    // line ends "...`stack.override` in your" and the overlay name begins
+    // the next line. Everything outside the overlay-hint + tier-word lines
+    // is identical between tiers.
     const normalise = (s: string): string =>
       s
-        .replace('your project overlay (.claude/gan/project.md)', 'OVERLAY')
-        .replace('your user overlay (~/.claude/gan/user.md)', 'OVERLAY')
+        .replace('project overlay (.claude/gan/project.md)', 'OVERLAY')
+        .replace('user overlay (~/.claude/gan/user.md)', 'OVERLAY')
         .replace('# This stack is project-tier:', '# This stack is TIER:')
         .replace('# This stack is user-tier:', '# This stack is TIER:');
     expect(normalise(proj)).toBe(normalise(user));
