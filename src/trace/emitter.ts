@@ -21,11 +21,7 @@
  */
 
 import { createError } from '../config-server/errors.js';
-import {
-  buildPayloadRef,
-  formatTimestamp,
-  type PayloadContentType,
-} from './encodings.js';
+import { buildPayloadRef, formatTimestamp, type PayloadContentType } from './encodings.js';
 import {
   computeInputDigest,
   computePromptRef,
@@ -38,6 +34,7 @@ import type {
   OrchestratorMilestoneEvent,
   SafetyHaltEvent,
   ToolCallEvent,
+  TraceEvent,
   TrustEventEvent,
   ValidationAbortEvent,
 } from './events.js';
@@ -157,6 +154,8 @@ export class TraceEmitter {
   private readonly runId: string;
   private readonly redaction: RedactionMode;
   private nextSequence: number;
+  /** In-memory index accumulator, updated in O(1) per emit (see `persist`). */
+  private index: TraceIndex;
   /** Allows `clock()` injection for deterministic timestamps in tests. */
   private readonly now: () => number;
 
@@ -173,6 +172,13 @@ export class TraceEmitter {
     }
     this.nextSequence = start;
     this.now = clock;
+    // Initialise the in-memory index ONCE from any existing on-disk events
+    // (empty for a fresh run; populated when resuming after --recover). Each
+    // emit then updates this accumulator in O(1) instead of re-scanning and
+    // re-validating the whole events directory — the persisted index stays
+    // byte-identical to a full buildIndex() over the same events.
+    const scan = scanEvents(this.traceRoot);
+    this.index = buildIndex(this.runId, scan.events, scan.unknownClassEvents);
   }
 
   /** The resolved redaction mode in effect. */
@@ -218,8 +224,7 @@ export class TraceEmitter {
     };
     if (input.disposition !== undefined) event.disposition = input.disposition;
     if (input.summary !== undefined) event.summary = input.summary;
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -233,8 +238,7 @@ export class TraceEmitter {
       outputArtifactPath: input.outputArtifactPath,
       disposition: input.disposition,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -252,7 +256,13 @@ export class TraceEmitter {
     const responseRef = sha256Hex(input.payloads.response);
 
     if (this.redaction === 'full') {
-      this.storePayload(envelope.sequenceNumber, input.role, 'prompt', input.payloads.prompt, 'text');
+      this.storePayload(
+        envelope.sequenceNumber,
+        input.role,
+        'prompt',
+        input.payloads.prompt,
+        'text',
+      );
       this.storePayload(
         envelope.sequenceNumber,
         input.role,
@@ -274,8 +284,7 @@ export class TraceEmitter {
       latencyMs: input.latencyMs,
       cacheHit: input.cacheHit,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -317,8 +326,7 @@ export class TraceEmitter {
       disposition: input.disposition,
       latencyMs: input.latencyMs,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -330,8 +338,7 @@ export class TraceEmitter {
       role: input.role,
       payload: input.payload,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -343,8 +350,7 @@ export class TraceEmitter {
       userChoice: input.userChoice,
       contentHash: input.contentHash,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -356,8 +362,7 @@ export class TraceEmitter {
       errorCode: input.errorCode,
       errorPayload: input.errorPayload,
     };
-    appendEventFile(this.traceRoot, event);
-    this.refreshIndex();
+    this.persist(event);
     return event;
   }
 
@@ -381,21 +386,48 @@ export class TraceEmitter {
   }
 
   /**
-   * Rebuild and write the index from the authoritative on-disk events. The
-   * index is written LAST (after the event file) and may lag if the process
+   * The single persistence path for an emitted event: append the event file
+   * (atomic), fold it into the in-memory index in O(1), and write the index
+   * LAST. The index is written after the event file and may lag if the process
    * dies between the two writes; reconciliation rebuilds it on next start.
    */
-  private refreshIndex(): void {
-    const { events } = scanEvents(this.traceRoot);
-    const index = buildIndex(this.runId, events);
-    writeIndex(this.traceRoot, index);
+  private persist(event: TraceEvent): void {
+    appendEventFile(this.traceRoot, event);
+    this.recordInIndex(event);
+    writeIndex(this.traceRoot, this.index);
+  }
+
+  /**
+   * Fold one freshly emitted (known-class) event into the in-memory index,
+   * mirroring `buildIndex()`'s per-event logic EXACTLY so the incremental index
+   * stays byte-identical to a full rebuild. The emitter only ever emits known
+   * classes, so `countByClass` is keyed by fixed v1 type strings (no
+   * forbidden-key risk).
+   */
+  private recordInIndex(event: TraceEvent): void {
+    const idx = this.index;
+    idx.totalEvents += 1;
+    idx.countByClass[event.eventType] = (idx.countByClass[event.eventType] ?? 0) + 1;
+    if (idx.firstTimestamp === undefined || event.timestamp < idx.firstTimestamp) {
+      idx.firstTimestamp = event.timestamp;
+    }
+    if (idx.lastTimestamp === undefined || event.timestamp > idx.lastTimestamp) {
+      idx.lastTimestamp = event.timestamp;
+    }
+    if (event.eventType === 'orchestratorMilestone' && event.disposition !== undefined) {
+      idx.disposition = event.disposition;
+    }
   }
 
   /**
    * Force a full startup reconciliation of the index against the events
-   * (F2.6). Exposed so a recovery caller can reconcile before resuming.
+   * (F2.6). Exposed so a recovery caller can reconcile before resuming; the
+   * in-memory accumulator is reset to the reconciled result so subsequent
+   * incremental updates build on it.
    */
   reconcile(): TraceIndex {
-    return reconcileIndex(this.traceRoot, this.runId);
+    const index = reconcileIndex(this.traceRoot, this.runId);
+    this.index = index;
+    return index;
   }
 }

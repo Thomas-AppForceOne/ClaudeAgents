@@ -10,10 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import {
-  verifyEvidenceBundle,
-  checkFailCompleteness,
-} from '../../src/trace/evidence-bundle.js';
+import { verifyEvidenceBundle, checkFailCompleteness } from '../../src/trace/evidence-bundle.js';
 import { getEvaluatorEvidenceBundleValidator } from '../../src/config-server/validation/schema-check.js';
 import type { TraceEvent } from '../../src/trace/events.js';
 
@@ -53,10 +50,7 @@ function trace(): TraceEvent[] {
   ] as TraceEvent[];
 }
 
-const CONTRACT = [
-  { name: 'tls_required_for_sensitive_traffic' },
-  { name: 'prototype_pollution' },
-];
+const CONTRACT = [{ name: 'tls_required_for_sensitive_traffic' }, { name: 'prototype_pollution' }];
 
 /** A fully-valid bundle: one pass criterion, one fail criterion (complete). */
 function validBundle(): unknown {

@@ -27,7 +27,7 @@ import path from 'node:path';
 import { getRunTraceValidator } from '../config-server/validation/schema-check.js';
 import { stableStringify } from '../config-server/determinism/index.js';
 import { atomicWriteFile } from '../config-server/storage/atomic-write.js';
-import type { TraceEvent } from './events.js';
+import { KNOWN_EVENT_TYPES, type TraceEvent } from './events.js';
 import { eventsDir, indexPath } from './store.js';
 
 /** Keys that must never be folded in from untrusted parsed objects. */
@@ -43,10 +43,35 @@ export interface TraceIndex {
   disposition?: 'success' | 'halted' | 'aborted' | 'error';
 }
 
+/**
+ * A forward-compatible UNKNOWN event-class file: a well-formed envelope whose
+ * `eventType` is not one of the v1 known classes. A v1 reader cannot interpret
+ * its class-specific fields, so it is skipped from `events` (with a structured
+ * warning) — but its envelope is well-formed, so it still counts toward the
+ * index and toward gapless sequence continuation. This realises T1's
+ * forward-compat reader invariant: a NEW event class entirely stays on v1, and
+ * a v1 reader tolerates it by skipping rather than erroring (or wrongly marking
+ * the run unrecoverable). When E5 (`clarifierFinding`) / E6 (`humanReview`) add
+ * classes on v1, an archived trace carrying one stays recoverable.
+ */
+export interface UnknownClassEvent {
+  sequenceNumber: number;
+  eventType: string;
+  timestamp: string;
+}
+
 /** Outcome of scanning the events directory as untrusted input. */
 export interface ScanResult {
-  /** Schema-valid events, sorted ascending by sequence number. */
+  /** Schema-valid events of a KNOWN v1 class, sorted ascending by sequence number. */
   events: TraceEvent[];
+  /**
+   * Well-formed-envelope events whose `eventType` is not a known v1 class
+   * (forward-compat). Skipped from `events`, but counted for the index and for
+   * sequence continuation. Sorted ascending by sequence number.
+   */
+  unknownClassEvents: UnknownClassEvent[];
+  /** Structured warnings, one per skipped unknown-class event. */
+  warnings: string[];
   /** Count of event files whose envelope was malformed (schema-invalid). */
   malformedEnvelopeCount: number;
   /** Count of event files lacking a readable (integer) sequence number. */
@@ -92,6 +117,23 @@ function readSequenceNumber(parsed: unknown): number | null {
 }
 
 /**
+ * True iff a parsed object carries a well-formed common envelope beyond the
+ * sequence number: a non-empty string `eventType`, `timestamp`, and `runId`.
+ * Used to distinguish a tolerable forward-compat unknown-class event (well-formed
+ * envelope, unknown `eventType`) from a genuinely malformed one.
+ */
+function hasWellFormedEnvelope(parsed: Record<string, unknown>): boolean {
+  return (
+    typeof parsed.eventType === 'string' &&
+    parsed.eventType.length > 0 &&
+    typeof parsed.timestamp === 'string' &&
+    parsed.timestamp.length > 0 &&
+    typeof parsed.runId === 'string' &&
+    parsed.runId.length > 0
+  );
+}
+
+/**
  * List the event files under `events/`, oldest-first by filename. Returns
  * absolute paths. A missing events directory yields an empty list (an
  * in-progress or never-started run is not an error here).
@@ -127,12 +169,24 @@ function listEventFiles(traceRoot: string): string[] {
  *    malformed envelope and counts toward `malformedEnvelopeCount` — ANY such
  *    file is unrecoverable (predicate a).
  *
+ * Forward-compat (T1 reader invariant): a file with a readable sequence number
+ * and a WELL-FORMED ENVELOPE whose `eventType` is simply NOT a known v1 class
+ * is neither malformed nor missing-sequence — it is a future event class. It is
+ * collected into `unknownClassEvents` and emits a structured `warning`, and is
+ * skipped from the typed `events` (a v1 reader cannot interpret its body). It
+ * does NOT count toward `malformedEnvelopeCount`, so a trace carrying a future
+ * additive event class stays recoverable. A forbidden-key `eventType` value
+ * (`__proto__`/`constructor`/`prototype`) is excluded from this path and falls
+ * through to the malformed bucket.
+ *
  * No file ever throws out of the scan: untrusted input is classified, never
  * trusted.
  */
 export function scanEvents(traceRoot: string): ScanResult {
   const validate = getRunTraceValidator();
   const events: TraceEvent[] = [];
+  const unknownClassEvents: UnknownClassEvent[] = [];
+  const warnings: string[] = [];
   let malformedEnvelopeCount = 0;
   let missingSequenceCount = 0;
 
@@ -154,7 +208,8 @@ export function scanEvents(traceRoot: string): ScanResult {
       continue;
     }
 
-    if (!isObject(parsed) || readSequenceNumber(parsed) === null) {
+    const seq = readSequenceNumber(parsed);
+    if (!isObject(parsed) || seq === null) {
       // No readable sequence number — interrupted-write tail bucket.
       missingSequenceCount += 1;
       continue;
@@ -173,6 +228,28 @@ export function scanEvents(traceRoot: string): ScanResult {
       continue;
     }
 
+    // Forward-compat: a well-formed envelope with an UNKNOWN (non-forbidden)
+    // event-class type is tolerated, not treated as malformed. Skip it from the
+    // typed events with a structured warning; its envelope still counts for the
+    // index and for gapless sequence continuation.
+    const eventType = safe.eventType;
+    if (
+      typeof eventType === 'string' &&
+      !KNOWN_EVENT_TYPES.has(eventType) &&
+      !FORBIDDEN_KEYS.has(eventType) &&
+      hasWellFormedEnvelope(safe)
+    ) {
+      unknownClassEvents.push({
+        sequenceNumber: seq,
+        eventType,
+        timestamp: safe.timestamp as string,
+      });
+      warnings.push(
+        `The framework encountered an unrecognised trace event class '${eventType}' at sequence ${seq}; skipping it (a newer version of the framework may have produced it).`,
+      );
+      continue;
+    }
+
     if (!validate(safe)) {
       malformedEnvelopeCount += 1;
       continue;
@@ -182,37 +259,54 @@ export function scanEvents(traceRoot: string): ScanResult {
   }
 
   events.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-  return { events, malformedEnvelopeCount, missingSequenceCount };
+  unknownClassEvents.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+  return { events, unknownClassEvents, warnings, malformedEnvelopeCount, missingSequenceCount };
 }
 
 /**
  * Build the derivative index purely from a set of authoritative events.
  * `disposition` is taken from the last orchestratorMilestone that carries one
  * (the run's terminal disposition); absent while the run is in progress.
+ *
+ * Forward-compat unknown-class events (well-formed envelope, future event type)
+ * are counted too — `totalEvents`, `countByClass[<their type>]`, and the
+ * timestamp bounds include them — so the index stays an honest tally even when a
+ * newer framework version produced a class this reader cannot interpret.
+ * `disposition` is only ever read from a known orchestratorMilestone.
  */
-export function buildIndex(runId: string, events: TraceEvent[]): TraceIndex {
-  const countByClass: Record<string, number> = {};
+export function buildIndex(
+  runId: string,
+  events: TraceEvent[],
+  unknownClassEvents: readonly UnknownClassEvent[] = [],
+): TraceIndex {
+  const countByClass: Record<string, number> = Object.create(null) as Record<string, number>;
   let firstTimestamp: string | undefined;
   let lastTimestamp: string | undefined;
   let disposition: TraceIndex['disposition'];
 
+  const note = (eventType: string, timestamp: string): void => {
+    countByClass[eventType] = (countByClass[eventType] ?? 0) + 1;
+    if (firstTimestamp === undefined || timestamp < firstTimestamp) firstTimestamp = timestamp;
+    if (lastTimestamp === undefined || timestamp > lastTimestamp) lastTimestamp = timestamp;
+  };
+
   for (const ev of events) {
-    countByClass[ev.eventType] = (countByClass[ev.eventType] ?? 0) + 1;
-    if (firstTimestamp === undefined || ev.timestamp < firstTimestamp) {
-      firstTimestamp = ev.timestamp;
-    }
-    if (lastTimestamp === undefined || ev.timestamp > lastTimestamp) {
-      lastTimestamp = ev.timestamp;
-    }
+    note(ev.eventType, ev.timestamp);
     if (ev.eventType === 'orchestratorMilestone' && ev.disposition !== undefined) {
       disposition = ev.disposition;
     }
   }
+  for (const ev of unknownClassEvents) {
+    note(ev.eventType, ev.timestamp);
+  }
 
   const index: TraceIndex = {
     runId,
-    totalEvents: events.length,
-    countByClass,
+    totalEvents: events.length + unknownClassEvents.length,
+    // Re-key onto a plain object so the persisted index is an ordinary JSON
+    // map (the null-prototype accumulator above only avoids pollution from a
+    // future event-type string during the fold).
+    countByClass: { ...countByClass },
   };
   if (firstTimestamp !== undefined) index.firstTimestamp = firstTimestamp;
   if (lastTimestamp !== undefined) index.lastTimestamp = lastTimestamp;
@@ -232,8 +326,8 @@ export function writeIndex(traceRoot: string, index: TraceIndex): void {
  * a lagging or disagreeing on-disk index is simply replaced — events win.
  */
 export function reconcileIndex(traceRoot: string, runId: string): TraceIndex {
-  const { events } = scanEvents(traceRoot);
-  const index = buildIndex(runId, events);
+  const { events, unknownClassEvents } = scanEvents(traceRoot);
+  const index = buildIndex(runId, events, unknownClassEvents);
   writeIndex(traceRoot, index);
   return index;
 }
@@ -297,12 +391,21 @@ export interface RecoveryState {
  * (schema-validated) event cannot reach `Object.prototype`.
  */
 export function reconstructRecoveryState(traceRoot: string): RecoveryState {
-  const { events } = scanEvents(traceRoot);
+  const { events, unknownClassEvents } = scanEvents(traceRoot);
 
   let highestSequence = -1;
-  const attemptStateByRole: Record<string, RoleAttemptState> = Object.create(
-    null,
-  ) as Record<string, RoleAttemptState>;
+  const attemptStateByRole: Record<string, RoleAttemptState> = Object.create(null) as Record<
+    string,
+    RoleAttemptState
+  >;
+
+  // Forward-compat: an unknown-class event (skipped from `events`) may hold the
+  // highest sequence number. Its envelope is well-formed, so it must count for
+  // gapless continuation — otherwise recovery would reuse a sequence number a
+  // newer framework version already allocated.
+  for (const ev of unknownClassEvents) {
+    if (ev.sequenceNumber > highestSequence) highestSequence = ev.sequenceNumber;
+  }
 
   for (const ev of events) {
     if (ev.sequenceNumber > highestSequence) highestSequence = ev.sequenceNumber;

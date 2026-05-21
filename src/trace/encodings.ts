@@ -23,12 +23,7 @@ import { createError } from '../config-server/errors.js';
 /** The four payload classes pinned by F2.4. */
 export type PayloadClass = 'prompt' | 'response' | 'arguments' | 'result';
 
-const PAYLOAD_CLASSES: ReadonlySet<string> = new Set([
-  'prompt',
-  'response',
-  'arguments',
-  'result',
-]);
+const PAYLOAD_CLASSES: ReadonlySet<string> = new Set(['prompt', 'response', 'arguments', 'result']);
 
 /** Payload extension by content type: `md` for text, `json` for structured. */
 export type PayloadContentType = 'text' | 'structured';

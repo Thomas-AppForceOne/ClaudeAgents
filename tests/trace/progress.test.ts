@@ -62,7 +62,7 @@ describe('per_llm_call_formatter_exact_string', () => {
       latencyMs: 2500,
       cacheHit: true,
     });
-    expect(line).toBe('[gan-generator] 1200 in / 350 out / 800 cached / 2.5s [cache hit]');
+    expect(line).toBe('[gan-generator] 1200 in / 350 out / 800 cached / 2.5s [hit]');
   });
 
   it('renders the cache-miss branch byte-exact', () => {
@@ -75,7 +75,7 @@ describe('per_llm_call_formatter_exact_string', () => {
       cacheHit: false,
     });
     // spec example: 8341ms -> 8.3s
-    expect(line).toBe('[gan-evaluator] 4096 in / 512 out / 0 cached / 8.3s [cache miss]');
+    expect(line).toBe('[gan-evaluator] 4096 in / 512 out / 0 cached / 8.3s [miss]');
   });
 
   it('renders latencyMs/1000 with one decimal place (spec form)', () => {

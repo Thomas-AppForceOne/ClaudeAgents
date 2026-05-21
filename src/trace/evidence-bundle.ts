@@ -37,11 +37,7 @@ export interface ContractCriterionLike {
 }
 
 /** The four named checks the verifier runs, in evaluation order. */
-export type EvidenceBundleCheck =
-  | 'schema'
-  | 'joinKey'
-  | 'refIntegrity'
-  | 'failCompleteness';
+export type EvidenceBundleCheck = 'schema' | 'joinKey' | 'refIntegrity' | 'failCompleteness';
 
 /** A single failure, naming the check and the offending item. */
 export interface EvidenceBundleFailure {

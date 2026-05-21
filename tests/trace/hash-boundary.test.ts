@@ -10,11 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import {
-  computePromptRef,
-  isSha256Hex,
-  type LlmRequestIdentity,
-} from '../../src/trace/hash.js';
+import { computePromptRef, isSha256Hex, type LlmRequestIdentity } from '../../src/trace/hash.js';
 
 /** A representative in-boundary request identity used across the suite. */
 function baseIdentity(): LlmRequestIdentity {

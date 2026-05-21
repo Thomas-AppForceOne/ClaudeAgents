@@ -216,7 +216,11 @@ describe('prototype_pollution guard', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, JSON.stringify(validEvent(0)));
     // An adversarial event file whose parsed object carries a __proto__ key.
-    writeRawEvent(root, 1, '{"sequenceNumber": 1, "eventType": "x", "__proto__": {"polluted": "yes"}}');
+    writeRawEvent(
+      root,
+      1,
+      '{"sequenceNumber": 1, "eventType": "x", "__proto__": {"polluted": "yes"}}',
+    );
 
     // Scanning treats the adversarial file as malformed (guard fired) rather
     // than folding it in, and Object.prototype is untouched.
@@ -236,5 +240,91 @@ describe('prototype_pollution guard', () => {
     expect(Object.getPrototypeOf(out)).toBeNull();
     expect(out.a).toBe(1);
     expect(out.b).toBe('two');
+  });
+});
+
+describe('forward-compat: unknown event-class types (T1 reader invariant)', () => {
+  function unknownClassEvent(seq: number, eventType: string): Record<string, unknown> {
+    return {
+      sequenceNumber: seq,
+      eventType,
+      timestamp: '2026-05-21T19:47:20.000Z',
+      runId: RUN_ID,
+      // a class-specific field a v1 reader does not know how to interpret:
+      finding: 'something a newer framework version recorded',
+    };
+  }
+
+  it('skips an unknown-but-well-formed event class without marking it malformed (run stays recoverable)', () => {
+    const root = makeRoot();
+    writeRawEvent(root, 0, JSON.stringify(validEvent(0, 'orchestratorMilestone')));
+    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'clarifierFinding')));
+
+    const scan = scanEvents(root);
+    // Neither malformed nor missing-sequence → the run stays recoverable.
+    expect(scan.malformedEnvelopeCount).toBe(0);
+    expect(scan.missingSequenceCount).toBe(0);
+    expect(isUnrecoverable(root)).toBe(false);
+    // The known event is in `events`; the unknown class is bucketed separately.
+    expect(scan.events.map((e) => e.sequenceNumber)).toEqual([0]);
+    expect(scan.unknownClassEvents).toEqual([
+      { sequenceNumber: 1, eventType: 'clarifierFinding', timestamp: '2026-05-21T19:47:20.000Z' },
+    ]);
+    // A structured warning was emitted naming the class and the sequence.
+    expect(scan.warnings).toHaveLength(1);
+    expect(scan.warnings[0]).toContain('clarifierFinding');
+    expect(scan.warnings[0]).toContain('1');
+  });
+
+  it('counts unknown-class events in the reconciled index (totalEvents + countByClass)', () => {
+    const root = makeRoot();
+    writeRawEvent(root, 0, JSON.stringify(validEvent(0, 'orchestratorMilestone')));
+    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'clarifierFinding')));
+    writeRawEvent(root, 2, JSON.stringify(unknownClassEvent(2, 'clarifierFinding')));
+
+    const index = reconcileIndex(root, RUN_ID);
+    expect(index.totalEvents).toBe(3);
+    expect(index.countByClass).toEqual({ orchestratorMilestone: 1, clarifierFinding: 2 });
+    // The persisted index still validates against the Sprint-1 index schema.
+    const validate = getRunTraceIndexValidator();
+    expect(validate(index), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it('treats an unknown class with a malformed envelope as malformed (not tolerated)', () => {
+    const root = makeRoot();
+    // Unknown eventType but missing runId → the envelope is not well-formed.
+    writeRawEvent(
+      root,
+      0,
+      JSON.stringify({
+        sequenceNumber: 0,
+        eventType: 'clarifierFinding',
+        timestamp: '2026-05-21T19:47:20.000Z',
+      }),
+    );
+    const scan = scanEvents(root);
+    expect(scan.unknownClassEvents).toEqual([]);
+    expect(scan.malformedEnvelopeCount).toBe(1);
+    expect(isUnrecoverable(root)).toBe(true);
+  });
+
+  it('does not tolerate a forbidden-key eventType value (prototype-pollution vector)', () => {
+    const root = makeRoot();
+    writeRawEvent(
+      root,
+      0,
+      JSON.stringify({
+        sequenceNumber: 0,
+        eventType: '__proto__',
+        timestamp: '2026-05-21T19:47:20.000Z',
+        runId: RUN_ID,
+      }),
+    );
+    const scan = scanEvents(root);
+    // Not bucketed as a tolerated unknown class; falls through to malformed.
+    expect(scan.unknownClassEvents).toEqual([]);
+    expect(scan.malformedEnvelopeCount).toBe(1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(({} as any).polluted).toBeUndefined();
   });
 });

@@ -50,14 +50,16 @@ export function formatHeartbeat(role: string): string {
 
 /**
  * F3.6 — the per-LLM-call summary line, EXACTLY:
- *   `[<role>] <tokensInput> in / <tokensOutput> out / <tokensCached> cached / <latencyMs/1000>s [cache hit|miss]`
+ *   `[<role>] <tokensInput> in / <tokensOutput> out / <tokensCached> cached / <latencyMs/1000>s [hit|miss]`
  *
- * The trailing token is `cache hit` when `cacheHit` is true and `cache miss`
- * when false. Reads only the metric fields of an `llmCall` event; the
- * `promptRef`/`responseRef` content is never consulted.
+ * The trailing bracket is `[hit]` when `cacheHit` is true and `[miss]` when
+ * false, matching the spec's worked examples (e.g.
+ * `[gan-planner] 4827 in / 612 out / 3201 cached / 8.3s [hit]`). Reads only the
+ * metric fields of an `llmCall` event; the `promptRef`/`responseRef` content is
+ * never consulted.
  */
 export function formatLlmCallSummary(metrics: LlmCallMetrics): string {
-  const cache = metrics.cacheHit ? 'cache hit' : 'cache miss';
+  const cache = metrics.cacheHit ? 'hit' : 'miss';
   return (
     `[${metrics.role}] ${metrics.tokensInput} in / ${metrics.tokensOutput} out / ` +
     `${metrics.tokensCached} cached / ${renderSeconds(metrics.latencyMs)}s [${cache}]`

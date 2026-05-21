@@ -110,7 +110,10 @@ describe('recovery sequence continuation', () => {
     expect(emitter.peekNextSequence()).toBe(3);
 
     const ev3 = emitter.emitOrchestratorMilestone({ milestone: 'resumed' });
-    const ev4 = emitter.emitOrchestratorMilestone({ milestone: 'sprintEnd', disposition: 'success' });
+    const ev4 = emitter.emitOrchestratorMilestone({
+      milestone: 'sprintEnd',
+      disposition: 'success',
+    });
     expect(ev3.sequenceNumber).toBe(3);
     expect(ev4.sequenceNumber).toBe(4);
 
@@ -220,5 +223,43 @@ describe('web_node_prototype_pollution (recovery fold reuses the guard)', () => 
     writeRawEvent(root, 0, agentAttempt(0, 'gan-generator', 1));
     const state = reconstructRecoveryState(root);
     expect(Object.getPrototypeOf(state.attemptStateByRole)).toBeNull();
+  });
+});
+
+describe('forward-compat: recovery past an unknown event class', () => {
+  function unknownClass(seq: number): Record<string, unknown> {
+    return {
+      sequenceNumber: seq,
+      eventType: 'clarifierFinding',
+      timestamp: '2026-05-21T19:47:20.000Z',
+      runId: RUN_ID,
+      finding: 'recorded by a newer framework version',
+    };
+  }
+
+  it('resumes past an unknown-class event holding the highest sequence (gapless)', () => {
+    const root = makeRoot();
+    writeRawEvent(root, 0, milestone(0));
+    writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
+    // The trace ends with an event class this v1 reader does not know. It must
+    // still count for sequence continuation, or recovery would reuse seq 2.
+    writeRawEvent(root, 2, unknownClass(2));
+
+    const state = reconstructRecoveryState(root);
+    expect(state.nextSequence).toBe(3);
+    expect(nextRecoverySequence(root)).toBe(3);
+    // The unknown class is not folded into the known-class attempt counters.
+    expect(state.attemptStateByRole['gan-generator']).toEqual({
+      attemptCount: 1,
+      highestAttemptNumber: 1,
+    });
+
+    // A TraceEmitter resuming at the reconstructed sequence continues gaplessly.
+    const emitter = new TraceEmitter(
+      { traceRoot: root, runId: RUN_ID, startSequence: state.nextSequence },
+      fixedClock(),
+    );
+    const ev = emitter.emitOrchestratorMilestone({ milestone: 'resumed' });
+    expect(ev.sequenceNumber).toBe(3);
   });
 });

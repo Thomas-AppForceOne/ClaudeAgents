@@ -18,10 +18,7 @@
  */
 
 import { createError, type ConfigServerError, type ErrorCode } from '../config-server/errors.js';
-import type {
-  TrustEventEvent,
-  ValidationAbortEvent,
-} from './events.js';
+import type { TrustEventEvent, ValidationAbortEvent } from './events.js';
 
 /** The class-specific fields of a `trustEvent` (no common envelope). */
 export type TrustEventBody = Omit<
