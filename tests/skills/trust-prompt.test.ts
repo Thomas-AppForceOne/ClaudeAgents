@@ -38,7 +38,7 @@ describe('skills/gan/trust-prompt.md (R5 S4)', () => {
     expect(content).toContain('git log -- .claude/gan/');
   });
 
-  it('warns that the trust hash does not transitively cover invoked scripts', () => {
-    expect(content).toContain('does not transitively cover');
+  it('discloses that invoked scripts are not covered by the trust hash', () => {
+    expect(content).toContain('NOT in the hash');
   });
 });

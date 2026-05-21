@@ -218,11 +218,9 @@ The existing PreToolUse hook remains in place. Spawned agents write only inside 
 
 ## Trust integration
 
-When the validation step returns the `UntrustedOverlay` structured error, the orchestrator surfaces the trust prompt described in F4 / R5. The user's choice is one of:
+When the validation step returns the `UntrustedOverlay` structured error, the orchestrator surfaces the interactive trust prompt **before reaching any command-execution path**. The prompt is a protocol the orchestrator is contracted to obey, not a server-enforced gate: the orchestrator MUST show what the approval covers (the changed or newly-declared command-bearing fields, plus the disclosure that the trust hash does not cover the scripts those commands invoke), wait for explicit consent, and call `trustApprove` **only** when the user chooses `[a]`.
 
-- **Approve and run** — record the new content hash via the API's `trustApprove` write.
-- **Run with `--no-project-commands`** — set the runtime mode and continue without writing to the trust cache.
-- **Cancel** — abort the run.
+The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set are the single responsibility of [`trust-prompt.md`](trust-prompt.md); the orchestrator renders the first-introduction or config-changed variant per whether `getTrustState(projectRoot)` reports a prior approval, and does not restate the options here.
 
 `GAN_TRUST=strict` makes the prompt fail closed in CI; `GAN_TRUST=unsafe-trust-all` skips the trust check entirely (logged loudly).
 
