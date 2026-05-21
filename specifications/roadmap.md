@@ -70,9 +70,9 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 2. ✅ **I1** — self-contained install correctness. Shipped PR #9.
 3. ✅ **I3** — uninstall + version policy. Shipped PR #9 (slices 1+3) and PR #10 (slice 2).
 4. ✅ **I2** — install user-facing surfaces. Shipped PR #13.
-5. **[F5](F5-config-api-coherence.md)** — config API surface coherence. ~1 sprint. **Next.** Closes the dogfooding session's loudest bug (`trustApprove` cache staleness) and the `NotImplemented` advertised-tool footgun. No external dependencies.
-6. **[R6](R6-tier-aware-stack-scaffold.md)** — tier-aware stack scaffold. ~1 sprint. Closes the first-use scaffold trap. Independent of F5; can land in either order within slots 5–7.
-7. **[F6](F6-trust-prompt-protocol-clarification.md)** — trust-prompt protocol clarification. ~1 sprint. Documentation-only. Bundled with R6 as compliance cleanup; independent.
+5. ✅ **F5** — config API surface coherence. Shipped PR #14.
+6. ✅ **R6** — tier-aware stack scaffold. Shipped PR #16.
+7. **[F6](F6-trust-prompt-protocol-clarification.md)** — trust-prompt protocol clarification. ~1 sprint. **Next.** Documentation-only; independent (R6 shipped standalone in #16).
 8. **[T1](T1-structured-run-trace.md)** — structured run trace. ~2–3 sprints. Substrate for A1, E5, O3 — must land before them.
 9. **[H1](H1-framework-owned-confinement-hook.md)** — framework-owned confinement hook. ~1–2 sprints. Lands between the I-series and orchestrator-level work so confinement is correct before agent flows ship.
 10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
