@@ -98,6 +98,11 @@ Independents within the order: slot 5 and slots 6–7 can land in any order (non
 
 Every v1.1 candidate spec is re-audited against T1 trace data from v1.0 dogfooding before v1.1 work begins. Audit notes are authored when v1.0 ships; no v1.1 work starts until the audit closes. Same checkpoint discipline as the post-R, post-E1, post-M breaks.
 
+Candidates seeded for this audit (judged against real T1 traces, not designed speculatively now; gated behind the audit, not jumped ahead of T1):
+
+- **Structural clone / prior-art detection surface (Q-series).** Flags when changed code duplicates code already present elsewhere in the repo OR in a prior sprint's diff within the same run. Motivated by the R6-era finding (`resolveUserHome` 3-way clone; `editedBody` cross-sprint dup). Shares Q1's diff-analysis substrate (natural ~v1.2); tokenized / structural and language-agnostic; advisory severity by default (per the "Measurement is separate from gating" convention in [PROJECT_CONTEXT.md](../PROJECT_CONTEXT.md) § Conventions). Extends through E3's `evaluator.additionalChecks` as a pure function over (file content, file path, sprint plan).
+- **Contract-time prior-art rule in the contract-proposer.** When the contract-proposer drafts a criterion introducing a utility / helper / constant, it searches the repo for an existing definition and, if found, writes a REUSE-OR-JUSTIFY-DIVERGENCE criterion the evaluator scores — turning cross-file duplication into a scored criterion before the generator runs. Proactive surface; pairs with the reactive clone probe above the way R6's scaffold guidance pairs with W1's `StackOverrideShrinkage` warning. Prompt-level change to the contract-proposer, NOT a new Config API surface. "Reuse or justify" (not "always reuse") so the generator can object when sharing is wrong.
+
 ## v1.1 — first iteration on real signal
 
 Builds on T1 trace data and v1.0 user reports. Specs land in priority order driven by data, not speculation.
