@@ -1,0 +1,206 @@
+{
+  "$id": "https://claudeagents.dev/schemas/evaluator-evidence-bundle-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "criterion": {
+      "allOf": [
+        {
+          "$comment": "Conditional-required (T1 Evidence bundle shape): a pass OR fail verdict must carry reproductionCommand; a fail verdict must ALSO carry deltaFromContract. The 'then' subschemas re-declare the properties they require so the schema compiles cleanly under the repo's pinned ajv strict mode.",
+          "if": {
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "pass",
+                  "fail"
+                ]
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "reproductionCommand": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reproductionCommand"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "evidence"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "fail"
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "deltaFromContract": {
+                    "$ref": "#/definitions/deltaFromContract"
+                  }
+                },
+                "required": [
+                  "deltaFromContract"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "evidence"
+            ],
+            "type": "object"
+          }
+        }
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/definitions/evidence"
+        },
+        "name": {
+          "description": "Join key: matches a criteria[].name in the corresponding sprint-{N}-contract.json.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked",
+            "skipped"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence",
+        "name",
+        "verdict"
+      ],
+      "type": "object"
+    },
+    "deltaFromContract": {
+      "additionalProperties": false,
+      "description": "expected paraphrases the criterion's description; observed is what the evaluator found.",
+      "properties": {
+        "expected": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected",
+        "observed"
+      ],
+      "type": "object"
+    },
+    "evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "deltaFromContract": {
+          "$ref": "#/definitions/deltaFromContract"
+        },
+        "reproductionCommand": {
+          "description": "A deterministic shell command a human can run to re-derive the verdict. Required for pass and fail verdicts; optional for blocked and skipped.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "traceEventRefs": {
+          "description": "Array of <eventType>:<sequenceNumber> strings pointing into the run's trace. May be empty for verdict='skipped'.",
+          "items": {
+            "pattern": "^[a-z][A-Za-z0-9]*:(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "traceEventRefs"
+      ],
+      "type": "object"
+    },
+    "verdictSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "passed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalCriteria": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "blocked",
+        "failed",
+        "passed",
+        "skipped",
+        "totalCriteria"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the ClaudeAgents evaluator evidence bundle (T1 F1.4). The bundle is the evaluator's output artifact at .gan-state/runs/<run-id>/sprint-{N}-feedback-{attemptLetter}.json. Each criterion's name joins to a criteria[].name in the corresponding sprint-{N}-contract.json. Per-criterion conditional-required logic: verdict='fail' carries BOTH reproductionCommand and deltaFromContract; verdict='pass' carries reproductionCommand; blocked/skipped may omit both. Forward-compatibility (T1 additive rule): new optional fields and new verdict-enum values via the discriminator-tolerance contract stay on v1.",
+  "properties": {
+    "attemptLetter": {
+      "pattern": "^[A-Z]$",
+      "type": "string"
+    },
+    "criteria": {
+      "items": {
+        "$ref": "#/definitions/criterion"
+      },
+      "type": "array"
+    },
+    "sprintNumber": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "verdictSummary": {
+      "$ref": "#/definitions/verdictSummary"
+    }
+  },
+  "required": [
+    "attemptLetter",
+    "criteria",
+    "sprintNumber",
+    "verdictSummary"
+  ],
+  "title": "ClaudeAgents evaluator evidence bundle, v1",
+  "type": "object"
+}

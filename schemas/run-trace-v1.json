@@ -1,0 +1,359 @@
+{
+  "$id": "https://claudeagents.dev/schemas/run-trace-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "properties": {
+        "eventType": {
+          "$ref": "#/definitions/eventType"
+        },
+        "runId": {
+          "$ref": "#/definitions/runId"
+        },
+        "sequenceNumber": {
+          "$ref": "#/definitions/sequenceNumber"
+        },
+        "timestamp": {
+          "$ref": "#/definitions/timestamp"
+        }
+      },
+      "required": [
+        "eventType",
+        "runId",
+        "sequenceNumber",
+        "timestamp"
+      ],
+      "type": "object"
+    },
+    {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/orchestratorMilestone"
+        },
+        {
+          "$ref": "#/definitions/agentAttempt"
+        },
+        {
+          "$ref": "#/definitions/llmCall"
+        },
+        {
+          "$ref": "#/definitions/toolCall"
+        },
+        {
+          "$ref": "#/definitions/safetyHalt"
+        },
+        {
+          "$ref": "#/definitions/trustEvent"
+        },
+        {
+          "$ref": "#/definitions/validationAbort"
+        }
+      ]
+    }
+  ],
+  "definitions": {
+    "agentAttempt": {
+      "properties": {
+        "attemptNumber": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "disposition": {
+          "enum": [
+            "completed",
+            "objected",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "eventType": {
+          "const": "agentAttempt"
+        },
+        "inputDigest": {
+          "$ref": "#/definitions/sha256Hex"
+        },
+        "outputArtifactPath": {
+          "$ref": "#/definitions/relativePosixPath"
+        },
+        "role": {
+          "$ref": "#/definitions/roleId"
+        }
+      },
+      "required": [
+        "attemptNumber",
+        "disposition",
+        "eventType",
+        "inputDigest",
+        "outputArtifactPath",
+        "role"
+      ],
+      "type": "object"
+    },
+    "errorCode": {
+      "description": "F2 error code, PascalCase ASCII Type-like name (e.g. UntrustedOverlay, PathEscape). Distinct from the camelCase trace discriminators by design.",
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "type": "string"
+    },
+    "eventType": {
+      "description": "Event-class discriminator. The seven values below are the v1 known set; readers tolerate unknown values per the forward-compatibility contract (see the schema-level description). camelCase ASCII.",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "type": "string"
+    },
+    "llmCall": {
+      "properties": {
+        "cacheHit": {
+          "type": "boolean"
+        },
+        "eventType": {
+          "const": "llmCall"
+        },
+        "latencyMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "promptRef": {
+          "$ref": "#/definitions/sha256Hex"
+        },
+        "responseRef": {
+          "$ref": "#/definitions/sha256Hex"
+        },
+        "role": {
+          "$ref": "#/definitions/roleId"
+        },
+        "tokensCached": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokensInput": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokensOutput": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cacheHit",
+        "eventType",
+        "latencyMs",
+        "model",
+        "promptRef",
+        "responseRef",
+        "role",
+        "tokensCached",
+        "tokensInput",
+        "tokensOutput"
+      ],
+      "type": "object"
+    },
+    "orchestratorMilestone": {
+      "properties": {
+        "disposition": {
+          "description": "Set on sprint-end milestones; the run/sprint outcome.",
+          "enum": [
+            "success",
+            "halted",
+            "aborted",
+            "error"
+          ],
+          "type": "string"
+        },
+        "eventType": {
+          "const": "orchestratorMilestone"
+        },
+        "milestone": {
+          "description": "Sprint-level transition label. camelCase ASCII; new values stay on v1 per the additive-discriminator rule.",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventType",
+        "milestone"
+      ],
+      "type": "object"
+    },
+    "relativePosixPath": {
+      "description": "Relative POSIX path from the trace root. No leading separator and no '..' traversal segments.",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "\\\\"
+          }
+        ]
+      },
+      "type": "string"
+    },
+    "roleId": {
+      "description": "Agent role identifier, kebab-case ASCII (e.g. gan-generator).",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "safetyHalt": {
+      "properties": {
+        "eventType": {
+          "const": "safetyHalt"
+        },
+        "payload": {
+          "description": "Class-specific shape owned by the triggering spec (A1 owns loopDetected; A2 owns scopeViolation). T1 reserves the extension point and does not constrain the payload's inner shape.",
+          "type": "object"
+        },
+        "role": {
+          "$ref": "#/definitions/roleId"
+        },
+        "safetyClass": {
+          "description": "Discriminator within the safetyHalt class. The v1 known values are loopDetected, scopeViolation, future; readers tolerate unknown additive values per the forward-compatibility contract. camelCase ASCII.",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventType",
+        "payload",
+        "role",
+        "safetyClass"
+      ],
+      "type": "object"
+    },
+    "sequenceNumber": {
+      "description": "Monotonic non-negative integer, no gaps within a run.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sha256Hex": {
+      "description": "SHA-256 hash, hex-encoded lowercase, exactly 64 chars. No sha256: prefix (bare hex per T1 field encodings).",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "timestamp": {
+      "description": "RFC 3339 UTC timestamp with millisecond precision. The pattern enforces the encoding directly (the repo's pinned ajv runs strict:true with no ajv-formats, so format:date-time is not used): the trailing Z and the .mmm fraction are required and local timezones are forbidden.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "type": "string"
+    },
+    "toolCall": {
+      "properties": {
+        "argumentsRef": {
+          "$ref": "#/definitions/relativePosixPath"
+        },
+        "disposition": {
+          "enum": [
+            "completed",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "eventType": {
+          "const": "toolCall"
+        },
+        "latencyMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resultRef": {
+          "$ref": "#/definitions/relativePosixPath"
+        },
+        "role": {
+          "$ref": "#/definitions/roleId"
+        },
+        "tool": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "argumentsRef",
+        "disposition",
+        "eventType",
+        "latencyMs",
+        "resultRef",
+        "role",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "trustEvent": {
+      "properties": {
+        "contentHash": {
+          "$ref": "#/definitions/sha256Hex"
+        },
+        "eventType": {
+          "const": "trustEvent"
+        },
+        "promptVariant": {
+          "enum": [
+            "subsequentChange",
+            "initialIntroduction"
+          ],
+          "type": "string"
+        },
+        "userChoice": {
+          "enum": [
+            "view",
+            "approve",
+            "runWithoutProjectCommands",
+            "cancel"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "contentHash",
+        "eventType",
+        "promptVariant",
+        "userChoice"
+      ],
+      "type": "object"
+    },
+    "validationAbort": {
+      "properties": {
+        "errorCode": {
+          "$ref": "#/definitions/errorCode"
+        },
+        "errorPayload": {
+          "description": "The F2 error payload, preserved verbatim ({ code, message, file?, field?, line?, ... }).",
+          "type": "object"
+        },
+        "eventType": {
+          "const": "validationAbort"
+        },
+        "validationStage": {
+          "enum": [
+            "config",
+            "overlay",
+            "stack",
+            "module"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "errorCode",
+        "errorPayload",
+        "eventType",
+        "validationStage"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "JSON Schema (draft-07) for a single ClaudeAgents run-trace event (T1). Every event carries the common envelope (sequenceNumber, eventType, timestamp, runId) plus the class-specific fields selected by the eventType discriminator. The oneOf below is the v1 KNOWN set of event classes. Forward-compatibility / additive-evolution contract (T1 F1.2): a NEW optional field, a NEW discriminator value within an existing class (e.g. a new safetyHalt.safetyClass or orchestratorMilestone.milestone), and a NEW event-class type ENTIRELY all stay on v1 and DO NOT bump the schema version. A field RENAME or a SEMANTIC change of an existing field forces run-trace-v2. Because additive changes stay on v1, the schema's oneOf cannot itself accept future-unknown event classes; the v1 READER (not this schema) is responsible for tolerating both an unknown discriminator value within a known class AND an unknown event-class type, skipping such an event with a structured warning rather than erroring. The envelope is therefore intentionally open (no envelope-level additionalProperties:false) so future optional fields validate against v1.",
+  "title": "ClaudeAgents run-trace event, v1",
+  "type": "object"
+}
