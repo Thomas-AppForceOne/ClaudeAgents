@@ -20,7 +20,13 @@
 
 import AjvImport, { type ErrorObject, type ValidateFunction } from 'ajv';
 
-import { stackV1, overlayV1 } from '../schemas-bundled.js';
+import {
+  stackV1,
+  overlayV1,
+  runTraceV1,
+  runTraceIndexV1,
+  evaluatorEvidenceBundleV1,
+} from '../schemas-bundled.js';
 
 // Ajv ships as CJS with `module.exports = Ajv`; under TS NodeNext +
 // `esModuleInterop`, the default-import binding resolves to the namespace
@@ -66,6 +72,44 @@ function getOverlayValidator(): ValidateFunction {
   const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
   const compiled = ajv.compile(overlayV1);
   overlayValidator = compiled;
+  return compiled;
+}
+
+let runTraceValidator: ValidateFunction | null = null;
+let runTraceIndexValidator: ValidateFunction | null = null;
+let evaluatorEvidenceBundleValidator: ValidateFunction | null = null;
+
+/**
+ * T1 run-trace event validator. Lazily compiled under the same pinned ajv
+ * options as the stack/overlay validators (`strict: true`, `allErrors:
+ * true`, `useDefaults: false`) — no parallel ajv configuration. Exposed so
+ * the run-trace emission/reconciliation surface (Sprint 2) and the
+ * schema-validation tests can validate a parsed event without re-deriving
+ * the compile step.
+ */
+export function getRunTraceValidator(): ValidateFunction {
+  if (runTraceValidator !== null) return runTraceValidator;
+  const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
+  const compiled = ajv.compile(runTraceV1);
+  runTraceValidator = compiled;
+  return compiled;
+}
+
+/** T1 run-trace index validator (same pinned ajv options). */
+export function getRunTraceIndexValidator(): ValidateFunction {
+  if (runTraceIndexValidator !== null) return runTraceIndexValidator;
+  const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
+  const compiled = ajv.compile(runTraceIndexV1);
+  runTraceIndexValidator = compiled;
+  return compiled;
+}
+
+/** T1 evaluator evidence-bundle validator (same pinned ajv options). */
+export function getEvaluatorEvidenceBundleValidator(): ValidateFunction {
+  if (evaluatorEvidenceBundleValidator !== null) return evaluatorEvidenceBundleValidator;
+  const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
+  const compiled = ajv.compile(evaluatorEvidenceBundleV1);
+  evaluatorEvidenceBundleValidator = compiled;
   return compiled;
 }
 
