@@ -1,0 +1,59 @@
+{
+  "$id": "https://claudeagents.dev/schemas/run-trace-index-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "nonNegativeInteger": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "timestamp": {
+      "description": "RFC 3339 UTC timestamp with millisecond precision (same encoding as run-trace events).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "type": "string"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the derivative ClaudeAgents run-trace index (T1 F1.3). The index is a fast-read summary so readers do not have to scan every event file; it is regenerable by scanning the self-describing event files and sorting by sequence number, and may lag the events (readers MUST treat events as authoritative when the index disagrees). countByClass keys are the eventType discriminator strings; per the forward-compatibility contract a new event-class type adds a new key without bumping the schema, so countByClass permits additional camelCase keys. The run disposition is set when the run terminates and is absent on an in-progress run.",
+  "properties": {
+    "countByClass": {
+      "additionalProperties": {
+        "$ref": "#/definitions/nonNegativeInteger"
+      },
+      "description": "Per-event-class counts keyed on the eventType discriminator. Open map: a new event class adds a key without a schema bump (forward-compatibility contract). Keys are camelCase ASCII.",
+      "propertyNames": {
+        "pattern": "^[a-z][A-Za-z0-9]*$"
+      },
+      "type": "object"
+    },
+    "disposition": {
+      "description": "Run/sprint outcome, set when the run terminates. Absent while the run is in progress.",
+      "enum": [
+        "success",
+        "halted",
+        "aborted",
+        "error"
+      ],
+      "type": "string"
+    },
+    "firstTimestamp": {
+      "$ref": "#/definitions/timestamp"
+    },
+    "lastTimestamp": {
+      "$ref": "#/definitions/timestamp"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "totalEvents": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    }
+  },
+  "required": [
+    "countByClass",
+    "runId",
+    "totalEvents"
+  ],
+  "title": "ClaudeAgents run-trace index, v1",
+  "type": "object"
+}

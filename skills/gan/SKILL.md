@@ -224,6 +224,24 @@ The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set a
 
 `GAN_TRUST=strict` makes the prompt fail closed in CI; `GAN_TRUST=unsafe-trust-all` skips the trust check entirely (logged loudly).
 
+## Run-trace integration points
+
+Every `/gan` run writes a structured, append-only event log to `.gan-state/runs/<run-id>/trace/` via the framework's trace library: the orchestrator holds one trace emitter for the run and emits a typed event at each milestone, agent attempt, LLM call, and tool call (`orchestratorMilestone`, `agentAttempt`, `llmCall`, `toolCall`). The trace is the read-substrate for loop detection, recovery, and later cost/accuracy phases — downstream phases read trace events rather than inventing their own logging. The trace lives entirely under `.gan-state/` and is never transmitted off-machine.
+
+The orchestrator/skill runtime wires the following integration points. Each names the framework helper or formatter it calls — those are the unit-tested seams the runtime composes; the timing and placement below are the orchestrator's responsibility.
+
+- **Agent-attempt heartbeat (stderr).** Before an agent's **first** LLM call in an attempt, the orchestrator emits one heartbeat line to stderr so a watching user knows the tool has not frozen. The line is produced by the `formatHeartbeat(role)` formatter and renders exactly `[<role>] thinking...` — metadata only, no payload content. Emitted once per attempt.
+
+- **Per-LLM-call and sprint-end summaries (stderr).** When each LLM call completes, the orchestrator emits the one-line cost/latency summary produced by `formatLlmCallSummary` (reading the `llmCall` event's metric fields). At every sprint termination — graceful completion, loop-detection halt, validation abort, user cancel, or error — it emits the cumulative line produced by `formatSprintSummary` / `formatSprintSummaryFromEvents`, aggregated from the trace. These lines go unconditionally to stderr and carry operational metadata only (token counts, latency, cache-hit status, counts and sums); never prompt or response content, and no dollar cost.
+
+- **Trust-prompt resolution → `trustEvent`.** When the interactive trust prompt resolves (the `[v]` / `[a]` / `[r]` / `[c]` path owned by [`trust-prompt.md`](trust-prompt.md)), the orchestrator records the outcome by building a `trustEvent` with the `buildTrustEventBody` builder and emitting it through the trace emitter. The builder maps the resolution's `promptVariant` and the user's `userChoice` faithfully — in particular, `[a]`/`approve` and `[r]`/`runWithoutProjectCommands` are distinct outcomes and are never collapsed.
+
+- **`validateAll()` abort → `validationAbort`.** When `validateAll()` (aborting mode) fails and aborts the run, the orchestrator builds a `validationAbort` event with the `buildValidationAbortBody` builder and emits it before exiting. The builder copies the framework's F2 error payload (`code`, `message`, and any `file` / `field` / `line`) into the event **verbatim**, so the validation diagnostic in the trace matches the F2 error the user is shown field-for-field.
+
+- **`--recover` → trace-driven resumption.** Recovery reads the archived trace (O2's archive includes the entire trace directory) to reconstruct sprint state with the `reconstructRecoveryState` helper: it resumes sequence numbering **gaplessly** from one past the highest sequence the archive ended on, and reconstructs the per-role attempt-counter state purely from the `agentAttempt` events — **without** any external counter file. The resume sequence is fed to a fresh trace emitter so writing continues to the same trace directory without a gap or a collision.
+
+- **A1 loop-detection `safetyHalt` (reserved extension point).** The trace reserves a `safetyHalt` event class with a `safetyClass` discriminator; the framework's loop-detection phase emits a `safetyHalt` with `safetyClass = "loopDetected"` when it halts a run. The trace library provides the reserved class and emission seam; the loop-detection payload shape is owned by that phase, not by the trace surface.
+
 ## Spawn discipline (summary)
 
 Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object.

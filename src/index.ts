@@ -56,6 +56,64 @@ export {
 
 export { validateAll, validateOverlay, validateStack } from './config-server/tools/validate.js';
 
+// ---- T1 run-trace emission library --------------------------------------
+
+export {
+  TraceEmitter,
+  computePromptRef,
+  computeInputDigest,
+  sha256Hex,
+  isSha256Hex,
+  buildPayloadFilename,
+  buildPayloadRef,
+  scanEvents,
+  buildIndex,
+  reconcileIndex,
+  isUnrecoverable,
+  safeMergeParsedObject,
+  eventsDir,
+  payloadsDir,
+  indexPath,
+  // Sprint 3 helpers
+  reconstructRecoveryState,
+  nextRecoverySequence,
+  buildTrustEventBody,
+  buildValidationAbortBody,
+  buildValidationAbortFromCode,
+  formatHeartbeat,
+  formatLlmCallSummary,
+  formatWallclock,
+  aggregateSprintSummary,
+  formatSprintSummary,
+  formatSprintSummaryFromEvents,
+  verifyEvidenceBundle,
+  checkFailCompleteness,
+} from './trace/index.js';
+
+export type {
+  TraceEmitterOptions,
+  RedactionMode,
+  LlmRequestIdentity,
+  TraceEvent,
+  TraceIndex,
+  PayloadClass,
+  // Sprint 3 helper types
+  RecoveryState,
+  RoleAttemptState,
+  TrustResolution,
+  TrustEventBody,
+  ValidationAbortBody,
+  ValidationStage,
+  F2ErrorLike,
+  LlmCallMetrics,
+  SprintSummaryAggregate,
+  EvidenceBundleVerifyResult,
+  EvidenceBundleFailure,
+  EvidenceBundleCheck,
+  ContractCriterionLike,
+  BundleCriterion,
+} from './trace/index.js';
+
 // ---- shared types --------------------------------------------------------
 
 export type { Issue } from './config-server/validation/schema-check.js';

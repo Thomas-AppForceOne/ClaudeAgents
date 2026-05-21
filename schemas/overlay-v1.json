@@ -93,6 +93,13 @@
     },
     "thresholdOverrideBare": {
       "type": "integer"
+    },
+    "tracePayloadsBare": {
+      "enum": [
+        "full",
+        "hashed"
+      ],
+      "type": "string"
     }
   },
   "description": "JSON Schema (draft-07) for the body-YAML of ClaudeAgents overlay files. Per F3, this document is immutable; future changes bump to v2.",
@@ -337,6 +344,39 @@
                 },
                 "value": {
                   "$ref": "#/definitions/stackOverrideBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "telemetry": {
+      "additionalProperties": false,
+      "properties": {
+        "discardInherited": {
+          "type": "boolean"
+        },
+        "tracePayloads": {
+          "default": "full",
+          "description": "T1 telemetry.tracePayloads splice point. Controls whether trace payloads are stored verbatim ('full', the default) or only hashed ('hashed'). Scalar cascade; available in both tiers.",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/tracePayloadsBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/tracePayloadsBare"
                 }
               },
               "required": [
