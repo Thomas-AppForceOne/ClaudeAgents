@@ -73,7 +73,7 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 5. ✅ **F5** — config API surface coherence. Shipped PR #14.
 6. ✅ **R6** — tier-aware stack scaffold. Shipped PR #16.
 7. ✅ **F6** — trust-prompt protocol clarification. Shipped PR #18.
-8. ✅ **T1** — structured run trace. Shipped PR #TBD.
+8. ✅ **T1** — structured run trace. Shipped PR #19.
 9. **[H1](H1-framework-owned-confinement-hook.md)** — framework-owned confinement hook. ~1–2 sprints. **Next.** Lands between the I-series and orchestrator-level work so confinement is correct before agent flows ship.
 10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
 11. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
