@@ -10,6 +10,6 @@ ClaudeAgents is a generator-discriminator framework for AI-driven software devel
 
 ## Definition of done for a spec implementation
 
-When you implement a spec and its PR merges to `develop`, the **same PR** flips that spec's entry in `specifications/roadmap.md` § "Implementation order" to the shipped form — `✅ **<spec>** — <short desc>. Shipped PR #<n>` — dropping the link and rationale to match the already-shipped slots, and moving the `**Next.**` marker to the next un-shipped slot. A merged spec whose roadmap entry still shows a link, a `**Next.**` marker, or no `✅` is a defect (it shipped twice undetected: F5 #14, R6 #16). The roadmap is editable (not a shipped spec), so this edit never trips the immutability rule. Full rule + rationale: PROJECT_CONTEXT § Conventions, "Shipping a spec flips its roadmap entry."
+A spec's implementation PR also flips that spec's entry in `specifications/roadmap.md` § "Implementation order" to the shipped form (`✅ **<spec>** — <desc>. Shipped PR #<n>`) in the **same diff** — a merged spec whose roadmap entry still shows a link, a `**Next.**` marker, or no `✅` is a defect. Shipped specs are otherwise immutable: new behaviour goes in a new spec, never an edit to a shipped one.
 
-Shipped specs are immutable — new behaviour goes in a new spec or an unimplemented one, never an edit to a shipped spec's prose.
+Full rules and rationale live in PROJECT_CONTEXT § Conventions — "Shipping a spec flips its roadmap entry", "Implemented specs are immutable", "One fact, one home". (Status itself is never tracked here or in PROJECT_CONTEXT; the roadmap is its only home.)

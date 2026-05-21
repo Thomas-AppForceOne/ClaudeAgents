@@ -83,7 +83,7 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 15. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
 16. **Pre-release chores.** See below.
 
-Independents within the order: slot 5 and slots 6–7 can land in any order (none gate each other). Slots 8–14 have the dependency relationships called out above. The post-v1.0 dogfooding audit fires after slot 16.
+Independents within the order: slots 8–14 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 16.
 
 ### Known gaps accepted at v1.0
 
