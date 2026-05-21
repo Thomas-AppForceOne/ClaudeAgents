@@ -70,9 +70,9 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 2. ✅ **I1** — self-contained install correctness. Shipped PR #9.
 3. ✅ **I3** — uninstall + version policy. Shipped PR #9 (slices 1+3) and PR #10 (slice 2).
 4. ✅ **I2** — install user-facing surfaces. Shipped PR #13.
-5. **[F5](F5-config-api-coherence.md)** — config API surface coherence. ~1 sprint. **Next.** Closes the dogfooding session's loudest bug (`trustApprove` cache staleness) and the `NotImplemented` advertised-tool footgun. No external dependencies.
-6. **[R6](R6-tier-aware-stack-scaffold.md)** — tier-aware stack scaffold. ~1 sprint. Closes the first-use scaffold trap. Independent of F5; can land in either order within slots 5–7.
-7. **[F6](F6-trust-prompt-protocol-clarification.md)** — trust-prompt protocol clarification. ~1 sprint. Documentation-only. Bundled with R6 as compliance cleanup; independent.
+5. ✅ **F5** — config API surface coherence. Shipped PR #14.
+6. ✅ **R6** — tier-aware stack scaffold. Shipped PR #16.
+7. **[F6](F6-trust-prompt-protocol-clarification.md)** — trust-prompt protocol clarification. ~1 sprint. **Next.** Documentation-only; independent (R6 shipped standalone in #16).
 8. **[T1](T1-structured-run-trace.md)** — structured run trace. ~2–3 sprints. Substrate for A1, E5, O3 — must land before them.
 9. **[H1](H1-framework-owned-confinement-hook.md)** — framework-owned confinement hook. ~1–2 sprints. Lands between the I-series and orchestrator-level work so confinement is correct before agent flows ship.
 10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
@@ -83,7 +83,7 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 15. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
 16. **Pre-release chores.** See below.
 
-Independents within the order: slot 5 and slots 6–7 can land in any order (none gate each other). Slots 8–14 have the dependency relationships called out above. The post-v1.0 dogfooding audit fires after slot 16.
+Independents within the order: slots 8–14 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 16.
 
 ### Known gaps accepted at v1.0
 
@@ -97,6 +97,11 @@ Independents within the order: slot 5 and slots 6–7 can land in any order (non
 ### Post-v1.0 dogfooding audit
 
 Every v1.1 candidate spec is re-audited against T1 trace data from v1.0 dogfooding before v1.1 work begins. Audit notes are authored when v1.0 ships; no v1.1 work starts until the audit closes. Same checkpoint discipline as the post-R, post-E1, post-M breaks.
+
+Candidates seeded for this audit (judged against real T1 traces, not designed speculatively now; gated behind the audit, not jumped ahead of T1):
+
+- **Structural clone / prior-art detection surface (Q-series).** Flags when changed code duplicates code already present elsewhere in the repo OR in a prior sprint's diff within the same run. Motivated by the R6-era finding (`resolveUserHome` 3-way clone; `editedBody` cross-sprint dup). Shares Q1's diff-analysis substrate (natural ~v1.2); tokenized / structural and language-agnostic; advisory severity by default (per the "Measurement is separate from gating" convention in [PROJECT_CONTEXT.md](../PROJECT_CONTEXT.md) § Conventions). Extends through E3's `evaluator.additionalChecks` as a pure function over (file content, file path, sprint plan).
+- **Contract-time prior-art rule in the contract-proposer.** When the contract-proposer drafts a criterion introducing a utility / helper / constant, it searches the repo for an existing definition and, if found, writes a REUSE-OR-JUSTIFY-DIVERGENCE criterion the evaluator scores — turning cross-file duplication into a scored criterion before the generator runs. Proactive surface; pairs with the reactive clone probe above the way R6's scaffold guidance pairs with W1's `StackOverrideShrinkage` warning. Prompt-level change to the contract-proposer, NOT a new Config API surface. "Reuse or justify" (not "always reuse") so the generator can object when sharing is wrong.
 
 ## v1.1 — first iteration on real signal
 
