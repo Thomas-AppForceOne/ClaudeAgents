@@ -56,6 +56,35 @@ export {
 
 export { validateAll, validateOverlay, validateStack } from './config-server/tools/validate.js';
 
+// ---- T1 run-trace emission library --------------------------------------
+
+export {
+  TraceEmitter,
+  computePromptRef,
+  computeInputDigest,
+  sha256Hex,
+  isSha256Hex,
+  buildPayloadFilename,
+  buildPayloadRef,
+  scanEvents,
+  buildIndex,
+  reconcileIndex,
+  isUnrecoverable,
+  safeMergeParsedObject,
+  eventsDir,
+  payloadsDir,
+  indexPath,
+} from './trace/index.js';
+
+export type {
+  TraceEmitterOptions,
+  RedactionMode,
+  LlmRequestIdentity,
+  TraceEvent,
+  TraceIndex,
+  PayloadClass,
+} from './trace/index.js';
+
 // ---- shared types --------------------------------------------------------
 
 export type { Issue } from './config-server/validation/schema-check.js';
