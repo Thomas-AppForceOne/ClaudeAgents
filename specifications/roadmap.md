@@ -108,9 +108,11 @@ Candidates seeded for this audit (judged against real T1 traces, not designed sp
 Builds on T1 trace data and v1.0 user reports. Specs land in priority order driven by data, not speculation.
 
 - **[A2](A2-generator-scope-enforcement.md)** — generator scope enforcement (PreToolUse hook, per-role scope splits).
+- **[H2](H2-operator-controls.md)** — operator controls: run halt + mid-run steering (`gan halt` / `resume` / `steer`). Extends H1's framework-owned confinement hook with a halt precedence check and adds a one-shot zone-2 steering channel. Depends on H1, A1, O2, T1; composes with A2 in the same hook (halt → scope → zone precedence). Steering is advisory only — it never alters contract criteria, preserving the evaluator's sole-gate property.
 - **Q2** — failure-mode taxonomy (structured error codes replacing free-form prose; shared vocabulary with E5's clarifier-gap codes).
   - *T1 follow-up — out-of-contract findings have no home in the evaluator evidence bundle.* T1 pinned the evaluator's output to a per-criterion evidence bundle (`schemas/evaluator-evidence-bundle-v1.json`) and retired the legacy free-form `blockingConcerns[]` channel. Because every `criteria[].name` must satisfy the join-key invariant (it must match a criterion in the sprint contract), a genuinely *out-of-contract* finding — one that maps to no contract criterion — has no representation in the bundle, and the contract-renegotiation trigger silently shifted from "non-empty `blockingConcerns`" to "any `blocked` verdict." Q2 should define how orphan findings are surfaced: a structured out-of-contract record carried alongside the per-criterion verdicts and keyed by a Q2 error code (sharing the E5 clarifier-gap vocabulary), plus an explicit definition of the renegotiation-trigger semantics. Per T1's "additive stays on v1" rule this lands as a NEW OPTIONAL top-level bundle field (a field rename or a change to existing per-criterion semantics would instead force `evaluator-evidence-bundle-v2`). Surfaced by the post-merge review of T1's implementation; not a defect in T1 (the bundle shape is deliberate) — a deferred design decision Q2 owns.
 - **T2** — cost & efficiency surface (`gan run report`, `gan stats`).
+- **[T4](T4-run-configuration-record.md)** — run-configuration trace record. A per-run `runConfiguration` event (framework version, config digest, active stacks, agent roster + per-role model, trust posture, resolved harness knobs) for run-level debugging and V1's cross-run comparison. Additive new event class on `run-trace-v1`.
 - **A4** — PII / secret regex catalog (per-stack regex bank layered on `secretsGlob`).
 - **E5 round 2** — confidence-scored adaptive clarification depth; optional persistence of resolved clarifications to `additionalContext`.
 - **Per-stack overlay command override completion** — closes W1's `PerStackOverrideUnsupported` warning with the real implementation.
@@ -140,6 +142,7 @@ From "framework that runs agents" to "framework that *measures* agents." Depends
 - **B2** — in-house regression set from real v1.x usage.
 - **Q3** — coverage delta tracking (per-stack `coverageCmd` + threshold splice point).
 - **Q4** — per-stack repo-convention checks (`conventionCmd` slot).
+- **E7** — browser-verified evaluator (new spec). The evaluator opens the running app through a browser surface and scores UI from what it observes, instead of trusting generator-reported screenshots; injects browser checks into E3's evaluator-core through the existing `evaluator.additionalChecks` / stack splice points, paired with a frontend stack. Prerequisite for a graded design-quality rubric (the Q-series quality signal — gradable subjective quality, not binary pass/fail).
 - **C6** — per-step model routing in stack files (tiered model selection per agent role).
 
 ## Beyond v2.0
