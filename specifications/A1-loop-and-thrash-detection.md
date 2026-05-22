@@ -108,6 +108,8 @@ The error message rendered to the user is plain prose:
 
 The message points at the trace directory directly because v1.0 ships without a `gan run trace` command — that surface is T2's scope in v1.1. When T2 lands, A1's PR for v1.1 updates the message to reference the command instead of the directory.
 
+> **F7 dependency.** Per [F7](F7-central-run-data-store-and-worktree-execution.md), the trace and other run data live in the central, repo-keyed store (`<store-root>/<repo-key>/runs/<run-id>/`), not under the project-local `.gan-state/runs/`. The `.gan-state/runs/<run-id>/trace/` path in the message above is the pre-F7 layout; A1's implementation (which lands after F7) renders the central-store path.
+
 ### Halt timing
 
 Ceilings are checked at attempt-start boundaries. An attempt already in flight runs to completion; the next ceiling check fires after it finishes. This means an attempt-in-flight when the ceiling is reached counts toward the trace but does not abort. The trade is predictable semantics for a small worst-case extra attempt; v1.0 accepts this. Mid-attempt cancellation is deferable to a future spec if real usage shows the wasted token cost matters.

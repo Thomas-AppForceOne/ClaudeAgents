@@ -83,7 +83,7 @@ F7 redefines the "project root" O2 uses for both anchoring and recovery keying: 
 - **Serialization (2b).** O2's one-active-run-per-project lock is preserved, re-anchored to the central store: the exclusive `flock` is taken on `<store-root>/<repo-key>/run.lock`. One active `/gan` run per repo, across all its worktrees — concurrent invocations from different worktrees of the same repo hard-refuse, exactly as O2 specifies for one project root.
 - **`--cleanup`** deletes the central-store run directory and, when `workspace.createdByGan` is true, the run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` and its run branch — symmetric to the current model. A user-owned worktree (case 1a) is never touched; only its central run *data* is removed. Because data lives centrally, removing a worktree by any means no longer loses run data.
 
-These edits land in O2's spec (unimplemented, therefore editable) in F7's PR; O2's full implementation (roadmap slot 15) builds on F7's resolved store + worktree model.
+These edits land in O2's spec (unimplemented, therefore editable) in F7's PR; O2's full implementation (roadmap slot 16) builds on F7's resolved store + worktree model.
 
 ### 5. Install-time configuration
 
@@ -175,6 +175,8 @@ $ /gan --list-recoverable     # run from ../myapp-add-export OR from the main ch
 - **O2** — recovery (unimplemented, edited here). projectRoot redefined to the main-worktree root; lock and run enumeration re-anchored to the central store.
 - **O3** — telemetry semantics (unimplemented, edited here). Telemetry capture paths move with the run directory.
 - **H2** — draft (a reconciliation note added here flagging the F7 dependency and the open control-channel-location question; the full path rework lands at H2's v1.1 implementation).
+- **A1, E5, D1** — v1.0 drafts (F7-consistency notes added here): their incidental run-path references — A1's halt-message trace path, E5's `clarified-spec.md`/`raw-prompt.md` output paths, D1's run enumeration — now resolve under the central store. Each spec's own implementation lands after F7 and renders the central-store paths.
+- **A2 (v1.1), E6 (later)** — drafts that also reference `.gan-state/runs/` paths but are out of v1.0 scope; not edited now, reconciled with F7 when those specs are worked.
 - **T4** — draft; no filesystem-path coupling (it adds a `runConfiguration` trace event class only), so no change is needed.
 - **install.sh / R2 / I-series** — shipped; F7 adds an install step and flag without editing those specs (same pattern as H1).
 
@@ -187,6 +189,6 @@ Sprintable as:
 3. (one sprint) Confinement-hook supersession: orchestrator exports `GAN_WORKTREE` / `GAN_RUN_DIR`; rewrite `gan-confine.sh.template` and `gan hooks status`; behavioral path tests.
 4. (one sprint) Recovery + serialization: O2 spec edits, repo-wide enumeration, lock re-anchoring, cleanup worktree handling.
 5. (one sprint) Install-time config: `install.sh --runs-dir` + prompt, marker persistence, STATE_LOG + rollback + uninstall.
-6. (one sprint) Cascade + docs: `runtime-knobs.md` surfaces, `retirements.md` rows, roadmap cross-refs + flip, dependent edits to O3 / H2 / T4 / A1 / E5.
+6. (one sprint) Implementation-time docs: add the `runtime-knobs.md` surfaces (`--new-worktree`, `--runs-dir`, `GAN_RUNS_DATA`, `GAN_WORKTREE`, `GAN_RUN_DIR`) + surface-count bump; add the `retirements.md` rows; flip F7's roadmap entry to ✅. (The dependent spec-prose edits — O2 / O3 / H2 / A1 / E5 / D1 — already landed with this spec, not the implementation; T4 needed none.)
 
-Slices 1–2 land first and in order; 3–5 depend on 1–2 and can parallelize; slice 6 lands with the PR that completes the spec edits.
+Slices 1–2 land first and in order; 3–5 depend on 1–2 and can parallelize; slice 6 lands with F7's implementation PR.

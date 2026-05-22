@@ -156,8 +156,8 @@ A SKILL.md section with status markers:
   framework" and exits non-zero.
 
 `--list-recoverable` [deferred-to-v1.1]
-- Per O2's revision: enumerates `.gan-state/runs/*/progress.json` and prints
-  recoverable runs.
+- Per O2's revision: enumerates `<store-root>/<repo-key>/runs/*/progress.json`
+  (central store per F7) and prints recoverable runs.
 - v1.0 behavior: prints "this command requires v1.1; install the latest
   framework" and exits non-zero.
 ```
