@@ -32,13 +32,27 @@
  *     No stub binary is required — the failure is an env-flagged branch in
  *     install.sh's own real code path, leaving every other side effect real.
  *
+ *   - 'runs-dir-config' — (F7 slice 5) sets `CAS_FAIL_RUNS_DIR_CONFIG=1`,
+ *     which `configure_runs_dir` reads at the END of its body, AFTER it has
+ *     written the central-store marker (`~/.claude/gan/runs-data-dir`) and
+ *     merged the store-root read/write grant into `~/.claude/settings.json`.
+ *     The installer then returns non-zero, routing through the real ERR trap
+ *     and `rollback()` so a test can assert BOTH writes are undone (marker
+ *     removed/restored, settings grant gone). Same env-flagged-branch shape as
+ *     'confine-hook-write' — no stub binary required.
+ *
  * The helper deliberately works via env-flagged stubs (rather than
  * patching `install.sh`) so the script under test sees its real code
  * paths — only the side-effect surface is faked.
  */
 import { writeStubBin } from './tmpenv.js';
 
-export type FailurePoint = 'npm-install' | 'json-edit' | 'zone-prep' | 'confine-hook-write';
+export type FailurePoint =
+  | 'npm-install'
+  | 'json-edit'
+  | 'zone-prep'
+  | 'confine-hook-write'
+  | 'runs-dir-config';
 
 export interface FailurePointEnv {
   /** Env vars the stubs read to know whether to fail. */
@@ -134,6 +148,13 @@ export function injectFailureAt(
       // registration have been written, so rollback exercises the real
       // partial-state cleanup.
       target.env.CAS_FAIL_CONFINE_HOOK_WRITE = '1';
+      break;
+    case 'runs-dir-config':
+      // (F7 slice 5) Pure env-flagged branch in install.sh's own
+      // `configure_runs_dir` — no stub binary needed. The flag is read after
+      // BOTH the marker and the settings grant have been written, so rollback
+      // exercises the real partial-state cleanup of both.
+      target.env.CAS_FAIL_RUNS_DIR_CONFIG = '1';
       break;
     default: {
       // exhaustiveness check
