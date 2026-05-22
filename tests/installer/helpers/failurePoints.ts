@@ -41,6 +41,16 @@
  *     removed/restored, settings grant gone). Same env-flagged-branch shape as
  *     'confine-hook-write' — no stub binary required.
  *
+ *   - 'module-state-dir-config' — (F8) sets `CAS_FAIL_MODULE_STATE_DIR_CONFIG=1`,
+ *     which `configure_module_state_dir` reads at the END of its body, AFTER it
+ *     has written the module-state marker (`~/.claude/gan/module-state-dir`).
+ *     The installer then returns non-zero, routing through the real ERR trap and
+ *     `rollback()` so a test can assert the marker write is undone (marker
+ *     removed when newly created, byte-restored when pre-existing). PARITY-MINUS
+ *     vs 'runs-dir-config': F8 writes NO settings.json grant, so there is no
+ *     second write to undo — the rollback is marker-only. Same
+ *     env-flagged-branch shape as 'runs-dir-config' — no stub binary required.
+ *
  * The helper deliberately works via env-flagged stubs (rather than
  * patching `install.sh`) so the script under test sees its real code
  * paths — only the side-effect surface is faked.
@@ -52,7 +62,8 @@ export type FailurePoint =
   | 'json-edit'
   | 'zone-prep'
   | 'confine-hook-write'
-  | 'runs-dir-config';
+  | 'runs-dir-config'
+  | 'module-state-dir-config';
 
 export interface FailurePointEnv {
   /** Env vars the stubs read to know whether to fail. */
@@ -155,6 +166,14 @@ export function injectFailureAt(
       // BOTH the marker and the settings grant have been written, so rollback
       // exercises the real partial-state cleanup of both.
       target.env.CAS_FAIL_RUNS_DIR_CONFIG = '1';
+      break;
+    case 'module-state-dir-config':
+      // (F8) Pure env-flagged branch in install.sh's own
+      // `configure_module_state_dir` — no stub binary needed. The flag is read
+      // after the marker has been written, so rollback exercises the real
+      // partial-state cleanup of the marker. No settings grant exists to undo
+      // (F8 parity-MINUS).
+      target.env.CAS_FAIL_MODULE_STATE_DIR_CONFIG = '1';
       break;
     default: {
       // exhaustiveness check
