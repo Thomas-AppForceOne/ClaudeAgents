@@ -56,6 +56,29 @@ export {
 
 export { validateAll, validateOverlay, validateStack } from './config-server/tools/validate.js';
 
+// ---- F7 central run-data store resolution --------------------------------
+
+export {
+  resolveStoreRoot,
+  resolveMainWorktreeRoot,
+  computeRepoKey,
+  resolveRepoKey,
+  resolveRepoStoreDir,
+  resolveRunLockPath,
+  resolveRunsRoot,
+  resolveRunDir,
+  resolveRunStore,
+  generateRunId,
+  DEFAULT_STORE_DIRNAME,
+  STORE_MARKER_RELPATH,
+  STORE_ROOT_ENV,
+  REPO_KEY_HASH_LENGTH,
+  RUN_ID_PATTERN,
+  REPO_KEY_HASH_TAIL,
+} from './config-server/storage/run-store.js';
+
+export type { StoreEnv, ResolvedRunStore } from './config-server/storage/run-store.js';
+
 // ---- T1 run-trace emission library --------------------------------------
 
 export {
