@@ -285,6 +285,42 @@ describe('CLI prose discipline (F4 backstop)', () => {
     }
   });
 
+  // F7 slice-3 extension — `gan hooks status` human surface (including the
+  // new Active-run confinement zones section) obeys prose discipline both
+  // outside a run (zones unset) and inside one (zones resolved). The zone
+  // env values are sandbox paths constructed at runtime, never hardcoded.
+  it('F7 hooks-status human surface obeys prose discipline (out-of-run + in-run)', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'gan-prose-hooks-home-'));
+    const cwd = mkdtempSync(path.join(tmpdir(), 'gan-prose-hooks-cwd-'));
+    tmpDirs.push(home, cwd);
+
+    // Out of a run: GAN_RUN_ID absent → zones reported unset.
+    const outOfRun = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
+    expect(outOfRun.exitCode).toBe(0);
+
+    // In a run: zones resolved from the env.
+    const inRun = await runGan(['hooks', 'status'], {
+      cwd,
+      extraEnv: {
+        HOME: home,
+        GAN_RUN_ID: '20240115T091500-a1b2',
+        GAN_WORKTREE: path.join(cwd, 'worktree'),
+        GAN_RUN_DIR: path.join(cwd, 'rundir'),
+      },
+    });
+    expect(inRun.exitCode).toBe(0);
+
+    for (const r of [outOfRun, inRun]) {
+      const violations = findViolations(r.stdout + r.stderr);
+      if (violations.length > 0) {
+        throw new Error(
+          `F4 prose violations in hooks-status surface:\n` +
+            violations.map((v) => `  @${v.index} '${v.match}': …${v.context}…`).join('\n'),
+        );
+      }
+    }
+  });
+
   it('S2 inner-dispatch error surfaces obey prose discipline', async () => {
     // Unknown inner subcommand under each parent (e.g. `gan config nope`).
     const cases = [

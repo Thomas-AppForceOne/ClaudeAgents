@@ -7,9 +7,10 @@
  *
  * Covers (sprint 2):
  *   AC-A1 — hook rendered from the template, executable, version-correct,
- *           carries F1 zone references; hook body is byte-identical to the
- *           template's non-placeholder lines (rendered against the running
- *           framework version, not a hardcoded golden).
+ *           sources its zones from the F7 GAN_WORKTREE / GAN_RUN_DIR env vars
+ *           (the project-root-anchored worktree literal is gone); hook body is
+ *           byte-identical to the template's non-placeholder lines (rendered
+ *           against the running framework version, not a hardcoded golden).
  *   AC-A2 — settings.json `hooks.PreToolUse[]` carries the ABSOLUTE hook path;
  *           the merge is additive (pre-seeded unrelated PreToolUse entry +
  *           other settings survive).
@@ -167,10 +168,13 @@ describe('install.sh — H1 confinement hook write + registration', () => {
       ),
     );
 
-    // F1 zone references carried from the template.
-    expect(onDisk).toContain('.gan-state/runs');
+    // F7 zone sourcing carried from the template: the two orchestrator-exported
+    // env vars are referenced, and the legacy project-root-anchored worktree
+    // literal is gone (zones derive from GAN_WORKTREE / GAN_RUN_DIR).
+    expect(onDisk).toContain('GAN_WORKTREE');
+    expect(onDisk).toContain('GAN_RUN_DIR');
     expect(onDisk).toContain('worktree');
-    expect(onDisk).toContain('.gan-state/modules');
+    expect(onDisk).not.toContain('.gan-state/runs/$GAN_RUN_ID/worktree');
 
     // Body is exactly the rendered template (no inline re-authoring).
     expect(onDisk).toBe(renderedTemplate());

@@ -246,6 +246,96 @@ describe('gan hooks status', () => {
     expect(parsed.userTier.authoredVersion).toBe(null);
   });
 
+  // ---------------------------------------------------------------------
+  // F7 slice 3 — Active-run confinement zones (GAN_WORKTREE / GAN_RUN_DIR).
+  // ---------------------------------------------------------------------
+
+  it('F7: with GAN_WORKTREE / GAN_RUN_DIR set, the human surface reports the resolved zones', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, userHookHeader(CURRENT_VERSION));
+    const worktree = path.join(cwd, 'my-worktree');
+    const runDir = path.join(cwd, 'store', 'runs', '20240115T091500-a1b2');
+    const r = await runGan(['hooks', 'status'], {
+      cwd,
+      extraEnv: {
+        HOME: home,
+        GAN_RUN_ID: '20240115T091500-a1b2',
+        GAN_WORKTREE: worktree,
+        GAN_RUN_DIR: runDir,
+      },
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('Active-run confinement zones:');
+    expect(r.stdout).toContain('`GAN_WORKTREE`');
+    expect(r.stdout).toContain('`GAN_RUN_DIR`');
+    expect(r.stdout).toContain('20240115T091500-a1b2');
+    expect(r.stdout).toContain(worktree);
+    expect(r.stdout).toContain(runDir);
+  });
+
+  it('F7 --json: the zone fields surface the resolved values', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, userHookHeader(CURRENT_VERSION));
+    const worktree = path.join(cwd, 'my-worktree');
+    const runDir = path.join(cwd, 'store', 'runs', '20240115T091500-a1b2');
+    const r = await runGan(['hooks', 'status', '--json'], {
+      cwd,
+      extraEnv: {
+        HOME: home,
+        GAN_RUN_ID: '20240115T091500-a1b2',
+        GAN_WORKTREE: worktree,
+        GAN_RUN_DIR: runDir,
+      },
+    });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout) as {
+      runZones: { runId: string | null; worktree: string | null; runDir: string | null };
+    };
+    expect(parsed.runZones.runId).toBe('20240115T091500-a1b2');
+    expect(parsed.runZones.worktree).toBe(worktree);
+    expect(parsed.runZones.runDir).toBe(runDir);
+  });
+
+  it('F7: invoked outside a run (zones unset) → exits 0, reports them as unset, never crashes', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, userHookHeader(CURRENT_VERSION));
+    // No GAN_* vars in the env.
+    const r = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('Active-run confinement zones:');
+    expect(r.stdout).toContain('Not in a run.');
+
+    const j = await runGan(['hooks', 'status', '--json'], { cwd, extraEnv: { HOME: home } });
+    expect(j.exitCode).toBe(0);
+    const parsed = JSON.parse(j.stdout) as {
+      runZones: { runId: string | null; worktree: string | null; runDir: string | null };
+    };
+    expect(parsed.runZones.runId).toBe(null);
+    expect(parsed.runZones.worktree).toBe(null);
+    expect(parsed.runZones.runDir).toBe(null);
+  });
+
+  it('F7: a run-id with the zone vars unset reports the run id but unset zones (no crash)', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, userHookHeader(CURRENT_VERSION));
+    const r = await runGan(['hooks', 'status', '--json'], {
+      cwd,
+      extraEnv: { HOME: home, GAN_RUN_ID: '20240115T091500-a1b2' },
+    });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout) as {
+      runZones: { runId: string | null; worktree: string | null; runDir: string | null };
+    };
+    expect(parsed.runZones.runId).toBe('20240115T091500-a1b2');
+    expect(parsed.runZones.worktree).toBe(null);
+    expect(parsed.runZones.runDir).toBe(null);
+  });
+
   it('--help exits 0 with usage / examples / exit codes', async () => {
     const r = await runGan(['hooks', '--help']);
     expect(r.exitCode).toBe(0);

@@ -1,100 +1,135 @@
 {
   "_comment": [
-    "H1 AC-A10 behavioral path matrix for scripts/hooks/gan-confine.sh.template.",
-    "The AC-A10 test (tests/installer/confineHook.behavioral.test.ts) renders the",
-    "source-of-truth template, then drives the rendered hook once per `cases[]`",
+    "F7 slice-3 behavioral path matrix for scripts/hooks/gan-confine.sh.template.",
+    "The behavioral test (tests/installer/confineHook.behavioral.test.ts) renders",
+    "the source-of-truth template, then drives the rendered hook once per `cases[]`",
     "entry: it feeds the entry's `path` as PreToolUse stdin JSON",
     "(`{\"tool_input\":{\"file_path\":\"<path>\"}}`), with GAN_RUN_ID set to `runId`",
-    "(unless `unsetRunId` is true) and CLAUDE_PROJECT_DIR pointed at a sandbox",
-    "project root, and asserts exit 0 for `expect: \"allow\"` and a non-zero exit",
-    "for `expect: \"deny\"`. A future F1 zone rework edits this one table, not",
-    "inline cases. The four spec-named cases (worktree allow; ~/.claude deny;",
-    ".gan-state/modules deny; project-root-outside-zones deny) are tagged with",
-    "`spec: true`.",
+    "(unless `unsetRunId` is true) and the two F7 zones exported as GAN_WORKTREE /",
+    "GAN_RUN_DIR pointed at sandbox directories, and asserts exit 0 for",
+    "`expect: \"allow\"` and a non-zero exit for `expect: \"deny\"`. A future zone",
+    "rework edits this one table, not inline cases. The spec-named cases (worktree",
+    "allow; declared run-dir artifact allow; ~/.claude deny; .gan-state/modules",
+    "deny; outside-both-zones deny) are tagged with `spec: true`.",
+    "",
+    "F7 supersedes H1: the allowed zones are the orchestrator-exported absolute",
+    "paths $GAN_WORKTREE (writes anywhere under it) and the declared artifact",
+    "subpaths under $GAN_RUN_DIR (the central-store run dir) — NOT a",
+    "reconstruction from the project root. The forbidden zones (~/.claude/,",
+    ".gan-state/modules/, .gan-cache/, .claude/gan/) are denied precisely because",
+    "they live OUTSIDE both zones, so they are expressed here as absolute paths",
+    "under {home} (or a different worktree), never as worktree-relative writes.",
     "",
     "Path placeholders the test expands before spawning the hook:",
-    "  {run}  -> the `runId` value below (the live run-id segment).",
-    "  {root} -> the sandbox project-root absolute path.",
-    "  {home} -> the sandbox $HOME absolute path.",
-    "A `path` with no leading slash and no placeholder is project-root-relative",
-    "(the hook resolves it against CLAUDE_PROJECT_DIR); a leading slash or a",
-    "{root}/{home} expansion yields an absolute candidate."
+    "  {worktree} -> the sandbox $GAN_WORKTREE absolute path.",
+    "  {rundir}   -> the sandbox $GAN_RUN_DIR absolute path.",
+    "  {run}      -> the `runId` value below (the live run-id segment).",
+    "  {home}     -> the sandbox $HOME absolute path.",
+    "  {canary}   -> a sandbox path the injection-bait cases assert is never made.",
+    "A `path` with no leading slash and no placeholder is worktree-relative (the",
+    "hook resolves it against $GAN_WORKTREE); a leading slash or a {worktree} /",
+    "{rundir} / {home} expansion yields an absolute candidate."
   ],
   "runId": "20240115T091500-a1b2",
   "cases": [
     {
-      "name": "worktree file (spec: write inside the run worktree)",
+      "name": "worktree file (spec: write inside the resolved worktree)",
       "spec": true,
-      "path": ".gan-state/runs/{run}/worktree/src/app.ts",
+      "path": "{worktree}/src/app.ts",
       "expect": "allow",
-      "why": "Inside .gan-state/runs/<run-id>/worktree/ for the current run."
+      "why": "A write inside $GAN_WORKTREE is allowed."
     },
     {
       "name": "worktree nested file",
-      "path": ".gan-state/runs/{run}/worktree/a/b/c/deep.txt",
+      "path": "{worktree}/a/b/c/deep.txt",
       "expect": "allow",
-      "why": "Arbitrary depth under the run worktree is allowed."
+      "why": "Arbitrary depth under $GAN_WORKTREE is allowed."
     },
     {
       "name": "worktree directory itself",
-      "path": ".gan-state/runs/{run}/worktree",
+      "path": "{worktree}",
       "expect": "allow",
-      "why": "The worktree root path equals the allowed ancestor."
+      "why": "The worktree root path equals the allowed zone."
     },
     {
-      "name": "absolute worktree path",
-      "path": "{root}/.gan-state/runs/{run}/worktree/dist/out.js",
+      "name": "worktree-relative file (resolved against $GAN_WORKTREE)",
+      "path": "src/index.ts",
       "expect": "allow",
-      "why": "Absolute form of a worktree path resolves to the same allowed zone."
+      "why": "A relative candidate resolves against $GAN_WORKTREE, the run's working dir."
     },
     {
-      "name": "per-sprint contract artifact",
-      "path": ".gan-state/runs/{run}/sprint-5-contract.json",
+      "name": "worktree normalises-but-stays-inside",
+      "path": "{worktree}/a/../b.ts",
       "expect": "allow",
-      "why": "Enumerated per-sprint O2 artifact directly under the run dir."
+      "why": "Lexical .. collapses inside the worktree; normalisation is correct, not over-broad."
+    },
+    {
+      "name": "per-sprint contract artifact (spec: declared run-dir artifact)",
+      "spec": true,
+      "path": "{rundir}/sprint-5-contract.json",
+      "expect": "allow",
+      "why": "Enumerated per-sprint O2 artifact directly under $GAN_RUN_DIR."
+    },
+    {
+      "name": "per-sprint contract-draft artifact",
+      "path": "{rundir}/sprint-5-contract-draft.json",
+      "expect": "allow",
+      "why": "Enumerated per-sprint contract-draft artifact under the run dir."
     },
     {
       "name": "per-sprint feedback artifact",
-      "path": ".gan-state/runs/{run}/sprint-2-feedback-1.json",
+      "path": "{rundir}/sprint-2-feedback-1.json",
       "expect": "allow",
       "why": "Enumerated per-sprint feedback artifact under the run dir."
     },
     {
       "name": "per-sprint objection artifact",
-      "path": ".gan-state/runs/{run}/sprint-5-objection-1.json",
+      "path": "{rundir}/sprint-5-objection-1.json",
       "expect": "allow",
       "why": "Enumerated per-sprint objection artifact under the run dir."
     },
     {
       "name": "per-sprint base-commit artifact",
-      "path": ".gan-state/runs/{run}/sprint-3-base-commit.txt",
+      "path": "{rundir}/sprint-3-base-commit.txt",
       "expect": "allow",
       "why": "Enumerated per-sprint base-commit artifact under the run dir."
     },
     {
       "name": "progress.json artifact",
-      "path": ".gan-state/runs/{run}/progress.json",
+      "path": "{rundir}/progress.json",
       "expect": "allow",
       "why": "Enumerated run-dir progress file."
     },
     {
       "name": "trace subtree (T1)",
-      "path": ".gan-state/runs/{run}/trace/run-trace.jsonl",
+      "path": "{rundir}/trace/run-trace.jsonl",
       "expect": "allow",
       "why": "T1 trace subtree under the run dir is allowed."
     },
     {
       "name": "telemetry subtree",
-      "path": ".gan-state/runs/{run}/telemetry/metrics.json",
+      "path": "{rundir}/telemetry/metrics.json",
       "expect": "allow",
       "why": "Opt-in telemetry subtree under the run dir is allowed."
+    },
+    {
+      "name": "run dir itself (not blanket-allowed)",
+      "path": "{rundir}",
+      "expect": "deny",
+      "why": "The run dir is not blanket-allowed; only enumerated artifacts + worktree are."
+    },
+    {
+      "name": "unenumerated file under run dir (allowed-looking parent, still denied)",
+      "path": "{rundir}/scratch.txt",
+      "expect": "deny",
+      "why": "A non-enumerated file directly under $GAN_RUN_DIR is denied."
     },
     {
       "name": "home ~/.claude/settings.json (spec: deny ~/.claude/)",
       "spec": true,
       "path": "{home}/.claude/settings.json",
       "expect": "deny",
-      "why": "Writes to ~/.claude/ are denied."
+      "why": "Writes to ~/.claude/ are outside both zones — denied."
     },
     {
       "name": "home ~/.claude.json",
@@ -106,133 +141,141 @@
       "name": "home directory generally",
       "path": "{home}/notes.txt",
       "expect": "deny",
-      "why": "The user's home directory generally is denied."
+      "why": "The user's home directory generally is outside both zones — denied."
     },
     {
       "name": ".gan-state/modules (spec: deny module-owned state)",
       "spec": true,
-      "path": ".gan-state/modules/docker/state.json",
+      "path": "{home}/.gan-state/modules/docker/state.json",
       "expect": "deny",
-      "why": "F1 zone-2 module state is module-owned, never sprint-writable."
-    },
-    {
-      "name": "project-root file outside zones (spec)",
-      "spec": true,
-      "path": "README.md",
-      "expect": "deny",
-      "why": "A project-root file outside the run zones is denied."
+      "why": "Module state is module-owned, outside both zones — denied."
     },
     {
       "name": ".claude/gan project config",
-      "path": ".claude/gan/project.md",
+      "path": "{home}/.claude/gan/project.md",
       "expect": "deny",
-      "why": "Zone-1 project config is not a sprint write target."
+      "why": "Zone-1 project config is outside both run zones — denied."
     },
     {
       "name": ".gan-cache ephemeral cache",
-      "path": ".gan-cache/index.json",
+      "path": "{home}/project/.gan-cache/index.json",
       "expect": "deny",
-      "why": "Zone-3 cache is not a sprint write target."
+      "why": "Zone-3 cache is outside both run zones — denied."
     },
     {
       "name": "another run's worktree",
-      "path": ".gan-state/runs/20240115T091500-ffff/worktree/x.ts",
+      "path": "{home}/other-run/worktree/x.ts",
       "expect": "deny",
-      "why": "A different run-id's worktree is outside this run's allowed zone."
+      "why": "A different run's worktree is outside this run's $GAN_WORKTREE — denied."
     },
     {
-      "name": "run dir itself (not blanket-allowed)",
-      "path": ".gan-state/runs/{run}",
-      "expect": "deny",
-      "why": "The run dir is not blanket-allowed; only enumerated artifacts + worktree are."
-    },
-    {
-      "name": "unenumerated file under run dir",
-      "path": ".gan-state/runs/{run}/scratch.txt",
-      "expect": "deny",
-      "why": "A non-enumerated file directly under the run dir is denied."
-    },
-    {
-      "name": "absolute path outside the project root",
+      "name": "absolute path outside both zones",
       "path": "/etc/hosts",
       "expect": "deny",
-      "why": "Any absolute path outside the project root is denied."
+      "why": "Any absolute path outside both zones is denied."
     },
     {
-      "name": "tmp absolute path outside root",
+      "name": "tmp absolute path outside both zones",
       "path": "/tmp/evil.sh",
       "expect": "deny",
-      "why": "Absolute path outside the project root is denied."
+      "why": "Absolute path outside both zones is denied."
     }
   ],
   "security": [
     {
+      "name": "worktree sibling-prefix path (boundary-aware deny)",
+      "path": "{worktree}x/file.ts",
+      "expect": "deny",
+      "why": "String-starts-with the worktree but is NOT within it; the boundary is the '/' separator."
+    },
+    {
+      "name": "worktree sibling-suffix path (boundary-aware deny)",
+      "path": "{worktree}-sibling/file.ts",
+      "expect": "deny",
+      "why": "A sibling directory sharing the worktree prefix is not within the worktree — denied."
+    },
+    {
+      "name": "run-dir sibling-prefix path (boundary-aware deny)",
+      "path": "{rundir}x/progress.json",
+      "expect": "deny",
+      "why": "String-starts-with the run dir but is NOT within it; a naive prefix match is forbidden."
+    },
+    {
       "name": "hostile GAN_RUN_ID with slash",
       "runId": "20240115T091500-a1b2/../../../../etc",
-      "path": ".gan-state/runs/20240115T091500-a1b2/worktree/x.ts",
+      "path": "{worktree}/x.ts",
       "expect": "deny",
       "why": "A run-id containing '/' fails the O2 grammar; set-but-malformed is a deny."
     },
     {
       "name": "hostile GAN_RUN_ID with dot-dot",
       "runId": "..",
-      "path": ".gan-state/runs/../worktree/x.ts",
+      "path": "{worktree}/x.ts",
       "expect": "deny",
       "why": "A run-id of '..' fails the O2 grammar; deny."
     },
     {
       "name": "hostile GAN_RUN_ID with glob",
       "runId": "*",
-      "path": ".gan-state/runs/anything/worktree/x.ts",
+      "path": "{worktree}/x.ts",
       "expect": "deny",
       "why": "A glob run-id fails the O2 grammar and cannot widen the allow set."
     },
     {
       "name": "hostile GAN_RUN_ID with semicolon + backtick",
       "runId": "20240115T091500-a1b2;`id`",
-      "path": ".gan-state/runs/20240115T091500-a1b2/worktree/x.ts",
+      "path": "{worktree}/x.ts",
       "expect": "deny",
       "why": "Shell metacharacters in the run-id fail the O2 grammar; never executed."
     },
     {
       "name": "hostile GAN_RUN_ID with command substitution",
       "runId": "$(touch {canary})",
-      "path": ".gan-state/runs/{run}/worktree/x.ts",
+      "path": "{worktree}/x.ts",
       "expect": "deny",
+      "assertNoCanary": true,
       "why": "A $(...) run-id is treated strictly as data and rejected; no canary created."
     },
     {
-      "name": "traversal escaping the worktree via dot-dot",
-      "path": ".gan-state/runs/{run}/worktree/../../../modules/x.json",
+      "name": "traversal escaping the worktree to a forbidden zone via dot-dot",
+      "path": "{worktree}/../modules/x.json",
       "expect": "deny",
-      "why": "Lexical .. normalisation lands the path in .gan-state/modules — denied."
+      "why": "Lexical .. normalisation lands the path outside the worktree — denied."
     },
     {
-      "name": "traversal out of run dir to home",
-      "path": ".gan-state/runs/{run}/worktree/../../../../../../etc/passwd",
+      "name": "traversal out of the worktree to home via dot-dot",
+      "path": "{worktree}/../../../../../../etc/passwd",
       "expect": "deny",
-      "why": "Repeated .. escapes the project root; denied at default-deny terminus."
+      "why": "Repeated .. escapes both zones; denied at the default-deny terminus."
     },
     {
       "name": "injection-bait candidate path with command substitution",
-      "path": ".gan-state/runs/{run}/worktree/$(touch {canary}).ts",
+      "path": "{worktree}/$(touch {canary}).ts",
       "expect": "allow",
-      "why": "The $(...) is part of the path STRING, never executed; it normalises to a worktree file so it allows, and the canary is NOT created.",
-      "assertNoCanary": true
+      "assertNoCanary": true,
+      "why": "The $(...) is part of the path STRING, never executed; it normalises to a worktree file so it allows, and the canary is NOT created."
     },
     {
       "name": "injection-bait candidate path with backticks outside zone",
-      "path": "`touch {canary}`/evil.txt",
+      "path": "/tmp/`touch {canary}`/evil.txt",
       "expect": "deny",
-      "why": "Backticks are path data, not shell; the path is outside the run zones (deny) and the canary is NOT created.",
-      "assertNoCanary": true
+      "assertNoCanary": true,
+      "why": "Backticks are path data, not shell; this absolute path is outside both zones (deny) and the canary is NOT created."
     },
     {
       "name": "injection-bait candidate path with semicolon command",
-      "path": ".gan-state/runs/{run}/worktree/a; touch {canary}",
+      "path": "{worktree}/a; touch {canary}",
       "expect": "allow",
-      "why": "The '; touch' is path data inside the worktree segment; normalises under the worktree (allow) and the canary is NOT created.",
-      "assertNoCanary": true
+      "assertNoCanary": true,
+      "why": "The '; touch' is path data inside the worktree segment; normalises under the worktree (allow) and the canary is NOT created."
+    },
+    {
+      "name": "hostile GAN_WORKTREE with command substitution",
+      "worktree": "$(touch {canary})",
+      "path": "{worktree}/x.ts",
+      "expect": "deny",
+      "assertNoCanary": true,
+      "why": "A non-absolute / metacharacter GAN_WORKTREE is rejected (not absolute); never executed; no canary created."
     },
     {
       "name": "GAN_RUN_ID unset no-ops",
