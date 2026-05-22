@@ -79,6 +79,27 @@ export {
 
 export type { StoreEnv, ResolvedRunStore } from './config-server/storage/run-store.js';
 
+// ---- F7 worktree-aware execution (1a/1b/1c resolver) ---------------------
+
+export {
+  slugify,
+  terminalSlug,
+  branchMatchesSlug,
+  resolveDefaultBranch,
+  resolveWorkspace,
+  defaultGitExec,
+} from './config-server/storage/worktree-resolver.js';
+
+export type {
+  GitExec,
+  ResolvedWorkspace,
+  ResolveWorkspaceOptions,
+} from './config-server/storage/worktree-resolver.js';
+
+export { buildWorkspaceRecord, recordWorkspace } from './config-server/storage/run-progress.js';
+
+export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
+
 // ---- T1 run-trace emission library --------------------------------------
 
 export {
