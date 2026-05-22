@@ -12,7 +12,7 @@
 # per-sprint constraint, not global confinement — it no-ops entirely outside a
 # /gan run (see the GAN_RUN_ID gate below).
 #
-# INTERFACE (documented assumption, see sprint-1 contract)
+# INTERFACE (documented assumption)
 #   * The tool invocation arrives as a single JSON object on stdin (matching the
 #     existing precedent scripts/hooks/ensure-worktree-mcp.sh, which reads stdin
 #     JSON via `cat`). The candidate write/edit path is read from the tool-input
@@ -20,7 +20,7 @@
 #   * allow  -> exit 0
 #   * deny   -> exit non-zero, with a one-line reason on stderr.
 #
-# SECURITY POSTURE (sprint-1 contract: shell_and_subprocess_safety)
+# SECURITY POSTURE
 # GAN_RUN_ID and the tool-supplied candidate path are attacker-influenceable.
 # Therefore: no eval and no value is ever executed as a command; every
 # expansion of GAN_RUN_ID and the candidate path is double-quoted so glob /
@@ -217,7 +217,7 @@ if is_within "$NORM" "$RUN_DIR"; then
   if [ "$NORM" = "$RUN_DIR" ]; then
     REL=""
   else
-    REL="${NORM#$RUN_DIR/}"
+    REL="${NORM#"$RUN_DIR"/}"
   fi
   case "$REL" in
     # Per-sprint artifact files directly under the run dir (O2 layout).

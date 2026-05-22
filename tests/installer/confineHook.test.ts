@@ -58,6 +58,7 @@ import { runInstall, repoRootDir } from './helpers/spawn.js';
 import { makeTmpHome, writeStubBin, type TmpHome } from './helpers/tmpenv.js';
 import { writeFakeNpm, writeFakeConfigServer, npmInvocationLog } from './helpers/fakeNpm.js';
 import { injectFailureAt, makeFailureEnv } from './helpers/failurePoints.js';
+import { renderedTemplate } from './helpers/confineTemplate.js';
 
 const cleanups: TmpHome[] = [];
 
@@ -77,15 +78,6 @@ interface SetupResult {
 function packageVersion(): string {
   const raw = readFileSync(path.join(repoRootDir(), 'package.json'), 'utf8');
   return (JSON.parse(raw) as { version: string }).version;
-}
-
-/** Render the source-of-truth template for the running framework version. */
-function renderedTemplate(): string {
-  const tpl = readFileSync(
-    path.join(repoRootDir(), 'scripts', 'hooks', 'gan-confine.sh.template'),
-    'utf8',
-  );
-  return tpl.split('__GAN_FRAMEWORK_VERSION__').join(packageVersion());
 }
 
 /**

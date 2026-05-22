@@ -8,11 +8,11 @@
  * matrix lands with sprint 5; this is the smoke + contract-critical layer.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { runGan } from './helpers/spawn.js';
+import { runGan, repoRootDir } from './helpers/spawn.js';
 
 const tmpDirs: string[] = [];
 
@@ -41,7 +41,11 @@ function seedHook(root: string, content: string): string {
   return p;
 }
 
-const CURRENT_VERSION = '0.1.0';
+const CURRENT_VERSION = (
+  JSON.parse(readFileSync(path.join(repoRootDir(), 'package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
 
 function userHookHeader(version: string): string {
   return (

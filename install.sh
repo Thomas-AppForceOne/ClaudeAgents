@@ -600,7 +600,7 @@ ensure_settings_preedit_snapshot() {
 # other settings survive) and idempotent (deduped on the absolute hook path —
 # a re-run does not append a second entry for the same path).
 #
-# Security posture (sprint-2 contract: shell_and_subprocess_safety): no `eval`;
+# Security posture: no `eval`;
 # every path/version expansion is double-quoted; the version flows into the
 # rendered template as DATA via node reading it from the environment (it is
 # never interpolated into a shell command line, and the rendered hook is only

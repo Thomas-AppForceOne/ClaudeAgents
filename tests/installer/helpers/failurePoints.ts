@@ -22,12 +22,12 @@
  *     `/bin/mkdir`, so the installer's earlier `mkdir -p ~/.claude/agents`
  *     calls still succeed.
  *
- *   - 'confine-hook-write' (H1) — sets `CAS_FAIL_CONFINE_HOOK_WRITE=1`,
+ *   - 'confine-hook-write' — sets `CAS_FAIL_CONFINE_HOOK_WRITE=1`,
  *     which `write_confine_hook` reads at the END of its body, AFTER it has
  *     rendered the hook to `~/.claude/hooks/gan-confine.sh` and merged the
  *     `hooks.PreToolUse[]` registration into `~/.claude/settings.json`. The
  *     installer then returns non-zero, routing through its real ERR trap and
- *     `rollback()` so AC-A4 can assert the partial hook file is removed and
+ *     `rollback()` so a test can assert the partial hook file is removed and
  *     the settings.json registration is gone (restored from the preedit copy).
  *     No stub binary is required — the failure is an env-flagged branch in
  *     install.sh's own real code path, leaving every other side effect real.
@@ -129,10 +129,10 @@ export function injectFailureAt(
       break;
     }
     case 'confine-hook-write':
-      // (H1) Pure env-flagged branch in install.sh's own `write_confine_hook`
+      // Pure env-flagged branch in install.sh's own `write_confine_hook`
       // — no stub binary needed. The flag is read after the hook + settings
       // registration have been written, so rollback exercises the real
-      // partial-state cleanup (AC-A4).
+      // partial-state cleanup.
       target.env.CAS_FAIL_CONFINE_HOOK_WRITE = '1';
       break;
     default: {

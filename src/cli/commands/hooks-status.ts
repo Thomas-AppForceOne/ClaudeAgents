@@ -25,8 +25,8 @@
  * on the decoded text); the authoring-version parse is a regex over the
  * header. Large / binary / NUL-byte / shell-injection-bait content is
  * classified and reporting continues — it can neither crash the command
- * nor trigger code execution. Mirrors the sprint-1 template's own
- * never-execute-untrusted-bytes posture.
+ * nor trigger code execution. Mirrors the confinement hook template's
+ * own never-execute-untrusted-bytes posture.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -126,7 +126,7 @@ async function readFrameworkVersion(): Promise<string | null> {
  * Read a candidate hook file as UTF-8 text. Returns `null` when the file
  * is absent (ENOENT), the directory is missing, the path is unreadable, or
  * any other I/O error occurs — every such case is treated as ABSENCE, not
- * a fatal error (criterion: absent-user-tier-graceful). Decoding is lossy
+ * a fatal error. Decoding is lossy
  * UTF-8 (`utf8`), so binary / NUL-byte content yields a string that the
  * pure content scan can classify without crashing.
  */
@@ -143,8 +143,8 @@ async function readHookText(hookPath: string): Promise<string | null> {
  *
  *   # Source of truth: ClaudeAgents framework, version <semver>.
  *
- * (the sprint-1 template's `__GAN_FRAMEWORK_VERSION__` slot, substituted at
- * install). The match is a pure regex over the decoded text — the bytes are
+ * (the confinement hook template's `__GAN_FRAMEWORK_VERSION__` slot,
+ * substituted at install). The match is a pure regex over the decoded text — the bytes are
  * never executed. Returns `null` when no parseable `version <semver>` line
  * is found (corrupted / hand-edited / non-framework header), so the caller
  * reports the authored version as unknown rather than crashing.
@@ -284,8 +284,7 @@ function renderHuman(out: HooksStatusOutput, home: string): string {
   }
 
   // --- Project tier -------------------------------------------------------
-  // Only emit a project-tier section when an override is actually present;
-  // AC-A8 requires NO project-tier "Detected" line when none exists.
+  // Only emit a project-tier section when an override is actually present.
   if (out.projectTier.present) {
     lines.push('');
     lines.push(`Project-tier override: ${out.projectTier.path}`);
