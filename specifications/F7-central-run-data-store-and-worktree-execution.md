@@ -83,7 +83,7 @@ F7 redefines the "project root" O2 uses for both anchoring and recovery keying: 
 - **Serialization (2b).** O2's one-active-run-per-project lock is preserved, re-anchored to the central store: the exclusive `flock` is taken on `<store-root>/<repo-key>/run.lock`. One active `/gan` run per repo, across all its worktrees — concurrent invocations from different worktrees of the same repo hard-refuse, exactly as O2 specifies for one project root.
 - **`--cleanup`** deletes the central-store run directory and, when `workspace.createdByGan` is true, the run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` and its run branch — symmetric to the current model. A user-owned worktree (case 1a) is never touched; only its central run *data* is removed. Because data lives centrally, removing a worktree by any means no longer loses run data.
 
-These edits land in O2's spec (unimplemented, therefore editable) in F7's PR; O2's full implementation (roadmap slot 16) builds on F7's resolved store + worktree model.
+These edits land in O2's spec (unimplemented, therefore editable) in F7's PR; O2's full implementation (later in the v1.0 order) builds on F7's resolved store + worktree model.
 
 ### 5. Install-time configuration
 

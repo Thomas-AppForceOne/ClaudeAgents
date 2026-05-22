@@ -60,7 +60,7 @@ Phases 0–4 (foundations F1–F4; configuration domains C1–C5; reference impl
 
 **User experience target:** a developer installs ClaudeAgents, edits `.claude/gan/project.md` to declare their project's quirks, runs `/gan` with a prompt, gets bounded clarifying questions on genuine ambiguities, sees a startup log naming active stacks (with non-aborting warnings on overlay misuse), gets a sprint plan/contract/generation/evaluation cycle that won't loop forever, can `--recover` if interrupted, and can read a structured trace afterward.
 
-**Effort estimate:** ~25–31 sprints of focused work (~6–8 calendar months at one full-time developer).
+**Effort estimate:** ~27–34 sprints of focused work (~7–9 calendar months at one full-time developer).
 
 ### Implementation order
 
@@ -76,15 +76,16 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 8. ✅ **T1** — structured run trace. Shipped PR #19. *(Run-data and trace location relocated to the central store by F7 — see slot 10.)*
 9. ✅ **H1** — framework-owned confinement hook. Shipped PR #21. *(Hook path construction superseded by F7 — see slot 10.)*
 10. **[F7](F7-central-run-data-store-and-worktree-execution.md)** — centralized run-data store + worktree-aware execution. ~4–5 sprints. **Next.** Relocates run data to a central, repo-keyed store (`~/.gan-runs-data`) so it survives worktree removal; makes `/gan` reuse a task worktree in place (1a/1b/1c). Supersedes the run-data/trace location in F1/T1 and the confinement-hook path construction in H1 (those shipped specs are not edited; this entry is their cross-reference). Edits unimplemented O2/O3 and draft H2. Lands before A1/E5/O2/O3 so run paths and confinement are settled before those build on them.
-11. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
-12. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
-13. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
-14. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
-15. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
-16. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
-17. **Pre-release chores.** See below.
+11. **[F8](F8-centralized-module-state-store.md)** — centralized repo-keyed module-state store. ~2–3 sprints. Pairs with F7 (the same zone-2 worktree-removal fix, for module state): relocates `.gan-state/modules/` to a separate repo-keyed store, fixing both the durability footgun and a latent M2 cross-worktree port-collision bug. Depends on F7 (reuses its repo-key); ships in the same PR. Supersedes F1/M1/M2/R1 location decisions; edits unimplemented O2; adds no confinement-hook or permission-grant surface (module state is config-server-managed).
+12. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
+13. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
+14. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
+15. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
+16. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
+17. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
+18. **Pre-release chores.** See below.
 
-Independents within the order: slots 8–15 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 17.
+Independents within the order: slots 8–16 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 18.
 
 ### Known gaps accepted at v1.0
 
