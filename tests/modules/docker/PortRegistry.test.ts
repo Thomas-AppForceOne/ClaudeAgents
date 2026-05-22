@@ -184,13 +184,19 @@ describe('PortRegistry', () => {
     expect(regC.lookup(wtB)).toEqual({ port: 7101, containerName: 'cross-b' });
   });
 
-  it('does not import atomic-write or filesystem helpers directly (routes through M1)', async () => {
+  it('does not import the registry-file IO helpers directly (routes through M1)', async () => {
     // Source-level guarantee that PortRegistry is a pure consumer of
-    // the M1 module-state surface — no import of atomicWriteFile or
-    // node:fs read helpers, no path string for the on-disk file. We
-    // grep the import lines specifically so doc-comments mentioning
-    // those names (intentionally, to explain what we *don't* do) don't
-    // trip the assertion.
+    // the M1 module-state surface for the registry FILE: no import of
+    // atomicWriteFile or a node:fs *read* helper, no path string for
+    // the on-disk registry file. We grep the import lines specifically
+    // so doc-comments mentioning those names (intentionally, to explain
+    // what we *don't* do) don't trip the assertion.
+    //
+    // F8 prune-on-load needs ONE filesystem fact — whether a keyed
+    // worktree DIRECTORY still exists — taken via `existsSync` through
+    // an injectable probe. That is a probe of the worktree, not registry
+    // -file IO and not a registry-path join, so it does not violate the
+    // black-box rule the rest of this assertion guards.
     const src = readFileSync(
       path.join(__dirname, '..', '..', '..', 'src', 'modules', 'docker', 'PortRegistry.ts'),
       'utf8',
@@ -201,8 +207,16 @@ describe('PortRegistry', () => {
       .join('\n');
     expect(imports).not.toMatch(/atomicWriteFile/);
     expect(imports).not.toMatch(/readFileSync/);
-    expect(imports).not.toMatch(/from ['"]node:fs['"]/);
+    expect(imports).not.toMatch(/writeFileSync/);
     expect(imports).toMatch(/setModuleState/);
     expect(imports).toMatch(/loadModuleState/);
+    // The only node:fs import permitted is the worktree-existence probe
+    // for prune-on-load; PortRegistry must not pull in fs read/write
+    // helpers for the registry file itself.
+    const fsImportLines = imports.split('\n').filter((l) => /from ['"]node:fs['"]/.test(l));
+    for (const line of fsImportLines) {
+      expect(line).toMatch(/existsSync/);
+      expect(line).not.toMatch(/readFile|writeFile|readdir|appendFile/);
+    }
   });
 });
