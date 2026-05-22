@@ -37,6 +37,7 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 | `--uninstall` | R2 | Reverse the install (remove symlinks + MCP config entry; leave filesystem zones intact). |
 | `--no-claude-code` | R2 | Install in CI/headless environments that have Node + git but no Claude Code; `gan` CLI works, `/gan` skill is unavailable. |
 | `--runs-dir=<path>` | F7 | Set the central run-data store root at install time (persisted to `~/.claude/gan/runs-data-dir` and granted in `~/.claude/settings.json`). Interactive installs prompt, defaulting to `~/.gan-runs-data`. Per-run override via `GAN_RUNS_DATA`. |
+| `--module-state-dir=<path>` | F8 | Set the central module-state store root at install time (persisted to the marker `~/.claude/gan/module-state-dir`). Interactive installs prompt, defaulting to `~/.gan-module-state`. Per-run override via `GAN_MODULE_STATE`. Marker-only — unlike `--runs-dir`, it writes **no** `~/.claude/settings.json` grant (module state is config-server-managed). A separate root from `--runs-dir`. |
 
 ## `gan` CLI subcommands
 
@@ -75,6 +76,7 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 |---|---|---|---|
 | `GAN_TRUST` | unset / `strict` / `unsafe-trust-all` | F4 | Trust mode. Unset = interactive prompt on `UntrustedOverlay`. `strict` = fail closed (no prompt; CI default). `unsafe-trust-all` = bypass trust check (development convenience; never in CI). |
 | `GAN_RUNS_DATA` | absolute path | F7 | Per-run override of the central run-data store root. Highest-priority store-root source (above the install-time `~/.claude/gan/runs-data-dir` marker and the `~/.gan-runs-data` default). For testing and CI. |
+| `GAN_MODULE_STATE` | absolute path | F8 | Per-run override of the central module-state store root. Highest-priority module-state-root source (above the install-time `~/.claude/gan/module-state-dir` marker and the `~/.gan-module-state` default). For testing and CI. |
 | `GAN_WORKTREE` | absolute path | F7 | Orchestrator-exported absolute path to the resolved worktree (the user's worktree in case 1a, or `<project>/.gan-state/runs/<run-id>/worktree/` in 1b/1c). Consumed by the confinement hook as an allowed write zone. |
 | `GAN_RUN_DIR` | absolute path | F7 | Orchestrator-exported absolute path to the central-store run directory (`<store-root>/<repo-key>/runs/<run-id>/`) holding the run artifacts, `trace/`, and `telemetry/`. Consumed by the confinement hook as an allowed write zone. |
 
@@ -99,10 +101,10 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 |---|---|---|
 | command | 3 | `/gan`, `gan`, `install.sh` |
 | subcommand | 16 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `hooks status`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
-| flag | 19 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--new-worktree`, `--uninstall`, `--no-claude-code`, `--runs-dir`, `--json`, `--project-root`, `--tier`, `--note` |
-| env-var-value | 5 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all`, `GAN_RUNS_DATA`, `GAN_WORKTREE`, `GAN_RUN_DIR` |
+| flag | 20 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--new-worktree`, `--uninstall`, `--no-claude-code`, `--runs-dir`, `--module-state-dir`, `--json`, `--project-root`, `--tier`, `--note` |
+| env-var-value | 6 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all`, `GAN_RUNS_DATA`, `GAN_MODULE_STATE`, `GAN_WORKTREE`, `GAN_RUN_DIR` |
 | prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
-| **total** | **47** | |
+| **total** | **49** | |
 
 Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
 
