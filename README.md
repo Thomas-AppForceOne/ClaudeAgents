@@ -123,6 +123,10 @@ Earlier setups copied the hook into the project at `.claude/hooks/gan-confine.sh
 2. Inspect both tiers with `gan hooks status`. It reports the user-tier hook path and authoring framework version, any project-tier hook in the current directory, and — when the project hook still references the legacy `.gan/` layout — a deletion hint.
 3. If the project hook is a legacy copy and not a deliberate override, delete it with `rm .claude/hooks/gan-confine.sh`. The framework's current user-tier hook then applies. If it is a deliberate override (narrower or wider confinement on purpose), keep it and update it by hand to match the framework's current zone layout.
 
+### A pre-existing project-local `.gan-state/runs/`
+
+Run data now lives in a central, repo-keyed store outside any worktree (default `~/.gan-runs-data`, set at install time with `./install.sh --runs-dir=<path>`) so it survives `git worktree remove`. The framework does **not** migrate older run data: a pre-existing project-local `.gan-state/runs/` is reported once and then left untouched for you to delete or archive by hand — there is no automatic migration. When you no longer need that legacy run data, remove it with `rm -rf .gan-state/runs` (or move it somewhere for archival). New runs write only to the central store.
+
 ---
 
 ## Quick start
