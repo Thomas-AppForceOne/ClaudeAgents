@@ -80,16 +80,16 @@ None. The `port-registry.json` shape is M2's and unchanged; the only structural 
 Two worktrees of the same repo, both using the Docker module:
 
 ```
-# worktree A (../app-feature-x): module starts a container, registers host port 8080
-# worktree B (../app-feature-y): PortRegistry reads the SAME shared registry,
+# worktree A (../myapp-feature-x): module starts a container, registers host port 8080
+# worktree B (../myapp-feature-y): PortRegistry reads the SAME shared registry,
 #   sees 8080 taken, allocates 8081 — no collision
-# registry: ~/.gan-module-state/app-3f9a1c0b8e21/docker/port-registry.json
+# registry: ~/.gan-module-state/myapp-3f9a1c0b8e21/docker/port-registry.json
 ```
 
 Worktree removal no longer loses the registry:
 
 ```
-$ git worktree remove ../app-feature-x
+$ git worktree remove ../myapp-feature-x
 # the shared registry survives; on next module load, the entry for the removed
 # worktree is pruned and host port 8080 is freed for reuse
 ```
