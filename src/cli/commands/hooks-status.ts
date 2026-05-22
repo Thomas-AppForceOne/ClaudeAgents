@@ -74,11 +74,36 @@ export interface ProjectTierStatus {
   legacy: boolean;
 }
 
+/**
+ * The two F7 confinement zones the orchestrator exports at sprint start, as
+ * read from the environment when `gan hooks status` runs. Both are reported —
+ * resolved when set, `null` when absent (invoked outside a run). The command
+ * never throws on absence; an unset zone is reported, never fatal.
+ */
+export interface RunZonesStatus {
+  /**
+   * The run-id of the active run (`GAN_RUN_ID`), or `null` when the command
+   * is invoked outside a run. When `null`, the zone values below are reported
+   * as unset regardless of whether the zone env vars happen to be present.
+   */
+  runId: string | null;
+  /** The resolved worktree (`GAN_WORKTREE`), or `null` when unset/empty. */
+  worktree: string | null;
+  /** The central-store run directory (`GAN_RUN_DIR`), or `null` when unset/empty. */
+  runDir: string | null;
+}
+
 export interface HooksStatusOutput {
   /** The current framework version (read from package.json). */
   frameworkVersion: string;
   userTier: UserTierStatus;
   projectTier: ProjectTierStatus;
+  /**
+   * The two F7 confinement zones the active run exports (GAN_WORKTREE /
+   * GAN_RUN_DIR), reported as resolved or unset. Replaces the retired
+   * project-root-derived run-path report.
+   */
+  runZones: RunZonesStatus;
   /**
    * True when the project-tier hook is present (it always takes precedence
    * over the user-tier hook when present).
@@ -199,8 +224,40 @@ function displayUserPath(absPath: string, home: string): string {
   return absPath;
 }
 
+/**
+ * Read a string environment value, returning `null` for an absent OR empty
+ * value (an empty zone is treated as unset, mirroring the hook's own
+ * `[ -z … ]` gate). Pure read of the supplied env map — no execution.
+ */
+function readEnvOrNull(env: NodeJS.ProcessEnv, key: string): string | null {
+  const v = env[key];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/**
+ * Resolve the F7 run zones from the environment. The two zone values are
+ * meaningful only inside an active run: when `GAN_RUN_ID` is unset/empty the
+ * command is running outside a run, so the zones are reported as unset even
+ * if the env happens to carry stray values. Never throws.
+ */
+function collectRunZones(env: NodeJS.ProcessEnv): RunZonesStatus {
+  const runId = readEnvOrNull(env, 'GAN_RUN_ID');
+  if (runId === null) {
+    return { runId: null, worktree: null, runDir: null };
+  }
+  return {
+    runId,
+    worktree: readEnvOrNull(env, 'GAN_WORKTREE'),
+    runDir: readEnvOrNull(env, 'GAN_RUN_DIR'),
+  };
+}
+
 /** Build the structured report. Never throws. */
-export async function collectStatus(cwd: string, home: string): Promise<HooksStatusOutput> {
+export async function collectStatus(
+  cwd: string,
+  home: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<HooksStatusOutput> {
   const userPath = path.join(home, '.claude', 'hooks', 'gan-confine.sh');
   const projectPath = path.join(cwd, '.claude', 'hooks', 'gan-confine.sh');
 
@@ -233,6 +290,7 @@ export async function collectStatus(cwd: string, home: string): Promise<HooksSta
     frameworkVersion: frameworkVersion ?? 'unknown',
     userTier,
     projectTier,
+    runZones: collectRunZones(env),
     projectTierTakesPrecedence: projectPresent,
     legacyDeletionHint: projectPresent && legacy,
   };
@@ -250,6 +308,10 @@ export async function collectStatus(cwd: string, home: string): Promise<HooksSta
  *     If you don't have a deliberate reason to keep this override, delete it
  *     (`rm .claude/hooks/gan-confine.sh`) — the framework's current user-tier
  *     hook will then apply.
+ *
+ * A trailing "Active-run confinement zones:" section reports the two F7
+ * zones the orchestrator exports (`GAN_WORKTREE` / `GAN_RUN_DIR`) for the
+ * active run, or notes that the command is running outside a run.
  *
  * Every user-visible string obeys F4 prose discipline: shell remediation
  * (`rm <path>`, run `install.sh`), refers to "the framework" / "ClaudeAgents",
@@ -299,6 +361,29 @@ function renderHuman(out: HooksStatusOutput, home: string): string {
     }
   }
 
+  // --- Run zones (F7) -----------------------------------------------------
+  // The two confinement zones the orchestrator exports for the active run.
+  // Reported as resolved when set, or unset when invoked outside a run.
+  lines.push('');
+  lines.push('Active-run confinement zones:');
+  if (out.runZones.runId === null) {
+    lines.push('  Not in a run. `GAN_RUN_ID`, `GAN_WORKTREE`, and `GAN_RUN_DIR` are unset.');
+    lines.push('  The framework exports these at sprint start; the hook confines writes to');
+    lines.push('  the worktree and the run directory only while a run is active.');
+  } else {
+    lines.push(`  Run id (\`GAN_RUN_ID\`): ${out.runZones.runId}`);
+    lines.push(
+      `  Worktree (\`GAN_WORKTREE\`): ${
+        out.runZones.worktree === null ? 'unset' : displayUserPath(out.runZones.worktree, home)
+      }`,
+    );
+    lines.push(
+      `  Run directory (\`GAN_RUN_DIR\`): ${
+        out.runZones.runDir === null ? 'unset' : displayUserPath(out.runZones.runDir, home)
+      }`,
+    );
+  }
+
   return lines.join('\n') + '\n';
 }
 
@@ -318,7 +403,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   // to a clean report rather than a stack trace on stderr.
   let out: HooksStatusOutput;
   try {
-    out = await collectStatus(cwd, home);
+    out = await collectStatus(cwd, home, process.env);
   } catch {
     out = {
       frameworkVersion: 'unknown',
@@ -333,6 +418,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
         present: false,
         legacy: false,
       },
+      runZones: { runId: null, worktree: null, runDir: null },
       projectTierTakesPrecedence: false,
       legacyDeletionHint: false,
     };

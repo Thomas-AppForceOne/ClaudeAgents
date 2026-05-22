@@ -20,6 +20,20 @@ CLAUDE_SETTINGS_JSON="$HOME/.claude/settings.json"
 # and the content is regenerated on every install (no version tracking).
 CONFINE_HOOK_PATH="$HOME/.claude/hooks/gan-confine.sh"
 CONFINE_HOOK_TEMPLATE="$REPO_ROOT/scripts/hooks/gan-confine.sh.template"
+# (F7 slice 5) User-tier marker recording the central run-data store root the
+# orchestrator reads at run start (single trimmed raw-path line — NOT JSON).
+# The on-disk path MUST match src/config-server/storage/run-store.ts
+# STORE_MARKER_RELPATH (`.claude/gan/runs-data-dir`) and the default below MUST
+# match its DEFAULT_STORE_DIRNAME (`.gan-runs-data`) so resolveStoreRoot() reads
+# exactly what install writes. `$GAN_RUNS_DATA` overrides the marker per-run
+# (resolver precedence step 1). The default is the tilde form expanded against
+# $HOME at runtime — never a hardcoded absolute home/store path literal.
+RUNS_DIR_MARKER_PATH="$HOME/.claude/gan/runs-data-dir"
+RUNS_DIR_DEFAULT="$HOME/.gan-runs-data"
+# Display form of the default shown in the interactive prompt (tilde, not the
+# expanded absolute path) so the user-facing string carries no machine-specific
+# home literal.
+RUNS_DIR_DEFAULT_DISPLAY="~/.gan-runs-data"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 # Highest Node major the framework's CI has been exercised through. Above
@@ -45,6 +59,17 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
 #   confine-hook-written:<absolute-path>
+#   runs-dir-configured:<store-root>
+#   runs-dir-permission-granted:<store-root>
+# (F7 slice 5) `runs-dir-configured` records the central-store marker write
+# (rollback removes the marker, or byte-restores a pre-existing one from its
+# preedit snapshot); `runs-dir-permission-granted` records the settings.json
+# read/write grant (the three Read/Write/Edit(<store-root>/**) rules + the
+# <store-root> additionalDirectories entry). Both payloads carry the resolved
+# store root so rollback / `--uninstall` know which entries to strip; the grant
+# rides the existing claude-settings-edited preedit snapshot (taken before the
+# first settings.json mutation), so its settings restoration is the established
+# claude-settings-edited rollback case.
 # (H1) `confine-hook-written` records the rendered ~/.claude/hooks/gan-confine.sh
 # the install wrote; rollback removes the partial hook file at that path. Its
 # settings.json `hooks.PreToolUse[]` registration rides the existing
@@ -86,6 +111,11 @@ PREEDIT_CLAUDE_JSON=""
 # with PREEDIT_CLAUDE_JSON above. Cleaned up by main() on success;
 # consumed by rollback() on failure.
 PREEDIT_CLAUDE_SETTINGS=""
+
+# (F7 slice 5) Per-run pre-edit copy of the central-store marker
+# `~/.claude/gan/runs-data-dir` (if it pre-existed this run). configure_runs_dir
+# sets it; rollback restores the marker from it; main() removes it on success.
+RUNS_DIR_MARKER_PREEDIT=""
 
 log_info() {
   printf '%s\n' "$*"
@@ -140,6 +170,11 @@ Flags:
                       categories are already granted. Useful for
                       revoking a previously approved category by
                       declining now.
+  --runs-dir=<path>   Set the central run-data store root (where run
+                      trace, telemetry, and evaluator feedback live,
+                      outside any git worktree). Interactive installs
+                      prompt for this, defaulting to `~/.gan-runs-data`;
+                      the env var `GAN_RUNS_DATA` overrides it per-run.
 
 What it does:
   - Copies ClaudeAgents agents and skills into your Claude Code config
@@ -991,6 +1026,209 @@ configure_permissions() {
   mv "$tmp" "$CLAUDE_SETTINGS_JSON"
 }
 
+# resolve_runs_dir
+#
+# (F7 slice 5) Resolve the central run-data store root for this install, setting
+# the global RUNS_DIR. Precedence:
+#   1. The `--runs-dir=<path>` flag, if supplied (RUNS_DIR_FLAG non-empty).
+#   2. In a TTY install with no flag: prompt, defaulting to
+#      `~/.gan-runs-data` (RUNS_DIR_DEFAULT). An empty answer (Enter) selects
+#      the default.
+#   3. In a non-TTY install with no flag (every harness run): the default
+#      `~/.gan-runs-data`, no prompt — mirroring configure_permissions'
+#      non-TTY default-minimal contract so existing tests need no flag threading.
+#
+# A leading `~/` in the flag/prompt value is expanded against $HOME (the
+# resolver's absolutize() does the same, but expanding here keeps the persisted
+# marker an absolute path with no literal `~`). The value is treated purely as
+# data throughout — quoted in every expansion, never `eval`'d.
+RUNS_DIR=""
+resolve_runs_dir() {
+  local chosen=""
+  if [ -n "${RUNS_DIR_FLAG:-}" ]; then
+    chosen="$RUNS_DIR_FLAG"
+  elif [ -t 0 ]; then
+    # TTY interactive prompt. The default is the tilde display form; pressing
+    # Enter (empty answer) selects RUNS_DIR_DEFAULT.
+    local answer
+    log_info ""
+    log_info "ClaudeAgents installer: choose the central run-data store root."
+    log_info "Run data (trace, telemetry, evaluator feedback) lives here, outside any"
+    log_info "git worktree, so it survives \`git worktree remove\`."
+    printf 'Store root [%s]: ' "$RUNS_DIR_DEFAULT_DISPLAY"
+    IFS= read -r answer || answer=""
+    if [ -z "$answer" ]; then
+      chosen="$RUNS_DIR_DEFAULT"
+    else
+      chosen="$answer"
+    fi
+  else
+    # Non-TTY default: the tilde-default store root, no prompt.
+    chosen="$RUNS_DIR_DEFAULT"
+  fi
+
+  # Expand a leading `~/` (or bare `~`) against $HOME so the persisted marker is
+  # an absolute path with no literal tilde. A path with no leading tilde is left
+  # exactly as supplied (it may be absolute or relative; the resolver's
+  # absolutize() resolves a relative form against $HOME at run start).
+  case "$chosen" in
+    '~') chosen="$HOME" ;;
+    '~/'*) chosen="$HOME/${chosen#'~/'}" ;;
+  esac
+  RUNS_DIR="$chosen"
+}
+
+# configure_runs_dir
+#
+# (F7 slice 5) Persist the resolved central-store root and grant persistent
+# read/write to it. Two writes, both recorded in STATE_LOG so partial-failure
+# rollback and `--uninstall` undo BOTH:
+#
+#   1. Marker write — `~/.claude/gan/runs-data-dir` gets the store root as a
+#      single trimmed raw-path line (NOT JSON), the exact format the slice-1
+#      resolver consumes via readFileSync(...).trim(). Atomic *.tmp.$$ + mv.
+#      STATE_LOG entry `runs-dir-configured:<store-root>`. A pre-existing marker
+#      is snapshotted to `<marker>.preedit-$$` first so rollback byte-restores
+#      it (rather than removing a marker the run did not create).
+#   2. Settings grant — merges into `~/.claude/settings.json`:
+#        permissions.allow += Read(<store-root>/**), Write(<store-root>/**),
+#                             Edit(<store-root>/**)
+#        permissions.additionalDirectories += <store-root>
+#      Additive + idempotent (deduped on exact-string membership), sorted-key /
+#      2-space-indent / trailing-newline JSON via the established node -e merge.
+#      The grant rides ensure_settings_preedit_snapshot (taken before the run's
+#      first settings.json mutation) so its rollback is the existing
+#      claude-settings-edited path. STATE_LOG entry
+#      `runs-dir-permission-granted:<store-root>`.
+#
+# Security posture (shell_and_subprocess_safety): RUNS_DIR is untrusted user
+# input. No `eval`; every expansion of it is double-quoted. The marker write is
+# `printf '%s\n' "$RUNS_DIR" > tmp` (the path is data to printf, never re-parsed
+# as a command). The settings merge passes the store root to node as DATA via an
+# environment variable (the established CLAUDE_SETTINGS_PATH / CONFINE_HOOK_ABS
+# pattern) — never string-concatenated into the node program text or into JSON.
+# A store root carrying spaces or shell metacharacters (`$()`, `;`, backticks)
+# is persisted literally and creates no injected side effect.
+configure_runs_dir() {
+  # ---- Write 1: persist the marker (raw single trimmed line). ----
+  local marker_dir snapshot
+  marker_dir="$(dirname "$RUNS_DIR_MARKER_PATH")"
+  mkdir -p "$marker_dir"
+
+  # Snapshot a pre-existing marker so rollback restores it instead of removing
+  # a marker the run did not create. The snapshot path is recorded in the
+  # STATE_LOG payload after the marker value (delimited) so rollback can find
+  # it; absent any pre-existing marker, the payload is the store root alone.
+  if [ -f "$RUNS_DIR_MARKER_PATH" ]; then
+    snapshot="$RUNS_DIR_MARKER_PATH.preedit-$$"
+    cp "$RUNS_DIR_MARKER_PATH" "$snapshot"
+    RUNS_DIR_MARKER_PREEDIT="$snapshot"
+  else
+    RUNS_DIR_MARKER_PREEDIT=""
+  fi
+
+  # Atomic write: the store root is written as data to a *.tmp.$$ sibling, then
+  # mv'd into place. `printf '%s\n'` emits exactly one trailing newline so the
+  # resolver's `.trim()` yields the literal path.
+  local marker_tmp="$RUNS_DIR_MARKER_PATH.tmp.$$"
+  printf '%s\n' "$RUNS_DIR" >"$marker_tmp"
+  mv "$marker_tmp" "$RUNS_DIR_MARKER_PATH"
+  STATE_LOG+=("runs-dir-configured:$RUNS_DIR")
+
+  # ---- Write 2: grant persistent read/write via settings.json. ----
+  # Take the settings preedit snapshot before this run's first settings.json
+  # mutation (no-op if write_confine_hook / configure_permissions already did),
+  # so the grant's settings restoration rides the claude-settings-edited case.
+  ensure_settings_preedit_snapshot
+
+  local tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+  CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+  CLAUDE_SETTINGS_TMP="$tmp" \
+  RUNS_DIR_STORE_ROOT="$RUNS_DIR" \
+  node -e '
+    const fs = require("fs");
+    const src = process.env.CLAUDE_SETTINGS_PATH;
+    const dst = process.env.CLAUDE_SETTINGS_TMP;
+    const storeRoot = process.env.RUNS_DIR_STORE_ROOT;
+    if (!storeRoot) {
+      console.error("install.sh: central store root not set.");
+      process.exit(1);
+    }
+    let data = {};
+    if (fs.existsSync(src)) {
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+    }
+    if (typeof data.permissions !== "object" || data.permissions === null || Array.isArray(data.permissions)) {
+      data.permissions = {};
+    }
+    if (!Array.isArray(data.permissions.allow)) {
+      data.permissions.allow = [];
+    }
+    if (!Array.isArray(data.permissions.additionalDirectories)) {
+      data.permissions.additionalDirectories = [];
+    }
+    // The three RW rules scoped to the store-root subtree. The store root is an
+    // array-element VALUE only — never used as an object key — so the merge has
+    // no prototype-pollution sink.
+    const rules = [
+      "Read(" + storeRoot + "/**)",
+      "Write(" + storeRoot + "/**)",
+      "Edit(" + storeRoot + "/**)",
+    ];
+    const haveAllow = new Set(data.permissions.allow.map(String));
+    for (const r of rules) {
+      if (!haveAllow.has(r)) {
+        data.permissions.allow.push(r);
+        haveAllow.add(r);
+      }
+    }
+    data.permissions.allow = Array.from(new Set(data.permissions.allow.map(String))).sort();
+    const haveDirs = new Set(data.permissions.additionalDirectories.map(String));
+    if (!haveDirs.has(storeRoot)) {
+      data.permissions.additionalDirectories.push(storeRoot);
+    }
+    data.permissions.additionalDirectories =
+      Array.from(new Set(data.permissions.additionalDirectories.map(String))).sort();
+    function sortedStringify(value, indent) {
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === "object") {
+          const out = {};
+          for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return JSON.stringify(sortKeys(value), null, indent);
+    }
+    const out = sortedStringify(data, 2) + "\n";
+    fs.writeFileSync(dst, out, "utf8");
+  '
+  mv "$tmp" "$CLAUDE_SETTINGS_JSON"
+  STATE_LOG+=("runs-dir-permission-granted:$RUNS_DIR")
+
+  # Optional failure injection point: a post-write step that fails so tests can
+  # exercise rollback of BOTH the marker and the settings grant. Env-flagged
+  # stub surface only — read AFTER both writes, mirroring
+  # CAS_FAIL_CONFINE_HOOK_WRITE. Never patches install.sh.
+  if [ "${CAS_FAIL_RUNS_DIR_CONFIG:-0}" = "1" ]; then
+    log_error "install.sh: injected runs-dir-config failure"
+    return 1
+  fi
+}
+
 # register_mcp_in_claude_json
 #
 # Sets `mcpServers.claudeagents-config = {command, args, env}` on
@@ -1400,6 +1638,26 @@ rollback() {
           fi
         fi
         ;;
+      runs-dir-configured)
+        # (F7 slice 5) Undo the central-store marker write. If the run snapshotted
+        # a pre-existing marker (RUNS_DIR_MARKER_PREEDIT set), byte-restore it;
+        # otherwise the run created the marker, so remove it. The payload is the
+        # store root (informational); the on-disk marker path is the constant.
+        if [ -n "$RUNS_DIR_MARKER_PREEDIT" ] && [ -f "$RUNS_DIR_MARKER_PREEDIT" ]; then
+          mv "$RUNS_DIR_MARKER_PREEDIT" "$RUNS_DIR_MARKER_PATH" 2>/dev/null || true
+        else
+          rm -f "$RUNS_DIR_MARKER_PATH" 2>/dev/null || true
+        fi
+        ;;
+      runs-dir-permission-granted)
+        # (F7 slice 5) The settings.json grant (the three Read/Write/Edit rules +
+        # the additionalDirectories entry) is undone by the claude-settings-edited
+        # case, which byte-restores (or removes) settings.json from the preedit
+        # snapshot taken before the run's first settings.json mutation. No extra
+        # work is needed here; the entry is recorded for audit symmetry with the
+        # marker write and so `--uninstall` can find the granted store root.
+        :
+        ;;
       confine-hook-written)
         # (H1) Remove the framework-owned confinement hook this run wrote.
         # Same defensive guard as copied-file: only remove if it is still a
@@ -1458,6 +1716,12 @@ rollback() {
   # succeeded but a later step failed and rollback restored it via mv).
   if [ -n "$PREEDIT_CLAUDE_JSON" ] && [ -f "$PREEDIT_CLAUDE_JSON" ]; then
     rm -f "$PREEDIT_CLAUDE_JSON" 2>/dev/null || true
+  fi
+  # (F7 slice 5) Clean up the per-run marker preedit snapshot if it survived
+  # (e.g. the marker write was never reached, so the runs-dir-configured case
+  # did not consume it via the restore mv).
+  if [ -n "$RUNS_DIR_MARKER_PREEDIT" ] && [ -f "$RUNS_DIR_MARKER_PREEDIT" ]; then
+    rm -f "$RUNS_DIR_MARKER_PREEDIT" 2>/dev/null || true
   fi
 
   if [ "$mentioned_npm" -eq 1 ]; then
@@ -1767,6 +2031,90 @@ uninstall_main() {
     mv "$pretooluse_tmp" "$CLAUDE_SETTINGS_JSON"
   fi
 
+  # (F7 slice 5) Remove the central-store marker AND surgically strip the
+  # store-root settings grant. The store root is read from the marker BEFORE the
+  # marker is removed (the marker is the single source of which store root was
+  # granted); when the marker is absent there is nothing to strip and the whole
+  # block is a no-op (idempotent second uninstall). The marker contents are read
+  # as data via the resolver's exact `readFileSync(...).trim()` shape and passed
+  # to node as an environment variable — never interpolated into the program
+  # text or into JSON.
+  local granted_store_root=""
+  if [ -f "$RUNS_DIR_MARKER_PATH" ]; then
+    # Read the raw single trimmed line. `tr -d '\n'` then a trailing-space trim
+    # is avoided in favour of the same trim the resolver uses; bash word-reading
+    # via `read -r` strips the trailing newline and is bash-3.2 safe.
+    IFS= read -r granted_store_root <"$RUNS_DIR_MARKER_PATH" || granted_store_root=""
+    rm -f "$RUNS_DIR_MARKER_PATH"
+  fi
+
+  if [ -n "$granted_store_root" ] && [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    # Strip the three Read/Write/Edit(<store-root>/**) rules from
+    # permissions.allow and the matching <store-root> additionalDirectories
+    # entry. Structural exact-string match on the granted store root (never
+    # substring matching), so an unrelated user rule that merely contains the
+    # path survives. Atomic temp+rename, sorted-key + 2-space-indent +
+    # trailing-newline; the store root flows in as DATA via an env var.
+    local runs_dir_tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+    CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+    CLAUDE_SETTINGS_TMP="$runs_dir_tmp" \
+    RUNS_DIR_STORE_ROOT="$granted_store_root" \
+    node -e '
+      const fs = require("fs");
+      const src = process.env.CLAUDE_SETTINGS_PATH;
+      const dst = process.env.CLAUDE_SETTINGS_TMP;
+      const storeRoot = process.env.RUNS_DIR_STORE_ROOT;
+      let data = {};
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+      const rules = new Set([
+        "Read(" + storeRoot + "/**)",
+        "Write(" + storeRoot + "/**)",
+        "Edit(" + storeRoot + "/**)",
+      ]);
+      if (
+        data &&
+        typeof data.permissions === "object" &&
+        data.permissions !== null &&
+        !Array.isArray(data.permissions)
+      ) {
+        if (Array.isArray(data.permissions.allow)) {
+          data.permissions.allow = data.permissions.allow.filter((t) => !rules.has(String(t)));
+        }
+        if (Array.isArray(data.permissions.additionalDirectories)) {
+          data.permissions.additionalDirectories =
+            data.permissions.additionalDirectories.filter((d) => String(d) !== storeRoot);
+        }
+      }
+      function sortedStringify(value, indent) {
+        const sortKeys = (v) => {
+          if (Array.isArray(v)) return v.map(sortKeys);
+          if (v && typeof v === "object") {
+            const out = {};
+            for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+            return out;
+          }
+          return v;
+        };
+        return JSON.stringify(sortKeys(value), null, indent);
+      }
+      const out = sortedStringify(data, 2) + "\n";
+      fs.writeFileSync(dst, out, "utf8");
+    '
+    mv "$runs_dir_tmp" "$CLAUDE_SETTINGS_JSON"
+  fi
+
   # Remove the built-in stacks symlink only when it points into the
   # globally-installed framework package. Symlinks the user has redirected
   # somewhere else are left alone.
@@ -1835,12 +2183,24 @@ main() {
   # CATEGORIES_JSON / CLAUDE_SETTINGS_JSON from globals.
   PERMISSION_MODE=""
   RECONFIGURE_PERMISSIONS=0
+  # (F7 slice 5) The `--runs-dir=<path>` value, if supplied. Empty means "no
+  # flag"; resolve_runs_dir then prompts (TTY) or defaults (non-TTY). The value
+  # is untrusted user input — it is only ever assigned and quoted, never eval'd.
+  RUNS_DIR_FLAG=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h)
         print_help
         exit 0
+        ;;
+      --runs-dir=*)
+        # Capture everything after the first `=` as the store root, verbatim.
+        # Quoted on assignment; never re-parsed as a command.
+        RUNS_DIR_FLAG="${1#--runs-dir=}"
+        ;;
+      --runs-dir)
+        die "\`--runs-dir\` requires a value: pass \`--runs-dir=<path>\` (for example \`--runs-dir=$RUNS_DIR_DEFAULT_DISPLAY\`)."
         ;;
       --uninstall)
         mode="uninstall"
@@ -1902,6 +2262,17 @@ main() {
 
   log_info "ClaudeAgents installer: prerequisites verified."
 
+  # (F7 slice 5) Resolve the central run-data store root: the `--runs-dir` flag,
+  # else (TTY) a prompt defaulting to `~/.gan-runs-data`, else (non-TTY) that
+  # default. Resolve before the install body so the prompt (if any) is up front;
+  # the persist + grant happen in configure_runs_dir below. Skipped under
+  # `--no-claude-code` (the marker + settings grant are part of the Claude Code
+  # configuration block, which that flag opts out of), so no prompt fires when
+  # nothing will be persisted.
+  if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
+    resolve_runs_dir
+  fi
+
   # Read the package.json version once; the version-probe compares
   # against this when deciding whether to run `npm install -g .`.
   local package_version probe_version
@@ -1928,6 +2299,11 @@ main() {
     # existing claude-settings-edited rollback case restore the registration.
     write_confine_hook
     configure_permissions
+    # (F7 slice 5) Persist the central run-data store root and grant persistent
+    # read/write to it. Both writes go through STATE_LOG (rolled back on partial
+    # failure, removed by `--uninstall`). Runs after configure_permissions so it
+    # shares the same settings preedit snapshot.
+    configure_runs_dir
   fi
 
   detect_preexisting_gan_dir
@@ -1949,6 +2325,10 @@ main() {
   fi
   if [ -n "$PREEDIT_CLAUDE_SETTINGS" ] && [ -f "$PREEDIT_CLAUDE_SETTINGS" ]; then
     rm -f "$PREEDIT_CLAUDE_SETTINGS"
+  fi
+  # (F7 slice 5) Remove the per-run marker preedit snapshot on success.
+  if [ -n "$RUNS_DIR_MARKER_PREEDIT" ] && [ -f "$RUNS_DIR_MARKER_PREEDIT" ]; then
+    rm -f "$RUNS_DIR_MARKER_PREEDIT"
   fi
 
   print_final_status

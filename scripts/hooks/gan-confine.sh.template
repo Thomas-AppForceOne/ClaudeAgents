@@ -7,10 +7,22 @@
 # WHAT THIS HOOK DOES
 # -------------------
 # Claude Code runs this as a PreToolUse hook. It confines the file writes a
-# /gan sprint may perform to F1's zone-2 run directory: the run's worktree and
-# the run's per-sprint artifact paths. Everything else is denied. The hook is a
-# per-sprint constraint, not global confinement — it no-ops entirely outside a
-# /gan run (see the GAN_RUN_ID gate below).
+# /gan sprint may perform to two orchestrator-exported zones: the resolved
+# worktree ($GAN_WORKTREE) and the declared per-sprint artifact paths under
+# the central-store run directory ($GAN_RUN_DIR). Everything else is denied.
+# The hook is a per-sprint constraint, not global confinement — it no-ops
+# entirely outside a /gan run (see the GAN_RUN_ID gate below).
+#
+# F7 supersedes the zone construction the hook originally used: the worktree
+# is no longer always a fixed sub-path of the project root (it is the user's
+# own worktree when the run reuses a task worktree), and the run artifacts now
+# live in the central, repo-keyed store outside the project tree. The
+# orchestrator therefore exports two absolute paths alongside GAN_RUN_ID, and
+# this hook reads its zones from them rather than reconstructing them from the
+# project root:
+#   * GAN_WORKTREE — the resolved worktree (writes anywhere under it allowed).
+#   * GAN_RUN_DIR  — the central-store run directory holding the artifacts,
+#                    the trace/ subtree, and the telemetry/ subtree.
 #
 # INTERFACE (documented assumption)
 #   * The tool invocation arrives as a single JSON object on stdin (matching the
@@ -21,16 +33,19 @@
 #   * deny   -> exit non-zero, with a one-line reason on stderr.
 #
 # SECURITY POSTURE
-# GAN_RUN_ID and the tool-supplied candidate path are attacker-influenceable.
-# Therefore: no eval and no value is ever executed as a command; every
-# expansion of GAN_RUN_ID and the candidate path is double-quoted so glob /
-# word-splitting / command-substitution cannot fire on attacker content; the
-# stdin JSON is parsed by `node` reading stdin as data (never by interpolating
-# untrusted bytes into a command line); the candidate path is lexically
-# normalised (".." segments resolved) BEFORE any zone comparison so a path
-# that textually starts under the worktree but escapes via ".." is denied; and
-# GAN_RUN_ID is validated against the O2 run-id grammar so a value containing
-# "/" or ".." cannot widen the allowed zone.
+# GAN_RUN_ID, GAN_WORKTREE, GAN_RUN_DIR, and the tool-supplied candidate path
+# are attacker-influenceable. Therefore: no eval and no value is ever executed
+# as a command; every expansion of GAN_RUN_ID, GAN_WORKTREE, GAN_RUN_DIR, and
+# the candidate path is double-quoted so glob / word-splitting /
+# command-substitution cannot fire on attacker content; the stdin JSON is
+# parsed by reading stdin as data (never by interpolating untrusted bytes into
+# a command line); the candidate path is lexically normalised (".." segments
+# resolved) BEFORE any zone comparison so a path that textually starts under a
+# zone but escapes via ".." is compared at its true location and denied; the
+# zone membership test is path-boundary-aware (a sibling-prefix path such as
+# "<worktree>x" is NOT treated as inside "<worktree>"); and GAN_RUN_ID is
+# validated against the O2 run-id grammar so a value containing "/" or ".."
+# cannot widen the allowed zone.
 #
 # PORTABILITY
 # Targets the bash-3.2 floor (the macOS /bin/bash baseline, matching
@@ -57,7 +72,7 @@ fi
 # allow set. A set-but-malformed run-id is a deny, not a no-op: being inside a
 # run means confinement applies. The grammar is checked with a pure bash-3.2
 # `case` glob (no external `grep` — keeps the hook self-contained and
-# PATH-independent), then with an exact-shape pattern.
+# PATH-independent).
 case "$GAN_RUN_ID" in
   [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
     : # well-formed run id
@@ -68,19 +83,35 @@ case "$GAN_RUN_ID" in
     ;;
 esac
 
-# --- 3. Resolve the project root -------------------------------------------
-# The allowed zones are relative to the project root. Claude Code exports
-# CLAUDE_PROJECT_DIR; fall back to PWD when it is absent (matches the precedent
-# hook's resolve order). Quote every expansion.
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+# --- 3. Resolve the two allowed zones from the environment -----------------
+# F7: the zones are the orchestrator-exported absolute paths, NOT a
+# reconstruction from the project root. GAN_WORKTREE is the resolved worktree;
+# GAN_RUN_DIR is the central-store run directory. Both are required when a run
+# is active: a missing or empty zone path would otherwise collapse to a bare
+# normalisation result and could match unintended paths, so treat absence as a
+# deny rather than allowing through. Quote every expansion.
+if [ -z "${GAN_WORKTREE:-}" ] || [ -z "${GAN_RUN_DIR:-}" ]; then
+  printf '%s\n' "gan-confine: refusing — GAN_WORKTREE / GAN_RUN_DIR are not set for this run." >&2
+  exit 1
+fi
+
+# A zone path must be absolute; a relative zone could not be reasoned about
+# without a project root (which the hook deliberately no longer consults).
+case "$GAN_WORKTREE" in /*) : ;; *)
+  printf '%s\n' "gan-confine: refusing — GAN_WORKTREE is not an absolute path." >&2
+  exit 1 ;;
+esac
+case "$GAN_RUN_DIR" in /*) : ;; *)
+  printf '%s\n' "gan-confine: refusing — GAN_RUN_DIR is not an absolute path." >&2
+  exit 1 ;;
+esac
 
 # --- 4. Read the candidate path from the stdin JSON ------------------------
-# The PreToolUse JSON arrives on stdin. node reads it directly as data and
-# emits the first non-empty write-target field it finds, or an empty string.
-# Nothing from the payload is ever interpolated into a command line; the
-# program text below is a fixed literal, and the untrusted bytes flow only
-# through node's stdin. node is already a hard dependency of the framework's
-# install/runtime, so requiring it here is consistent with the repo.
+# The PreToolUse JSON arrives on stdin. The interpreter reads it directly as
+# data and emits the first non-empty write-target field it finds, or an empty
+# string. Nothing from the payload is ever interpolated into a command line;
+# the program text below is a fixed literal, and the untrusted bytes flow only
+# through the interpreter's stdin.
 CANDIDATE="$(
   node -e '
     let d = "";
@@ -119,11 +150,12 @@ if [ -z "$CANDIDATE" ]; then
 fi
 
 # --- 5. Make the candidate path absolute -----------------------------------
-# A relative path is resolved against the project root. An absolute path is
-# taken as-is. (No filesystem probe — the target may not exist yet.)
+# A relative path is resolved against the worktree (the run's working
+# directory). An absolute path is taken as-is. (No filesystem probe — the
+# target may not exist yet.)
 case "$CANDIDATE" in
   /*) ABS="$CANDIDATE" ;;
-  *)  ABS="$PROJECT_ROOT/$CANDIDATE" ;;
+  *)  ABS="$GAN_WORKTREE/$CANDIDATE" ;;
 esac
 
 # --- 6. Lexically normalise ".." / "." segments ----------------------------
@@ -140,7 +172,8 @@ normalise_path() {
     *)  np_lead="" ;;
   esac
   np_out=""
-  # Split on "/" using IFS in a subshell-free way (bash-3.2 safe).
+  # Split on "/" using prefix/suffix stripping in a subshell-free way
+  # (bash-3.2 safe).
   np_rest="$np_in"
   while [ -n "$np_rest" ]; do
     case "$np_rest" in
@@ -175,16 +208,14 @@ normalise_path() {
 }
 
 NORM="$(normalise_path "$ABS")"
-ROOT_NORM="$(normalise_path "$PROJECT_ROOT")"
-
-# --- 7. Compute the run directory and its allowed sub-paths ----------------
-RUN_DIR="$ROOT_NORM/.gan-state/runs/$GAN_RUN_ID"
-WORKTREE="$RUN_DIR/worktree"
-MODULES_DIR="$ROOT_NORM/.gan-state/modules"
+WORKTREE_NORM="$(normalise_path "$GAN_WORKTREE")"
+RUN_DIR_NORM="$(normalise_path "$GAN_RUN_DIR")"
 
 # is_within <child> <ancestor-dir> : true when child == ancestor or is nested
-# under it. Compares normalised, "/"-terminated prefixes so "/a/bc" is NOT
-# treated as within "/a/b". Pure string comparison on already-quoted values.
+# under it. Boundary-aware: compares the normalised paths so "/a/bc" is NOT
+# treated as within "/a/b" (the only match below the equality case requires
+# the candidate to begin with the zone plus a "/" separator). Pure string
+# comparison on already-normalised, double-quoted values.
 is_within() {
   iw_child="$1"
   iw_dir="$2"
@@ -195,29 +226,21 @@ is_within() {
   esac
 }
 
-# --- 8. DENY rules that take precedence ------------------------------------
-# Module state (F1 zone-2) is owned by modules, never by sprints — deny even
-# when it would otherwise sit under .gan-state.
-if is_within "$NORM" "$MODULES_DIR"; then
-  printf '%s\n' "gan-confine: deny — .gan-state/modules/ is module-owned state." >&2
-  exit 1
-fi
-
-# --- 9. ALLOW: writes inside the run's worktree ----------------------------
-if is_within "$NORM" "$WORKTREE"; then
+# --- 7. ALLOW: writes inside the resolved worktree -------------------------
+# Any depth under $GAN_WORKTREE (and the worktree root itself) is allowed.
+if is_within "$NORM" "$WORKTREE_NORM"; then
   exit 0
 fi
 
-# --- 10. ALLOW: the run's per-sprint artifact paths (and trace/ telemetry/) -
-# Only the enumerated F1/O2 artifact forms directly under the run dir are
-# allowed; the run dir is NOT blanket-allowed. REL is the path relative to the
-# run dir (empty when NORM is not under it).
-REL=""
-if is_within "$NORM" "$RUN_DIR"; then
-  if [ "$NORM" = "$RUN_DIR" ]; then
+# --- 8. ALLOW: the declared per-sprint artifact paths under the run dir -----
+# Only the enumerated O2 artifact forms directly under $GAN_RUN_DIR are
+# allowed (plus the trace/ and telemetry/ subtrees); the run dir is NOT
+# blanket-allowed. REL is the path relative to the run dir.
+if is_within "$NORM" "$RUN_DIR_NORM"; then
+  if [ "$NORM" = "$RUN_DIR_NORM" ]; then
     REL=""
   else
-    REL="${NORM#"$RUN_DIR"/}"
+    REL="${NORM#"$RUN_DIR_NORM"/}"
   fi
   case "$REL" in
     # Per-sprint artifact files directly under the run dir (O2 layout).
@@ -233,9 +256,10 @@ if is_within "$NORM" "$RUN_DIR"; then
   esac
 fi
 
-# --- 11. Default deny -------------------------------------------------------
+# --- 9. Default deny --------------------------------------------------------
 # Everything else: ~/.claude/, ~/.claude.json, the home dir generally,
-# .claude/gan/, .gan-cache/, project-root files outside the run zones, and any
-# path outside the project root. No allow rule matched, so deny.
+# .claude/gan/, .gan-cache/, .gan-state/modules/, another run's worktree, the
+# run dir path itself, an unenumerated file directly under the run dir, and
+# any path outside both zones. No allow rule matched, so deny.
 printf '%s\n' "gan-confine: deny — write target is outside the run's allowed zones." >&2
 exit 1

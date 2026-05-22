@@ -56,6 +56,100 @@ export {
 
 export { validateAll, validateOverlay, validateStack } from './config-server/tools/validate.js';
 
+// ---- F7 central run-data store resolution --------------------------------
+
+export {
+  resolveStoreRoot,
+  resolveMainWorktreeRoot,
+  computeRepoKey,
+  resolveRepoKey,
+  resolveRepoStoreDir,
+  resolveRunLockPath,
+  resolveRunsRoot,
+  resolveRunDir,
+  resolveRunStore,
+  generateRunId,
+  DEFAULT_STORE_DIRNAME,
+  STORE_MARKER_RELPATH,
+  STORE_ROOT_ENV,
+  REPO_KEY_HASH_LENGTH,
+  RUN_ID_PATTERN,
+  REPO_KEY_HASH_TAIL,
+} from './config-server/storage/run-store.js';
+
+export type { StoreEnv, ResolvedRunStore } from './config-server/storage/run-store.js';
+
+// ---- F7 worktree-aware execution (1a/1b/1c resolver) ---------------------
+
+export {
+  slugify,
+  terminalSlug,
+  branchMatchesSlug,
+  resolveDefaultBranch,
+  resolveWorkspace,
+  defaultGitExec,
+} from './config-server/storage/worktree-resolver.js';
+
+export type {
+  GitExec,
+  ResolvedWorkspace,
+  ResolveWorkspaceOptions,
+} from './config-server/storage/worktree-resolver.js';
+
+export { buildWorkspaceRecord, recordWorkspace } from './config-server/storage/run-progress.js';
+
+export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
+
+// ---- F7 slice 4: recovery + serialization (re-anchored to central store) --
+
+export {
+  acquireRunLock,
+  releaseRunLock,
+  readRunLock,
+  defaultIsAlive,
+} from './config-server/storage/run-lock.js';
+
+export type {
+  RunLockContents,
+  RunLockHandle,
+  AcquireRunLockOptions,
+  IsAlive,
+} from './config-server/storage/run-lock.js';
+
+export { checkRecoveryAnchor } from './config-server/storage/recovery-anchor.js';
+
+export type {
+  WorkspaceAnchor,
+  RecoveryAnchorResult,
+  CheckRecoveryAnchorOptions,
+} from './config-server/storage/recovery-anchor.js';
+
+export { enumerateRuns, findRun } from './config-server/storage/run-enumerator.js';
+
+export type {
+  EnumeratedRun,
+  EnumeratedWorkspace,
+} from './config-server/storage/run-enumerator.js';
+
+export {
+  planRunCleanup,
+  executeRunCleanup,
+  resolveMergeBase,
+  isBranchMerged,
+  checkActiveRunGuard,
+  defaultRmDir,
+} from './config-server/storage/cleanup-planner.js';
+
+export type {
+  BranchPlan,
+  RunCleanupPlan,
+  RunCleanupOutcome,
+  CleanupOptions,
+  ExecuteCleanupOptions,
+  ActiveRunGuardResult,
+  RmDir,
+} from './config-server/storage/cleanup-planner.js';
+
 // ---- T1 run-trace emission library --------------------------------------
 
 export {
