@@ -222,7 +222,15 @@ Every API error (during validation or during a sprint) is reported with the F2 s
 
 ## Confinement
 
-The existing PreToolUse hook remains in place. Spawned agents write only inside `.gan-state/runs/<run-id>/worktree` and to their designated artefact paths under `.gan-state/runs/<run-id>/`. MCP tool calls are not file-system reads; agents may call the API freely from inside a confined worktree.
+The framework-owned PreToolUse confinement hook remains in place. Spawned agents write only inside the resolved worktree and to their designated artefact paths under the run directory. MCP tool calls are not file-system reads; agents may call the API freely from inside a confined worktree.
+
+Before spawning agents at sprint start, the orchestrator exports three absolute-path environment variables that the confinement hook reads to derive its two allowed zones:
+
+- `GAN_RUN_ID` — the active run's identifier (`<YYYYMMDDTHHMMSS>-<4 hex>`). When unset, the hook is a no-op: confinement is a per-sprint constraint, not global.
+- `GAN_WORKTREE` — the resolved worktree. This is the user's own worktree when the run reuses a task-named worktree, or the run-scoped worktree the framework created otherwise. Writes anywhere under it are in-bounds.
+- `GAN_RUN_DIR` — the central-store run directory that holds the run's artefacts, its `trace/` subtree, and its `telemetry/` subtree. Only the declared artefact subpaths under it are in-bounds.
+
+The hook derives its zones from `GAN_WORKTREE` and `GAN_RUN_DIR` rather than from the project root, because the worktree is not always a fixed sub-path of the project and the run directory lives in the central store outside the project tree. It stays a pure deny-gate: it allows writes inside those two zones and denies everything else (`~/.claude/`, the home directory generally, the module-state directory, the ephemeral cache, and any path outside both zones). `gan hooks status` reports the resolved `GAN_WORKTREE` and `GAN_RUN_DIR` for the active run, or notes that the command is running outside a run.
 
 ## Trust integration
 
@@ -252,6 +260,6 @@ The orchestrator/skill runtime wires the following integration points. Each name
 
 ## Spawn discipline (summary)
 
-Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object.
+Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object. The orchestrator also exports `GAN_RUN_ID`, `GAN_WORKTREE`, and `GAN_RUN_DIR` into the spawn environment (see "Confinement"), so the confinement hook can derive its allowed zones from the resolved worktree and run directory.
 
 The orchestrator parses the artefact each agent writes under `.gan-state/runs/<run-id>/` and decides whether to spawn the next agent.
