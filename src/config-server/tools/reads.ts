@@ -52,6 +52,7 @@ import {
   loadModuleState,
   type ModuleStateRecord,
 } from '../storage/module-loader.js';
+import { type ModuleStateStoreOptions } from '../storage/module-state-store.js';
 import {
   resolveStackFile,
   type ResolveStackOptions,
@@ -78,6 +79,14 @@ export interface ReadToolContext {
    * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
    */
   packageRoot?: string;
+  /**
+   * Home/env + git injection seams for the repo-keyed module-state store
+   * (F8). Production leaves this unset and uses the real `os.homedir`,
+   * `process.env`, and `execFileSync('git', …)` seams; tests inject a fake
+   * home (so no real marker leaks) and a stub git seam (so no real repo is
+   * required) to make module-state resolution deterministic.
+   */
+  moduleStateStore?: ModuleStateStoreOptions;
 }
 
 interface PackageMeta {
@@ -362,11 +371,13 @@ export interface GetModuleStateInput {
 }
 
 /**
- * Real read (M3 per-key). Loads the persisted JSON blob at
- * `<projectRoot>/.gan-state/modules/<name>/<key>.json`. Returns `null`
- * when the file does not exist; throws via the factory on
- * read/parse failure so callers can distinguish "no state" from
- * "corrupt state".
+ * Real read (M3 per-key). Loads the persisted JSON blob at the central,
+ * repo-keyed module-state store
+ * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation; the
+ * repo-key is derived from `projectRoot` via F7's git-common-dir resolution,
+ * so all worktrees of a repo read the same file). Returns `null` when the
+ * file does not exist; throws via the factory on read/parse failure so
+ * callers can distinguish "no state" from "corrupt state".
  *
  * Reads against a `key` that the module manifest does not declare
  * also return `null` (consistent with "no file") rather than throwing
@@ -375,10 +386,10 @@ export interface GetModuleStateInput {
  */
 export function getModuleState(
   input: GetModuleStateInput,
-  _ctx: ReadToolContext = {},
+  ctx: ReadToolContext = {},
 ): ModuleStateRecord | null {
   const root = canonicalizePath(input.projectRoot);
-  return loadModuleState(input.name, input.key, root);
+  return loadModuleState(input.name, input.key, root, ctx.moduleStateStore);
 }
 
 export interface ListModulesInput {

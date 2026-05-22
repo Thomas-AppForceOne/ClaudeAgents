@@ -13,28 +13,23 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  PortRegistry,
-  type PortRegistryFile,
-} from '../../../src/modules/docker/PortRegistry.js';
+import { PortRegistry, type PortRegistryFile } from '../../../src/modules/docker/PortRegistry.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 import {
   _resetModuleRegistrationCacheForTests,
   moduleStatePath,
 } from '../../../src/config-server/storage/module-loader.js';
 import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -73,9 +68,15 @@ describe('PortRegistry', () => {
   let scratch: string;
   let stagedRoot: string;
   let savedOverride: string | undefined;
+  let store: ModuleStateStoreScope;
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-portregistry-'));
+    // F8: module state now lives in the repo-keyed store, derived from the
+    // project root via git-common-dir. Make `scratch` a real repo so the key
+    // resolves, and point the store at a throwaway root.
+    initGitRepo(scratch);
+    store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
     stagedRoot = stageDockerModuleRoot();
     process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
@@ -83,8 +84,10 @@ describe('PortRegistry', () => {
     _resetModuleRegistrationCacheForTests();
   });
   afterEach(() => {
+    store.restore();
     rmSync(scratch, { recursive: true, force: true });
     rmSync(stagedRoot, { recursive: true, force: true });
+    rmSync(store.storeRoot, { recursive: true, force: true });
     if (savedOverride === undefined) {
       delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
     } else {
@@ -139,16 +142,18 @@ describe('PortRegistry', () => {
     expect(reg.getAll()).toHaveLength(0);
   });
 
-  it('on-disk JSON matches {version: 1, entries: {...}} shape at M3 module-state per-key path', () => {
+  it('on-disk JSON matches {version: 1, entries: {...}} shape at the repo-keyed module-state path', () => {
     const reg = new PortRegistry(scratch);
     const wt = path.join(scratch, 'wt-disk');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 7000, 'app-disk');
-    // M3 owns the path: <projectRoot>/.gan-state/modules/<name>/<key>.json
+    // F8 owns the path: <module-state-root>/<repo-key>/<name>/<key>.json,
+    // keyed by the repo (not <projectRoot>/.gan-state/modules/...).
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
-    expect(filePath).toBe(
-      path.join(scratch, '.gan-state', 'modules', 'docker', 'port-registry.json'),
-    );
+    expect(filePath).toBe(store.statePath(scratch, 'docker', 'port-registry'));
+    expect(filePath.startsWith(store.storeRoot + path.sep)).toBe(true);
+    expect(filePath).not.toContain(path.join('.gan-state', 'modules'));
+    expect(filePath.endsWith(path.join('docker', 'port-registry.json'))).toBe(true);
     expect(existsSync(filePath)).toBe(true);
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8')) as PortRegistryFile;
     expect(onDisk.version).toBe(1);
@@ -190,7 +195,10 @@ describe('PortRegistry', () => {
       path.join(__dirname, '..', '..', '..', 'src', 'modules', 'docker', 'PortRegistry.ts'),
       'utf8',
     );
-    const imports = src.split('\n').filter((l) => /^\s*import\b/.test(l)).join('\n');
+    const imports = src
+      .split('\n')
+      .filter((l) => /^\s*import\b/.test(l))
+      .join('\n');
     expect(imports).not.toMatch(/atomicWriteFile/);
     expect(imports).not.toMatch(/readFileSync/);
     expect(imports).not.toMatch(/from ['"]node:fs['"]/);

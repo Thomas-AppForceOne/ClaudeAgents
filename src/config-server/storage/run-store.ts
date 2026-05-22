@@ -37,12 +37,15 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { canonicalizePath } from '../determinism/index.js';
 import { mainWorktreeRoot as deriveMainWorktreeRoot, type GitExec } from './git-exec.js';
+import { resolveStoreRootByPrecedence, type StoreEnv } from './store-common.js';
+
+// The home/env injection seam is shared across every central store; re-export
+// it from here so existing F7 callers keep importing `StoreEnv` from run-store.
+export type { StoreEnv } from './store-common.js';
 
 /** Default store-root directory name under the user's home directory. */
 export const DEFAULT_STORE_DIRNAME = '.gan-runs-data';
@@ -66,37 +69,6 @@ export const RUN_ID_PATTERN = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$/;
 /** Matches the trailing `-<hash12>` segment of a well-formed repo key. */
 export const REPO_KEY_HASH_TAIL = /-[0-9a-f]{12}$/;
 
-/** Optional dependency seam so tests can isolate `os.homedir` / `process.env`. */
-export interface StoreEnv {
-  /** Defaults to `os.homedir()`. */
-  homedir?: () => string;
-  /** Defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
-}
-
-function resolveHomedir(deps?: StoreEnv): string {
-  return (deps?.homedir ?? os.homedir)();
-}
-
-function resolveEnv(deps?: StoreEnv): NodeJS.ProcessEnv {
-  return deps?.env ?? process.env;
-}
-
-/**
- * Read the install-time marker contents, or `undefined` if it is absent or
- * empty. The marker's single line is the configured store-root path.
- */
-function readStoreMarker(deps?: StoreEnv): string | undefined {
-  const markerPath = path.join(resolveHomedir(deps), STORE_MARKER_RELPATH);
-  if (!existsSync(markerPath)) return undefined;
-  try {
-    const contents = readFileSync(markerPath, 'utf8').trim();
-    return contents.length > 0 ? contents : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Resolve the store root, highest precedence first:
  *   1. `GAN_RUNS_DATA` environment variable (single-run override; testing / CI).
@@ -108,40 +80,20 @@ function readStoreMarker(deps?: StoreEnv): string | undefined {
  * with the home directory. The env/marker forms are resolved to absolute paths
  * (relative to the home directory if not already absolute) so callers always
  * receive an absolute store root.
+ *
+ * Delegates to the shared {@link resolveStoreRootByPrecedence} ladder — the
+ * SAME implementation F8's module-state store uses — passing only the knobs
+ * that differ for run data (env var, marker relpath, default dirname).
  */
 export function resolveStoreRoot(deps?: StoreEnv): string {
-  const home = resolveHomedir(deps);
-  const env = resolveEnv(deps);
-
-  const fromEnv = env[STORE_ROOT_ENV];
-  if (fromEnv !== undefined && fromEnv.trim().length > 0) {
-    return absolutize(fromEnv.trim(), home);
-  }
-
-  const fromMarker = readStoreMarker(deps);
-  if (fromMarker !== undefined) {
-    return absolutize(fromMarker, home);
-  }
-
-  return path.join(home, DEFAULT_STORE_DIRNAME);
-}
-
-/**
- * Expand a configured store path to an absolute form. A leading `~` is expanded
- * to the home directory (never left as a literal `~`); a relative path is
- * resolved against the home directory; an absolute path is normalised.
- */
-function absolutize(p: string, home: string): string {
-  let expanded = p;
-  if (expanded === '~') {
-    expanded = home;
-  } else if (expanded.startsWith('~/') || expanded.startsWith('~\\')) {
-    expanded = path.join(home, expanded.slice(2));
-  }
-  if (path.isAbsolute(expanded)) {
-    return path.normalize(expanded);
-  }
-  return path.resolve(home, expanded);
+  return resolveStoreRootByPrecedence(
+    {
+      envVar: STORE_ROOT_ENV,
+      markerRelpath: STORE_MARKER_RELPATH,
+      defaultDirname: DEFAULT_STORE_DIRNAME,
+    },
+    deps,
+  );
 }
 
 /**
