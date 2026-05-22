@@ -31,6 +31,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { RUN_ID_PATTERN } from './run-store.js';
+
 /** The workspace block surfaced from a run's `progress.json`. */
 export interface EnumeratedWorkspace {
   /** Canonical absolute worktree path (the recovery anchor). */
@@ -93,7 +95,7 @@ export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
 
   const runs: EnumeratedRun[] = [];
   for (const name of entries) {
-    if (!RUN_ID_DIR_PATTERN.test(name)) continue; // skip non-run entries
+    if (!RUN_ID_PATTERN.test(name)) continue; // skip non-run entries
     const runDir = path.join(runsRoot, name);
     let dirStat;
     try {
@@ -122,9 +124,6 @@ export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
   runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return runs;
 }
-
-/** Run-id directory grammar `<YYYYMMDDTHHMMSS>-<4 hex>` (mirrors slice-1). */
-const RUN_ID_DIR_PATTERN = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$/;
 
 /**
  * Parse `progress.json` into a plain object, skipping prototype-polluting keys.

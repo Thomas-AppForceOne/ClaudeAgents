@@ -44,7 +44,6 @@
 
 import { rmSync } from 'node:fs';
 
-import { canonicalizePathForDisplay } from '../determinism/index.js';
 import { createError } from '../errors.js';
 import type { EnumeratedRun } from './run-enumerator.js';
 import { readRunLock, defaultIsAlive, type IsAlive } from './run-lock.js';
@@ -399,9 +398,4 @@ export function checkActiveRunGuard(
       `Cannot clean up ${holder.runId}; it is currently active (pid ${holder.pid}). ` +
       `Stop the run first.`,
   };
-}
-
-/** Render a display-form path for a worktree (used in cleanup reports). */
-export function displayWorktree(p: string): string {
-  return canonicalizePathForDisplay(p);
 }

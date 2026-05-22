@@ -137,7 +137,6 @@ export {
   resolveMergeBase,
   isBranchMerged,
   checkActiveRunGuard,
-  displayWorktree,
   defaultRmDir,
 } from './config-server/storage/cleanup-planner.js';
 
