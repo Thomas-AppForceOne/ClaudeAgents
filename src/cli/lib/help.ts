@@ -30,6 +30,7 @@ export const SUBCOMMAND_NAMES: readonly string[] = Object.freeze([
   'stacks',
   'stack',
   'modules',
+  'hooks',
   'trust',
   'help',
 ]);
@@ -42,6 +43,7 @@ const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   stacks: 'Inspect active or available stacks; scaffold, customize, or reset stack files.',
   stack: 'Show or update a single stack file.',
   modules: 'List registered modules with pairing status.',
+  hooks: 'Report confinement-hook state across the user and project tiers.',
   trust: 'Approve, revoke, or inspect project trust-cache approvals.',
   help: 'Show help for a subcommand.',
 });
@@ -204,6 +206,26 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
     description: 'List registered modules with their pairing status.',
     examples: ['  gan modules list', '  gan modules list --json'],
     exitCodes: ['  0   Success', '  5   Framework library unreachable'],
+  },
+  hooks: {
+    usage: 'gan hooks status [--json]',
+    description:
+      'Report the framework confinement-hook state.\n' +
+      '  gan hooks status   Show the user-tier and project-tier hooks.',
+    examples: ['  gan hooks status', '  gan hooks status --json'],
+    exitCodes: ['  0   Success', '  64  Bad CLI arguments'],
+  },
+  'hooks status': {
+    usage: 'gan hooks status [--json]',
+    description:
+      'Report the framework-owned confinement hook at the user tier\n' +
+      '(`~/.claude/hooks/gan-confine.sh`) and any project-tier override at\n' +
+      '`<cwd>/.claude/hooks/gan-confine.sh`. Shows the framework version that\n' +
+      'authored the user-tier hook, notes that a project-tier hook takes\n' +
+      'precedence, and hints at deletion when an override matches a known\n' +
+      'legacy zone layout. Reads the filesystem; needs no project config.',
+    examples: ['  gan hooks status', '  gan hooks status --json'],
+    exitCodes: ['  0   Success'],
   },
   trust: {
     usage: 'gan trust <info|approve|revoke|list> [args] [--json]',

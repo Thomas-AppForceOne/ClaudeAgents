@@ -15,6 +15,11 @@ REPO_ROOT="$SCRIPT_DIR"
 CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 CLAUDE_SETTINGS_JSON="$HOME/.claude/settings.json"
+# (H1) Framework-owned PreToolUse confinement hook. Content is rendered from
+# the single source-of-truth template under the repo; the on-disk path is fixed
+# and the content is regenerated on every install (no version tracking).
+CONFINE_HOOK_PATH="$HOME/.claude/hooks/gan-confine.sh"
+CONFINE_HOOK_TEMPLATE="$REPO_ROOT/scripts/hooks/gan-confine.sh.template"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 # Highest Node major the framework's CI has been exercised through. Above
@@ -39,6 +44,13 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   zone-created:<absolute-path>
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
+#   confine-hook-written:<absolute-path>
+# (H1) `confine-hook-written` records the rendered ~/.claude/hooks/gan-confine.sh
+# the install wrote; rollback removes the partial hook file at that path. Its
+# settings.json `hooks.PreToolUse[]` registration rides the existing
+# `claude-settings-edited` entry — write_confine_hook takes the settings preedit
+# snapshot BEFORE merging the registration, so settings restoration is already
+# covered by the claude-settings-edited rollback case.
 # The `symlink:<absolute-path>` kind is retained as a legacy entry — it is
 # still recognised by `rollback()` but is no longer emitted by current
 # install paths (which copy files, not symlink them).
@@ -55,6 +67,15 @@ MIDPIVOT_WARNING_FIRED=0
 # `~/.claude/gan/builtin-stacks/` is in place after the install body
 # runs; consumed by print_final_status.
 BUILTIN_STACKS_LINKED=0
+
+# (H1) Absolute path to a project-tier confinement hook detected in the
+# current repo (`<repo-top>/.claude/hooks/gan-confine.sh`), set by
+# detect_project_tier_confine_hook; consumed by print_final_status to emit the
+# non-blocking override warning. Empty when no project-tier hook is present (or
+# the install is run outside a git repo). DISTINCT from CONFINE_HOOK_PATH (the
+# user-tier hook under $HOME) — the two are never confused, even when $HOME is
+# the repo top (the sandboxed-$HOME test case).
+PROJECT_TIER_HOOK_DETECTED=""
 
 # Per-run pre-edit copy of `~/.claude.json` (if any). The install branch
 # of `main()` cleans this up after every other step succeeds; rollback
@@ -526,9 +547,195 @@ CATEGORIES_JSON='[
 # permissions`, `--reconfigure-permissions` flags; idempotent re-runs
 # (skip already-granted categories); and the uninstall integration that
 # removes only the framework's added entries.
-configure_permissions() {
-  PREEDIT_CLAUDE_SETTINGS="$HOME/.claude/settings.json.preedit-$$"
+# ensure_settings_preedit_snapshot
+#
+# (H1) Idempotently snapshots `~/.claude/settings.json` for rollback before
+# the FIRST settings.json mutation of this run, recording a single
+# `claude-settings-edited` STATE_LOG entry. Both `write_confine_hook` (the
+# PreToolUse registration merge) and `configure_permissions` (the
+# permissions.allow merge) edit settings.json; whichever runs first takes the
+# snapshot, and the second call is a no-op. This guarantees the preedit copy
+# captures the pre-run state (not an already-merged intermediate), so the
+# existing `claude-settings-edited` rollback case byte-restores (or removes)
+# the file regardless of which merges ran.
+#
+# Sets the global PREEDIT_CLAUDE_SETTINGS to the preedit copy path on the
+# pre-existing-file path, or leaves it empty and records `:NEW` when the file
+# did not exist (rollback then removes the file outright). Re-entrancy is
+# detected by scanning STATE_LOG for an existing `claude-settings-edited`
+# entry — once one is present the snapshot has already been taken.
+ensure_settings_preedit_snapshot() {
+  local e
+  for e in "${STATE_LOG[@]:-}"; do
+    case "$e" in
+      claude-settings-edited:*) return 0 ;;
+    esac
+  done
+  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    PREEDIT_CLAUDE_SETTINGS="$HOME/.claude/settings.json.preedit-$$"
+    cp "$CLAUDE_SETTINGS_JSON" "$PREEDIT_CLAUDE_SETTINGS"
+    STATE_LOG+=("claude-settings-edited:$PREEDIT_CLAUDE_SETTINGS")
+  else
+    STATE_LOG+=("claude-settings-edited:NEW")
+    # Ensure parent directory exists for the atomic-write rename target.
+    mkdir -p "$(dirname "$CLAUDE_SETTINGS_JSON")"
+  fi
+}
 
+# write_confine_hook
+#
+# (H1) Renders the framework-owned PreToolUse confinement hook from its single
+# source-of-truth template (`scripts/hooks/gan-confine.sh.template`) and writes
+# it to `~/.claude/hooks/gan-confine.sh`, then registers its ABSOLUTE path in
+# `~/.claude/settings.json` under `hooks.PreToolUse[]`.
+#
+# The hook body is never re-authored here — install.sh reads the template and
+# substitutes only the `__GAN_FRAMEWORK_VERSION__` placeholder with the
+# framework version read at runtime from package.json (read_mcp_server_version,
+# the R2-locked `node -p` version source — never a hardcoded constant).
+#
+# Regeneration: the hook is overwritten on every install (no version-tracking
+# short-circuit), so an F1 zone rework lands on disk the next time install.sh
+# runs. The settings.json merge is additive (unrelated PreToolUse entries and
+# other settings survive) and idempotent (deduped on the absolute hook path —
+# a re-run does not append a second entry for the same path).
+#
+# Security posture: no `eval`;
+# every path/version expansion is double-quoted; the version flows into the
+# rendered template as DATA via node reading it from the environment (it is
+# never interpolated into a shell command line, and the rendered hook is only
+# written + chmod'd — install.sh never sources or executes it); the JSON merge
+# reads the hook path from an environment variable (like the existing
+# CLAUDE_SETTINGS_PATH / CLAUDE_MCP_BIN_ABS pattern), never by concatenating it
+# into the node program text. Atomic *.tmp.$$ + mv writes throughout; bash-3.2
+# floor respected.
+write_confine_hook() {
+  local hooks_dir version tmp_hook
+  hooks_dir="$(dirname "$CONFINE_HOOK_PATH")"
+  mkdir -p "$hooks_dir"
+
+  # Version is read at runtime and treated purely as data downstream.
+  version="$(read_mcp_server_version)"
+
+  # Render: substitute the literal placeholder with the version. node reads
+  # both the template (from the path in an env var) and the version (from an
+  # env var) as data and replaces every occurrence of the exact placeholder
+  # token — the version bytes are never parsed as code or as a regex.
+  tmp_hook="$CONFINE_HOOK_PATH.tmp.$$"
+  CONFINE_TEMPLATE_PATH="$CONFINE_HOOK_TEMPLATE" \
+  CONFINE_HOOK_TMP="$tmp_hook" \
+  CONFINE_FRAMEWORK_VERSION="$version" \
+  node -e '
+    const fs = require("fs");
+    const tpl = fs.readFileSync(process.env.CONFINE_TEMPLATE_PATH, "utf8");
+    const version = process.env.CONFINE_FRAMEWORK_VERSION;
+    // Literal split/join replacement — no regex, so version bytes cannot be
+    // interpreted as regex metacharacters or replacement-string specials.
+    const rendered = tpl.split("__GAN_FRAMEWORK_VERSION__").join(version);
+    fs.writeFileSync(process.env.CONFINE_HOOK_TMP, rendered, "utf8");
+  '
+  chmod +x "$tmp_hook"
+  mv "$tmp_hook" "$CONFINE_HOOK_PATH"
+
+  # Record the written hook for rollback BEFORE touching settings.json, so a
+  # failure during the registration merge still rolls back the partial hook.
+  STATE_LOG+=("confine-hook-written:$CONFINE_HOOK_PATH")
+
+  # Take the settings preedit snapshot BEFORE merging the registration, so the
+  # registration restoration rides the existing claude-settings-edited case.
+  ensure_settings_preedit_snapshot
+
+  # Resolve the hook path to a real absolute path for the registration entry
+  # (the constant is already absolute and `~`-free since it is built from
+  # $HOME, but resolve the parent dir defensively so the entry never carries a
+  # literal `~` or a relative segment).
+  local hook_abs
+  hook_abs="$(cd "$hooks_dir" && pwd)/$(basename "$CONFINE_HOOK_PATH")"
+
+  # Atomic, additive, idempotent merge of the PreToolUse registration via node.
+  # Mirrors the permissions.allow merge in configure_permissions: reads values
+  # from the environment as data, dedupes on the absolute hook path, and emits
+  # sorted-key + 2-space-indent + trailing-newline JSON to a *.tmp.$$ sibling,
+  # then mv's into place.
+  local tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+  CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+  CLAUDE_SETTINGS_TMP="$tmp" \
+  CONFINE_HOOK_ABS="$hook_abs" \
+  node -e '
+    const fs = require("fs");
+    const src = process.env.CLAUDE_SETTINGS_PATH;
+    const dst = process.env.CLAUDE_SETTINGS_TMP;
+    const hookAbs = process.env.CONFINE_HOOK_ABS;
+    if (!hookAbs) {
+      console.error("install.sh: confinement hook path not set.");
+      process.exit(1);
+    }
+    let data = {};
+    if (fs.existsSync(src)) {
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+    }
+    if (typeof data.hooks !== "object" || data.hooks === null || Array.isArray(data.hooks)) {
+      data.hooks = {};
+    }
+    if (!Array.isArray(data.hooks.PreToolUse)) {
+      data.hooks.PreToolUse = [];
+    }
+    // Has the framework hook (by absolute command path) already been
+    // registered? Scan every entry and its nested hooks[] for the path so a
+    // re-run is idempotent regardless of the entry shape Claude Code wrote.
+    const mentionsHook = (entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      if (entry.command === hookAbs) return true;
+      if (Array.isArray(entry.hooks)) {
+        return entry.hooks.some((h) => h && typeof h === "object" && h.command === hookAbs);
+      }
+      return false;
+    };
+    if (!data.hooks.PreToolUse.some(mentionsHook)) {
+      data.hooks.PreToolUse.push({
+        matcher: "Write|Edit|MultiEdit|NotebookEdit",
+        hooks: [{ type: "command", command: hookAbs }],
+      });
+    }
+    function sortedStringify(value, indent) {
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === "object") {
+          const out = {};
+          for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return JSON.stringify(sortKeys(value), null, indent);
+    }
+    const out = sortedStringify(data, 2) + "\n";
+    fs.writeFileSync(dst, out, "utf8");
+  '
+  mv "$tmp" "$CLAUDE_SETTINGS_JSON"
+
+  # (AC-A4 enablement) Optional failure injection point: a post-write step
+  # that fails so tests can exercise rollback of the partial hook + the
+  # registration. Env-flagged stub surface only — never patches install.sh.
+  if [ "${CAS_FAIL_CONFINE_HOOK_WRITE:-0}" = "1" ]; then
+    log_error "install.sh: injected confine-hook-write failure"
+    return 1
+  fi
+}
+
+configure_permissions() {
   # Decide which categories to approve.
   local approved_indices_csv=""
 
@@ -710,15 +917,11 @@ configure_permissions() {
     return 0
   fi
 
-  # Snapshot the existing settings.json (if any) for rollback.
-  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
-    cp "$CLAUDE_SETTINGS_JSON" "$PREEDIT_CLAUDE_SETTINGS"
-    STATE_LOG+=("claude-settings-edited:$PREEDIT_CLAUDE_SETTINGS")
-  else
-    STATE_LOG+=("claude-settings-edited:NEW")
-    # Ensure parent directory exists for the atomic-write rename target.
-    mkdir -p "$(dirname "$CLAUDE_SETTINGS_JSON")"
-  fi
+  # Snapshot the existing settings.json (if any) for rollback. Idempotent: if
+  # write_confine_hook (which runs earlier in main()) already snapshotted this
+  # run's settings.json, this is a no-op so the preedit copy keeps the
+  # pre-run state rather than the post-registration-merge intermediate.
+  ensure_settings_preedit_snapshot
 
   # Atomic merge via node. Preserves existing `permissions.allow`
   # entries; appends the approved categories' tool patterns; sorts
@@ -906,6 +1109,40 @@ detect_preexisting_gan_dir() {
   fi
 }
 
+# detect_project_tier_confine_hook
+#
+# (H1, AC-A7) When the cwd is a git repo whose top contains a project-tier
+# confinement hook at `<repo-top>/.claude/hooks/gan-confine.sh`, record its
+# absolute path in PROJECT_TIER_HOOK_DETECTED so print_final_status can emit the
+# non-blocking override warning. Outside a git repo it is a no-op (gated on
+# `git rev-parse --show-toplevel`, the same gate detect_preexisting_gan_dir and
+# prepare_zones use).
+#
+# READ-ONLY: a single `[ -f ... ] && [ ! -L ... ]` regular-file test against the
+# project-tier path. The framework never reads, edits, removes, or migrates the
+# project hook — it is the project's file (per H1 § "Project-tier override
+# pattern"). The probed path is the repo-top `.claude/hooks/gan-confine.sh`,
+# DISTINCT from the user-tier CONFINE_HOOK_PATH (`$HOME/.claude/hooks/...`); the
+# two never collide even when the sandboxed $HOME equals the repo top, because
+# the repo-top path is resolved from `git rev-parse --show-toplevel` and the
+# warning text names the project-relative path explicitly.
+#
+# Security posture (shell_and_subprocess_safety): no `eval`; every expansion of
+# the repo top and the probed path is double-quoted, so a repo path carrying
+# spaces or shell metacharacters (`$(...)`, `;`, backticks) is treated purely as
+# data by the `[ -f ]`/`[ ! -L ]` test and never re-parsed as a command.
+detect_project_tier_confine_hook() {
+  PROJECT_TIER_HOOK_DETECTED=""
+  local top project_hook
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] || return 0
+  project_hook="$top/.claude/hooks/gan-confine.sh"
+  # Read-only regular-file probe (never a symlink/dir we would misreport).
+  if [ -f "$project_hook" ] && [ ! -L "$project_hook" ]; then
+    PROJECT_TIER_HOOK_DETECTED="$project_hook"
+  fi
+}
+
 # prepare_zones
 #
 # Inside a git repo only: creates zone-2 (`.gan-state/`) and zone-3
@@ -1056,6 +1293,21 @@ print_final_status() {
     log_info "Delete it by hand once you have copied anything you still need: \`rm -rf $PREEXISTING_GAN_DIR\`."
   fi
 
+  # (H1, AC-A7 / AC-M2) Non-blocking informational override warning. Emitted
+  # via the same log_info status surface the rest of this block uses — never
+  # log_warn/die — so a detected project-tier hook does not fail or block the
+  # install (it still exits 0 with the user-tier hook + registration written).
+  # Wording is the canonical text fixed in H1 § "Project-tier override
+  # pattern"; the appended `gan hooks status` recommendation is backtick-wrapped
+  # per F4 token discipline. Refers to "the framework" / "user-tier hook", names
+  # no runtime, and uses a path/command the user inspects (shell-style
+  # remediation) — no Node-style `npm run ...`.
+  if [ -n "$PROJECT_TIER_HOOK_DETECTED" ]; then
+    log_info ""
+    log_info "A project-tier confinement hook is present at \`.claude/hooks/gan-confine.sh\`. The framework's user-tier hook at \`~/.claude/hooks/gan-confine.sh\` will not be used in this project. Verify the project hook still reflects the framework's current zone layout (see F1)."
+    log_info "Inspect both tiers with \`gan hooks status\`."
+  fi
+
   if [ "$MIDPIVOT_WARNING_FIRED" -eq 1 ]; then
     log_info ""
     log_info "Heads up: you are installing from the \`feature/stack-plugin-rfc\` branch."
@@ -1146,6 +1398,18 @@ rollback() {
           if [ -f "$payload" ]; then
             mv "$payload" "$CLAUDE_SETTINGS_JSON" 2>/dev/null || true
           fi
+        fi
+        ;;
+      confine-hook-written)
+        # (H1) Remove the framework-owned confinement hook this run wrote.
+        # Same defensive guard as copied-file: only remove if it is still a
+        # regular (non-symlink) file at the recorded path — if a third party
+        # replaced it with a symlink or directory, leave it alone. The hook's
+        # settings.json registration is restored/removed separately by the
+        # claude-settings-edited case (the preedit snapshot was taken before
+        # the registration merge), so this case only undoes the hook file.
+        if [ -f "$payload" ] && [ ! -L "$payload" ]; then
+          rm -f "$payload" 2>/dev/null || true
         fi
         ;;
       zone-created)
@@ -1244,6 +1508,14 @@ feature_branch_warning() {
 #   - Removes the `mcpServers.claudeagents-config` entry from
 #     `~/.claude.json` via `node -e`, atomic temp+rename, sorted keys.
 #     Leaves `mcpServers` as an empty object if no other entries remain.
+#   - (H1, AC-A5) Removes the user-tier confinement hook file at
+#     CONFINE_HOOK_PATH (`~/.claude/hooks/gan-confine.sh`) and surgically
+#     strips its `hooks.PreToolUse[]` registration from
+#     `~/.claude/settings.json` (matched by the same absolute-hook-path
+#     `mentionsHook` predicate the registration used). Unrelated PreToolUse
+#     entries and all other settings survive. A project-tier
+#     `<project>/.claude/hooks/gan-confine.sh` in the cwd is the project's
+#     file and is never touched.
 #   - Leaves `.gan-state/`, `.gan-cache/`, `.claude/gan/`, the
 #     once-per-machine backup, and the globally installed framework
 #     package alone. Prints follow-up commands in backticks so the
@@ -1281,6 +1553,19 @@ uninstall_main() {
     removed_count=$(( removed_count + 1 ))
   elif [ -d "$CLAUDE_HOME/skills/gan" ]; then
     rm -rf "$CLAUDE_HOME/skills/gan"
+    removed_count=$(( removed_count + 1 ))
+  fi
+
+  # (H1, AC-A5) Remove the framework-owned user-tier confinement hook file at
+  # CONFINE_HOOK_PATH (`$HOME/.claude/hooks/gan-confine.sh`). Same defensive
+  # guard the agent-removal and rollback paths use: remove only when it is a
+  # regular non-symlink file at the recorded user-tier path — a symlink/dir a
+  # third party put there is left alone. Scoped to the user-tier path ONLY; a
+  # project-tier `<repo>/.claude/hooks/gan-confine.sh` in the cwd is the
+  # project's file and is never touched. Idempotent: a second uninstall against
+  # an already-clean HOME finds nothing here and removes nothing.
+  if [ -f "$CONFINE_HOOK_PATH" ] && [ ! -L "$CONFINE_HOOK_PATH" ]; then
+    rm -f "$CONFINE_HOOK_PATH"
     removed_count=$(( removed_count + 1 ))
   fi
 
@@ -1393,6 +1678,93 @@ uninstall_main() {
       fs.writeFileSync(dst, out, "utf8");
     '
     mv "$settings_tmp" "$CLAUDE_SETTINGS_JSON"
+  fi
+
+  # (H1, AC-A5) Surgically strip the framework's `hooks.PreToolUse[]`
+  # registration from `~/.claude/settings.json`, symmetric with the
+  # permissions.allow strip above. An independent atomic edit: it reads the file
+  # the previous edit just wrote, so the two never collide. The match predicate
+  # is the SAME `mentionsHook` shape write_confine_hook used to register the
+  # entry — an entry whose top-level `command` equals the absolute hook path, OR
+  # an entry whose nested `hooks[].command` equals it. Only matching entries are
+  # removed; unrelated user-authored PreToolUse entries (different command) and
+  # all other settings survive byte-for-byte. The match is structural on the
+  # command path (never substring matching on raw content), so adversarial
+  # settings cannot widen the blast radius. R2-locked node -e + atomic
+  # temp+rename + sorted-key + 2-space-indent + trailing-newline (no jq);
+  # malformed settings.json exits 1 with framework prose. Empty arrays/objects
+  # left after removal are acceptable, matching the permissions.allow precedent.
+  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    # Resolve the user-tier hook path to the same real absolute path the
+    # registration carried (the constant is already absolute/`~`-free, but
+    # resolve its parent dir defensively when it exists so the strip predicate
+    # matches the registration's entry exactly).
+    local hooks_dir hook_abs
+    hooks_dir="$(dirname "$CONFINE_HOOK_PATH")"
+    if [ -d "$hooks_dir" ]; then
+      hook_abs="$(cd "$hooks_dir" && pwd)/$(basename "$CONFINE_HOOK_PATH")"
+    else
+      hook_abs="$CONFINE_HOOK_PATH"
+    fi
+    local pretooluse_tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+    CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+    CLAUDE_SETTINGS_TMP="$pretooluse_tmp" \
+    CONFINE_HOOK_ABS="$hook_abs" \
+    node -e '
+      const fs = require("fs");
+      const src = process.env.CLAUDE_SETTINGS_PATH;
+      const dst = process.env.CLAUDE_SETTINGS_TMP;
+      const hookAbs = process.env.CONFINE_HOOK_ABS;
+      let data = {};
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+      // Same mentionsHook predicate the registration used: a top-level
+      // command === hookAbs, OR a nested hooks[].command === hookAbs. We keep
+      // every entry that does NOT mention the framework hook.
+      const mentionsHook = (entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        if (entry.command === hookAbs) return true;
+        if (Array.isArray(entry.hooks)) {
+          return entry.hooks.some((h) => h && typeof h === "object" && h.command === hookAbs);
+        }
+        return false;
+      };
+      if (
+        data &&
+        typeof data.hooks === "object" &&
+        data.hooks !== null &&
+        !Array.isArray(data.hooks) &&
+        Array.isArray(data.hooks.PreToolUse)
+      ) {
+        data.hooks.PreToolUse = data.hooks.PreToolUse.filter((e) => !mentionsHook(e));
+      }
+      function sortedStringify(value, indent) {
+        const sortKeys = (v) => {
+          if (Array.isArray(v)) return v.map(sortKeys);
+          if (v && typeof v === "object") {
+            const out = {};
+            for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+            return out;
+          }
+          return v;
+        };
+        return JSON.stringify(sortKeys(value), null, indent);
+      }
+      const out = sortedStringify(data, 2) + "\n";
+      fs.writeFileSync(dst, out, "utf8");
+    '
+    mv "$pretooluse_tmp" "$CLAUDE_SETTINGS_JSON"
   fi
 
   # Remove the built-in stacks symlink only when it points into the
@@ -1550,10 +1922,19 @@ main() {
   if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
     backup_claude_json_once
     register_mcp_in_claude_json
+    # (H1) Render + write the framework-owned confinement hook and register it
+    # in settings.json. Runs before configure_permissions so its settings
+    # preedit snapshot covers the run's first settings.json edit, letting the
+    # existing claude-settings-edited rollback case restore the registration.
+    write_confine_hook
     configure_permissions
   fi
 
   detect_preexisting_gan_dir
+  # (H1) Detect a project-tier confinement hook so print_final_status can warn
+  # that it takes precedence over the framework's user-tier hook. Read-only and
+  # non-blocking — it never touches the project file and never fails the install.
+  detect_project_tier_confine_hook
   prepare_zones
   run_validate_all_best_effort
 

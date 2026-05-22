@@ -74,8 +74,8 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 6. ✅ **R6** — tier-aware stack scaffold. Shipped PR #16.
 7. ✅ **F6** — trust-prompt protocol clarification. Shipped PR #18.
 8. ✅ **T1** — structured run trace. Shipped PR #19.
-9. **[H1](H1-framework-owned-confinement-hook.md)** — framework-owned confinement hook. ~1–2 sprints. **Next.** Lands between the I-series and orchestrator-level work so confinement is correct before agent flows ship.
-10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
+9. ✅ **H1** — framework-owned confinement hook. Shipped PR #21.
+10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. **Next.** Depends on T1.
 11. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
 12. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
 13. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.

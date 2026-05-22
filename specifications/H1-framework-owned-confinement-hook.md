@@ -88,7 +88,7 @@ Users with the legacy `<project>/.claude/hooks/gan-confine.sh` (referencing `.ga
 
 The framework cannot reliably distinguish "project-tier hook is a copy of the old framework hook" from "project-tier hook is a deliberate override that happens to look similar." Deletion is the user's call.
 
-A `gan hooks status` CLI command (added in R3 by H1's implementation PR) prints the user-tier hook path, any project-tier hook in the current directory, the framework version that authored the user-tier hook, and a hint about deletion when the project-tier hook predates F1's zone rework.
+A `gan hooks status` CLI command (added to R3's command surface by H1's implementation PR) prints the user-tier hook path, any project-tier hook in the current directory, the framework version that authored the user-tier hook, and a hint about deletion when the project-tier hook predates F1's zone rework.
 
 ### Why user-tier, not symlinked-into-project
 
@@ -204,6 +204,7 @@ Sprintable as:
 3. (one sprint) Project-tier override detection + warning: install detects project-tier hooks, prints the override warning, recommends `gan hooks status` for inspection.
 4. (one sprint) `gan hooks status` CLI subcommand: detect both tiers, report framework version, surface deletion hint when project-tier hook matches a legacy template.
 5. (one sprint) Test coverage: hook content correctness, install / uninstall round-trip, project-tier override resolution, behavioral tests for representative path patterns.
-6. (rides with R2/R3 maintenance) Update R2 and R3 spec text to reflect the new install step and CLI subcommand.
 
-Slices 1–3 must land in order; slices 4–5 depend on 1–3 and can land in parallel; slice 6 lands with the spec revisions in the same PR as slices 4 / 5.
+No R2/R3 spec edits — both are shipped and immutable (per the manual-review check above). H1 owns the new install step and the `gan hooks status` subcommand; readers reach those surfaces through this spec and the roadmap cross-references, never via in-place edits to R2/R3.
+
+Slices 1–3 must land in order; slices 4–5 depend on 1–3 and can land in parallel.

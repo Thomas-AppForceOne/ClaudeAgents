@@ -49,6 +49,7 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 | `gan stack show <name>` | R3 | Print one stack's full data. |
 | `gan stack update <name> <field> <value>` | R3 | Update one field of a stack file. |
 | `gan modules list` | R3 | List registered modules + `pairsWith` status. |
+| `gan hooks status` | H1 | Report the user-tier confinement hook + its authoring framework version, any project-tier override (which takes precedence), and a deletion hint when the override matches a known-legacy `.gan/` layout. |
 | `gan trust info` | R5 | Show approval status + declared command-paths. Reminder that the trust hash does not transitively cover scripts. |
 | `gan trust approve` | R5 | Approve the current content hash for the named project. Trust-mutating; `--project-root` required. |
 | `gan trust revoke` | R5 | Remove approval for the named project. Trust-mutating; `--project-root` required. |
@@ -92,11 +93,11 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 | Surface-type | Count | Members |
 |---|---|---|
 | command | 3 | `/gan`, `gan`, `install.sh` |
-| subcommand | 15 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
+| subcommand | 16 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `hooks status`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
 | flag | 17 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--uninstall`, `--no-claude-code`, `--json`, `--project-root`, `--tier`, `--note` |
 | env-var-value | 2 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all` |
 | prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
-| **total** | **41** | |
+| **total** | **42** | |
 
 Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
 

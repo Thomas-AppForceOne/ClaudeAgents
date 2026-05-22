@@ -111,6 +111,20 @@ Restart Claude Code once after the first install. Subsequent updates do not requ
 
 ---
 
+## v1.0 release notes
+
+### Migrating a legacy project-tier confinement hook
+
+The framework confines every `/gan` sprint to its run directory with a PreToolUse hook (`gan-confine.sh`). In v1.0 the framework owns that hook: `./install.sh` writes it to `~/.claude/hooks/gan-confine.sh` and refreshes it on every install, so a filesystem-zone rework upgrades automatically instead of silently breaking each project.
+
+Earlier setups copied the hook into the project at `.claude/hooks/gan-confine.sh`. A project-tier hook still takes precedence over the framework's user-tier hook, and the framework **never** auto-migrates or deletes it — removing it is your explicit call. If you carry a legacy project hook (one that references the retired `.gan/` zone layout), migrate like this:
+
+1. Run `./install.sh`. It writes the current user-tier hook to `~/.claude/hooks/gan-confine.sh`. When you run it from inside a project that has a project-tier hook, it prints an override warning telling you the user-tier hook will not be used in that project.
+2. Inspect both tiers with `gan hooks status`. It reports the user-tier hook path and authoring framework version, any project-tier hook in the current directory, and — when the project hook still references the legacy `.gan/` layout — a deletion hint.
+3. If the project hook is a legacy copy and not a deliberate override, delete it with `rm .claude/hooks/gan-confine.sh`. The framework's current user-tier hook then applies. If it is a deliberate override (narrower or wider confinement on purpose), keep it and update it by hand to match the framework's current zone layout.
+
+---
+
 ## Quick start
 
 Inside Claude Code, after install:
