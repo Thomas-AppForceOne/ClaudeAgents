@@ -226,6 +226,8 @@ The example shows the visual cue for assumed-blocker resolution: each `assumed:`
 
 A markdown document at `.gan-state/runs/<run-id>/clarified-spec.md`. Prior-round drafts are preserved alongside as `clarified-spec.md.round-1`, `clarified-spec.md.round-2`, etc. Sections:
 
+> **F7 dependency.** Per [F7](F7-central-run-data-store-and-worktree-execution.md), run data — `clarified-spec.md`, `raw-prompt.md`, and the round-N drafts — lives in the central, repo-keyed store (`<store-root>/<repo-key>/runs/<run-id>/`), not under the project-local `.gan-state/runs/`. The `.gan-state/runs/<run-id>/` paths throughout E5 are the pre-F7 layout; E5's implementation (which lands after F7) resolves them under the central store.
+
 - **Goal** — one-paragraph restatement of what the user asked for, after applying assumptions and any user evolution.
 - **In scope** — bulleted list of work items the sprint will cover.
 - **Out of scope** — bulleted list of items the user did not include, with brief justification when the clarifier resolved an ambiguity in a particular direction.
