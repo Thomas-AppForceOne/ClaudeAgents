@@ -96,7 +96,7 @@ Both are additions to `install.sh`'s sequence, not edits to the shipped R2/I-ser
 
 ### What F7 does not do
 
-- **Relocate module state.** `.gan-state/modules/` stays project-local (F1). It carries the same worktree-removal vulnerability for the Docker port-registry; addressing it is deferred to a future spec, because module state is repo-coupled in ways run data is not (e.g. host-port allocations tied to a checkout).
+- **Relocate module state.** `.gan-state/modules/` stays project-local (F1). It carries the same worktree-removal vulnerability for the Docker port-registry; relocating it is the job of its paired spec **[F8](F8-centralized-module-state-store.md)**, because module state is repo-coupled in ways run data is not (e.g. host-port allocations tied to a checkout).
 - **Migrate existing `.gan-state/runs/` data.** Pre-1.0, no migration: a pre-existing project-local `.gan-state/runs/` is reported once and left for the user to delete or archive by hand.
 - **Change the per-run directory's internal layout** (O2 owns it) or the trace event schema (T1 owns it). Only the storage *location* moves.
 - **Support Windows.** Bash-flavored, macOS/Linux, per existing platform decisions.
