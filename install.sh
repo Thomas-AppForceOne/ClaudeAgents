@@ -15,6 +15,11 @@ REPO_ROOT="$SCRIPT_DIR"
 CLAUDE_HOME="$HOME/.claude"
 CLAUDE_CONFIG_JSON="$HOME/.claude.json"
 CLAUDE_SETTINGS_JSON="$HOME/.claude/settings.json"
+# (H1) Framework-owned PreToolUse confinement hook. Content is rendered from
+# the single source-of-truth template under the repo; the on-disk path is fixed
+# and the content is regenerated on every install (no version tracking).
+CONFINE_HOOK_PATH="$HOME/.claude/hooks/gan-confine.sh"
+CONFINE_HOOK_TEMPLATE="$REPO_ROOT/scripts/hooks/gan-confine.sh.template"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 # Highest Node major the framework's CI has been exercised through. Above
@@ -39,6 +44,13 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   zone-created:<absolute-path>
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
+#   confine-hook-written:<absolute-path>
+# (H1) `confine-hook-written` records the rendered ~/.claude/hooks/gan-confine.sh
+# the install wrote; rollback removes the partial hook file at that path. Its
+# settings.json `hooks.PreToolUse[]` registration rides the existing
+# `claude-settings-edited` entry — write_confine_hook takes the settings preedit
+# snapshot BEFORE merging the registration, so settings restoration is already
+# covered by the claude-settings-edited rollback case.
 # The `symlink:<absolute-path>` kind is retained as a legacy entry — it is
 # still recognised by `rollback()` but is no longer emitted by current
 # install paths (which copy files, not symlink them).
@@ -526,9 +538,195 @@ CATEGORIES_JSON='[
 # permissions`, `--reconfigure-permissions` flags; idempotent re-runs
 # (skip already-granted categories); and the uninstall integration that
 # removes only the framework's added entries.
-configure_permissions() {
-  PREEDIT_CLAUDE_SETTINGS="$HOME/.claude/settings.json.preedit-$$"
+# ensure_settings_preedit_snapshot
+#
+# (H1) Idempotently snapshots `~/.claude/settings.json` for rollback before
+# the FIRST settings.json mutation of this run, recording a single
+# `claude-settings-edited` STATE_LOG entry. Both `write_confine_hook` (the
+# PreToolUse registration merge) and `configure_permissions` (the
+# permissions.allow merge) edit settings.json; whichever runs first takes the
+# snapshot, and the second call is a no-op. This guarantees the preedit copy
+# captures the pre-run state (not an already-merged intermediate), so the
+# existing `claude-settings-edited` rollback case byte-restores (or removes)
+# the file regardless of which merges ran.
+#
+# Sets the global PREEDIT_CLAUDE_SETTINGS to the preedit copy path on the
+# pre-existing-file path, or leaves it empty and records `:NEW` when the file
+# did not exist (rollback then removes the file outright). Re-entrancy is
+# detected by scanning STATE_LOG for an existing `claude-settings-edited`
+# entry — once one is present the snapshot has already been taken.
+ensure_settings_preedit_snapshot() {
+  local e
+  for e in "${STATE_LOG[@]:-}"; do
+    case "$e" in
+      claude-settings-edited:*) return 0 ;;
+    esac
+  done
+  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
+    PREEDIT_CLAUDE_SETTINGS="$HOME/.claude/settings.json.preedit-$$"
+    cp "$CLAUDE_SETTINGS_JSON" "$PREEDIT_CLAUDE_SETTINGS"
+    STATE_LOG+=("claude-settings-edited:$PREEDIT_CLAUDE_SETTINGS")
+  else
+    STATE_LOG+=("claude-settings-edited:NEW")
+    # Ensure parent directory exists for the atomic-write rename target.
+    mkdir -p "$(dirname "$CLAUDE_SETTINGS_JSON")"
+  fi
+}
 
+# write_confine_hook
+#
+# (H1) Renders the framework-owned PreToolUse confinement hook from its single
+# source-of-truth template (`scripts/hooks/gan-confine.sh.template`) and writes
+# it to `~/.claude/hooks/gan-confine.sh`, then registers its ABSOLUTE path in
+# `~/.claude/settings.json` under `hooks.PreToolUse[]`.
+#
+# The hook body is never re-authored here — install.sh reads the template and
+# substitutes only the `__GAN_FRAMEWORK_VERSION__` placeholder with the
+# framework version read at runtime from package.json (read_mcp_server_version,
+# the R2-locked `node -p` version source — never a hardcoded constant).
+#
+# Regeneration: the hook is overwritten on every install (no version-tracking
+# short-circuit), so an F1 zone rework lands on disk the next time install.sh
+# runs. The settings.json merge is additive (unrelated PreToolUse entries and
+# other settings survive) and idempotent (deduped on the absolute hook path —
+# a re-run does not append a second entry for the same path).
+#
+# Security posture (sprint-2 contract: shell_and_subprocess_safety): no `eval`;
+# every path/version expansion is double-quoted; the version flows into the
+# rendered template as DATA via node reading it from the environment (it is
+# never interpolated into a shell command line, and the rendered hook is only
+# written + chmod'd — install.sh never sources or executes it); the JSON merge
+# reads the hook path from an environment variable (like the existing
+# CLAUDE_SETTINGS_PATH / CLAUDE_MCP_BIN_ABS pattern), never by concatenating it
+# into the node program text. Atomic *.tmp.$$ + mv writes throughout; bash-3.2
+# floor respected.
+write_confine_hook() {
+  local hooks_dir version tmp_hook
+  hooks_dir="$(dirname "$CONFINE_HOOK_PATH")"
+  mkdir -p "$hooks_dir"
+
+  # Version is read at runtime and treated purely as data downstream.
+  version="$(read_mcp_server_version)"
+
+  # Render: substitute the literal placeholder with the version. node reads
+  # both the template (from the path in an env var) and the version (from an
+  # env var) as data and replaces every occurrence of the exact placeholder
+  # token — the version bytes are never parsed as code or as a regex.
+  tmp_hook="$CONFINE_HOOK_PATH.tmp.$$"
+  CONFINE_TEMPLATE_PATH="$CONFINE_HOOK_TEMPLATE" \
+  CONFINE_HOOK_TMP="$tmp_hook" \
+  CONFINE_FRAMEWORK_VERSION="$version" \
+  node -e '
+    const fs = require("fs");
+    const tpl = fs.readFileSync(process.env.CONFINE_TEMPLATE_PATH, "utf8");
+    const version = process.env.CONFINE_FRAMEWORK_VERSION;
+    // Literal split/join replacement — no regex, so version bytes cannot be
+    // interpreted as regex metacharacters or replacement-string specials.
+    const rendered = tpl.split("__GAN_FRAMEWORK_VERSION__").join(version);
+    fs.writeFileSync(process.env.CONFINE_HOOK_TMP, rendered, "utf8");
+  '
+  chmod +x "$tmp_hook"
+  mv "$tmp_hook" "$CONFINE_HOOK_PATH"
+
+  # Record the written hook for rollback BEFORE touching settings.json, so a
+  # failure during the registration merge still rolls back the partial hook.
+  STATE_LOG+=("confine-hook-written:$CONFINE_HOOK_PATH")
+
+  # Take the settings preedit snapshot BEFORE merging the registration, so the
+  # registration restoration rides the existing claude-settings-edited case.
+  ensure_settings_preedit_snapshot
+
+  # Resolve the hook path to a real absolute path for the registration entry
+  # (the constant is already absolute and `~`-free since it is built from
+  # $HOME, but resolve the parent dir defensively so the entry never carries a
+  # literal `~` or a relative segment).
+  local hook_abs
+  hook_abs="$(cd "$hooks_dir" && pwd)/$(basename "$CONFINE_HOOK_PATH")"
+
+  # Atomic, additive, idempotent merge of the PreToolUse registration via node.
+  # Mirrors the permissions.allow merge in configure_permissions: reads values
+  # from the environment as data, dedupes on the absolute hook path, and emits
+  # sorted-key + 2-space-indent + trailing-newline JSON to a *.tmp.$$ sibling,
+  # then mv's into place.
+  local tmp="$CLAUDE_SETTINGS_JSON.tmp.$$"
+  CLAUDE_SETTINGS_PATH="$CLAUDE_SETTINGS_JSON" \
+  CLAUDE_SETTINGS_TMP="$tmp" \
+  CONFINE_HOOK_ABS="$hook_abs" \
+  node -e '
+    const fs = require("fs");
+    const src = process.env.CLAUDE_SETTINGS_PATH;
+    const dst = process.env.CLAUDE_SETTINGS_TMP;
+    const hookAbs = process.env.CONFINE_HOOK_ABS;
+    if (!hookAbs) {
+      console.error("install.sh: confinement hook path not set.");
+      process.exit(1);
+    }
+    let data = {};
+    if (fs.existsSync(src)) {
+      const raw = fs.readFileSync(src, "utf8");
+      if (raw.trim().length > 0) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          console.error("install.sh: ~/.claude/settings.json is not valid JSON: " + e.message);
+          process.exit(1);
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          console.error("install.sh: ~/.claude/settings.json must be a JSON object.");
+          process.exit(1);
+        }
+      }
+    }
+    if (typeof data.hooks !== "object" || data.hooks === null || Array.isArray(data.hooks)) {
+      data.hooks = {};
+    }
+    if (!Array.isArray(data.hooks.PreToolUse)) {
+      data.hooks.PreToolUse = [];
+    }
+    // Has the framework hook (by absolute command path) already been
+    // registered? Scan every entry and its nested hooks[] for the path so a
+    // re-run is idempotent regardless of the entry shape Claude Code wrote.
+    const mentionsHook = (entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      if (entry.command === hookAbs) return true;
+      if (Array.isArray(entry.hooks)) {
+        return entry.hooks.some((h) => h && typeof h === "object" && h.command === hookAbs);
+      }
+      return false;
+    };
+    if (!data.hooks.PreToolUse.some(mentionsHook)) {
+      data.hooks.PreToolUse.push({
+        matcher: "Write|Edit|MultiEdit|NotebookEdit",
+        hooks: [{ type: "command", command: hookAbs }],
+      });
+    }
+    function sortedStringify(value, indent) {
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === "object") {
+          const out = {};
+          for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return JSON.stringify(sortKeys(value), null, indent);
+    }
+    const out = sortedStringify(data, 2) + "\n";
+    fs.writeFileSync(dst, out, "utf8");
+  '
+  mv "$tmp" "$CLAUDE_SETTINGS_JSON"
+
+  # (AC-A4 enablement) Optional failure injection point: a post-write step
+  # that fails so tests can exercise rollback of the partial hook + the
+  # registration. Env-flagged stub surface only — never patches install.sh.
+  if [ "${CAS_FAIL_CONFINE_HOOK_WRITE:-0}" = "1" ]; then
+    log_error "install.sh: injected confine-hook-write failure"
+    return 1
+  fi
+}
+
+configure_permissions() {
   # Decide which categories to approve.
   local approved_indices_csv=""
 
@@ -710,15 +908,11 @@ configure_permissions() {
     return 0
   fi
 
-  # Snapshot the existing settings.json (if any) for rollback.
-  if [ -f "$CLAUDE_SETTINGS_JSON" ]; then
-    cp "$CLAUDE_SETTINGS_JSON" "$PREEDIT_CLAUDE_SETTINGS"
-    STATE_LOG+=("claude-settings-edited:$PREEDIT_CLAUDE_SETTINGS")
-  else
-    STATE_LOG+=("claude-settings-edited:NEW")
-    # Ensure parent directory exists for the atomic-write rename target.
-    mkdir -p "$(dirname "$CLAUDE_SETTINGS_JSON")"
-  fi
+  # Snapshot the existing settings.json (if any) for rollback. Idempotent: if
+  # write_confine_hook (which runs earlier in main()) already snapshotted this
+  # run's settings.json, this is a no-op so the preedit copy keeps the
+  # pre-run state rather than the post-registration-merge intermediate.
+  ensure_settings_preedit_snapshot
 
   # Atomic merge via node. Preserves existing `permissions.allow`
   # entries; appends the approved categories' tool patterns; sorts
@@ -1148,6 +1342,18 @@ rollback() {
           fi
         fi
         ;;
+      confine-hook-written)
+        # (H1) Remove the framework-owned confinement hook this run wrote.
+        # Same defensive guard as copied-file: only remove if it is still a
+        # regular (non-symlink) file at the recorded path — if a third party
+        # replaced it with a symlink or directory, leave it alone. The hook's
+        # settings.json registration is restored/removed separately by the
+        # claude-settings-edited case (the preedit snapshot was taken before
+        # the registration merge), so this case only undoes the hook file.
+        if [ -f "$payload" ] && [ ! -L "$payload" ]; then
+          rm -f "$payload" 2>/dev/null || true
+        fi
+        ;;
       zone-created)
         # Only remove if empty — never blow away user data that landed
         # inside the zone after the installer created it.
@@ -1550,6 +1756,11 @@ main() {
   if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
     backup_claude_json_once
     register_mcp_in_claude_json
+    # (H1) Render + write the framework-owned confinement hook and register it
+    # in settings.json. Runs before configure_permissions so its settings
+    # preedit snapshot covers the run's first settings.json edit, letting the
+    # existing claude-settings-edited rollback case restore the registration.
+    write_confine_hook
     configure_permissions
   fi
 
