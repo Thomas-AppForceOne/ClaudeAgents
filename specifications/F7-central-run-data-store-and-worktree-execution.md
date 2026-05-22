@@ -57,7 +57,7 @@ At run start the orchestrator derives a **task slug** from the run subject (the 
 
 **Override.** A `--new-worktree` flag forces case-1c behavior (fresh task-named branch + worktree) even when the current context would match 1a/1b — for engineers who want gan isolated from their current working tree. Cataloged in `runtime-knobs.md`.
 
-`progress.json` records the resolved workspace so recovery, confinement (§3), and cleanup (§4) can find it: `workspace.worktreePath`, `workspace.branch`, and `workspace.createdByGan` (boolean — true only for 1b/1c).
+`progress.json` records the resolved workspace **at run start** so recovery, confinement (§3), and cleanup (§4) can find it: `workspace.worktreePath` (canonical absolute path — the **recovery anchor**, §4), `workspace.branch`, and `workspace.createdByGan` (boolean — true only for 1b/1c).
 
 ### 3. Confinement-hook supersession (over H1)
 
@@ -79,7 +79,7 @@ The H1-shipped template (`scripts/hooks/gan-confine.sh.template`) and `gan hooks
 
 F7 redefines the "project root" O2 uses for both anchoring and recovery keying: it is now the **main-worktree root** (git-common-dir parent), not the current worktree toplevel. Consequences:
 
-- **`--recover` / `--list-recoverable` / `--cleanup`** enumerate `<store-root>/<repo-key>/runs/` and therefore work **repo-wide** — invoked from any worktree of the repo, they see every run of that repo (2a). `progress.json.projectRoot` records the canonical main-worktree root; O2's cross-project-recovery refusal compares against the resolved main-worktree root rather than the invoking worktree.
+- **Discoverable repo-wide (2a), resumable only at the origin worktree.** `--list-recoverable` and `--cleanup` enumerate `<store-root>/<repo-key>/runs/`, so every run of the repo is *visible* from any worktree — the central, repo-keyed store is what makes this work, and `progress.json.projectRoot` (the canonical main-worktree root) is what O2's cross-project refusal compares against. **Resuming is different.** A run's working tree, branch, and base commit live in one specific worktree — the engineer's own in case 1a, the gan-created `.gan-state/runs/<id>/worktree/` under its origin checkout in 1b/1c — so a run is *resumable only there*. `--recover` reads `workspace.worktreePath` and **refuses** when the current invocation is not that worktree, exiting non-zero with the path: `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists (it was removed), recovery refuses with the same path plus guidance to recreate it — the run *data* is safe in the central store, but the worktree it must resume into is gone.
 - **Serialization (2b).** O2's one-active-run-per-project lock is preserved, re-anchored to the central store: the exclusive `flock` is taken on `<store-root>/<repo-key>/run.lock`. One active `/gan` run per repo, across all its worktrees — concurrent invocations from different worktrees of the same repo hard-refuse, exactly as O2 specifies for one project root.
 - **`--cleanup`** deletes the central-store run directory and, when `workspace.createdByGan` is true, the run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` and its run branch — symmetric to the current model. A user-owned worktree (case 1a) is never touched; only its central run *data* is removed. Because data lives centrally, removing a worktree by any means no longer loses run data.
 
@@ -148,6 +148,7 @@ $ /gan --list-recoverable     # run from ../myapp-add-export OR from the main ch
 
 - A run started in a linked worktree writes its run directory under `<store-root>/<repo-key>/runs/`, not under the worktree; removing the worktree afterward leaves the run directory and its `trace/` intact.
 - Two linked worktrees of the same repo resolve to the **same** `<repo-key>`; `--list-recoverable` from either lists the same runs.
+- `--recover` of a run invoked from a worktree other than its recorded `workspace.worktreePath` **refuses** (non-zero) and names the correct worktree path; the same run is still **listed** by `--list-recoverable` from any worktree of the repo.
 - Case 1a: current branch matches the task slug and the cwd is a dedicated worktree → no new worktree is created; `workspace.createdByGan` is false; the generator's writes land in the current worktree.
 - Case 1b: matching branch, non-dedicated cwd → a worktree is created for the existing branch; `createdByGan` true.
 - Case 1c: non-matching branch → a new branch named after the task, checked out in a run-scoped worktree at `.gan-state/runs/<id>/worktree/`; `createdByGan` true.
