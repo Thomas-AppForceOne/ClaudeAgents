@@ -22,6 +22,11 @@ import {
   moduleStatePath,
 } from '../../../src/config-server/storage/module-loader.js';
 import { clearResolvedConfigCache } from '../../../src/config-server/resolution/cache.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 function sha256OfFile(p: string): string {
   return createHash('sha256').update(readFileSync(p)).digest('hex');
@@ -31,6 +36,7 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   let scratch: string;
   let statePath: string;
   let preHash: string;
+  let store: ModuleStateStoreScope;
   // Deterministic content. The contract requires deterministic; we
   // use a stable JSON literal so reruns produce the same hash.
   const deterministicContent =
@@ -40,7 +46,11 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-o2-archive-'));
-    // M3 per-key path: `<scratch>/.gan-state/modules/docker/port-registry.json`.
+    // F8 repo-keyed store: `scratch` must be a real repo and writes go to a
+    // throwaway store root. The state file now lives at
+    // `<module-state-root>/<repo-key>/docker/port-registry.json`.
+    initGitRepo(scratch);
+    store = useTempModuleStateStore();
     statePath = moduleStatePath(scratch, 'docker', 'port-registry');
     mkdirSync(path.dirname(statePath), { recursive: true });
     writeFileSync(statePath, deterministicContent);
@@ -48,7 +58,9 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   });
 
   afterEach(() => {
+    store.restore();
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(store.storeRoot, { recursive: true, force: true });
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
   });

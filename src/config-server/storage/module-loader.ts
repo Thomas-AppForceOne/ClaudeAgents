@@ -44,6 +44,13 @@ import { localeSort } from '../determinism/index.js';
 import { ConfigServerError, createError } from '../errors.js';
 import { packageRoot as resolvePackageRoot } from '../package-root.js';
 import { moduleManifestV1 } from '../schemas-bundled.js';
+import {
+  type ModuleStateStoreOptions,
+  resolveModuleRepoKey,
+  resolveModuleStatePath,
+  resolveModuleStateRoot,
+  resolveRepoModuleStateDir,
+} from './module-state-store.js';
 
 // Ajv2020 ships as CJS; under TS NodeNext + esModuleInterop the default
 // import is the constructor at runtime but the namespace at type-check
@@ -234,10 +241,9 @@ function runPrerequisites(manifest: ModuleManifest, manifestPath: string): void 
     } catch (e) {
       throw createError('ModulePrerequisiteFailed', {
         file: manifestPath,
-        message:
-          `Module '${manifest.name}' prerequisite '${prereq.command}' failed: ${
-            e instanceof Error ? e.message : String(e)
-          }. ${prereq.errorHint}`,
+        message: `Module '${manifest.name}' prerequisite '${prereq.command}' failed: ${
+          e instanceof Error ? e.message : String(e)
+        }. ${prereq.errorHint}`,
         errorHint: prereq.errorHint,
       });
     }
@@ -269,17 +275,34 @@ function detectCollisions(registrations: ModuleRegistration[]): void {
 // ---- module state I/O (zone 2) -------------------------------------------
 
 /**
- * Resolve the on-disk state file for a module + state key under
- * `<projectRoot>/.gan-state/modules/<name>/<key>.json` (M3-locked
- * per-key layout). Each declared `stateKeys` entry persists to its
- * own file; the manifest's `stateKeys` array is the authoritative
- * allowlist enforced on writes (see `assertStateKeyAllowed`).
+ * Resolve the on-disk state file for a module + state key under the central,
+ * repo-keyed module-state store:
+ * `<module-state-root>/<repo-key>/<name>/<key>.json` (M3-locked per-key layout).
  *
- * The path is deterministic and exclusive to this module (per F1's
- * zone-2 rules).
+ * F8 relocates module state out of `<projectRoot>/.gan-state/modules/<name>/`
+ * into the repo-wide store so all worktrees of a repo share one tree and it
+ * survives `git worktree remove`. `projectRoot` is no longer joined into the
+ * path; it is now a *directory inside the repo* from which F7's repo-key is
+ * derived (via git-common-dir), so two worktrees of the same repo resolve here
+ * to the SAME file. Resolution is delegated to `module-state-store.ts` (the
+ * repo-key, store-root precedence, and determinism are all reused from F7,
+ * never re-implemented).
+ *
+ * Each declared `stateKeys` entry persists to its own file; the manifest's
+ * `stateKeys` array is the authoritative allowlist enforced on writes (see
+ * `assertStateKeyAllowed`). The path stays deterministic and exclusive to this
+ * module (per F1's zone-2 ownership, preserved at the new location).
+ *
+ * @param opts optional home/env and git injection seams forwarded to the store
+ *   (tests inject these; production passes nothing and uses the real seams).
  */
-export function moduleStatePath(projectRoot: string, name: string, key: string): string {
-  return path.join(projectRoot, '.gan-state', 'modules', name, `${key}.json`);
+export function moduleStatePath(
+  projectRoot: string,
+  name: string,
+  key: string,
+  opts?: ModuleStateStoreOptions,
+): string {
+  return resolveModuleStatePath(name, key, projectRoot, opts);
 }
 
 /**
@@ -297,8 +320,9 @@ export function loadModuleState(
   name: string,
   key: string,
   projectRoot: string,
+  opts?: ModuleStateStoreOptions,
 ): ModuleStateRecord | null {
-  const filePath = moduleStatePath(projectRoot, name, key);
+  const filePath = moduleStatePath(projectRoot, name, key, opts);
   if (!existsSync(filePath)) return null;
   let raw: string;
   try {
@@ -365,15 +389,26 @@ export function assertStateKeyAllowed(name: string, key: string): void {
 }
 
 /**
- * List installed module names by scanning `.gan-state/modules/<name>/`
- * subdirectories under `projectRoot`. This is the *state-side* listing
- * (which modules have written persistent state), not the
- * *registration-side* listing (which manifests the loader knows about).
- * Callers usually want the latter (`loadModules()`); this helper is
- * preserved for the durable-state surface.
+ * List installed module names by scanning the per-repo module-state directory
+ * `<module-state-root>/<repo-key>/<name>/` for module sub-directories. This is
+ * the *state-side* listing (which modules have written persistent state), not
+ * the *registration-side* listing (which manifests the loader knows about).
+ * Callers usually want the latter (`loadModules()`); this helper is preserved
+ * for the durable-state surface.
+ *
+ * F8: the scan root is the repo-wide store keyed by F7's repo-key (derived from
+ * `projectRoot` via git-common-dir), not `<projectRoot>/.gan-state/modules`, so
+ * every worktree of a repo sees the same installed-module set.
+ *
+ * @param opts optional home/env and git injection seams forwarded to the store.
  */
-export function listInstalledModules(projectRoot: string): string[] {
-  const dir = path.join(projectRoot, '.gan-state', 'modules');
+export function listInstalledModules(
+  projectRoot: string,
+  opts?: ModuleStateStoreOptions,
+): string[] {
+  const storeRoot = resolveModuleStateRoot(opts?.deps);
+  const repoKey = resolveModuleRepoKey(projectRoot, opts?.exec);
+  const dir = resolveRepoModuleStateDir(storeRoot, repoKey);
   if (!existsSync(dir)) return [];
   let entries: string[];
   try {

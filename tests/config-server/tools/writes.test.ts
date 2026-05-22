@@ -41,6 +41,11 @@ import {
   getResolvedConfigCache,
   cacheKeyForProjectRoot,
 } from '../../../src/config-server/resolution/cache.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -48,11 +53,27 @@ const jsTsMinimalSrc = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'js-ts
 
 const tmpDirs: string[] = [];
 
+// F8: module-state writes resolve through the repo-keyed store, which derives
+// its key from the project root via `git rev-parse --git-common-dir`. Each test
+// project is therefore a real git repo, and a per-test store scope keeps writes
+// inside a throwaway root (never the user's real `~/.gan-module-state`).
+let moduleStore: ModuleStateStoreScope;
+
 function makeTmpProject(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'cas-writes-'));
   cpSync(jsTsMinimalSrc, dir, { recursive: true });
+  initGitRepo(dir);
   tmpDirs.push(dir);
   return dir;
+}
+
+/**
+ * The repo-keyed module-state file a write to `(name, key)` from `proj` lands
+ * at: `<module-state-root>/<repo-key>/<name>/<key>.json`. Replaces the old
+ * `<proj>/.gan-state/modules/<name>/<key>.json` construction in assertions.
+ */
+function moduleStateFile(proj: string, name: string, key: string): string {
+  return moduleStore.statePath(proj, name, key);
 }
 
 /**
@@ -105,15 +126,22 @@ function fileHash(p: string): string {
 
 beforeEach(() => {
   clearResolvedConfigCache();
+  moduleStore = useTempModuleStateStore();
 });
 
 afterEach(() => {
+  moduleStore.restore();
   for (const d of tmpDirs.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {
       // Best-effort cleanup; ignore.
     }
+  }
+  try {
+    rmSync(moduleStore.storeRoot, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup; ignore.
   }
 });
 
@@ -417,7 +445,7 @@ describe('module writes (M3 per-key)', () => {
     _resetModuleRegistrationCacheForTests();
   });
 
-  it('setModuleState writes to <projectRoot>/.gan-state/modules/<name>/<key>.json', () => {
+  it('setModuleState writes to the repo-keyed <module-state-root>/<repo-key>/<name>/<key>.json', () => {
     const proj = makeTmpProject();
     const r = setModuleState({
       projectRoot: proj,
@@ -427,19 +455,16 @@ describe('module writes (M3 per-key)', () => {
     });
     expect(r.mutated).toBe(true);
     if (r.mutated === true) {
-      expect(
-        r.path.endsWith(
-          path.join('.gan-state', 'modules', 'mod-x', 'port-registry.json'),
-        ),
-      ).toBe(true);
+      // F8: the on-disk path is in the repo-keyed store, not under
+      // `<projectRoot>/.gan-state/modules`.
+      expect(r.path).toBe(moduleStateFile(proj, 'mod-x', 'port-registry'));
+      expect(r.path.endsWith(path.join('mod-x', 'port-registry.json'))).toBe(true);
+      expect(r.path).not.toContain(path.join('.gan-state', 'modules'));
+      expect(r.path.startsWith(moduleStore.storeRoot + path.sep)).toBe(true);
     }
-    expect(
-      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'port-registry.json')),
-    ).toBe(true);
+    expect(existsSync(moduleStateFile(proj, 'mod-x', 'port-registry'))).toBe(true);
     // The legacy whole-blob path must NOT be written.
-    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'state.json'))).toBe(
-      false,
-    );
+    expect(existsSync(moduleStateFile(proj, 'mod-x', 'state'))).toBe(false);
   });
 
   it('setModuleState rejects an undeclared key with UnknownStateKey naming the module and key', () => {
@@ -466,7 +491,7 @@ describe('module writes (M3 per-key)', () => {
       }),
     ).toThrow(/not-declared/);
     // No file must have been created.
-    expect(existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x'))).toBe(false);
+    expect(existsSync(path.dirname(moduleStateFile(proj, 'mod-x', 'port-registry')))).toBe(false);
   });
 
   it('setModuleState against a module with empty stateKeys always rejects with UnknownStateKey', () => {
@@ -506,13 +531,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { log: ['entry'] },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -540,13 +559,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { log: ['entry'] },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -572,13 +585,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { log: ['entry'] },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -615,13 +622,7 @@ describe('module writes (M3 per-key)', () => {
     });
     expect(r.mutated).toBe(true);
 
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
     expect(onDisk).toEqual({ log: ['entry', 'entry'] });
   });
@@ -634,13 +635,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { ports: { svc: { port: 3000 } } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -665,13 +660,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { ports: { svc: { port: 3000 } } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -697,13 +686,7 @@ describe('module writes (M3 per-key)', () => {
       key: 'port-registry',
       state: { ports: { svc: { port: 3000 } } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeHash = fileHash(filePath);
 
     const r = appendToModuleState({
@@ -740,13 +723,7 @@ describe('module writes (M3 per-key)', () => {
     });
     expect(r.mutated).toBe(true);
 
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8'));
     expect(onDisk).toEqual({ ports: { svc: { key: 'svc', port: 4000 } } });
   });
@@ -776,7 +753,7 @@ describe('module writes (M3 per-key)', () => {
     );
   });
 
-  it("appendToModuleState rejects an unknown duplicatePolicy value with MalformedInput", () => {
+  it('appendToModuleState rejects an unknown duplicatePolicy value with MalformedInput', () => {
     const proj = makeTmpProject();
     expect(() =>
       appendToModuleState({
@@ -870,28 +847,14 @@ describe('module writes (M3 per-key)', () => {
       state: { v: 'two' },
     });
     expect(r2.mutated).toBe(true);
-    const fileOne = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-multi',
-      'key-one.json',
-    );
-    const fileTwo = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-multi',
-      'key-two.json',
-    );
+    const fileOne = moduleStateFile(proj, 'mod-multi', 'key-one');
+    const fileTwo = moduleStateFile(proj, 'mod-multi', 'key-two');
     expect(existsSync(fileOne)).toBe(true);
     expect(existsSync(fileTwo)).toBe(true);
     expect(JSON.parse(readFileSync(fileOne, 'utf8'))).toEqual({ v: 'one' });
     expect(JSON.parse(readFileSync(fileTwo, 'utf8'))).toEqual({ v: 'two' });
     // The legacy whole-blob `state.json` must NOT exist alongside.
-    expect(
-      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-multi', 'state.json')),
-    ).toBe(false);
+    expect(existsSync(moduleStateFile(proj, 'mod-multi', 'state'))).toBe(false);
   });
 
   it('getModuleState returns null for an undeclared key (no throw)', () => {
@@ -1357,16 +1320,11 @@ describe('module state round-trip (M3 per-key)', () => {
     });
     expect(result.mutated).toBe(true);
     if (result.mutated === true) {
-      expect(
-        result.path.endsWith(
-          path.join('.gan-state', 'modules', 'mod-x', 'port-registry.json'),
-        ),
-      ).toBe(true);
+      expect(result.path).toBe(moduleStateFile(proj, 'mod-x', 'port-registry'));
+      expect(result.path.endsWith(path.join('mod-x', 'port-registry.json'))).toBe(true);
     }
 
-    expect(
-      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-x', 'port-registry.json')),
-    ).toBe(true);
+    expect(existsSync(moduleStateFile(proj, 'mod-x', 'port-registry'))).toBe(true);
 
     const record = getModuleState({
       projectRoot: proj,
@@ -1454,12 +1412,8 @@ describe('module state round-trip (M3 per-key)', () => {
     });
     expect(rB.mutated).toBe(true);
 
-    expect(
-      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-a', 'port-registry.json')),
-    ).toBe(true);
-    expect(
-      existsSync(path.join(proj, '.gan-state', 'modules', 'mod-b', 'port-registry.json')),
-    ).toBe(true);
+    expect(existsSync(moduleStateFile(proj, 'mod-a', 'port-registry'))).toBe(true);
+    expect(existsSync(moduleStateFile(proj, 'mod-b', 'port-registry'))).toBe(true);
 
     const recA1 = getModuleState({
       projectRoot: proj,
@@ -1510,13 +1464,7 @@ describe('module state round-trip (M3 per-key)', () => {
       key: 'port-registry',
       state: { alpha: { port: 3000 }, beta: { port: 3001 } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
 
     const r = removeFromModuleState({
       projectRoot: proj,
@@ -1544,13 +1492,7 @@ describe('module state round-trip (M3 per-key)', () => {
         { key: 'gamma', port: 3002 },
       ],
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
 
     const r = removeFromModuleState({
       projectRoot: proj,
@@ -1574,13 +1516,7 @@ describe('module state round-trip (M3 per-key)', () => {
       key: 'port-registry',
       state: { alpha: { port: 3000 } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeBytes = readFileSync(filePath);
 
     const r = removeFromModuleState({
@@ -1604,13 +1540,7 @@ describe('module state round-trip (M3 per-key)', () => {
       key: 'port-registry',
       state: [{ key: 'alpha', port: 3000 }],
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
     const beforeBytes = readFileSync(filePath);
 
     const r = removeFromModuleState({
@@ -1634,13 +1564,7 @@ describe('module state round-trip (M3 per-key)', () => {
       key: 'port-registry',
       state: { only: { port: 3000 } },
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
 
     const r = removeFromModuleState({
       projectRoot: proj,
@@ -1662,13 +1586,7 @@ describe('module state round-trip (M3 per-key)', () => {
       key: 'port-registry',
       state: [{ key: 'only', port: 3000 }],
     });
-    const filePath = path.join(
-      proj,
-      '.gan-state',
-      'modules',
-      'mod-x',
-      'port-registry.json',
-    );
+    const filePath = moduleStateFile(proj, 'mod-x', 'port-registry');
 
     const r = removeFromModuleState({
       projectRoot: proj,

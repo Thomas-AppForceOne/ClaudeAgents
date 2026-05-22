@@ -63,7 +63,7 @@ Three coordinated mechanisms, all post-E1:
 The `.gan-state/modules/` subdirectory is **never touched** by recovery — F1's zone-2
 ownership invariant. Module state belongs to modules; run-state has its own lane.
 
-> **F8 supersession (module-state relocation).** Per [F8](F8-centralized-module-state-store.md), durable module state no longer lives under `.gan-state/modules/`; it moves to a separate, repo-keyed store (`<module-state-root>/<repo-key>/`, default `~/.gan-module-state/`). The "never touched by recovery" invariant carries over verbatim to the new location: recovery and `--cleanup` never read or write the module store. Read every `.gan-state/modules/` reference below as the relocated module store.
+> **F8 supersession (module-state relocation).** Per [F8](F8-centralized-module-state-store.md), durable module state no longer lives under `<projectRoot>/.gan-state/modules/`; it moves to a separate, repo-keyed store outside any worktree (`<module-state-root>/<repo-key>/`, default `~/.gan-module-state/`) — a different root from F7's run-data store. The module store is durable cross-run and server-written; only the owning module writes or prunes it. O2's "never touched by recovery" invariant carries over **verbatim** to the new location: `--recover`, `--list-recoverable`, and `--cleanup` never read or write `<module-state-root>/<repo-key>/`, exactly as they never touched `.gan-state/modules/`. Read every `.gan-state/modules/` reference below — the Solution-summary "never touched by recovery" line and the Section 6 Forbidden-territory bullet — as the relocated module store.
 
 
 ## Detailed design
@@ -346,7 +346,7 @@ Per E1's recovery contract, runs `validateAll()` in non-aborting mode first. Doe
 
 `--recover`, `--list-recoverable`, and `--cleanup` are forbidden from:
 
-- Reading or writing `.gan-state/modules/` (per F1 zone-2 invariant).
+- Reading or writing the durable module store (per F1 zone-2 invariant). Per the F8 supersession note above, that store is the relocated, repo-keyed `<module-state-root>/<repo-key>/` (default `~/.gan-module-state/`), no longer `<projectRoot>/.gan-state/modules/`; recovery and cleanup touch neither the relocated store nor any residual project-local `.gan-state/modules/`.
 - Reading or writing `.claude/gan/` (configuration belongs to the user; recovery is
   read-through-the-snapshot only).
 - Reading or writing `.gan-cache/` (regenerable; not run-state).

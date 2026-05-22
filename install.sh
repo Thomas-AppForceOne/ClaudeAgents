@@ -34,6 +34,31 @@ RUNS_DIR_DEFAULT="$HOME/.gan-runs-data"
 # expanded absolute path) so the user-facing string carries no machine-specific
 # home literal.
 RUNS_DIR_DEFAULT_DISPLAY="~/.gan-runs-data"
+# (F8) User-tier marker recording the central MODULE-STATE store root the config
+# server reads when resolving durable cross-run module state (notably the Docker
+# port-registry, now shared repo-wide). Single trimmed raw-path line — NOT JSON.
+# The on-disk path MUST match src/config-server/storage/module-state-store.ts
+# MODULE_STATE_MARKER_RELPATH (`.claude/gan/module-state-dir`) and the default
+# below MUST match its DEFAULT_MODULE_STATE_DIRNAME (`.gan-module-state`) so
+# resolveModuleStateRoot() reads exactly what install writes. `$GAN_MODULE_STATE`
+# overrides the marker per-run (resolver precedence step 1). The default is the
+# tilde form expanded against $HOME at runtime — never a hardcoded absolute
+# home/store path literal.
+#
+# Deliberately a SEPARATE root from RUNS_DIR_MARKER_PATH (`runs-data-dir`): run
+# data and module state are different artifacts (per F8 §1 / F7 deferral) and
+# have their own markers and defaults.
+#
+# F8 PARITY-MINUS: unlike the run-data store, the module store gets NO
+# settings.json grant — only this marker is written. Module state is
+# config-server-managed (the server process writes it directly; no Claude-tool
+# file operation reaches it), so it needs no `permissions.allow` rule and no
+# `additionalDirectories` entry (F8 §4).
+MODULE_STATE_DIR_MARKER_PATH="$HOME/.claude/gan/module-state-dir"
+MODULE_STATE_DIR_DEFAULT="$HOME/.gan-module-state"
+# Display form of the module-state default shown in the interactive prompt
+# (tilde, not the expanded absolute path).
+MODULE_STATE_DIR_DEFAULT_DISPLAY="~/.gan-module-state"
 MIN_NODE_MAJOR=20
 MIN_NODE_MINOR=10
 # Highest Node major the framework's CI has been exercised through. Above
@@ -61,6 +86,7 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   confine-hook-written:<absolute-path>
 #   runs-dir-configured:<store-root>
 #   runs-dir-permission-granted:<store-root>
+#   module-state-dir-configured:<module-state-root>
 # (F7 slice 5) `runs-dir-configured` records the central-store marker write
 # (rollback removes the marker, or byte-restores a pre-existing one from its
 # preedit snapshot); `runs-dir-permission-granted` records the settings.json
@@ -70,6 +96,14 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 # rides the existing claude-settings-edited preedit snapshot (taken before the
 # first settings.json mutation), so its settings restoration is the established
 # claude-settings-edited rollback case.
+# (F8) `module-state-dir-configured` records the MODULE-STATE marker write
+# (`~/.claude/gan/module-state-dir`); rollback removes the marker, or
+# byte-restores a pre-existing one from its preedit snapshot — symmetric with
+# `runs-dir-configured`. PARITY-MINUS: there is NO companion
+# `module-state-dir-permission-granted` entry, because F8 writes ONLY the marker
+# and performs no settings.json grant for the module store (F8 §4/§5). The
+# rollback / `--uninstall` undo for module state is therefore marker-only and
+# never touches settings.json.
 # (H1) `confine-hook-written` records the rendered ~/.claude/hooks/gan-confine.sh
 # the install wrote; rollback removes the partial hook file at that path. Its
 # settings.json `hooks.PreToolUse[]` registration rides the existing
@@ -116,6 +150,12 @@ PREEDIT_CLAUDE_SETTINGS=""
 # `~/.claude/gan/runs-data-dir` (if it pre-existed this run). configure_runs_dir
 # sets it; rollback restores the marker from it; main() removes it on success.
 RUNS_DIR_MARKER_PREEDIT=""
+
+# (F8) Per-run pre-edit copy of the module-state marker
+# `~/.claude/gan/module-state-dir` (if it pre-existed this run). Symmetric with
+# RUNS_DIR_MARKER_PREEDIT above. configure_module_state_dir sets it; rollback
+# restores the marker from it; main() removes it on success.
+MODULE_STATE_DIR_MARKER_PREEDIT=""
 
 log_info() {
   printf '%s\n' "$*"
@@ -175,6 +215,14 @@ Flags:
                       outside any git worktree). Interactive installs
                       prompt for this, defaulting to `~/.gan-runs-data`;
                       the env var `GAN_RUNS_DATA` overrides it per-run.
+  --module-state-dir=<path>
+                      Set the central module-state store root (where
+                      durable cross-run module state lives, outside any
+                      git worktree, shared across all worktrees of a
+                      repo). Interactive installs prompt for this,
+                      defaulting to `~/.gan-module-state`; the env var
+                      `GAN_MODULE_STATE` overrides it per-run. This is a
+                      separate root from `--runs-dir`.
 
 What it does:
   - Copies ClaudeAgents agents and skills into your Claude Code config
@@ -1229,6 +1277,118 @@ configure_runs_dir() {
   fi
 }
 
+# resolve_module_state_dir
+#
+# (F8) Resolve the central MODULE-STATE store root for this install, setting the
+# global MODULE_STATE_DIR. Mirrors resolve_runs_dir exactly. Precedence:
+#   1. The `--module-state-dir=<path>` flag, if supplied
+#      (MODULE_STATE_DIR_FLAG non-empty).
+#   2. In a TTY install with no flag: prompt, defaulting to
+#      `~/.gan-module-state` (MODULE_STATE_DIR_DEFAULT). An empty answer (Enter)
+#      selects the default.
+#   3. In a non-TTY install with no flag (every harness run): the default
+#      `~/.gan-module-state`, no prompt — mirroring resolve_runs_dir's non-TTY
+#      default so existing tests need no flag threading.
+#
+# A leading `~/` in the flag/prompt value is expanded against $HOME (the
+# resolver's absolutize() does the same, but expanding here keeps the persisted
+# marker an absolute path with no literal `~`). The value is treated purely as
+# data throughout — quoted in every expansion, never `eval`'d.
+MODULE_STATE_DIR=""
+resolve_module_state_dir() {
+  local chosen=""
+  if [ -n "${MODULE_STATE_DIR_FLAG:-}" ]; then
+    chosen="$MODULE_STATE_DIR_FLAG"
+  elif [ -t 0 ]; then
+    # TTY interactive prompt. The default is the tilde display form; pressing
+    # Enter (empty answer) selects MODULE_STATE_DIR_DEFAULT.
+    local answer
+    log_info ""
+    log_info "ClaudeAgents installer: choose the central module-state store root."
+    log_info "Durable cross-run module state (such as the shared port registry) lives here,"
+    log_info "outside any git worktree, so it is shared across all worktrees of a repo and"
+    log_info "survives \`git worktree remove\`."
+    printf 'Module-state root [%s]: ' "$MODULE_STATE_DIR_DEFAULT_DISPLAY"
+    IFS= read -r answer || answer=""
+    if [ -z "$answer" ]; then
+      chosen="$MODULE_STATE_DIR_DEFAULT"
+    else
+      chosen="$answer"
+    fi
+  else
+    # Non-TTY default: the tilde-default store root, no prompt.
+    chosen="$MODULE_STATE_DIR_DEFAULT"
+  fi
+
+  # Expand a leading `~/` (or bare `~`) against $HOME so the persisted marker is
+  # an absolute path with no literal tilde. A path with no leading tilde is left
+  # exactly as supplied (it may be absolute or relative; the resolver's
+  # absolutize() resolves a relative form against $HOME at run start).
+  case "$chosen" in
+    '~') chosen="$HOME" ;;
+    '~/'*) chosen="$HOME/${chosen#'~/'}" ;;
+  esac
+  MODULE_STATE_DIR="$chosen"
+}
+
+# configure_module_state_dir
+#
+# (F8) Persist the resolved central MODULE-STATE store root. ONE write, recorded
+# in STATE_LOG so partial-failure rollback and `--uninstall` undo it:
+#
+#   Marker write — `~/.claude/gan/module-state-dir` gets the store root as a
+#   single trimmed raw-path line (NOT JSON), the exact format the slice-1
+#   resolveModuleStateRoot() consumes via readFileSync(...).trim(). Atomic
+#   *.tmp.$$ + mv. STATE_LOG entry `module-state-dir-configured:<store-root>`. A
+#   pre-existing marker is snapshotted to `<marker>.preedit-$$` first so rollback
+#   byte-restores it (rather than removing a marker the run did not create).
+#
+# F8 PARITY-MINUS vs configure_runs_dir: there is NO "Write 2" settings.json
+# grant. Module state is config-server-managed — the server process writes the
+# file directly and no Claude-tool file operation reaches it — so it needs no
+# `permissions.allow` rule and no `additionalDirectories` entry (F8 §4). This
+# function therefore touches ONLY the marker; it makes no settings.json mutation
+# and takes no settings preedit snapshot.
+#
+# Security posture (shell_and_subprocess_safety): MODULE_STATE_DIR is untrusted
+# user input. No `eval`; every expansion of it is double-quoted. The marker write
+# is `printf '%s\n' "$MODULE_STATE_DIR" > tmp` (the path is data to printf, never
+# re-parsed as a command). A store root carrying spaces or shell metacharacters
+# (`$()`, `;`, backticks) is persisted literally and creates no injected side
+# effect.
+configure_module_state_dir() {
+  local marker_dir snapshot
+  marker_dir="$(dirname "$MODULE_STATE_DIR_MARKER_PATH")"
+  mkdir -p "$marker_dir"
+
+  # Snapshot a pre-existing marker so rollback restores it instead of removing a
+  # marker the run did not create.
+  if [ -f "$MODULE_STATE_DIR_MARKER_PATH" ]; then
+    snapshot="$MODULE_STATE_DIR_MARKER_PATH.preedit-$$"
+    cp "$MODULE_STATE_DIR_MARKER_PATH" "$snapshot"
+    MODULE_STATE_DIR_MARKER_PREEDIT="$snapshot"
+  else
+    MODULE_STATE_DIR_MARKER_PREEDIT=""
+  fi
+
+  # Atomic write: the store root is written as data to a *.tmp.$$ sibling, then
+  # mv'd into place. `printf '%s\n'` emits exactly one trailing newline so the
+  # resolver's `.trim()` yields the literal path.
+  local marker_tmp="$MODULE_STATE_DIR_MARKER_PATH.tmp.$$"
+  printf '%s\n' "$MODULE_STATE_DIR" >"$marker_tmp"
+  mv "$marker_tmp" "$MODULE_STATE_DIR_MARKER_PATH"
+  STATE_LOG+=("module-state-dir-configured:$MODULE_STATE_DIR")
+
+  # Optional failure injection point: a post-write step that fails so tests can
+  # exercise rollback of the marker. Env-flagged stub surface only — read AFTER
+  # the marker write, mirroring CAS_FAIL_RUNS_DIR_CONFIG. Never patches
+  # install.sh.
+  if [ "${CAS_FAIL_MODULE_STATE_DIR_CONFIG:-0}" = "1" ]; then
+    log_error "install.sh: injected module-state-dir-config failure"
+    return 1
+  fi
+}
+
 # register_mcp_in_claude_json
 #
 # Sets `mcpServers.claudeagents-config = {command, args, env}` on
@@ -1658,6 +1818,20 @@ rollback() {
         # marker write and so `--uninstall` can find the granted store root.
         :
         ;;
+      module-state-dir-configured)
+        # (F8) Undo the module-state marker write. Symmetric with
+        # runs-dir-configured: if the run snapshotted a pre-existing marker
+        # (MODULE_STATE_DIR_MARKER_PREEDIT set), byte-restore it; otherwise the
+        # run created the marker, so remove it. The payload is the store root
+        # (informational); the on-disk marker path is the constant. PARITY-MINUS:
+        # there is no companion permission-granted case to undo — F8 wrote no
+        # settings.json grant, so this rollback touches ONLY the marker.
+        if [ -n "$MODULE_STATE_DIR_MARKER_PREEDIT" ] && [ -f "$MODULE_STATE_DIR_MARKER_PREEDIT" ]; then
+          mv "$MODULE_STATE_DIR_MARKER_PREEDIT" "$MODULE_STATE_DIR_MARKER_PATH" 2>/dev/null || true
+        else
+          rm -f "$MODULE_STATE_DIR_MARKER_PATH" 2>/dev/null || true
+        fi
+        ;;
       confine-hook-written)
         # (H1) Remove the framework-owned confinement hook this run wrote.
         # Same defensive guard as copied-file: only remove if it is still a
@@ -1722,6 +1896,10 @@ rollback() {
   # did not consume it via the restore mv).
   if [ -n "$RUNS_DIR_MARKER_PREEDIT" ] && [ -f "$RUNS_DIR_MARKER_PREEDIT" ]; then
     rm -f "$RUNS_DIR_MARKER_PREEDIT" 2>/dev/null || true
+  fi
+  # (F8) Same for the module-state marker preedit snapshot.
+  if [ -n "$MODULE_STATE_DIR_MARKER_PREEDIT" ] && [ -f "$MODULE_STATE_DIR_MARKER_PREEDIT" ]; then
+    rm -f "$MODULE_STATE_DIR_MARKER_PREEDIT" 2>/dev/null || true
   fi
 
   if [ "$mentioned_npm" -eq 1 ]; then
@@ -2115,6 +2293,16 @@ uninstall_main() {
     mv "$runs_dir_tmp" "$CLAUDE_SETTINGS_JSON"
   fi
 
+  # (F8) Remove the module-state marker. PARITY-MINUS vs the runs-dir block
+  # above: module state has NO settings.json grant (F8 §4/§5), so there is
+  # nothing to strip from settings.json — this is a marker-only removal that
+  # never touches settings.json. Idempotent: when the marker is absent (a second
+  # uninstall against an already-clean HOME) this block removes nothing further.
+  if [ -f "$MODULE_STATE_DIR_MARKER_PATH" ]; then
+    rm -f "$MODULE_STATE_DIR_MARKER_PATH"
+    removed_count=$(( removed_count + 1 ))
+  fi
+
   # Remove the built-in stacks symlink only when it points into the
   # globally-installed framework package. Symlinks the user has redirected
   # somewhere else are left alone.
@@ -2187,6 +2375,10 @@ main() {
   # flag"; resolve_runs_dir then prompts (TTY) or defaults (non-TTY). The value
   # is untrusted user input — it is only ever assigned and quoted, never eval'd.
   RUNS_DIR_FLAG=""
+  # (F8) The `--module-state-dir=<path>` value, if supplied. Empty means "no
+  # flag"; resolve_module_state_dir then prompts (TTY) or defaults (non-TTY).
+  # Same untrusted-input handling as RUNS_DIR_FLAG — only assigned and quoted.
+  MODULE_STATE_DIR_FLAG=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -2201,6 +2393,14 @@ main() {
         ;;
       --runs-dir)
         die "\`--runs-dir\` requires a value: pass \`--runs-dir=<path>\` (for example \`--runs-dir=$RUNS_DIR_DEFAULT_DISPLAY\`)."
+        ;;
+      --module-state-dir=*)
+        # (F8) Capture everything after the first `=` as the module-state root,
+        # verbatim. Quoted on assignment; never re-parsed as a command.
+        MODULE_STATE_DIR_FLAG="${1#--module-state-dir=}"
+        ;;
+      --module-state-dir)
+        die "\`--module-state-dir\` requires a value: pass \`--module-state-dir=<path>\` (for example \`--module-state-dir=$MODULE_STATE_DIR_DEFAULT_DISPLAY\`)."
         ;;
       --uninstall)
         mode="uninstall"
@@ -2271,6 +2471,13 @@ main() {
   # nothing will be persisted.
   if [ "$SKIP_CLAUDE_CODE" -eq 0 ]; then
     resolve_runs_dir
+    # (F8) Resolve the central module-state store root the same way: the
+    # `--module-state-dir` flag, else (TTY) a prompt defaulting to
+    # `~/.gan-module-state`, else (non-TTY) that default. Resolve before the
+    # install body so the prompt (if any) is up front; the marker persist happens
+    # in configure_module_state_dir below. Gated on `--no-claude-code` exactly
+    # like resolve_runs_dir, so no prompt fires when nothing will be persisted.
+    resolve_module_state_dir
   fi
 
   # Read the package.json version once; the version-probe compares
@@ -2304,6 +2511,11 @@ main() {
     # failure, removed by `--uninstall`). Runs after configure_permissions so it
     # shares the same settings preedit snapshot.
     configure_runs_dir
+    # (F8) Persist the central module-state store root — marker ONLY, no
+    # settings.json grant (the F8 parity-MINUS vs configure_runs_dir). The marker
+    # write goes through STATE_LOG (rolled back on partial failure, removed by
+    # `--uninstall`).
+    configure_module_state_dir
   fi
 
   detect_preexisting_gan_dir
@@ -2329,6 +2541,10 @@ main() {
   # (F7 slice 5) Remove the per-run marker preedit snapshot on success.
   if [ -n "$RUNS_DIR_MARKER_PREEDIT" ] && [ -f "$RUNS_DIR_MARKER_PREEDIT" ]; then
     rm -f "$RUNS_DIR_MARKER_PREEDIT"
+  fi
+  # (F8) Same for the module-state marker preedit snapshot.
+  if [ -n "$MODULE_STATE_DIR_MARKER_PREEDIT" ] && [ -f "$MODULE_STATE_DIR_MARKER_PREEDIT" ]; then
+    rm -f "$MODULE_STATE_DIR_MARKER_PREEDIT"
   fi
 
   print_final_status

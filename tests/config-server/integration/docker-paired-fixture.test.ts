@@ -39,6 +39,11 @@ import { composeResolvedConfig } from '../../../src/config-server/resolution/res
 import { clearResolvedConfigCache } from '../../../src/config-server/resolution/cache.js';
 import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
 import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -48,11 +53,13 @@ describe('docker-paired fixture integration', () => {
   let scratchModulesRoot: string;
   let scratchPkgRoot: string;
   let savedPkgOverride: string | undefined;
+  let store: ModuleStateStoreScope;
   const scratchProjects: string[] = [];
 
   beforeEach(() => {
     clearResolvedConfigCache();
     _resetModuleRegistrationCacheForTests();
+    store = useTempModuleStateStore();
     // Stage a hermetic docker module manifest with NO prerequisites so
     // the test does not require Docker on the running machine.
     scratchModulesRoot = mkdtempSync(path.join(os.tmpdir(), 'm2-docker-paired-modules-'));
@@ -99,6 +106,8 @@ describe('docker-paired fixture integration', () => {
     _resetPackageRootCacheForTests();
   });
   afterEach(() => {
+    store.restore();
+    rmSync(store.storeRoot, { recursive: true, force: true });
     rmSync(scratchModulesRoot, { recursive: true, force: true });
     rmSync(scratchPkgRoot, { recursive: true, force: true });
     if (savedPkgOverride === undefined) {
@@ -131,10 +140,7 @@ describe('docker-paired fixture integration', () => {
   });
 
   it('validateAll produces zero pairs-with and zero schema errors', () => {
-    const result = validateAll(
-      { projectRoot: fixtureRoot },
-      { modulesRoot: scratchModulesRoot },
-    );
+    const result = validateAll({ projectRoot: fixtureRoot }, { modulesRoot: scratchModulesRoot });
     const pairsWithIssues = result.issues.filter(
       (i) => typeof i.message === 'string' && i.message.includes('pairs-with'),
     );
@@ -170,6 +176,9 @@ describe('docker-paired fixture integration', () => {
     const scratchProj = mkdtempSync(path.join(os.tmpdir(), 'gan-test-'));
     scratchProjects.push(scratchProj);
     cpSync(fixtureRoot, scratchProj, { recursive: true });
+    // F8: module state resolves through the repo-keyed store, keyed off the
+    // project's git-common-dir, so the scratch project must be a real repo.
+    initGitRepo(scratchProj);
 
     const blob = {
       version: 1,
@@ -188,11 +197,9 @@ describe('docker-paired fixture integration', () => {
     expect(existsSync(path.join(scratchProj, '.claude', 'gan', 'modules', 'docker.yaml'))).toBe(
       true,
     );
-    expect(
-      existsSync(
-        path.join(scratchProj, '.gan-state', 'modules', 'docker', 'port-registry.json'),
-      ),
-    ).toBe(true);
+    // F8: the registry now lives in the repo-keyed store, not under
+    // `<scratchProj>/.gan-state/modules`.
+    expect(existsSync(store.statePath(scratchProj, 'docker', 'port-registry'))).toBe(true);
 
     const r = await composeResolvedConfig(scratchProj, {
       apiVersion: '0.0.0-test',

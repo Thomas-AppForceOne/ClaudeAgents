@@ -67,6 +67,7 @@ import {
   loadModuleState,
   moduleStatePath,
 } from '../storage/module-loader.js';
+import { type ModuleStateStoreOptions } from '../storage/module-state-store.js';
 import { stableStringify } from '../determinism/index.js';
 import {
   readCache,
@@ -96,6 +97,13 @@ export interface WriteToolContext {
    * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
    */
   packageRoot?: string;
+  /**
+   * Home/env + git injection seams for the repo-keyed module-state store
+   * (F8). Production leaves this unset and uses the real seams; tests inject
+   * a fake home and a stub git seam so module-state writes are deterministic
+   * and need no real repo. See `ModuleStateStoreOptions`.
+   */
+  moduleStateStore?: ModuleStateStoreOptions;
 }
 
 /** A canonical mutation result. */
@@ -444,11 +452,14 @@ export interface SetModuleStateInput {
 
 /**
  * Persist the supplied `state` blob for module `name` at the named
- * `key` under `<projectRoot>/.gan-state/modules/<name>/<key>.json`
- * (M3-locked per-key layout). Atomic write via `atomicWriteFile`;
+ * `key` under the central, repo-keyed module-state store
+ * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation;
+ * M3-locked per-key layout). Atomic write via `atomicWriteFile`;
  * serialised with `stableStringify` so the on-disk JSON is canonical
  * (sorted keys, two-space indent, trailing newline) per F3
- * determinism.
+ * determinism. The `<repo-key>` is derived from `projectRoot` via F7's
+ * git-common-dir resolution, so every worktree of a repo writes the
+ * same shared file (the central F8 correctness fix).
  *
  * Whole-value replacement of the named key's blob. The `key` must
  * appear in the module manifest's `stateKeys` allowlist; an
@@ -460,11 +471,11 @@ export interface SetModuleStateInput {
  */
 export function setModuleState(
   input: SetModuleStateInput,
-  _ctx: WriteToolContext = {},
+  ctx: WriteToolContext = {},
 ): WriteResult {
   assertStateKeyAllowed(input.name, input.key);
   const root = canonicalizePath(input.projectRoot);
-  const filePath = moduleStatePath(root, input.name, input.key);
+  const filePath = moduleStatePath(root, input.name, input.key, ctx.moduleStateStore);
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(input.state));
   // F5 slice 2 — uniform invalidation discipline across every state-
@@ -495,11 +506,7 @@ export function setModuleState(
  */
 export type DuplicatePolicy = 'error' | 'skip' | 'allow';
 
-const DUPLICATE_POLICIES: ReadonlySet<DuplicatePolicy> = new Set([
-  'error',
-  'skip',
-  'allow',
-]);
+const DUPLICATE_POLICIES: ReadonlySet<DuplicatePolicy> = new Set(['error', 'skip', 'allow']);
 
 export interface AppendToModuleStateInput {
   projectRoot: string;
@@ -550,7 +557,7 @@ export interface AppendToModuleStateInput {
  */
 export function appendToModuleState(
   input: AppendToModuleStateInput,
-  _ctx: WriteToolContext = {},
+  ctx: WriteToolContext = {},
 ): WriteResult {
   assertStateKeyAllowed(input.name, input.key);
   const policy = resolveDuplicatePolicy(input.duplicatePolicy);
@@ -558,8 +565,8 @@ export function appendToModuleState(
   const segments = parseFieldPath(input.fieldPath, 'appendToModuleState');
   if (!segments)
     return malformed(`appendToModuleState: 'fieldPath' must be a non-empty dotted path.`);
-  const filePath = moduleStatePath(root, input.name, input.key);
-  const data = readModuleStateOrEmpty(root, input.name, input.key);
+  const filePath = moduleStatePath(root, input.name, input.key, ctx.moduleStateStore);
+  const data = readModuleStateOrEmpty(root, input.name, input.key, ctx.moduleStateStore);
 
   const parent = navigateToParent(data, segments);
   const lastKey = segments[segments.length - 1];
@@ -683,9 +690,9 @@ export interface RemoveFromModuleStateInput {
  * state blob at the named `key`. Two stored shapes are supported (per
  * F2 / M3):
  *
- *   - **Map-shape**: the file at `<projectRoot>/.gan-state/modules/
- *     <name>/<key>.json` is a plain JSON object. `entryKey` matches
- *     the property name; the property is deleted.
+ *   - **Map-shape**: the file at the repo-keyed store
+ *     `<module-state-root>/<repo-key>/<name>/<key>.json` is a plain JSON
+ *     object. `entryKey` matches the property name; the property is deleted.
  *   - **List-shape**: the file is a JSON array of records, each
  *     carrying a `key: string` field. `entryKey` matches that field;
  *     the matching member is filtered out.
@@ -705,17 +712,17 @@ export interface RemoveFromModuleStateInput {
  */
 export function removeFromModuleState(
   input: RemoveFromModuleStateInput,
-  _ctx: WriteToolContext = {},
+  ctx: WriteToolContext = {},
 ): WriteResult {
   assertStateKeyAllowed(input.name, input.key);
   if (typeof input.entryKey !== 'string' || input.entryKey.length === 0) {
     return malformed(`removeFromModuleState: 'entryKey' must be a non-empty string.`);
   }
   const root = canonicalizePath(input.projectRoot);
-  const filePath = moduleStatePath(root, input.name, input.key);
+  const filePath = moduleStatePath(root, input.name, input.key, ctx.moduleStateStore);
   if (!existsSync(filePath)) return { mutated: false, reason: 'entry-not-found' };
 
-  const existing = loadModuleState(input.name, input.key, root);
+  const existing = loadModuleState(input.name, input.key, root, ctx.moduleStateStore);
   if (existing === null) return { mutated: false, reason: 'entry-not-found' };
   const stored = existing.state;
 
@@ -792,8 +799,9 @@ function readModuleStateOrEmpty(
   projectRoot: string,
   name: string,
   key: string,
+  storeOpts?: ModuleStateStoreOptions,
 ): Record<string, unknown> {
-  const existing = loadModuleState(name, key, projectRoot);
+  const existing = loadModuleState(name, key, projectRoot, storeOpts);
   if (existing === null) return {};
   if (isObject(existing.state)) {
     return deepClone(existing.state) as Record<string, unknown>;

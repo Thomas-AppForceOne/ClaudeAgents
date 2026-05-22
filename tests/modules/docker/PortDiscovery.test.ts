@@ -22,6 +22,11 @@ import { discoverPort } from '../../../src/modules/docker/PortDiscovery.js';
 import { PortRegistry } from '../../../src/modules/docker/PortRegistry.js';
 import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
 import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -60,9 +65,14 @@ describe('PortDiscovery.discoverPort', () => {
   let scratch: string;
   let stagedRoot: string;
   let savedOverride: string | undefined;
+  let store: ModuleStateStoreScope;
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-discover-'));
+    // F8: repo-keyed module-state store — `scratch` must be a real repo so the
+    // PortRegistry lookup layer can persist/read its registry.
+    initGitRepo(scratch);
+    store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
     stagedRoot = stageDockerModuleRoot();
     process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
@@ -70,8 +80,10 @@ describe('PortDiscovery.discoverPort', () => {
     _resetModuleRegistrationCacheForTests();
   });
   afterEach(() => {
+    store.restore();
     rmSync(scratch, { recursive: true, force: true });
     rmSync(stagedRoot, { recursive: true, force: true });
+    rmSync(store.storeRoot, { recursive: true, force: true });
     if (savedOverride === undefined) {
       delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
     } else {

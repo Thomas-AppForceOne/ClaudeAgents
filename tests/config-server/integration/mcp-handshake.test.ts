@@ -36,6 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { F2_TOOL_NAMES } from '../../../src/config-server/index.js';
+import { initGitRepo, useTempModuleStateStore } from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -44,8 +45,10 @@ const jsTsMinimal = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'js-ts-mi
 
 const tmpDirs: string[] = [];
 const liveChildren: ChildProcessWithoutNullStreams[] = [];
+const envRestores: Array<() => void> = [];
 
 afterEach(() => {
+  for (const restore of envRestores.splice(0)) restore();
   for (const c of liveChildren.splice(0)) {
     try {
       c.kill('SIGKILL');
@@ -140,6 +143,14 @@ describe('integration: MCP handshake (subprocess)', () => {
     const projectRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-'));
     cpSync(jsTsMinimal, projectRoot, { recursive: true });
     tmpDirs.push(projectRoot);
+    // F8: the server resolves module state through the repo-keyed store,
+    // keyed off the project's git-common-dir. Make the temp project a real
+    // repo and point GAN_MODULE_STATE (inherited by the subprocess below and
+    // the in-process path resolver) at a throwaway store root.
+    initGitRepo(projectRoot);
+    const moduleStore = useTempModuleStateStore();
+    tmpDirs.push(moduleStore.storeRoot);
+    envRestores.push(moduleStore.restore);
 
     // Stage a fake package root containing a `docker` module manifest
     // declaring `port-registry` as an allowed state key, so the M3
@@ -178,6 +189,7 @@ describe('integration: MCP handshake (subprocess)', () => {
         ...process.env,
         GAN_RUN_ID: runId,
         GAN_PACKAGE_ROOT_OVERRIDE: stagedPkgRoot,
+        GAN_MODULE_STATE: moduleStore.storeRoot,
       },
       cwd: projectRoot,
     });
@@ -302,11 +314,15 @@ describe('integration: MCP handshake (subprocess)', () => {
     >;
     expect(setStatePayload.mutated).toBe(true);
     expect(typeof setStatePayload.path).toBe('string');
+    // F8: the server writes to the repo-keyed store, not under
+    // `<projectRoot>/.gan-state/modules`.
+    expect(setStatePayload.path as string).toBe(
+      moduleStore.statePath(projectRoot, 'docker', 'port-registry'),
+    );
     expect(
-      (setStatePayload.path as string).endsWith(
-        path.join('.gan-state', 'modules', 'docker', 'port-registry.json'),
-      ),
+      (setStatePayload.path as string).endsWith(path.join('docker', 'port-registry.json')),
     ).toBe(true);
+    expect(setStatePayload.path as string).not.toContain(path.join('.gan-state', 'modules'));
 
     // 3d. Module-state read: getModuleState returns the same blob verbatim.
     rpc.send({
@@ -333,9 +349,9 @@ describe('integration: MCP handshake (subprocess)', () => {
     >;
     expect(getStatePayload.state).toEqual(moduleStateBlob);
     // Sanity-check the round-trip carried the labelled marker through.
-    expect(
-      ((getStatePayload.state as { settings: { label: string } }).settings.label),
-    ).toBe('mcp-handshake-module-state');
+    expect((getStatePayload.state as { settings: { label: string } }).settings.label).toBe(
+      'mcp-handshake-module-state',
+    );
 
     // 3c. Error-path round-trip: malformed input (missing `name`) on a
     // module-state tool must surface a structured error through the MCP
@@ -391,9 +407,10 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(unknownKeyResp.error).toBeUndefined();
     expect(unknownKeyResp.result.isError).toBe(true);
     expect(Array.isArray(unknownKeyResp.result.content)).toBe(true);
-    const unknownKeyPayload = JSON.parse(
-      unknownKeyResp.result.content[0].text,
-    ) as Record<string, unknown>;
+    const unknownKeyPayload = JSON.parse(unknownKeyResp.result.content[0].text) as Record<
+      string,
+      unknown
+    >;
     expect(unknownKeyPayload.code).toBe('UnknownStateKey');
     expect(typeof unknownKeyPayload.message).toBe('string');
     expect(unknownKeyPayload.message as string).toContain('docker');

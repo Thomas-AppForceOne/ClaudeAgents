@@ -24,50 +24,54 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { validateAll } from '../../../src/config-server/tools/validate.js';
+import { getModuleState, listModules } from '../../../src/config-server/tools/reads.js';
+import { setModuleState, registerModule } from '../../../src/config-server/tools/writes.js';
 import {
-  getModuleState,
-  listModules,
-} from '../../../src/config-server/tools/reads.js';
-import {
-  setModuleState,
-  registerModule,
-} from '../../../src/config-server/tools/writes.js';
-import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
+  _resetModuleRegistrationCacheForTests,
+  moduleStatePath,
+} from '../../../src/config-server/storage/module-loader.js';
 import { clearResolvedConfigCache } from '../../../src/config-server/resolution/cache.js';
+import {
+  initGitRepo,
+  useTempModuleStateStore,
+  type ModuleStateStoreScope,
+} from '../../helpers/module-state-store.js';
 
 function sha256OfFile(p: string): string {
   return createHash('sha256').update(readFileSync(p)).digest('hex');
 }
 
-describe('O2 archive non-interference: .gan-state/modules/ bytes are inviolate', () => {
+describe('O2 archive non-interference: repo-keyed module-state bytes are inviolate', () => {
   let scratch: string;
   let probePath: string;
   let preHash: string;
+  let store: ModuleStateStoreScope;
 
   beforeEach(() => {
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-o2-archive-'));
-    const probeDir = path.join(scratch, '.gan-state', 'modules', 'fixture-probe');
-    mkdirSync(probeDir, { recursive: true });
-    probePath = path.join(probeDir, 'probe.bin');
+    // F8: durable module state now lives in the repo-keyed store, not under
+    // `<scratch>/.gan-state/modules`. Make `scratch` a real repo, scope the
+    // store, and write the probe at the relocated module-state location so the
+    // byte-inviolate guard targets the live durable home.
+    initGitRepo(scratch);
+    store = useTempModuleStateStore();
+    probePath = moduleStatePath(scratch, 'fixture-probe', 'probe');
+    mkdirSync(path.dirname(probePath), { recursive: true });
     writeFileSync(probePath, randomBytes(4096));
     preHash = sha256OfFile(probePath);
   });
 
   afterEach(() => {
+    store.restore();
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(store.storeRoot, { recursive: true, force: true });
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
   });
