@@ -27,6 +27,8 @@ Passes all five — infrastructure, not a terminal feature.
 
 ### The control channel
 
+> **F7 dependency.** [F7](F7-central-run-data-store-and-worktree-execution.md) relocates run *data* to the central, repo-keyed store, and the confinement hook (below) now reads `$GAN_RUN_DIR` rather than constructing `.gan-state/runs/<id>/` paths. When H2 is implemented (v1.1, after F7), reconcile the control channel and halt-sentinel paths with F7: either the `control/` directory follows run data into `$GAN_RUN_DIR/control/`, or it stays project-local (`.gan-state/runs/<id>/control/`) for kill-switch ergonomics — a call H2 owns. The hook's halt check then resolves the sentinel relative to that chosen location, not the legacy `.gan-state/runs/${GAN_RUN_ID}/` construction. The `.gan-state/runs/<id>/` paths below are written against the pre-F7 layout and stand in for whichever location H2 picks.
+
 Operator-control state for a run lives under `.gan-state/runs/<run-id>/control/` (F1 zone 2):
 
 - `control/halt` — presence sentinel. Its existence, not its content, is the signal.

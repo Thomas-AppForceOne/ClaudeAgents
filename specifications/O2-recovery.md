@@ -93,6 +93,8 @@ The worktree's parent directory moves from `.gan/worktree/` (legacy) to
 `.gan-state/runs/<run-id>/worktree/` (post-E1, per F1 zone 2). Generator confinement
 hooks check `.gan-state/runs/<run-id>/worktree/` instead of `.gan/worktree/`.
 
+> **F7 supersession (run-data relocation).** Per [F7](F7-central-run-data-store-and-worktree-execution.md), the run *data* shown above — `progress.json`, `spec.md`, the `sprint-*` artifacts, `trace/`, and `telemetry/` — no longer lives under `<projectRoot>/.gan-state/runs/<run-id>/`. It lives in the central, repo-keyed store at `<store-root>/<repo-key>/runs/<run-id>/` (default `~/.gan-runs-data`), so it survives removal of the worktree it ran in. Only the `worktree/` subtree stays at `<project>/.gan-state/runs/<run-id>/worktree/` (gan-created, cases 1b/1c) or is the engineer's own worktree (case 1a). Read every `.gan-state/runs/<run-id>/` *data* path below as the central run dir; read `<projectRoot>` as the **main-worktree root** (the parent of `git rev-parse --git-common-dir`), which makes `--recover`/`--list-recoverable`/`--cleanup` and the lock **repo-wide** across all worktrees of the repo; and read `run.lock` as `<store-root>/<repo-key>/run.lock`. O2's full implementation (roadmap slot 16) applies this uniformly.
+
 ### 2. `progress.json` extensions for recovery
 
 The post-E1 `progress.json` schema gains four fields beyond the legacy set:
@@ -352,7 +354,7 @@ A user running `/gan` in two terminals against the same project would, without a
 
 Mechanism:
 
-- On `/gan` invocation (any short-circuit-or-not path), the orchestrator acquires an exclusive lock at `<projectRoot>/.gan-state/run.lock` via `flock(LOCK_EX | LOCK_NB)` before any other zone-2 work.
+- On `/gan` invocation (any short-circuit-or-not path), the orchestrator acquires an exclusive lock at `<store-root>/<repo-key>/run.lock` (per F7; formerly `<projectRoot>/.gan-state/run.lock`) via `flock(LOCK_EX | LOCK_NB)` before any other zone-2 work. Because the key is the repo's main worktree, this serializes runs **repo-wide** — concurrent `/gan` from two worktrees of the same repo contend on the one lock.
 - Lock contents: `{ runId, pid, startedAt, hostname }` written atomically (temp + rename) on acquisition.
 - On failure to acquire (lock held by another process):
   - Read the lock contents.

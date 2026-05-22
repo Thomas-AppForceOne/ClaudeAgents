@@ -18,14 +18,14 @@ O3 is the third spec under the **O** (observability and operations) phase code, 
 
 ### The `telemetry/` subdirectory
 
-Every `/gan` run that does not have `--no-telemetry` set produces two files under `.gan-state/runs/<run-id>/telemetry/`:
+Every `/gan` run that does not have `--no-telemetry` set produces two files under the run's `telemetry/` subdirectory (`<store-root>/<repo-key>/runs/<run-id>/telemetry/` per [F7](F7-central-run-data-store-and-worktree-execution.md); formerly `.gan-state/runs/<run-id>/telemetry/`):
 
 | File | Written when | What it captures |
 |---|---|---|
 | `config.json` | At run start, before the first agent spawns | The resolved-config snapshot from `getResolvedConfig()` — active stacks, overlay values, modules, additionalContext sources. |
 | `outcome.json` | At run termination (graceful, halted, aborted, or errored) | Sprint dispositions, summary stats, terminalReason, aggregate cost rollups derived from the trace. |
 
-The directory and both files live entirely under [F1](F1-filesystem-layout.md)'s zone 2 (durable run state). They are never written to zone 1 (config) or zone 3 (cache). They share lifetime with the rest of the run directory: when the run is archived per O2, the telemetry files travel with it; when zone 2 is cleaned, they go with it.
+The directory and both files live alongside the rest of the run directory in the central run-data store (per [F7](F7-central-run-data-store-and-worktree-execution.md); after F7, F1's project-local zone 2 holds only the worktree and module state, not run data). They are never written to config (`.claude/gan/`) or cache (`.gan-cache/`). They share lifetime with the run directory: when the run is archived per O2, the telemetry files travel with it; when the run directory is cleaned, they go with it. The local-only / no-egress invariant below is unchanged by the relocation — the central store is on the same machine.
 
 ### `config.json` — resolved-config snapshot
 
@@ -184,7 +184,7 @@ Standard per A1 / T1 / E5 / E6 conventions:
 
 ### Automated checks
 
-- A completed `/gan` run produces both `.gan-state/runs/<run-id>/telemetry/config.json` and `.../outcome.json`.
+- A completed `/gan` run produces both `<store-root>/<repo-key>/runs/<run-id>/telemetry/config.json` and `.../outcome.json` (central store, per F7).
 - `config.json` validates against `schemas/telemetry-config-v1.json`.
 - `outcome.json` validates against `schemas/telemetry-outcome-v1.json`.
 - A `/gan --no-telemetry` invocation produces no `telemetry/` subdirectory at any point during or after the run.
