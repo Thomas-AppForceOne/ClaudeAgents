@@ -74,7 +74,7 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 6. ✅ **R6** — tier-aware stack scaffold. Shipped PR #16.
 7. ✅ **F6** — trust-prompt protocol clarification. Shipped PR #18.
 8. ✅ **T1** — structured run trace. Shipped PR #19.
-9. ✅ **H1** — framework-owned confinement hook. Shipped PR #TBD.
+9. ✅ **H1** — framework-owned confinement hook. Shipped PR #21.
 10. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. **Next.** Depends on T1.
 11. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
 12. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
