@@ -48,6 +48,27 @@ export function initGitRepo(dir: string): void {
 }
 
 /**
+ * Add a linked git worktree of `mainRepoDir` at `worktreePath`, on a fresh
+ * branch `branch`. All linked worktrees of a repo share one git-common-dir, so
+ * the F8 repo-key derived from `worktreePath` is IDENTICAL to the one derived
+ * from `mainRepoDir` — i.e. both resolve to the SAME repo-keyed module-state
+ * tree. This is the seam the cross-worktree non-collision regression depends on:
+ * under the pre-F8 per-worktree layout the two worktrees would have kept
+ * separate registries.
+ *
+ * `git worktree add` is invoked as a literal argv array (never a shell string),
+ * matching the framework's subprocess-safety discipline.
+ */
+export function addGitWorktree(mainRepoDir: string, worktreePath: string, branch: string): void {
+  git(mainRepoDir, ['worktree', 'add', '-q', '-b', branch, worktreePath]);
+}
+
+/** Remove the linked git worktree at `worktreePath` (used to assert durability). */
+export function removeGitWorktree(mainRepoDir: string, worktreePath: string): void {
+  git(mainRepoDir, ['worktree', 'remove', '--force', worktreePath]);
+}
+
+/**
  * A scoped temp module-state store: a throwaway root exported via
  * `GAN_MODULE_STATE`. Call {@link ModuleStateStoreScope.restore} in `afterEach`
  * to put the environment back.
