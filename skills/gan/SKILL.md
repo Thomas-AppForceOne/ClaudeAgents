@@ -21,10 +21,10 @@ Parse arguments from the user's message before doing anything else. The five fla
 |---|---|---|
 | `--help` (also `-h`, `help`) | n/a | Print help text and exit 0. Runs BEFORE validation; no worktree, no agents. |
 | `--print-config` | n/a | Inspection short-circuit. Calls validation in non-aborting mode, prints the resolved view (plus any structured errors), exits. No worktree, no agents. |
-| `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. Without `--run-id`, targets the most recent non-terminal run; combine with `--run-id <id>` for a specific run. |
-| `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, prints recoverable runs, exits. |
-| `--cleanup` | n/a | Destructive symmetric to `--recover`: deletes the target run(s) from `.gan-state/runs/`, drops the run worktree and run branch. Default targets the most recent non-terminal run. Combine with `--run-id <id>`, `--all`, `--all --include-terminal`, or `--yes` (bypass prompt). Refuses to delete an active run. See "Cleanup" below. |
-| `--run-id <id>` | n/a | Modifier for `--recover` and `--cleanup`. Names the specific run id to act on; the id format is `<YYYYMMDDTHHMMSS>-<4 hex>` (the directory name under `.gan-state/runs/`). Use `/gan --list-recoverable` to list available ids. |
+| `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. Without `--run-id`, targets the most recent non-terminal run; combine with `--run-id <id>` for a specific run. Recovery is bound to the run's recorded `workspace.worktreePath`: it refuses (non-zero) when invoked from any other worktree. See "Cleanup and recovery" below. |
+| `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, enumerates the repo's runs under the central store (`<store-root>/<repo-key>/runs/`) so every run is visible from any worktree, prints recoverable runs, exits. |
+| `--cleanup` | n/a | Destructive symmetric to `--recover`: always deletes the target run(s) from the central store (`<store-root>/<repo-key>/runs/<run-id>/`), and for a gan-created workspace drops the run worktree and (merge-aware) the run branch. Default targets the most recent non-terminal run. Combine with `--run-id <id>`, `--all`, `--all --include-terminal`, or `--yes` (bypass prompt). Refuses to delete an active run. See "Cleanup and recovery" below. |
+| `--run-id <id>` | n/a | Modifier for `--recover` and `--cleanup`. Names the specific run id to act on; the id format is `<YYYYMMDDTHHMMSS>-<4 hex>` (the directory name under `<store-root>/<repo-key>/runs/`). Use `/gan --list-recoverable` to list available ids. |
 | `--no-project-commands` | false | Skip every command sourced from `project` and `user` tier files for this run; falls back to `builtin` tier defaults (per F4). |
 | `--skip-welcome` | false | Skip the first-run welcome banner. The marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip the banner. Idempotent — passing this flag on an already-welcomed system is a no-op. See "Welcome banner" below. |
 
@@ -117,7 +117,7 @@ CONFIGURATION
   Overlay authoring: .claude/gan/project.md in your repo root
 
 OUTPUT
-  Per-run state lives in .gan-state/runs/<run-id>/
+  Per-run state lives in the central store at <store-root>/<repo-key>/runs/<run-id>/
   Branches are named gan/<run-id> and target develop (or the --base-branch override)
 ```
 
@@ -136,39 +136,47 @@ OUTPUT
 Specifics:
 
 - `--print-config` calls `getResolvedConfig()` and emits an O1-shaped object on stdout. When validation captured errors, both the partial `resolvedConfig` and the `validationErrors` are emitted as top-level keys; exit code reflects validation status.
-- `--recover` and `--list-recoverable` dispatch to the recovery flow (per O2's revision). Recovery refuses to touch `.gan-state/modules/` (zone-2 module-state ownership rule).
-- `--cleanup` dispatches to the cleanup flow described in the "Cleanup" section below. Like recovery, it never touches `.gan-state/modules/`, `.claude/gan/`, or `.gan-cache/`.
+- `--recover` and `--list-recoverable` dispatch to the recovery flow (per O2's revision, re-anchored to the central store by F7). Enumeration reads the repo's runs under `<store-root>/<repo-key>/runs/` (repo-wide, so the same runs are listed from any worktree); `--recover` then binds to the run's recorded `workspace.worktreePath` and refuses from any other worktree. Recovery refuses to touch the module-state store, `.claude/gan/`, or `.gan-cache/` (zone ownership rules).
+- `--cleanup` dispatches to the cleanup flow described in the "Cleanup and recovery" section below. Like recovery, it never touches the module-state store, `.claude/gan/`, or `.gan-cache/`.
 
 No sprint work runs in any of these paths.
 
-## Cleanup
+## Cleanup and recovery
 
-Per `specifications/O2-recovery.md` § "`--cleanup`". The flag is destructive — it deletes the resolved run(s) from disk along with their worktrees and run branches. The orchestrator executes the following steps without spawning agents.
+Per `specifications/O2-recovery.md`, re-anchored to the central store by `specifications/F7-central-run-data-store-and-worktree-execution.md` § 4. Run *data* lives in the central, repo-keyed store at `<store-root>/<repo-key>/runs/<run-id>/` (not under `<projectRoot>/.gan-state/runs/`), and the serialization lock is `<store-root>/<repo-key>/run.lock` (not `<projectRoot>/.gan-state/run.lock`). The `<repo-key>` is derived from the repo's main-worktree root, so all linked worktrees of one repo share the same store directory and lock — recovery enumeration and the lock are repo-wide.
+
+**Recovery worktree-anchor (`--recover`).** Enumeration is repo-wide, but *resuming* is bound to the worktree the run executed in. `--recover` reads `progress.json.workspace.worktreePath`; when the current invocation is not that worktree it refuses (non-zero) with `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists, recovery refuses with the same path plus guidance to recreate it (the run data is safe in the central store; the worktree it must resume into is gone). The run is still *listed* by `--list-recoverable` from any worktree — enumeration is discovery, not resume.
+
+`--cleanup` is destructive. It **always** deletes the target run(s)' central-store directory; for a gan-created workspace it also drops the run worktree and handles the run branch by merge status. A user-owned (case 1a) worktree and branch are never touched. The orchestrator executes these steps without spawning agents.
 
 1. **Run `validateAll()` in non-aborting mode** so a known-broken project can still be cleaned up. Surface captured errors in the cleanup report; do not abort on them.
-2. **Resolve target runs.** Symmetric to `--recover`:
+2. **Resolve target runs.** Enumerate `<store-root>/<repo-key>/runs/` (repo-wide). Symmetric to `--recover`:
    - `--run-id X` → exactly that run.
    - `--all` → every run with `progress.json.terminal: false` (or missing).
    - `--all --include-terminal` → every run regardless of terminal flag.
    - Default (no `--run-id` and no `--all`) → most recent run by mtime with `terminal: false` (same selection as `--recover`).
-   - Empty resolve → print `No non-terminal runs found at <projectRoot>/.gan-state/runs/.` Exit 0.
-3. **Active-run guard.** Read `<projectRoot>/.gan-state/run.lock` if present. If its `runId` is in the resolved target set AND its `pid` is still alive (`kill -0 <pid>` on POSIX), refuse: `Cannot clean up <runId>; it is currently active (pid <pid>). Stop the run first.` Exit 1. Stale locks (dead pid) are ignored.
+   - Empty resolve → print `No non-terminal runs found at <store-root>/<repo-key>/runs/.` Exit 0.
+3. **Active-run guard.** Read `<store-root>/<repo-key>/run.lock` if present. If its `runId` is in the resolved target set AND its `pid` is still alive (`kill -0 <pid>` on POSIX), refuse: `Cannot clean up <runId>; it is currently active (pid <pid>). Stop the run first.` Exit 1. Stale locks (dead pid) are ignored.
 4. **Preview + confirm.** Print a table of the resolved runs (run id, status, sprint, started-at, on-disk size). Sum the count and bytes. Prompt `Delete these runs? [y/N] ` and read one line from stdin. `y` / `Y` proceeds; anything else exits 0 with `Cancelled.` If `--yes` was passed, skip the prompt — still print the table. Non-TTY stdin without `--yes` refuses: `Refusing to delete <N> runs without confirmation. Pass --yes to bypass the prompt.` Exit 1.
-5. **Per-run teardown.** For each confirmed run, in order:
-   - `git worktree remove <projectRoot>/.gan-state/runs/<runId>/worktree --force` (silent if the worktree is not registered).
-   - `git branch -D <runBranch>` (silent if the branch is missing). `<runBranch>` is read from `progress.json.runBranch`; if absent, the orchestrator falls back to the convention `gan/run/<runId>`.
-   - `rm -rf <projectRoot>/.gan-state/runs/<runId>`.
-   - Per-step failures other than the final `rm` are logged as a per-run warning and do not abort the batch. A failed `rm` aborts the batch with exit 1 and the run id of the failure.
+5. **Per-run teardown.** For each confirmed run, classify the workspace by `progress.json.workspace.createdByGan`:
+   - **gan-created (cases 1b/1c, `createdByGan: true`):**
+     - `git worktree remove <workspace.worktreePath> --force` (silent if the worktree is not registered).
+     - Determine the run branch's merge status **before any deletion**: `git merge-base --is-ancestor <branch> <base>` (exit 0 = merged), with `<base>` from the recorded `baseBranch`, else the resolved default branch (`origin/HEAD` → `init.defaultBranch` → `develop`/`main`/`master`), and the branch's `@{upstream}` consulted when set. `<branch>` is `progress.json.workspace.branch` (falling back to `runBranch`).
+       - **Merged** → `git branch -D <branch>` locally, and `git push <remote> --delete <branch>` on the remote when a tracking branch exists.
+       - **Not merged** → warn (naming the branch) and do **not** delete it without confirmation or `--yes`.
+   - **user-owned (case 1a, `createdByGan: false`):** never touch the worktree or branch.
+   - **Always:** `rm -rf <store-root>/<repo-key>/runs/<runId>` (the central-store run directory — the source-of-truth artifact).
+   - Per-step failures other than the final central-store `rm` are logged as a per-run warning and do not abort the batch. A failed `rm` aborts the batch with exit 1 and the run id of the failure.
 6. **Single `git worktree prune`** at the end of the batch (not per-run).
 7. **Report.** Print one summary line: `Cleaned up <N> runs. Freed <X> MB.` If any per-run warnings fired, append `<M> run(s) had teardown warnings; see above.`
 
-**Forbidden writes during cleanup** (same as recovery):
+**Forbidden writes during cleanup and recovery** (zone ownership):
 
-- `.gan-state/modules/` — read-only.
+- The module-state store — read-only / untouched.
 - `.claude/gan/` — read-only.
 - `.gan-cache/` — left untouched (regenerable but not run-state).
 
-The orchestrator's only writes are inside `.gan-state/runs/<runId>/` (deletion) and the git worktree / branch operations. Anything else is a bug.
+The orchestrator's only writes are the central-store run-directory deletion (`<store-root>/<repo-key>/runs/<runId>/`) and the git worktree / branch operations on gan-created workspaces. Anything else is a bug.
 
 ## Regular invocation flow
 
@@ -214,15 +222,7 @@ Every API error (during validation or during a sprint) is reported with the F2 s
 
 ## Confinement
 
-The framework-owned PreToolUse confinement hook remains in place. Spawned agents write only inside the resolved worktree and to their designated artefact paths under the run directory. MCP tool calls are not file-system reads; agents may call the API freely from inside a confined worktree.
-
-Before spawning agents at sprint start, the orchestrator exports three absolute-path environment variables that the confinement hook reads to derive its two allowed zones:
-
-- `GAN_RUN_ID` — the active run's identifier (`<YYYYMMDDTHHMMSS>-<4 hex>`). When unset, the hook is a no-op: confinement is a per-sprint constraint, not global.
-- `GAN_WORKTREE` — the resolved worktree. This is the user's own worktree when the run reuses a task-named worktree, or the run-scoped worktree the framework created otherwise. Writes anywhere under it are in-bounds.
-- `GAN_RUN_DIR` — the central-store run directory that holds the run's artefacts, its `trace/` subtree, and its `telemetry/` subtree. Only the declared artefact subpaths under it are in-bounds.
-
-The hook derives its zones from `GAN_WORKTREE` and `GAN_RUN_DIR` rather than from the project root, because the worktree is not always a fixed sub-path of the project and the run directory lives in the central store outside the project tree. It stays a pure deny-gate: it allows writes inside those two zones and denies everything else (`~/.claude/`, the home directory generally, the module-state directory, the ephemeral cache, and any path outside both zones). `gan hooks status` reports the resolved `GAN_WORKTREE` and `GAN_RUN_DIR` for the active run, or notes that the command is running outside a run.
+The existing PreToolUse hook remains in place. Spawned agents write only inside `.gan-state/runs/<run-id>/worktree` and to their designated artefact paths under `.gan-state/runs/<run-id>/`. MCP tool calls are not file-system reads; agents may call the API freely from inside a confined worktree.
 
 ## Trust integration
 
@@ -252,6 +252,6 @@ The orchestrator/skill runtime wires the following integration points. Each name
 
 ## Spawn discipline (summary)
 
-Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object. The orchestrator also exports `GAN_RUN_ID`, `GAN_WORKTREE`, and `GAN_RUN_DIR` into the spawn environment (see "Confinement"), so the confinement hook can derive its allowed zones from the resolved worktree and run directory.
+Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object.
 
 The orchestrator parses the artefact each agent writes under `.gan-state/runs/<run-id>/` and decides whether to spawn the next agent.

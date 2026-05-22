@@ -189,7 +189,11 @@ Failure modes:
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
 
 1. Calls `validateAll()` in non-aborting mode (per E1's recovery contract).
-2. Enumerates `<projectRoot>/.gan-state/runs/*/progress.json`.
+2. Enumerates `<store-root>/<repo-key>/runs/*/progress.json` (per F7 — formerly
+   `<projectRoot>/.gan-state/runs/`). Because the `<repo-key>` is derived from the repo's
+   main-worktree root, this enumeration is **repo-wide**: every run of the repo is listed
+   from any of its worktrees. Enumeration is discovery, not resume — it never binds to a
+   worktree.
 3. By default: filters to `terminal: false` (or missing). With `--include-terminal`,
    also lists terminal runs.
 4. Sorts descending by directory mtime (the most recently active run first).
@@ -204,18 +208,18 @@ New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
 
 6. Exit 0. No state mutation, no spawn.
 
-If no runs found: `No runs found at <projectRoot>/.gan-state/runs/.` Exit 0.
+If no runs found: `No runs found at <store-root>/<repo-key>/runs/.` Exit 0.
 
 ### 5. `--recover [--run-id X]`
 
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Per E1's recovery contract,
 runs `validateAll()` in non-aborting mode first.
 
-1. **Resolve target run.**
-   - If `--run-id X`: look up `<projectRoot>/.gan-state/runs/X/progress.json`. Missing
-     → `Run <X> not found at <projectRoot>/.gan-state/runs/X/.` Exit 1.
+1. **Resolve target run.** (Enumerate `<store-root>/<repo-key>/runs/` per F7 — repo-wide.)
+   - If `--run-id X`: look up `<store-root>/<repo-key>/runs/X/progress.json`. Missing
+     → `Run <X> not found at <store-root>/<repo-key>/runs/X/.` Exit 1.
    - Otherwise: enumerate runs, filter `terminal: false`, sort by mtime desc, pick the
-     first. None → `No recoverable runs found at <projectRoot>/.gan-state/runs/.`
+     first. None → `No recoverable runs found at <store-root>/<repo-key>/runs/.`
      Exit 1.
 
 2. **Preflight.**
@@ -223,7 +227,17 @@ runs `validateAll()` in non-aborting mode first.
    - **Project-root check**: if `progress.json.projectRoot` exists and
      differs from the orchestrator's resolved current project root, refuse:
      `Run <runId> was created at <oldRoot>; cannot recover from <currentRoot>. Cross-
-     project recovery is not supported.` Exit 1.
+     project recovery is not supported.` Per F7, `projectRoot` is the **main-worktree
+     root** (the parent of `git rev-parse --git-common-dir`), so the comparison is
+     repo-wide across worktrees, not toplevel-specific. Exit 1.
+   - **Worktree-anchor check (per F7)**: a run is *resumable only in the worktree it
+     executed in*. Read `progress.json.workspace.worktreePath`; if the current invocation
+     is not that worktree, refuse: `Run <runId> was executed in worktree <path> (branch
+     <branch>); recover it from there.` If the recorded worktree no longer exists, refuse
+     with the same path plus guidance to recreate it. The comparison is canonical (F1
+     determinism pins), so a trailing-slash or case-only difference is not a spurious
+     refusal. The same run is still *listed* by `--list-recoverable` from any worktree.
+     Exit 1.
    - **Run-branch check**: `git rev-parse --verify <runBranch>` — if missing,
      `Run branch <runBranch> is not present in this repository. The run state survives
      at <path> but cannot be resumed.` Exit 1.
@@ -241,9 +255,11 @@ runs `validateAll()` in non-aborting mode first.
      hash change (no diff).
    - Resume continues regardless.
 
-4. **Re-attach the worktree.**
-   - `git worktree add <projectRoot>/.gan-state/runs/<runId>/worktree <runBranch>` (no
-     `-b` — the branch exists).
+4. **Re-attach the worktree.** The worktree path is `progress.json.workspace.worktreePath`
+   (the run's recorded, recovery-anchored worktree — under `<project>/.gan-state/runs/<id>/worktree/`
+   for a gan-created workspace, or the engineer's own worktree in case 1a). The run *data*
+   itself lives in the central store, not the worktree.
+   - `git worktree add <workspace.worktreePath> <runBranch>` (no `-b` — the branch exists).
    - If the worktree is already registered (`git worktree list` shows it), skip the add.
    - If `git worktree add` fails because the path is registered but pointing elsewhere,
      `git worktree prune` then retry once.
@@ -283,14 +299,14 @@ New top-level flag. Parsed at SKILL.md flag-table dispatch. Symmetric to `--reco
 
 Per E1's recovery contract, runs `validateAll()` in non-aborting mode first. Does **not** acquire the run lock (it operates on non-active runs; an attempt to clean up an active run is refused per the active-run check below).
 
-1. **Resolve target run(s).** Mirrors `--recover`:
-   - `--run-id X`: target a single run by id. Missing → `Run <X> not found at <projectRoot>/.gan-state/runs/X/.` Exit 1.
+1. **Resolve target run(s).** Mirrors `--recover`; enumeration is `<store-root>/<repo-key>/runs/` (per F7 — repo-wide).
+   - `--run-id X`: target a single run by id. Missing → `Run <X> not found at <store-root>/<repo-key>/runs/X/.` Exit 1.
    - `--all`: target every non-terminal run.
    - `--all --include-terminal`: target every run regardless of terminal flag.
-   - Default (no `--run-id` and no `--all`): the most recent non-terminal run (same selection as `--recover`). None found → `No non-terminal runs found at <projectRoot>/.gan-state/runs/.` Exit 0 (not an error — nothing to do).
+   - Default (no `--run-id` and no `--all`): the most recent non-terminal run (same selection as `--recover`). None found → `No non-terminal runs found at <store-root>/<repo-key>/runs/.` Exit 0 (not an error — nothing to do).
 
 2. **Active-run guard.** For each resolved target:
-   - If `<projectRoot>/.gan-state/run.lock` exists, parse it for `runId` + `pid`.
+   - If `<store-root>/<repo-key>/run.lock` exists (per F7 — formerly `<projectRoot>/.gan-state/run.lock`), parse it for `runId` + `pid`.
    - If `runId` matches a target AND `pid` is still alive (`kill -0 <pid>`): refuse — `Cannot clean up <runId>; it is currently active (pid <pid>). Stop the run first.` Exit 1.
    - Stale locks (dead pid) are ignored; the target run is included.
 
@@ -307,12 +323,16 @@ Per E1's recovery contract, runs `validateAll()` in non-aborting mode first. Doe
    - `--yes` bypasses the prompt (still prints the table for the audit trail).
    - On non-TTY stdin without `--yes`: refuse — `Refusing to delete <N> runs without confirmation. Pass --yes to bypass the prompt.` Exit 1.
 
-4. **Per-run cleanup.** For each confirmed target:
-   - `git worktree remove <projectRoot>/.gan-state/runs/<runId>/worktree --force` (silent if not registered).
+4. **Per-run cleanup.** For each confirmed target. Per F7, cleanup is **merge-aware** and classifies the workspace by `progress.json.workspace.createdByGan`:
+   - **gan-created workspace (cases 1b/1c, `createdByGan: true`):**
+     - `git worktree remove <workspace.worktreePath> --force` (silent if not registered).
+     - Determine the run branch's merge status **before any deletion**: `git merge-base --is-ancestor <branch> <base>` (exit 0 = merged) and/or `git branch --merged <base>` membership, with `<base>` from the recorded `baseBranch`, else the resolved default branch (`origin/HEAD` → `init.defaultBranch` → `develop`/`main`/`master`), and the branch's `@{upstream}` consulted when set.
+       - **Merged** → `git branch -D <branch>` locally, and `git push <remote> --delete <branch>` on the remote when a tracking branch exists.
+       - **Not merged** → warn (naming the branch) and do **not** delete it without confirmation or `--yes`.
+   - **user-owned workspace (case 1a, `createdByGan: false`):** never touch the worktree or branch.
+   - **Always** (every confirmed target, independent of workspace type or merge status): `rm -rf <store-root>/<repo-key>/runs/<runId>` (the central-store run directory — the source-of-truth artefact; formerly `<projectRoot>/.gan-state/runs/<runId>`).
    - `git worktree prune` (runs once at the end of the batch, not per-run).
-   - `git branch -D <runBranch>` (silent if branch missing).
-   - `rm -rf <projectRoot>/.gan-state/runs/<runId>`.
-   - On any step failing: log a per-run warning naming the step and the run, continue with the next run. The rm is the only step whose failure escalates to exit 1 for the whole batch (the directory is the source-of-truth artefact).
+   - On any step failing: log a per-run warning naming the step and the run, continue with the next run. The central-store `rm` is the only step whose failure escalates to exit 1 for the whole batch.
 
 5. **Final report.**
    ```

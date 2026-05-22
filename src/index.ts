@@ -100,6 +100,57 @@ export { buildWorkspaceRecord, recordWorkspace } from './config-server/storage/r
 
 export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
 
+// ---- F7 slice 4: recovery + serialization (re-anchored to central store) --
+
+export {
+  acquireRunLock,
+  releaseRunLock,
+  readRunLock,
+  defaultIsAlive,
+} from './config-server/storage/run-lock.js';
+
+export type {
+  RunLockContents,
+  RunLockHandle,
+  AcquireRunLockOptions,
+  IsAlive,
+} from './config-server/storage/run-lock.js';
+
+export { checkRecoveryAnchor } from './config-server/storage/recovery-anchor.js';
+
+export type {
+  WorkspaceAnchor,
+  RecoveryAnchorResult,
+  CheckRecoveryAnchorOptions,
+} from './config-server/storage/recovery-anchor.js';
+
+export { enumerateRuns, findRun } from './config-server/storage/run-enumerator.js';
+
+export type {
+  EnumeratedRun,
+  EnumeratedWorkspace,
+} from './config-server/storage/run-enumerator.js';
+
+export {
+  planRunCleanup,
+  executeRunCleanup,
+  resolveMergeBase,
+  isBranchMerged,
+  checkActiveRunGuard,
+  displayWorktree,
+  defaultRmDir,
+} from './config-server/storage/cleanup-planner.js';
+
+export type {
+  BranchPlan,
+  RunCleanupPlan,
+  RunCleanupOutcome,
+  CleanupOptions,
+  ExecuteCleanupOptions,
+  ActiveRunGuardResult,
+  RmDir,
+} from './config-server/storage/cleanup-planner.js';
+
 // ---- T1 run-trace emission library --------------------------------------
 
 export {
