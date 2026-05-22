@@ -1,11 +1,11 @@
 /**
- * H1 sprint 2 — install integration tests for the framework-owned
+ * H1 sprints 2 + 3 — install integration tests for the framework-owned
  * PreToolUse confinement hook.
  *
  * Every install/uninstall invocation here runs against a sandboxed `$HOME`
  * (via makeTmpHome) so the developer's real `~/.claude/` is never touched.
  *
- * Covers:
+ * Covers (sprint 2):
  *   AC-A1 — hook rendered from the template, executable, version-correct,
  *           carries F1 zone references; hook body is byte-identical to the
  *           template's non-placeholder lines (rendered against the running
@@ -17,9 +17,36 @@
  *           duplicate the registration (idempotent).
  *   AC-A4 — a post-hook-write failure triggers rollback: the partial hook is
  *           removed and the settings.json registration is gone.
+ *
+ * Covers (sprint 3):
+ *   AC-A5 — `--uninstall` removes the user-tier hook file AND surgically
+ *           strips the framework's PreToolUse registration; unrelated
+ *           PreToolUse entries + other settings survive; idempotent.
+ *   AC-A6 (framework-contribution split) — install with NO project-tier hook
+ *           writes the user-tier hook + registration; the override warning
+ *           does NOT fire.
+ *   AC-A7 (framework-contribution split) — install with a pre-seeded
+ *           project-tier hook still writes only the user-tier hook +
+ *           registration, never touches the project-tier file, and fires the
+ *           override warning.
+ *   AC-M2 — the emitted override warning matches the canonical spec text and
+ *           carries no bare runtime/package-manager token outside backticks.
+ *
+ * NOTE on the non-blocking manual criterion
+ * (manual_claude_code_resolver_precedence_semantics): the precedence rule
+ * itself — Claude Code's hook resolver running the project-tier hook over the
+ * user-tier hook when both are registered — is DOCUMENTED Claude Code
+ * behavior, not something this repo re-implements. H1 § "Project-tier override
+ * pattern" cites it; install.sh only writes the user-tier hook and warns about
+ * a project-tier override, never re-implementing or exercising the resolver.
+ * That half of AC-A6/AC-A7 is deliberately reviewer-confirmed, not automated
+ * here (the real `~/.claude/` cannot be mutated and the resolver is not under
+ * test). The framework's testable contribution is fully covered by the AC-A6
+ * and AC-A7 cases below.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -239,6 +266,121 @@ describe('install.sh — H1 confinement hook write + registration', () => {
     expect(readdirSync(claudeDir).filter((e) => e.includes('settings.json.tmp.'))).toEqual([]);
   });
 
+  // -------------------------------------------------------------------------
+  // Sprint 3: project-tier override warning (AC-A6 / AC-A7 / AC-M2).
+  // -------------------------------------------------------------------------
+
+  /** Path to the project-tier hook in a given repo (the cwd's `.claude/...`). */
+  function projectHookPath(repo: string): string {
+    return path.join(repo, '.claude', 'hooks', 'gan-confine.sh');
+  }
+
+  /**
+   * The canonical override-warning sentence H1 § "Project-tier override
+   * pattern" fixes. We assert semantic-exact presence of this line in install
+   * output (the leading `log_info` prefix is empty, so the printed line equals
+   * this string verbatim).
+   */
+  const CANONICAL_WARNING =
+    'A project-tier confinement hook is present at `.claude/hooks/gan-confine.sh`. ' +
+    "The framework's user-tier hook at `~/.claude/hooks/gan-confine.sh` will not be used " +
+    "in this project. Verify the project hook still reflects the framework's current " +
+    'zone layout (see F1).';
+
+  // A short, stable substring of the canonical warning used as the
+  // fires/does-not-fire probe (avoids brittle exact-whitespace coupling while
+  // still being unique to the override warning).
+  const WARNING_PROBE = 'A project-tier confinement hook is present at';
+
+  it('AC-A6: with NO project-tier hook, install writes the user-tier hook + registration and the override warning does NOT fire', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+    // Sanity: the repo (cwd) has no project-tier hook.
+    expect(existsSync(projectHookPath(cwd))).toBe(false);
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    // User-tier hook written + executable.
+    const hp = hookPath(tmp.home);
+    expect(existsSync(hp)).toBe(true);
+    expect(statSync(hp).mode & 0o100).toBe(0o100);
+
+    // Registered in settings.json PreToolUse with the absolute user-tier path.
+    expect(preToolUseCommands(readSettings(tmp.home))).toContain(hp);
+
+    // Override warning absent from output (stdout + stderr).
+    expect(result.stdout + result.stderr).not.toContain(WARNING_PROBE);
+  });
+
+  it('AC-A7: with a pre-seeded project-tier hook, install still writes only the user-tier hook + registration, never touches the project file, and the override warning FIRES', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+
+    // Pre-seed a project-tier hook in the cwd repo with sentinel content.
+    const php = projectHookPath(cwd);
+    mkdirSync(path.dirname(php), { recursive: true });
+    const sentinel =
+      '#!/bin/bash\n# PROJECT-TIER OVERRIDE — sentinel content, do not touch.\nexit 0\n';
+    writeFileSync(php, sentinel);
+    chmodSync(php, 0o755);
+    const sentinelMtimeNs = statSync(php).mtimeMs;
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    // (1) User-tier hook + registration written exactly as on a clean install.
+    const hp = hookPath(tmp.home);
+    expect(existsSync(hp)).toBe(true);
+    expect(statSync(hp).mode & 0o100).toBe(0o100);
+    expect(preToolUseCommands(readSettings(tmp.home))).toContain(hp);
+
+    // (2) Project-tier file is byte-identical and untouched (content + mtime).
+    expect(readFileSync(php, 'utf8')).toBe(sentinel);
+    expect(statSync(php).mtimeMs).toBe(sentinelMtimeNs);
+
+    // (3) The override warning fired (probe present in install output).
+    expect(result.stdout).toContain(WARNING_PROBE);
+  });
+
+  it('AC-M2: the emitted override warning matches the canonical spec text, references the framework / user-tier hook, recommends `gan hooks status` in backticks, and carries no bare runtime token', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+
+    const php = projectHookPath(cwd);
+    mkdirSync(path.dirname(php), { recursive: true });
+    writeFileSync(php, '#!/bin/bash\nexit 0\n');
+
+    const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const out = result.stdout;
+
+    // Canonical text present verbatim (the four required elements + F1 ref).
+    expect(out).toContain(CANONICAL_WARNING);
+
+    // Required elements, checked individually so a partial drift is named.
+    expect(out).toContain('`.claude/hooks/gan-confine.sh`');
+    expect(out).toContain('`~/.claude/hooks/gan-confine.sh`');
+    expect(out).toContain('will not be used in this project');
+    expect(out).toContain("reflects the framework's current zone layout");
+    expect(out).toContain('(see F1)');
+    expect(out).toContain('the framework');
+    expect(out).toContain('user-tier hook');
+
+    // `gan hooks status` recommendation present and backtick-wrapped.
+    expect(out).toContain('`gan hooks status`');
+
+    // F4 prose discipline: isolate the emitted warning lines and assert no
+    // bare runtime/package-manager token appears OUTSIDE backticks. We strip
+    // every backtick-delimited span first, then scan the remainder.
+    const warningLines = out
+      .split('\n')
+      .filter((l) => l.includes('confinement hook') || l.includes('gan hooks status'));
+    expect(warningLines.length).toBeGreaterThan(0);
+    const outsideBackticks = warningLines.join('\n').replace(/`[^`]*`/g, '');
+    for (const token of ['npm', 'node', 'MCP server', 'npm package', 'npm run']) {
+      expect(outsideBackticks).not.toContain(token);
+    }
+  });
+
   it('AC-A4: a post-hook-write failure rolls back the partial hook AND the settings registration (newly created settings.json)', async () => {
     const { tmp, pathOverride, cwd } = setup();
 
@@ -315,5 +457,165 @@ describe('install.sh — H1 confinement hook write + registration', () => {
         (e) => e.startsWith('settings.json.tmp.') || e.startsWith('settings.json.preedit-'),
       ),
     ).toEqual([]);
+  });
+});
+
+describe('install.sh --uninstall — H1 confinement hook removal + PreToolUse strip (AC-A5)', () => {
+  it('removes the user-tier hook file and strips ONLY the framework PreToolUse entry; unrelated entries + keys survive', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+
+    // Clean install first so the user-tier hook + registration exist.
+    const installed = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(installed.exitCode).toBe(0);
+    const hp = hookPath(tmp.home);
+    expect(existsSync(hp)).toBe(true);
+    expect(preToolUseCommands(readSettings(tmp.home))).toContain(hp);
+
+    // Pre-seed an UNRELATED PreToolUse entry + an unrelated top-level key into
+    // settings.json (a re-merge that keeps the framework entry intact).
+    const settings = readSettings(tmp.home);
+    const pre = settings.hooks?.PreToolUse ?? [];
+    settings.hooks = {
+      PreToolUse: [
+        ...pre,
+        { matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/user-audit.sh' }] },
+      ],
+    };
+    (settings as Record<string, unknown>).keepMe = 'survivor';
+    writeFileSync(settingsPath(tmp.home), JSON.stringify(settings, null, 2) + '\n');
+
+    // Uninstall.
+    const result = await runInstall(['--uninstall'], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    // User-tier hook file gone.
+    expect(existsSync(hp)).toBe(false);
+
+    // Framework PreToolUse entry stripped; the unrelated entry + key survive.
+    const after = readSettings(tmp.home);
+    const cmds = preToolUseCommands(after);
+    expect(cmds).not.toContain(hp);
+    expect(cmds).toContain('/usr/local/bin/user-audit.sh');
+    expect((after as Record<string, unknown>).keepMe).toBe('survivor');
+
+    // Output is valid sorted JSON with a trailing newline.
+    const raw = readFileSync(settingsPath(tmp.home), 'utf8');
+    expect(raw.endsWith('\n')).toBe(true);
+    const reparsed = JSON.parse(raw) as SettingsShape;
+    expect(JSON.stringify(reparsed)).toBeTruthy();
+    // No straggler temp siblings.
+    const claudeDir = path.dirname(settingsPath(tmp.home));
+    const { readdirSync } = await import('node:fs');
+    expect(readdirSync(claudeDir).filter((e) => e.includes('settings.json.tmp.'))).toEqual([]);
+  });
+
+  it('does NOT touch a project-tier hook in the cwd, and is idempotent (second uninstall exits 0, removes nothing further)', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+
+    // Pre-seed a project-tier hook in the cwd repo.
+    const php = path.join(cwd, '.claude', 'hooks', 'gan-confine.sh');
+    mkdirSync(path.dirname(php), { recursive: true });
+    const sentinel = '#!/bin/bash\n# PROJECT OVERRIDE sentinel.\nexit 0\n';
+    writeFileSync(php, sentinel);
+
+    const installed = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(installed.exitCode).toBe(0);
+    expect(existsSync(hookPath(tmp.home))).toBe(true);
+
+    // First uninstall.
+    const first = await runInstall(['--uninstall'], { home: tmp.home, pathOverride, cwd });
+    expect(first.exitCode).toBe(0);
+    expect(existsSync(hookPath(tmp.home))).toBe(false);
+    // Project-tier hook untouched.
+    expect(readFileSync(php, 'utf8')).toBe(sentinel);
+
+    // Second uninstall against the now-clean HOME exits 0 and is a no-op.
+    const second = await runInstall(['--uninstall'], { home: tmp.home, pathOverride, cwd });
+    expect(second.exitCode).toBe(0);
+    expect(existsSync(hookPath(tmp.home))).toBe(false);
+    // Project-tier hook STILL untouched after the idempotent re-run.
+    expect(readFileSync(php, 'utf8')).toBe(sentinel);
+  });
+
+  it('preserves unrelated settings end-to-end: an adversarial near-miss command + user permissions.allow survive the strip', async () => {
+    const { tmp, pathOverride, cwd } = setup();
+
+    const installed = await runInstall([], { home: tmp.home, pathOverride, cwd });
+    expect(installed.exitCode).toBe(0);
+    const hp = hookPath(tmp.home);
+
+    // Craft settings.json that, alongside the real framework entry, carries an
+    // adversarial near-miss: a PreToolUse entry whose command merely CONTAINS
+    // the hook path as a substring (with a prefix), plus a user permissions
+    // entry. A correct structural (command === hookAbs) match must NOT delete
+    // these.
+    const settings = readSettings(tmp.home);
+    const pre = settings.hooks?.PreToolUse ?? [];
+    settings.hooks = {
+      PreToolUse: [
+        ...pre,
+        { matcher: 'Read', hooks: [{ type: 'command', command: `/opt/wrap ${hp}` }] },
+        { matcher: 'Write', command: `${hp}.bak` },
+      ],
+    };
+    settings.permissions = { allow: ['Read(//etc/hosts)', 'Bash(echo:*)'] };
+    writeFileSync(settingsPath(tmp.home), JSON.stringify(settings, null, 2) + '\n');
+
+    const result = await runInstall(['--uninstall'], { home: tmp.home, pathOverride, cwd });
+    expect(result.exitCode).toBe(0);
+
+    const after = readSettings(tmp.home);
+    const cmds = preToolUseCommands(after);
+    // The exact framework entry is gone.
+    expect(cmds).not.toContain(hp);
+    // The near-miss commands (substring / suffixed) survive — only the exact
+    // path match is stripped, never substring matches.
+    expect(cmds).toContain(`/opt/wrap ${hp}`);
+    expect(cmds).toContain(`${hp}.bak`);
+    // User permissions.allow entries that are NOT framework-catalog tools
+    // survive the permissions strip too.
+    expect(after.permissions?.allow).toContain('Read(//etc/hosts)');
+  });
+
+  it('survives an adversarial repo path containing shell metacharacters without command injection (detection is read-only + quoted)', async () => {
+    // A repo directory whose name carries `$()`, `;`, backticks and a space.
+    // If the detection helper interpolated the path into a command, this would
+    // execute the injected fragment; the double-quoted `[ -f ]` test treats it
+    // purely as data. We assert install completes cleanly and the project-tier
+    // warning still fires from inside this hostile cwd.
+    const tmp = makeTmpHome({ withRepo: false });
+    cleanups.push(tmp);
+    const hostNode = process.execPath;
+    writeStubBin(
+      tmp.bin,
+      'node',
+      [
+        `if [ "$1" = "--version" ]; then printf '%s\\n' "v20.10.0"; exit 0; fi`,
+        `exec ${JSON.stringify(hostNode)} "$@"`,
+      ].join('\n'),
+    );
+    writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
+    writeStubBin(tmp.bin, 'claude', 'exit 0');
+    writeFakeNpm(tmp.bin, { exitCode: 0, invocationLog: npmInvocationLog(tmp.root) });
+    writeFakeConfigServer(tmp.bin, { version: packageVersion() });
+
+    // Build the hostile git repo under tmp.root.
+    const hostileRepo = path.join(tmp.root, 'evil $(touch PWNED);` ` repo');
+    mkdirSync(hostileRepo, { recursive: true });
+    const { spawnSync } = await import('node:child_process');
+    expect(spawnSync('git', ['init', '--quiet', hostileRepo], { stdio: 'ignore' }).status).toBe(0);
+    const php = path.join(hostileRepo, '.claude', 'hooks', 'gan-confine.sh');
+    mkdirSync(path.dirname(php), { recursive: true });
+    writeFileSync(php, '#!/bin/bash\nexit 0\n');
+
+    const result = await runInstall([], { home: tmp.home, pathOverride: tmp.bin, cwd: hostileRepo });
+    expect(result.exitCode).toBe(0);
+    // No injected side-effect file was created anywhere we can observe.
+    expect(existsSync(path.join(hostileRepo, 'PWNED'))).toBe(false);
+    expect(existsSync(path.join(tmp.root, 'PWNED'))).toBe(false);
+    // The warning still fires for the hostile-named repo's project hook.
+    expect(result.stdout).toContain('A project-tier confinement hook is present at');
+    // And the project-tier file is byte-untouched.
+    expect(readFileSync(php, 'utf8')).toBe('#!/bin/bash\nexit 0\n');
   });
 });
