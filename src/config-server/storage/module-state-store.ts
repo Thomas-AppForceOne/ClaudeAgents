@@ -47,16 +47,68 @@ import {
   REPO_KEY_HASH_TAIL,
   computeRepoKey,
   resolveMainWorktreeRoot,
-  resolveRepoKey,
 } from './run-store.js';
 import { resolveStoreRootByPrecedence, type StoreEnv } from './store-common.js';
 
 // Re-export the F7 repo-key derivation so module-state callers depend on this
 // store as their single entry point without reaching back into run-store for
 // the key. These are the SAME functions F7 ships — re-exported, not copied.
+// (`resolveModuleRepoKey` below is a thin memoising wrapper over F7's
+// `resolveRepoKey`, not a re-implementation.)
 export { REPO_KEY_HASH_LENGTH, REPO_KEY_HASH_TAIL, computeRepoKey, resolveMainWorktreeRoot };
-export { resolveRepoKey as resolveModuleRepoKey };
 export type { StoreEnv } from './store-common.js';
+
+/**
+ * Process-lifetime memo of the git-derived main-worktree-root, keyed on the
+ * `fromDir` it was derived from. The main-worktree root (and therefore the
+ * `<repo-key>`) is invariant for a directory over a process's lifetime, so the
+ * single `git` subprocess behind it (in F7's `resolveMainWorktreeRoot`) runs
+ * once per `fromDir` and its result is reused by every later module-state path
+ * resolution. Without the memo, a long-lived config server and a multi-operation
+ * consumer like the Docker `PortRegistry` (which loads then persists, each
+ * resolving the path) would re-spawn git on every module-state read/write.
+ *
+ * Consulted/populated ONLY for the default (real) git seam — see
+ * {@link moduleMainWorktreeRoot}. The cache holds only the git-derived part;
+ * store-root/`GAN_MODULE_STATE` resolution stays per-call so an env override is
+ * always honoured.
+ */
+const mainWorktreeRootCache = new Map<string, string>();
+
+/** For tests only: clears the main-worktree-root memo. */
+export function _resetModuleRepoKeyCacheForTests(): void {
+  mainWorktreeRootCache.clear();
+}
+
+/**
+ * Resolve the repo's main-worktree root for `fromDir`, memoising the git
+ * derivation. When a custom `exec` seam is injected (tests), the cache is
+ * bypassed entirely so each injected stub is honoured and there is no
+ * cross-test leakage — mirroring the env-override bypass in `package-root.ts`.
+ */
+function moduleMainWorktreeRoot(fromDir: string, exec?: typeof execFileSync): string {
+  if (exec !== undefined) return resolveMainWorktreeRoot(fromDir, exec);
+  let mainRoot = mainWorktreeRootCache.get(fromDir);
+  if (mainRoot === undefined) {
+    mainRoot = resolveMainWorktreeRoot(fromDir);
+    mainWorktreeRootCache.set(fromDir, mainRoot);
+  }
+  return mainRoot;
+}
+
+/**
+ * The F7 repo-key (`<basename>-<hash12>`) for `fromDir`, with the git
+ * derivation memoised (see {@link moduleMainWorktreeRoot}). Behaviourally
+ * identical to F7's `resolveRepoKey` — `computeRepoKey(mainWorktreeRoot)` — but
+ * caches the one subprocess call. `computeRepoKey` itself (the cheap SHA-256
+ * keying) is reused from F7, never re-implemented.
+ */
+export function resolveModuleRepoKey(
+  fromDir: string = process.cwd(),
+  exec?: typeof execFileSync,
+): string {
+  return computeRepoKey(moduleMainWorktreeRoot(fromDir, exec));
+}
 
 /**
  * Default module-state store-root directory name under the user's home
@@ -148,7 +200,7 @@ export function resolveModuleStatePath(
   opts: ModuleStateStoreOptions = {},
 ): string {
   const storeRoot = resolveModuleStateRoot(opts.deps);
-  const repoKey = resolveRepoKey(fromDir, opts.exec);
+  const repoKey = resolveModuleRepoKey(fromDir, opts.exec);
   return path.join(resolveModuleDir(storeRoot, repoKey, name), `${key}.json`);
 }
 
@@ -177,7 +229,7 @@ export function resolveModuleStateStore(opts: {
   exec?: typeof execFileSync;
 }): ResolvedModuleStateStore {
   const storeRoot = resolveModuleStateRoot(opts.deps);
-  const mainWorktreeRoot = resolveMainWorktreeRoot(opts.fromDir, opts.exec);
+  const mainWorktreeRoot = moduleMainWorktreeRoot(opts.fromDir ?? process.cwd(), opts.exec);
   const repoKey = computeRepoKey(mainWorktreeRoot);
   return {
     storeRoot,

@@ -51,12 +51,14 @@ Each project has up to three on-disk areas, each with a single owner and a clear
 | Zone | Path | Role | Hand-edited? | Committed? |
 |---|---|---|---|---|
 | 1 | `.claude/gan/` | Project configuration: project overlay, project-tier stack files. | Yes (or via the `gan` CLI). | Yes. |
-| 2 | `.gan-state/` | Project-local run scratch: a gan-created run worktree (cases 1b/1c) and module state. Durable run *data* lives in the central store (below), not here. | No. | No (gitignored). |
+| 2 | `.gan-state/` | Project-local run scratch: a gan-created run worktree (cases 1b/1c). Durable run *data* and durable *module state* live in separate central stores (below), not here. | No. | No (gitignored). |
 | 3 | `.gan-cache/` | Ephemeral cache: regenerable indices, lookup tables. | No. | No (gitignored). |
 
 Zone 1 holds intent (what you want), zone 2 holds project-local run scratch (the gan-created worktree), zone 3 holds caches (what can always be rebuilt). Configuration always flows through the API — agents never read files in any zone directly.
 
 **Run data lives outside the project.** Durable per-run data — progress, sprint contracts, evaluator feedback, the run trace, telemetry — is written to a central, repo-keyed store outside any worktree (default `~/.gan-runs-data/<repo-key>/runs/<run-id>/`, set at install time with `./install.sh --runs-dir=<path>`). This is what makes run data survive `git worktree remove` and be discoverable from every linked worktree of the repo. Override the store root for a single run with `GAN_RUNS_DATA=<path>`.
+
+**Module state lives outside the project too.** Durable cross-run *module* state — notably the Docker module's port registry — is written to a **separate** central, repo-keyed store (default `~/.gan-module-state/<repo-key>/<module>/`, set at install time with `./install.sh --module-state-dir=<path>`; override per-run with `GAN_MODULE_STATE=<path>`). Keeping it repo-wide rather than per-worktree is what lets the port registry coordinate host-port allocations across every worktree of a repo without collisions, and what makes it survive `git worktree remove`. It is config-server-managed — only the framework's server process writes it, so, unlike the run-data store, it needs no Claude Code permission grant.
 
 ### Three-tier overlay cascade
 
@@ -100,12 +102,13 @@ cd ClaudeAgents
 ./install.sh
 ```
 
-The installer symlinks the agent prompts into `~/.claude/agents/`, links the skill into `~/.claude/skills/gan/`, runs `npm install -g .` from the repo root, registers the configuration MCP server with Claude Code, and configures the central run-data store (recording its path and granting Claude Code persistent access to it). Re-running `./install.sh` is a no-op when the install is up to date.
+The installer symlinks the agent prompts into `~/.claude/agents/`, links the skill into `~/.claude/skills/gan/`, runs `npm install -g .` from the repo root, registers the configuration MCP server with Claude Code, configures the central run-data store (recording its path and granting Claude Code persistent access to it), and records the central module-state store location (a marker only — no permission grant, since the config server manages that store itself). Re-running `./install.sh` is a no-op when the install is up to date.
 
-To set the central run-data store location, or to remove an existing install:
+To set the central store locations, or to remove an existing install:
 
 ```bash
-./install.sh --runs-dir=<path>   # central run-data store root (default ~/.gan-runs-data)
+./install.sh --runs-dir=<path>           # central run-data store root (default ~/.gan-runs-data)
+./install.sh --module-state-dir=<path>   # central module-state store root (default ~/.gan-module-state)
 ./install.sh --uninstall
 ```
 
@@ -216,7 +219,7 @@ The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.
 
 The inspection, recovery, and cleanup short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected or cleaned up.
 
-`--list-recoverable` enumerates the repo's runs from the central store, so they are visible from any worktree; but a run is **resumable only from the worktree it ran in** (its working tree and branch live there), and `--recover` refuses from anywhere else, naming the right worktree. `--cleanup` prints a preview table (run id, status, sprint, start time, size) and prompts `[y/N]` before deleting; pass `--yes` to skip the prompt. It removes the run's central-store directory and — for a gan-created worktree — the run worktree and, merge-aware, its task branch (a merged branch is deleted; an unmerged one is kept unless you confirm). A user-owned worktree (case 1a) is never touched. Active runs (with a live `run.lock`) are refused. Cleanup never touches `.gan-state/modules/`, `.claude/gan/`, or `.gan-cache/`.
+`--list-recoverable` enumerates the repo's runs from the central store, so they are visible from any worktree; but a run is **resumable only from the worktree it ran in** (its working tree and branch live there), and `--recover` refuses from anywhere else, naming the right worktree. `--cleanup` prints a preview table (run id, status, sprint, start time, size) and prompts `[y/N]` before deleting; pass `--yes` to skip the prompt. It removes the run's central-store directory and — for a gan-created worktree — the run worktree and, merge-aware, its task branch (a merged branch is deleted; an unmerged one is kept unless you confirm). A user-owned worktree (case 1a) is never touched. Active runs (with a live `run.lock`) are refused. Cleanup never touches the central module-state store (`~/.gan-module-state/<repo-key>/`), `.claude/gan/`, or `.gan-cache/`.
 
 ---
 

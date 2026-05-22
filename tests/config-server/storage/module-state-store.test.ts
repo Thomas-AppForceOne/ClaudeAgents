@@ -20,7 +20,7 @@
  * `tests/config-server/storage/run-store.test.ts` exactly.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,6 +36,7 @@ import {
   DEFAULT_MODULE_STATE_DIRNAME,
   MODULE_STATE_MARKER_RELPATH,
   MODULE_STATE_ROOT_ENV,
+  _resetModuleRepoKeyCacheForTests,
   computeRepoKey,
   resolveModuleRepoKey,
   resolveModuleStatePath,
@@ -59,6 +60,14 @@ afterEach(() => {
       // Best-effort cleanup; ignore.
     }
   }
+});
+
+// The repo-key memo is process-global. Clear it before every test so no
+// real-git resolution from one test leaks into another. (Injected-exec tests
+// bypass the memo anyway; this is belt-and-suspenders for the default-exec
+// integration tests, which all use unique temp dirs regardless.)
+beforeEach(() => {
+  _resetModuleRepoKeyCacheForTests();
 });
 
 // A StoreEnv whose `homedir` points at a throwaway dir, so the real
@@ -299,6 +308,46 @@ describe('integration — repo-key reuse across worktrees (repo_key_reuses_f7_no
     expect(p1).toBe(p2);
     expect(p1).toBe(pMain);
     expect(p1).toContain(keyWt1);
+  });
+});
+
+// ---- repo-key memoisation (default git seam) -----------------------------
+// The repo-key is invariant per fromDir for a process's lifetime, so the git
+// derivation is cached and reused across module-state resolutions. The memo is
+// consulted only for the default (real) git seam; an injected seam bypasses it.
+
+describe('repo-key memoisation (default git seam)', () => {
+  it('memoises the git-derived key per fromDir: a second resolve does not re-invoke git', () => {
+    const main = initRepo();
+    _resetModuleRepoKeyCacheForTests();
+
+    // First resolve derives the key from real git and caches the main-root.
+    const key1 = resolveModuleRepoKey(main);
+    expect(key1).toMatch(/-[0-9a-f]{12}$/);
+
+    // Break the repo so any FRESH git derivation from `main` would now fail.
+    rmSync(path.join(main, '.git'), { recursive: true, force: true });
+
+    // Cached: the second resolve returns the same key without touching git.
+    expect(resolveModuleRepoKey(main)).toBe(key1);
+
+    // After clearing the memo, the now-broken dir can no longer resolve —
+    // proving the prior success came from the cache, not a re-derivation.
+    _resetModuleRepoKeyCacheForTests();
+    expect(() => resolveModuleRepoKey(main)).toThrow();
+  });
+
+  it('an injected git seam bypasses the memo, so each stub is honoured', () => {
+    const fromDir = '/some/repo/dir';
+    // Same fromDir, two different stubbed main-roots: because an injected exec
+    // bypasses the cache, the second stub is honoured rather than returning the
+    // first call's cached value (this is what keeps the determinism tests above
+    // exercising their stubs).
+    const k1 = resolveModuleRepoKey(fromDir, makeGitStub('/Repo/One'));
+    const k2 = resolveModuleRepoKey(fromDir, makeGitStub('/Repo/Two'));
+    expect(k1).toBe(computeRepoKey('/Repo/One'));
+    expect(k2).toBe(computeRepoKey('/Repo/Two'));
+    expect(k1).not.toBe(k2);
   });
 });
 
