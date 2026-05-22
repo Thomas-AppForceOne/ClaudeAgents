@@ -26,7 +26,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
-  canonicalizePath,
   canonicalizePathForDisplay,
 } from '../../../src/config-server/determinism/index.js';
 import {
@@ -505,7 +504,7 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
     });
     let json = JSON.parse(readFileSync(progressPath, 'utf8'));
     expect(json.workspace).toBeDefined();
-    expect(json.workspace.worktreePath).toBe(canonicalizePath(worktreePath));
+    expect(json.workspace.worktreePath).toBe(canonicalizePathForDisplay(worktreePath));
     expect(path.isAbsolute(json.workspace.worktreePath)).toBe(true);
     expect(json.workspace.branch).toBe('feature/add-export');
     expect(json.workspace.createdByGan).toBe(false);
@@ -531,7 +530,7 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
     });
     expect(r.createdByGan).toBe(true);
     expect(r.branch).toBe('feature/other');
-    expect(r.worktreePath).toBe(canonicalizePath(worktreePath));
+    expect(r.worktreePath).toBe(canonicalizePathForDisplay(worktreePath));
   });
 
   it('ignores prototype-polluting keys in a pre-existing progress.json', () => {
@@ -700,7 +699,7 @@ describe('integration — real git worktree (1c then 1b)', () => {
 describe('git-subprocess-argv-safety (static source check)', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(here, '..', '..', '..');
-  const sources = ['worktree-resolver.ts', 'run-progress.ts'].map((f) =>
+  const sources = ['worktree-resolver.ts', 'run-progress.ts', 'git-exec.ts'].map((f) =>
     readFileSync(path.join(repoRoot, 'src', 'config-server', 'storage', f), 'utf8'),
   );
   const combined = sources.join('\n');

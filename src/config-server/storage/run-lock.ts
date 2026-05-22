@@ -39,11 +39,12 @@
  * module-state store, `.claude/gan/`, or `.gan-cache/`.
  */
 
-import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { createError } from '../errors.js';
+import { readJsonObjectFile } from './json-read.js';
 
 /** Parsed contents of the run lock file. */
 export interface RunLockContents {
@@ -106,15 +107,8 @@ export interface AcquireRunLockOptions {
 
 /** Read and parse the lock file, or `undefined` if absent / unparseable. */
 export function readRunLock(lockPath: string): RunLockContents | undefined {
-  if (!existsSync(lockPath)) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(lockPath, 'utf8'));
-  } catch {
-    return undefined;
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-  const obj = parsed as Record<string, unknown>;
+  const obj = readJsonObjectFile(lockPath);
+  if (obj === undefined) return undefined;
   const runId = typeof obj.runId === 'string' ? obj.runId : undefined;
   const pid = typeof obj.pid === 'number' ? obj.pid : undefined;
   if (runId === undefined || pid === undefined) return undefined;

@@ -28,9 +28,10 @@
  * keys are skipped on read (mirroring the slice-2 run-progress reader).
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { readJsonObjectFile, stripForbiddenKeys } from './json-read.js';
 import { RUN_ID_PATTERN } from './run-store.js';
 
 /** The workspace block surfaced from a run's `progress.json`. */
@@ -130,20 +131,8 @@ export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
  * Returns `undefined` when the file is absent, unreadable, or not a JSON object.
  */
 function readProgress(progressPath: string): Record<string, unknown> | undefined {
-  if (!existsSync(progressPath)) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(progressPath, 'utf8'));
-  } catch {
-    return undefined;
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-    out[k] = v;
-  }
-  return out;
+  const obj = readJsonObjectFile(progressPath);
+  return obj === undefined ? undefined : stripForbiddenKeys(obj);
 }
 
 /** Copy the pre-defined scalar fields off a parsed progress object. */

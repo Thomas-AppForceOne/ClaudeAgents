@@ -318,6 +318,15 @@ describe('shell_subprocess_safety_git_calls (static source check)', () => {
   });
 
   it('passes the git rev-parse invocation as an argv array', () => {
-    expect(storeSrc).toContain("['rev-parse', '--git-common-dir']");
+    // The git-common-dir derivation now lives in the shared git-exec module;
+    // verify the argv-array invocation at its new home.
+    const gitExecSrc = readFileSync(
+      path.join(repoRoot, 'src', 'config-server', 'storage', 'git-exec.ts'),
+      'utf8',
+    );
+    expect(gitExecSrc).toContain("['rev-parse', '--git-common-dir']");
+    expect(/exec\w*\(\s*['"]git['"]\s*,\s*\[/.test(gitExecSrc)).toBe(true);
+    expect(/\bexecSync\b/.test(gitExecSrc)).toBe(false);
+    expect(/exec\w*\(\s*`/.test(gitExecSrc)).toBe(false);
   });
 });

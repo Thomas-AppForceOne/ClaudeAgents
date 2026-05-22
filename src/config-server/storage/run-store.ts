@@ -42,6 +42,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { canonicalizePath } from '../determinism/index.js';
+import { mainWorktreeRoot as deriveMainWorktreeRoot, type GitExec } from './git-exec.js';
 
 /** Default store-root directory name under the user's home directory. */
 export const DEFAULT_STORE_DIRNAME = '.gan-runs-data';
@@ -162,25 +163,12 @@ export function resolveMainWorktreeRoot(
   fromDir: string = process.cwd(),
   exec: typeof execFileSync = execFileSync,
 ): string {
-  const out = exec('git', ['rev-parse', '--git-common-dir'], {
-    cwd: fromDir,
-    stdio: ['ignore', 'pipe', 'ignore'],
-  })
-    .toString()
-    .trim();
-
-  if (out.length === 0) {
-    throw new Error(
-      `Could not resolve the repository's git-common-dir from ${fromDir}; is this a git repository?`,
-    );
-  }
-
-  // `--git-common-dir` may be relative to `fromDir` (e.g. ".git" in the main
-  // checkout) or absolute (e.g. "/path/to/main/.git" from a linked worktree).
-  // Resolve against the invocation directory, then take the parent — the
-  // main-worktree root.
-  const commonDir = path.resolve(fromDir, out);
-  return path.dirname(commonDir);
+  // Adapt the execFileSync-style seam to the shared `GitExec` seam and delegate
+  // to the single git-common-dir → main-root derivation (one implementation,
+  // shared with the worktree resolver, including the empty-output guard).
+  const git: GitExec = (args, cwd) =>
+    exec('git', [...args], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+  return deriveMainWorktreeRoot(git, fromDir);
 }
 
 /**

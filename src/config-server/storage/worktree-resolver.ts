@@ -38,28 +38,18 @@
  * module never re-implements realpath / case-folding / slash-stripping.
  */
 
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 import { canonicalizePathForDisplay } from '../determinism/index.js';
 import { createError } from '../errors.js';
+import { defaultGitExec, mainWorktreeRoot, type GitExec } from './git-exec.js';
 
-/**
- * Injectable git exec seam. Defaults to `execFileSync` so the resolver is
- * unit-testable without a real repository, while production uses real git.
- * Implementations MUST treat `args` as a literal argv array (no shell).
- *
- * @returns the command's stdout. Throws on a non-zero exit (matching
- *   `execFileSync` semantics) so callers can branch on git failures.
- */
-export type GitExec = (args: readonly string[], cwd: string) => string;
-
-/** Default git exec seam: `execFileSync('git', argv, { cwd })`, argv-only. */
-export const defaultGitExec: GitExec = (args, cwd) =>
-  execFileSync('git', [...args], {
-    cwd,
-    stdio: ['ignore', 'pipe', 'ignore'],
-  }).toString();
+// The git exec seam (`GitExec` / `defaultGitExec`) and the main-worktree-root
+// derivation live in the shared `./git-exec` module so there is ONE
+// implementation. Re-exported here so existing importers (cleanup-planner,
+// tests, the library index) keep their import path.
+export { defaultGitExec };
+export type { GitExec };
 
 /** The resolved workspace, recorded into `progress.json` at run start. */
 export interface ResolvedWorkspace {
@@ -167,21 +157,6 @@ function currentBranch(git: GitExec, fromDir: string): string | undefined {
 /** The current worktree's top-level directory (`git rev-parse --show-toplevel`). */
 function currentWorktreeTop(git: GitExec, fromDir: string): string {
   return git(['rev-parse', '--show-toplevel'], fromDir).trim();
-}
-
-/**
- * The repo's main-worktree root — the parent of `git rev-parse
- * --git-common-dir` (all linked worktrees share one common-dir, so this
- * resolves to the main checkout from anywhere). Used to distinguish the main
- * checkout (→ 1b for a matching branch) from a linked task worktree (→ 1a).
- * Mirrors the slice-1 run-store derivation; argv-array seam, no shell.
- */
-function mainWorktreeRoot(git: GitExec, fromDir: string): string {
-  const out = git(['rev-parse', '--git-common-dir'], fromDir).trim();
-  // `--git-common-dir` may be relative to `fromDir` (e.g. `.git` in the main
-  // checkout) or absolute (from a linked worktree). Resolve, then take parent.
-  const commonDir = path.resolve(fromDir, out);
-  return path.dirname(commonDir);
 }
 
 /** `true` when the working tree at `fromDir` has any staged/unstaged/untracked change. */

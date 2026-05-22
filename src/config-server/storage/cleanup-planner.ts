@@ -98,23 +98,30 @@ export interface CleanupOptions {
   fromDir: string;
   /** Remote name for the remote-delete. Defaults to `origin`. */
   remote?: string;
+  /**
+   * Pre-resolved default branch, used as the merge base for runs that did not
+   * record a `baseBranch`. Supplying it once for a batch (e.g. `--cleanup
+   * --all`) avoids re-resolving the repo-constant default branch per run.
+   */
+  defaultBranch?: string;
 }
 
 // ---- merge-status (always evaluated BEFORE any delete) --------------------
 
 /**
  * Resolve the base ref a branch is checked for merge against:
- * the run's recorded `baseBranch` when present, else the slice-2
- * {@link resolveDefaultBranch} (origin/HEAD -> init.defaultBranch ->
- * develop/main/master), else `undefined`.
+ * the run's recorded `baseBranch` when present, else a caller-supplied
+ * pre-resolved `defaultBranch`, else the slice-2 {@link resolveDefaultBranch}
+ * (origin/HEAD -> init.defaultBranch -> develop/main/master), else `undefined`.
  */
 export function resolveMergeBase(
   git: GitExec,
   fromDir: string,
   run: EnumeratedRun,
+  defaultBranch?: string,
 ): string | undefined {
   if (typeof run.baseBranch === 'string' && run.baseBranch.length > 0) return run.baseBranch;
-  return resolveDefaultBranch(git, fromDir);
+  return defaultBranch ?? resolveDefaultBranch(git, fromDir);
 }
 
 /**
@@ -133,17 +140,38 @@ export function isBranchMerged(
 ): boolean {
   const refs: string[] = [];
   if (base !== undefined && base.length > 0) refs.push(base);
-  // Consult an upstream tracking ref when one is configured for the branch.
-  try {
-    const upstream = git(['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], fromDir).trim();
-    if (upstream.length > 0) refs.push(upstream);
-  } catch {
-    // No upstream configured; only the base ref is consulted.
-  }
+  const upstream = resolveUpstream(git, fromDir, branch);
+  if (upstream !== undefined) refs.push(upstream);
+  return isMergedIntoAny(git, fromDir, branch, refs);
+}
 
+/**
+ * The branch's configured upstream tracking ref (`@{upstream}`), or `undefined`
+ * when none is configured. The branch is passed as a discrete argv element.
+ */
+function resolveUpstream(git: GitExec, fromDir: string, branch: string): string | undefined {
+  try {
+    const out = git(['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], fromDir).trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `true` when `branch`'s tip is an ancestor of ANY ref in `refs` — i.e. the
+ * branch is merged. `git merge-base --is-ancestor <branch> <ref>` exits 0 when
+ * it is an ancestor; the seam surfaces a non-zero exit as a throw, mapped to a
+ * "try the next ref" miss. Branch and refs are discrete argv elements.
+ */
+function isMergedIntoAny(
+  git: GitExec,
+  fromDir: string,
+  branch: string,
+  refs: readonly string[],
+): boolean {
   for (const ref of refs) {
     try {
-      // Exit 0 => branch tip IS an ancestor of ref => merged.
       git(['merge-base', '--is-ancestor', branch, ref], fromDir);
       return true;
     } catch {
@@ -151,16 +179,6 @@ export function isBranchMerged(
     }
   }
   return false;
-}
-
-/** `true` when `branch` has a configured upstream tracking ref. */
-function hasUpstream(git: GitExec, fromDir: string, branch: string): boolean {
-  try {
-    const out = git(['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], fromDir).trim();
-    return out.length > 0;
-  } catch {
-    return false;
-  }
 }
 
 // ---- planning (no side effects) -------------------------------------------
@@ -197,9 +215,15 @@ export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCle
     };
   }
 
-  // Merge check FIRST — before the executor issues any delete.
-  const base = resolveMergeBase(git, opts.fromDir, run);
-  const merged = isBranchMerged(git, opts.fromDir, branch, base);
+  // Merge check FIRST — before the executor issues any delete. Resolve the
+  // upstream ref ONCE and reuse it for both the merge decision and the
+  // remote-delete decision (avoids probing `@{upstream}` twice per run).
+  const base = resolveMergeBase(git, opts.fromDir, run, opts.defaultBranch);
+  const upstream = resolveUpstream(git, opts.fromDir, branch);
+  const refs: string[] = [];
+  if (base !== undefined && base.length > 0) refs.push(base);
+  if (upstream !== undefined) refs.push(upstream);
+  const merged = isMergedIntoAny(git, opts.fromDir, branch, refs);
 
   if (!merged) {
     return {
@@ -212,7 +236,7 @@ export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCle
   }
 
   const branchPlan: BranchPlan = { kind: 'delete-merged', branch };
-  if (hasUpstream(git, opts.fromDir, branch)) branchPlan.remote = remote;
+  if (upstream !== undefined) branchPlan.remote = remote;
   return {
     runId: run.runId,
     runDir: run.runDir,
