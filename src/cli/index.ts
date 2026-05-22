@@ -37,6 +37,7 @@ import * as stacksWhereCmd from './commands/stacks-where.js';
 import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
+import * as hooksStatusCmd from './commands/hooks-status.js';
 import * as validateCmd from './commands/validate.js';
 import * as trustInfoCmd from './commands/trust-info.js';
 import * as trustApproveCmd from './commands/trust-approve.js';
@@ -187,6 +188,37 @@ async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
 }
 
 /**
+ * Inner dispatch for `gan hooks status`. The only H1 arm. Mirrors
+ * `modulesDispatch`'s undefined/default arms so `gan hooks` (no inner
+ * subcommand) and `gan hooks <bogus>` both surface exit-64 errors with a
+ * `gan hooks --help` pointer, symmetric with the sibling dispatchers.
+ */
+async function hooksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
+  const inner = parsed._[0];
+  const tail: ParsedArgs = {
+    _: parsed._.slice(1),
+    flags: parsed.flags,
+    doubleDashSeen: parsed.doubleDashSeen,
+  };
+  switch (inner) {
+    case 'status':
+      return hooksStatusCmd.run(tail);
+    case undefined:
+      return {
+        stdout: '',
+        stderr: 'Error: gan hooks requires a subcommand (`status`). Run `gan hooks --help`.\n',
+        code: EXIT_BAD_ARGS,
+      };
+    default:
+      return {
+        stdout: '',
+        stderr: `Error: unknown subcommand 'gan hooks ${inner}'. Run \`gan hooks --help\` for usage.\n`,
+        code: EXIT_BAD_ARGS,
+      };
+  }
+}
+
+/**
  * Inner dispatch for `gan trust <info|approve|revoke|list>`. All four
  * arms ship in R5 S4 (the final R-series sprint). Trust-mutating
  * subcommands (`approve`, `revoke`) require an explicit `--project-root`
@@ -244,6 +276,7 @@ const SUBCOMMANDS: Readonly<Record<string, Subcommand>> = Object.freeze({
   stacks: stacksDispatch,
   stack: stackDispatch,
   modules: modulesDispatch,
+  hooks: hooksDispatch,
   trust: trustDispatch,
 });
 
