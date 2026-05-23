@@ -151,6 +151,133 @@
       },
       "type": "array"
     },
+    "docLintCmd": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "absenceMessage": {
+              "type": "string"
+            },
+            "absenceSignal": {
+              "const": "silent",
+              "type": "string"
+            },
+            "baseline": {
+              "enum": [
+                "delta",
+                "absolute"
+              ],
+              "type": "string"
+            },
+            "command": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "fallback": {
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "blocker",
+                "warning",
+                "advisory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "absenceSignal",
+            "severity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "absenceMessage": {
+              "type": "string"
+            },
+            "absenceSignal": {
+              "enum": [
+                "blockingConcern",
+                "warning"
+              ],
+              "type": "string"
+            },
+            "baseline": {
+              "enum": [
+                "delta",
+                "absolute"
+              ],
+              "type": "string"
+            },
+            "command": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "fallback": {
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "blocker",
+                "warning",
+                "advisory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "absenceSignal",
+            "absenceMessage",
+            "severity"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "documentationSurfaces": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "template": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "triggers": {
+            "additionalProperties": false,
+            "properties": {
+              "keywords": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "template"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "lintCmd": {
       "type": "string"
     },
