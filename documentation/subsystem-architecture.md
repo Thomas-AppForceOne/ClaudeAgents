@@ -54,7 +54,7 @@ flowchart LR
     SKILL      -->|"orchestrates"| AL
     CLI        -->|"stdio MCP"| MT
     HOOK      -.->|"gates all tool calls"| AL
-    AL         -->|"MCP tool calls"| CS
+    AL         -->|"MCP tool calls"| MT
     DK         -->|"registered with"| MT
     RP         -->|"validates against"| SCH
     ST         --> Z1 & Z2R & Z2M & Z3
