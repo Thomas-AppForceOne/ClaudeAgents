@@ -146,6 +146,50 @@ securitySurfaces:
         - '**/*.js'
         - '**/*.json'
         - '**/*.env'
+documentationSurfaces:
+  - id: public_contract_completeness
+    template: >
+      Every exported function, class, or type added or changed in this sprint
+      documents, in its doc comment, each parameter's meaning (not merely its
+      type), the failure modes it can raise, any side effect beyond its return
+      value, and any invariant the caller must uphold.
+    triggers:
+      keywords:
+        - export function
+        - export class
+        - export const
+        - export interface
+      scope:
+        - '**/*.ts'
+        - '**/*.tsx'
+  - id: comments_explain_why_not_what
+    template: >
+      Every comment added in this sprint explains a constraint, an invariant, or
+      a non-obvious decision and its rationale — not a restatement of what the
+      adjacent code already expresses. No added comment can be deleted without
+      losing information absent from the code itself.
+    triggers:
+      scope:
+        - '**/*.ts'
+        - '**/*.tsx'
+  - id: nonobvious_decision_cites_rationale
+    template: >
+      Any non-obvious implementation decision in changed code (a workaround, a
+      performance trade-off, an ordering constraint) cites its rationale in a
+      comment or doc contract.
+    triggers:
+      scope:
+        - '**/*.ts'
+        - '**/*.tsx'
+docLintCmd:
+  command: npm run doc-lint
+  absenceSignal: warning
+  absenceMessage: >
+    The framework could not run the documentation linter for this stack.
+    Confirm a `doc-lint` script is configured for the project and re-run, or
+    review the changed exports' documentation by hand before merging.
+  severity: blocker
+  baseline: delta
 ---
 
 # web-node conventions
@@ -162,6 +206,17 @@ The `auditCmd` runs the ecosystem's standard high-severity dependency
 audit. The `securitySurfaces` array catalogs the recurring web-stack
 hazards that the evaluator templates into per-sprint criteria when a
 matching keyword or scope trigger fires.
+
+The `documentationSurfaces` array carries the stack's documentation
+standard as judgment criteria the evaluator scores — public-contract
+completeness on exported symbols, comments that explain *why* rather
+than restate *what*, and a rationale citation on non-obvious decisions.
+They template into per-sprint criteria through the same trigger
+machinery as `securitySurfaces`. The `docLintCmd` runs the stack's
+deterministic documentation linter; like `auditCmd` it degrades to a
+warning when the tool is absent rather than failing the run, and its
+`baseline: delta` default means a pre-existing undocumented export does
+not fail a sprint — only a regression introduced by the sprint's diff.
 
 Users who need to diverge from these defaults fork the file into their
 project tier (`.claude/gan/stacks/web-node.md`) and edit the fork; the
