@@ -38,6 +38,8 @@ run branch (reused or task-named) ready to review and merge
 
 Per-run *data* — sprint contracts, evaluator feedback, progress state, the run trace — lives in a central, repo-keyed store outside any worktree (`~/.gan-runs-data/<repo-key>/runs/<run-id>/`), so it survives `git worktree remove`. The code is written in the run's worktree: the task worktree you launched from when it matches the task (case 1a), or a gan-created run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` otherwise (cases 1b/1c). When every sprint passes evaluation, the branch is ready to inspect and merge.
 
+The build → evaluate retry loop is **bounded**: loop & thrash detection halts a sprint that stops converging — a role exhausting its attempt ceiling, the combined work exceeding the sprint-wide budget, or the generator oscillating between edits — with a structured `LoopDetected` error instead of retrying without limit. The ceilings are configurable per project, and a halted run is recoverable (see [Configuration recipes](#configuration-recipes) and [Inspecting, recovering, and cleaning up runs](#inspecting-recovering-and-cleaning-up-runs)).
+
 ---
 
 ## Architecture
@@ -70,7 +72,7 @@ The three-tier overlay cascade decides which value wins for a given splice point
 
 The cascade has two halves with different semantics:
 
-- **Overlay fields merge per-field.** Higher tiers add to or replace specific splice points; lower-tier values survive unless explicitly discarded. The merge rule for each splice point is fixed by the schema (union by string, union by key, scalar override, project-only).
+- **Overlay fields merge per-field.** Higher tiers add to or replace specific splice points; lower-tier values survive unless explicitly discarded. The merge rule for each splice point is fixed by the schema (union by string, union by key, scalar override, per-role map merge, project-only).
 - **Stack files replace wholesale.** A project-tier stack file shadowing a built-in name replaces the entire built-in file. Stack files are structurally rich (detection trees, scope globs, security surfaces); merge semantics would be ambiguous, so the rule is "highest tier wins, top-to-bottom".
 
 If you only need to tweak a known splice point, write an overlay. If you need to fork an ecosystem's behaviour wholesale, fork the stack file.
@@ -200,6 +202,7 @@ Most projects need nothing — the framework auto-detects a stack and runs. A fe
 - **Override the lint command for a stack**: `gan stack update web-node lintCmd 'npm run lint:next'`.
 - **Force the active stack set**: in `.claude/gan/project.md`, set `stack.override: ['web-node']` (replaces auto-detection).
 - **Skip every project-sourced command for one run**: `/gan --no-project-commands "review someone's branch"`.
+- **Tune the loop's safety ceilings**: in `.claude/gan/project.md`, set `safety.attemptCeilings.gan-generator: 5` to give the generator more revision rounds, `safety.sprintBudget: 16` to raise the sprint-wide cap, or `safety.oscillationDetection: false` to turn off edit-oscillation halts. For a one-off override, pass `/gan --max-attempts=5` (a uniform per-role ceiling for that run).
 
 The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.json); the stack schema in [`schemas/stack-v1.json`](schemas/stack-v1.json).
 
@@ -211,6 +214,7 @@ The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.
 /gan --print-config             # Inspect the resolved configuration. Fail-open.
 /gan --list-recoverable         # List runs eligible for recovery (repo-wide, from the central store).
 /gan --recover --run-id <id>    # Resume an interrupted run (only from the worktree it ran in).
+/gan --recover --reset-attempts # Resume, restarting the attempt counters from zero.
 /gan --cleanup                  # Delete the most recent non-terminal run.
 /gan --cleanup --run-id <id>    # Delete one specific run.
 /gan --cleanup --all            # Delete every non-terminal run.
@@ -218,6 +222,8 @@ The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.
 ```
 
 The inspection, recovery, and cleanup short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected or cleaned up.
+
+A run halted by loop & thrash detection (a `LoopDetected` exit, distinct from validation and contract failures) is recoverable like any other interrupted run. `--recover` rebuilds the per-role attempt counters from the run trace, so a sprint that was still looping halts again on the next attempt unless you change the prompt — or pass `--reset-attempts` (valid only alongside `--recover`) to resume with the counters reset to zero.
 
 `--list-recoverable` enumerates the repo's runs from the central store, so they are visible from any worktree; but a run is **resumable only from the worktree it ran in** (its working tree and branch live there), and `--recover` refuses from anywhere else, naming the right worktree. `--cleanup` prints a preview table (run id, status, sprint, start time, size) and prompts `[y/N]` before deleting; pass `--yes` to skip the prompt. It removes the run's central-store directory and — for a gan-created worktree — the run worktree and, merge-aware, its task branch (a merged branch is deleted; an unmerged one is kept unless you confirm). A user-owned worktree (case 1a) is never touched. Active runs (with a live `run.lock`) are refused. Cleanup never touches the central module-state store (`~/.gan-module-state/<repo-key>/`), `.claude/gan/`, or `.gan-cache/`.
 
@@ -241,7 +247,7 @@ The inspection, recovery, and cleanup short-circuits run validation in non-abort
 ├── skills/gan/          The /gan skill orchestrator
 ├── stacks/              Built-in stack files (web-node, generic)
 ├── schemas/             Published JSON Schemas (stack, overlay, …)
-├── src/                 TypeScript source (config server, CLI, evaluator core)
+├── src/                 TypeScript source (config server, CLI, evaluator core, trace, safety)
 ├── tests/               Vitest test suites (unit, integration, fixtures)
 ├── templates/           Packaged templates (e.g. Claude Code settings)
 ├── specifications/      The RFC + roadmap (authoritative)
