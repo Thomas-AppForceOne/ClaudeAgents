@@ -156,6 +156,63 @@ describe('rule 3 — no-op when sortableLists is empty', () => {
   });
 });
 
+describe('rule 2 — comment markers inside string literals are not stripped', () => {
+  it('does NOT strip a line marker that appears inside a string literal', () => {
+    // The `//` is inside the string, so it is real in-string content, not a
+    // comment; two edits differing only inside the string must NOT collapse.
+    // (A naive marker-strip would erase `//b"` / `//a"` and collide these.)
+    const a = 'const url = "http://example.com/a";\n';
+    const b = 'const url = "http://example.com/b";\n';
+    expect(fingerprintEditSet([{ path: 'src/a.ts', content: a }], FIXTURE_OPTS)).not.toBe(
+      fingerprintEditSet([{ path: 'src/a.ts', content: b }], FIXTURE_OPTS),
+    );
+  });
+
+  it('does NOT strip a block-open marker that appears inside a string literal', () => {
+    const a = 'const s = "/* literal a */";\n';
+    const b = 'const s = "/* literal b */";\n';
+    expect(fingerprintEditSet([{ path: 'src/a.ts', content: a }], FIXTURE_OPTS)).not.toBe(
+      fingerprintEditSet([{ path: 'src/a.ts', content: b }], FIXTURE_OPTS),
+    );
+  });
+
+  it('still strips a real comment while preserving an adjacent string with an in-string marker', () => {
+    // The string content (with its in-string `//`) is identical and preserved;
+    // only the trailing real comment differs, so the two collapse — the fix
+    // narrows stripping to real comments, it does not stop stripping them.
+    const a = 'const url = "http://x"; // note one\n';
+    const b = 'const url = "http://x"; // note two\n';
+    expect(fingerprintEditSet([{ path: 'src/a.ts', content: a }], FIXTURE_OPTS)).toBe(
+      fingerprintEditSet([{ path: 'src/a.ts', content: b }], FIXTURE_OPTS),
+    );
+  });
+
+  it('an escaped quote does not end the string early', () => {
+    // The \" is an escaped quote inside the string, so the string does not
+    // close there and the following `//` is still in-string content; a and b
+    // differ only inside that string, so they must NOT collapse.
+    const a = 'const s = "a\\"// x";\n';
+    const b = 'const s = "a\\"// y";\n';
+    expect(fingerprintEditSet([{ path: 'src/a.ts', content: a }], FIXTURE_OPTS)).not.toBe(
+      fingerprintEditSet([{ path: 'src/a.ts', content: b }], FIXTURE_OPTS),
+    );
+  });
+});
+
+describe('rule 3 — reorder collapses even with differing in-region whitespace', () => {
+  it('collapses a reorder WITHIN the region despite incidental in-region whitespace diffs', () => {
+    // Same imports, reordered AND with differing internal whitespace. Rule 1
+    // (per-line whitespace collapse) runs before the rule-3 sort, so the sort
+    // key is whitespace-normalized and the two still collapse — guarding the
+    // false negative where a reorder plus incidental whitespace would not.
+    const a = 'import a from "a";\nimport   b   from "b";\nconst x = 1;\n';
+    const b = 'import b from "b";\nimport a from   "a";\nconst x = 1;\n';
+    expect(fingerprintEditSet([{ path: 'src/a.ts', content: a }], FIXTURE_OPTS)).toBe(
+      fingerprintEditSet([{ path: 'src/a.ts', content: b }], FIXTURE_OPTS),
+    );
+  });
+});
+
 describe('fingerprintEditSet — prototype-pollution resistance', () => {
   it('does not pollute Object.prototype and does not crash on a __proto__ path', () => {
     const before = ({} as Record<string, unknown>).polluted;

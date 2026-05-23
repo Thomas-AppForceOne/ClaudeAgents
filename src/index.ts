@@ -191,7 +191,13 @@ export type {
   BundleCriterion,
 } from './trace/index.js';
 
+// The full A1 safety surface. `src/safety/index.js` is the subsystem barrel and
+// the canonical import surface; this package entry re-exports it in full so a
+// consumer importing from the package root sees the same safety API the barrel
+// exposes (per-role ceiling, sprint-wide budget, edit fingerprint + oscillation,
+// the effective-config resolver, and the recovery pieces) — not just one slice.
 export {
+  // loop-detection (per-role ceiling)
   DEFAULT_ATTEMPT_CEILINGS,
   checkRoleCeiling,
   buildRoleCeilingEvidence,
@@ -199,14 +205,64 @@ export {
   isRoleCeilingEvidenceEntry,
   renderRoleCeilingMessage,
   createLoopDetectedError,
+  // sprint-budget (aggregate ceiling)
+  DEFAULT_SPRINT_BUDGET,
+  SPRINT_ROLE,
+  checkSprintBudget,
+  buildSprintBudgetEvidence,
+  isSprintBudgetEvidence,
+  renderSprintBudgetMessage,
+  createSprintBudgetError,
+  // fingerprint (edit-set normalization)
+  fingerprintEditSet,
+  // oscillation (directRepeat / 3cycle)
+  OSCILLATION_ROLE,
+  detectEditOscillation,
+  isEditOscillationEvidence,
+  renderEditOscillationMessage,
+  createEditOscillationError,
+  // effective-safety-config resolver
+  MAX_ATTEMPTS_BUDGET_HEADROOM,
+  resolveEffectiveSafetyConfig,
+  readSafetyOverlayBlock,
+  // recovery (--reset-attempts validation, terminal record, counter resume)
+  FAILED_LOOP_DETECTED_TERMINAL_REASON,
+  validateResetAttemptsUsage,
+  buildLoopHaltTerminalRecord,
+  effectiveStartingCounters,
 } from './safety/index.js';
 
 export type {
+  // loop-detection
   LoopDetectedReason,
   LoopDetectedFields,
   RoleCeilingEvidenceEntry,
   CeilingDecision,
   CheckRoleCeilingInput,
+  // sprint-budget
+  SprintBudgetEvidence,
+  CheckSprintBudgetInput,
+  // fingerprint
+  CommentSyntax,
+  SortableList,
+  FingerprintOptions,
+  EditFile,
+  EditSet,
+  // oscillation
+  DetectedPattern,
+  AttemptFingerprint,
+  FingerprintHistory,
+  EditOscillationEvidence,
+  // effective-safety-config resolver
+  EffectiveSafetyConfig,
+  SafetyRuntimeFlags,
+  SafetyOverlayBlock,
+  ResolveEffectiveSafetyConfigInput,
+  // recovery
+  ResetAttemptsValidation,
+  ResetAttemptsFlags,
+  LoopHaltTerminalRecord,
+  EffectiveStartingCountersInput,
 } from './safety/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';

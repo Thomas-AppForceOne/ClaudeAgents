@@ -183,11 +183,19 @@ export function fingerprintEditSet(editSet: EditSet, options: FingerprintOptions
   return sha256Hex(preimage);
 }
 
-// Apply the three normalization rules to one file's content, in the order that
-// keeps each rule independent: comments first (rule 2), then reorder sortable
-// regions (rule 3) over the comment-stripped lines, then collapse whitespace
-// (rule 1) last so it cannot be undone by a later rule. A rule whose field is
-// absent/empty is a structural no-op here, not a special case downstream.
+// Apply the three normalization rules to one file's content. Order matters and
+// is deliberate: comments first (rule 2), then per-line whitespace collapse
+// (rule 1) applied to each line, then reorder sortable regions (rule 3) over the
+// already-whitespace-normalized lines, then drop the now-blank lines and join.
+//
+// Why rule 1 runs *before* rule 3 (not after): the rule-3 sort compares lines
+// by value, so its sort key must be whitespace-normalized — otherwise a reorder
+// that ALSO carries incidental whitespace differences inside the region (e.g.
+// `import  b` vs `import b`) would sort to a different order and fail to
+// collapse, even though rules 1 and 3 together make the two edit sets logically
+// identical. Normalizing each line first makes both the region-match and the
+// sort key whitespace-insensitive, so reorder-plus-whitespace collapses too. A
+// rule whose field is absent/empty is a structural no-op, not a special case.
 function normalizeFileContent(
   filePath: string,
   content: string,
@@ -200,24 +208,27 @@ function normalizeFileContent(
   // a built-in default.
   const decommented = commentSyntax ? stripComments(content, commentSyntax) : content;
 
-  let lines = splitLines(decommented);
+  // Rule 1: collapse each line's whitespace up front — trim it and squeeze
+  // internal whitespace runs to a single space — so indentation, trailing
+  // whitespace, and line-ending style wash out before the rule-3 sort uses the
+  // line as a comparison key. Blank lines become '' here and are dropped after
+  // the sort (a '' line never matches a sortable region's pattern, so its
+  // position is irrelevant).
+  let lines = splitLines(decommented).map((l) => l.replace(/\s+/g, ' ').trim());
 
   // Rule 3: within each region this file's path opts into, sort the contiguous
-  // runs of region-matching lines. Scoped to the declared region (pathGlob +
-  // lineRangePattern) so reordering OUTSIDE it still changes the digest.
+  // runs of region-matching lines over the whitespace-normalized lines above.
+  // Scoped to the declared region (pathGlob + lineRangePattern) so reordering
+  // OUTSIDE it still changes the digest.
   for (const region of sortable) {
     if (!FORBIDDEN_KEYS.has(region.pathGlob) && pathMatchesGlob(filePath, region.pathGlob)) {
       lines = sortMatchingRuns(lines, region.lineRangePattern);
     }
   }
 
-  // Rule 1: collapse whitespace last. Trim each line and drop blank lines, then
-  // collapse internal whitespace runs to a single space, so indentation,
-  // trailing whitespace, blank lines, and line-ending style all wash out.
-  return lines
-    .map((l) => l.replace(/\s+/g, ' ').trim())
-    .filter((l) => l.length > 0)
-    .join('\n');
+  // Drop the blank lines rule 1 produced and join; the per-line whitespace
+  // collapse already ran above, so this is purely the blank-line filter.
+  return lines.filter((l) => l.length > 0).join('\n');
 }
 
 // Split on any line-ending style (CRLF, CR, LF) so line-ending differences are
@@ -238,28 +249,89 @@ function pathMatchesGlob(filePath: string, pattern: string): boolean {
   }
 }
 
-// Strip comment text per the stack-declared syntax. Block comments are removed
-// first (they can span lines and contain the line marker), then line comments.
-// Markers are matched literally — they are arbitrary stack-supplied strings,
-// not regexes — so they are escaped before use.
+// String-literal delimiters the comment scanner treats as opaque: a comment
+// marker that appears between matching delimiters is string content, not a
+// comment, and must not be stripped. Covers the single/double/backtick quotes
+// common across mainstream ecosystems. This is a best-effort heuristic, not a
+// full per-language lexer — A1 defers deeper cross-language support to the
+// stack-declared fields — but it eliminates the realistic false collapse where
+// a stack's comment marker appears inside a string (e.g. `//` inside a URL
+// string literal), which would otherwise erase a real in-string difference and
+// make two genuinely-different edits hash identically.
+const STRING_DELIMITERS: ReadonlySet<string> = new Set(['"', "'", '`']);
+
+// Strip comment text per the stack-declared syntax, scanning character by
+// character so a comment marker INSIDE a string literal is preserved. The
+// scanner tracks three exclusive states — string, block comment, line comment —
+// and only recognises a comment marker in normal (non-string) text:
+//
+//  - String: from an opening quote to the matching close quote (honouring
+//    backslash escapes), copied verbatim; an unterminated string copies to EOF.
+//  - Block comment: from the open delimiter to the next close (inclusive),
+//    removed entirely including any internal newlines; an unterminated open is
+//    treated as a comment to end-of-content.
+//  - Line comment: from the marker to (not including) the end of line, so the
+//    newline survives and a marker on one line never eats the next.
+//
+// Markers are arbitrary literal strings, matched verbatim with startsWith (not
+// as regexes). When the stack declares neither marker the content is returned
+// unchanged. Block is checked before line so a `/* */` stack whose line marker
+// shares a prefix is classified correctly.
 function stripComments(content: string, syntax: CommentSyntax): string {
-  let out = content;
+  const lineMarker = syntax.line && syntax.line.length > 0 ? syntax.line : undefined;
+  const blockOpen =
+    syntax.block && syntax.block.open.length > 0 && syntax.block.close.length > 0
+      ? syntax.block.open
+      : undefined;
+  const blockClose = blockOpen ? syntax.block!.close : undefined;
+  if (lineMarker === undefined && blockOpen === undefined) return content;
 
-  const block = syntax.block;
-  if (block && block.open.length > 0 && block.close.length > 0) {
-    // Non-greedy span from each open delimiter to the next close delimiter,
-    // across newlines (s flag) — the smallest well-formed block, so adjacent
-    // blocks are not merged into one.
-    const re = new RegExp(`${escapeRegExp(block.open)}[\\s\\S]*?${escapeRegExp(block.close)}`, 'g');
-    out = out.replace(re, '');
-  }
+  let out = '';
+  let i = 0;
+  const n = content.length;
 
-  const line = syntax.line;
-  if (line && line.length > 0) {
-    // From the line marker to (but not including) the end of line. Applied per
-    // line so a marker on one line never eats the next.
-    const re = new RegExp(`${escapeRegExp(line)}[^\\r\\n]*`, 'g');
-    out = out.replace(re, '');
+  while (i < n) {
+    const ch = content[i];
+
+    // String literal: copy verbatim to the matching close quote so a comment
+    // marker between the quotes is never treated as a comment.
+    if (STRING_DELIMITERS.has(ch)) {
+      out += ch;
+      i++;
+      while (i < n) {
+        const c = content[i];
+        out += c;
+        i++;
+        if (c === '\\' && i < n) {
+          // Escaped character: copy the escapee verbatim so an escaped quote
+          // (e.g. \") does not prematurely close the string.
+          out += content[i];
+          i++;
+          continue;
+        }
+        if (c === ch) break; // matching close quote ends the string
+      }
+      continue;
+    }
+
+    // Block comment: open delimiter to the next close (inclusive), removed
+    // whole. Checked before the line marker.
+    if (blockOpen !== undefined && content.startsWith(blockOpen, i)) {
+      const closeAt = content.indexOf(blockClose as string, i + blockOpen.length);
+      i = closeAt === -1 ? n : closeAt + (blockClose as string).length;
+      continue;
+    }
+
+    // Line comment: marker to end-of-line, leaving the line terminator.
+    if (lineMarker !== undefined && content.startsWith(lineMarker, i)) {
+      let j = i + lineMarker.length;
+      while (j < n && content[j] !== '\n' && content[j] !== '\r') j++;
+      i = j;
+      continue;
+    }
+
+    out += ch;
+    i++;
   }
 
   return out;
@@ -301,11 +373,4 @@ function sortMatchingRuns(lines: string[], patternSource: string): string[] {
   }
   flushRun();
   return out;
-}
-
-// Escape a literal string for safe interpolation into a RegExp. Stack-supplied
-// comment markers are literal text (e.g. `/*`), not patterns, so their regex
-// metacharacters must be neutralised before they are spliced into a pattern.
-function escapeRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
