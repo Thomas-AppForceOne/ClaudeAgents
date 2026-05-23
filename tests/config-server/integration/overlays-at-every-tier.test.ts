@@ -28,8 +28,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { getResolvedConfig } from '../../../src/config-server/tools/reads.js';
+import { getMergedSplicePoints, getResolvedConfig } from '../../../src/config-server/tools/reads.js';
 import { validateAll } from '../../../src/config-server/tools/validate.js';
+import { resolveEffectiveSafetyConfig, readSafetyOverlayBlock } from '../../../src/safety/index.js';
 import { clearResolvedConfigCache } from '../../../src/config-server/resolution/cache.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -152,5 +153,78 @@ runner:
 
     // Nothing was dropped: a non-empty discarded list would signal a merge bug.
     expect(r.discarded).toEqual([]);
+  });
+
+  it('surfaces merged safety.* through getResolvedConfig and getMergedSplicePoints (A1)', async () => {
+    const { projectRoot, userHome } = makeTmpProjectAndUserHome();
+
+    // user sets a base ceiling map; project raises one role and sets the two
+    // scalars — proving attemptCeilings merges per-role across tiers while the
+    // scalars are last-writer-wins by precedence.
+    writeOverlay(
+      path.join(userHome, '.claude', 'gan', 'user.md'),
+      `---
+schemaVersion: 1
+safety:
+  attemptCeilings:
+    gan-contract-proposer: 4
+    gan-generator: 4
+  sprintBudget: 15
+---
+`,
+    );
+    writeOverlay(
+      path.join(projectRoot, '.claude', 'gan', 'project.md'),
+      `---
+schemaVersion: 1
+safety:
+  attemptCeilings:
+    gan-generator: 6
+  oscillationDetection: false
+---
+`,
+    );
+
+    const validation = validateAll({ projectRoot }, { userHome });
+    expect(validation.issues).toEqual([]);
+
+    const r = await getResolvedConfig({ projectRoot }, { userHome });
+    const merged = r.overlay as Record<string, Record<string, unknown>>;
+    expect(merged.safety.attemptCeilings).toEqual({
+      'gan-contract-proposer': 4, // survives from the user tier
+      'gan-generator': 6, // project tier wins the shared key
+    });
+    expect(merged.safety.sprintBudget).toBe(15); // user tier (project did not set it)
+    expect(merged.safety.oscillationDetection).toBe(false); // project tier
+    expect(r.discarded).toEqual([]);
+
+    // getMergedSplicePoints surfaces the same block, and the resolver folds it
+    // (over the seed defaults) into the effective config the orchestrator uses.
+    const { mergedSplicePoints } = getMergedSplicePoints({ projectRoot }, { userHome });
+    const eff = resolveEffectiveSafetyConfig({ overlay: readSafetyOverlayBlock(mergedSplicePoints) });
+    expect(eff.attemptCeilings).toEqual({ 'gan-contract-proposer': 4, 'gan-generator': 6 });
+    expect(eff.sprintBudget).toBe(15);
+    expect(eff.oscillationDetection).toBe(false);
+  });
+
+  it('empty overlay resolves with no hollow safety block (A1 additive guarantee)', async () => {
+    const { projectRoot, userHome } = makeTmpProjectAndUserHome();
+    // No overlay files written at all → empty overlay for this project.
+
+    const validation = validateAll({ projectRoot }, { userHome });
+    expect(validation.issues).toEqual([]);
+
+    const r = await getResolvedConfig({ projectRoot }, { userHome });
+    const merged = r.overlay as Record<string, unknown>;
+    // The three new fields are absent ⇒ no safety block is materialised (empty
+    // blocks are pruned), and the resolver yields exactly the sprint-1..4 seeds.
+    expect(merged.safety).toBeUndefined();
+    expect(r.issues).toEqual([]);
+
+    const { mergedSplicePoints } = getMergedSplicePoints({ projectRoot }, { userHome });
+    const eff = resolveEffectiveSafetyConfig({ overlay: readSafetyOverlayBlock(mergedSplicePoints) });
+    expect(eff.attemptCeilings).toEqual({ 'gan-contract-proposer': 3, 'gan-generator': 3 });
+    expect(eff.sprintBudget).toBe(12);
+    expect(eff.oscillationDetection).toBe(true);
   });
 });

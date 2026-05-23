@@ -27,6 +27,8 @@ Parse arguments from the user's message before doing anything else. The five fla
 | `--run-id <id>` | n/a | Modifier for `--recover` and `--cleanup`. Names the specific run id to act on; the id format is `<YYYYMMDDTHHMMSS>-<4 hex>` (the directory name under `<store-root>/<repo-key>/runs/`). Use `/gan --list-recoverable` to list available ids. |
 | `--no-project-commands` | false | Skip every command sourced from `project` and `user` tier files for this run; falls back to `builtin` tier defaults (per F4). |
 | `--skip-welcome` | false | Skip the first-run welcome banner. The marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip the banner. Idempotent — passing this flag on an already-welcomed system is a no-op. See "Welcome banner" below. |
+| `--max-attempts <n>` | from config | One-off override of the attempt ceilings for this run. Applies a **uniform** per-role ceiling of `n` to **every** multi-attempt role and sets the sprint-wide budget to `n × roleCount + 4` (the `+4` covers clarifier, planner, reviewer, and evaluator). It **overrides** the overlay's `safety.attemptCeilings.*` and `safety.sprintBudget`: a coarse one-off debugging knob beats persisted config for the run it is passed on. Feeds the resolved effective ceilings and budget into the attempt-start checks (see "Per-role attempt ceilings (A1)" and "Sprint-wide attempt budget (A1)"). |
+| `--reset-attempts` | false | Modifier valid only alongside `--recover`. When set, the recovered sprint resumes with attempt counters at zero; without it, recovery preserves the counters reconstructed from the trace (so a recovered sprint hitting the same loop halts again on the next attempt). |
 
 Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring. Help includes at least one realistic invocation example.
 
@@ -89,7 +91,8 @@ USAGE
 FLAGS  (defaults shown in parens)
   --spec <path>                 Use an existing spec file instead of planning from scratch (none)
   --target <path>               Override the repo root (current repo top)
-  --max-attempts <n>            Maximum generator/evaluator cycles per sprint (3)
+  --max-attempts <n>            Uniform per-role attempt ceiling for this run; also sets the
+                                sprint budget to n x roleCount + 4. Overrides overlay config (3)
   --threshold <0-100>           Minimum evaluator score to pass a sprint (from resolved config)
   --branch-name <name>          Override the generated branch name (gan/<run-id>)
   --base-branch <name>          Override the base branch (develop)
@@ -214,7 +217,9 @@ When any agent's API call returns `{ mutated: true, ... }` (per F2's mutation in
 
 ## Per-role attempt ceilings (A1)
 
-The framework caps how many times a multi-attempt role may attempt the same step within a sprint, so a role that never converges halts the sprint rather than retrying without bound. The roles with a per-role ceiling and their default ceilings come from the framework's safety layer (`gan-contract-proposer` and `gan-generator`, each defaulting to 3); single-attempt roles (clarifier, planner) and the once-per-output roles (reviewer, evaluator) carry no per-role ceiling and are never checked here.
+The framework caps how many times a multi-attempt role may attempt the same step within a sprint, so a role that never converges halts the sprint rather than retrying without bound. The roles with a per-role ceiling and their seed default ceilings come from the framework's safety layer (`gan-contract-proposer` and `gan-generator`, each defaulting to 3); single-attempt roles (clarifier, planner) and the once-per-output roles (reviewer, evaluator) carry no per-role ceiling and are never checked here.
+
+**Effective ceilings — resolved once, then fed to the check.** The orchestrator does not consult the seed defaults directly. At run start it resolves the *effective* safety config — the seed defaults, the merged overlay's `safety.*` block (`safety.attemptCeilings.<role>`, `safety.sprintBudget`, `safety.oscillationDetection`), and the one-off runtime flags — with the framework's pure effective-safety-config resolver (precedence flags > overlay > defaults), and threads the resulting effective per-role ceiling map into `checkRoleCeiling` in place of the seed table. An overlay raising one role's ceiling (e.g. `safety.attemptCeilings.gan-generator: 5`) leaves the other roles at their seed defaults — an unspecified role is never dropped. `--max-attempts=<n>` is a one-off coarse override that **beats** the overlay: it applies a uniform ceiling of `n` to every multi-attempt role (and derives the sprint budget, see below). The orchestrator does not re-implement this resolution inline; it calls the resolver and passes the result to the existing checks.
 
 **Timing — checked at attempt-start boundaries.** The orchestrator evaluates the ceiling at the **start** of each attempt, immediately before it would spawn the next attempt of a multi-attempt role. An attempt already in flight always runs to completion; the ceiling is never used to cancel work mid-attempt. This is a deliberate choice of predictable boundaries over fine-grained cancellation: the check fires at one well-defined point in the loop, so the behaviour is easy to reason about, and the cost is at most one extra attempt in the worst case.
 
@@ -230,7 +235,7 @@ A halted sprint is recoverable: re-running with `--recover` resumes from the tra
 
 ## Sprint-wide attempt budget (A1)
 
-Independent of the per-role ceilings, the framework caps the **combined** work across a whole sprint: the summed attempt count over every role. This guards against pathological cross-role thrash — a sprint that cycles plan → contract → generate → evaluate → revise without converging, where no single role ever reaches its own ceiling but the roles together burn through the sprint. The default sprint-wide budget comes from the framework's safety layer (12); it is the sum of the per-role ceilings (proposer 3 + generator 3 = 6) plus headroom for the roles that carry no per-role ceiling but still consume attempts — the single-attempt clarifier and planner and the once-per-output reviewer and evaluator.
+Independent of the per-role ceilings, the framework caps the **combined** work across a whole sprint: the summed attempt count over every role. This guards against pathological cross-role thrash — a sprint that cycles plan → contract → generate → evaluate → revise without converging, where no single role ever reaches its own ceiling but the roles together burn through the sprint. The seed default sprint-wide budget comes from the framework's safety layer (12); it is the sum of the per-role ceilings (proposer 3 + generator 3 = 6) plus headroom for the roles that carry no per-role ceiling but still consume attempts — the single-attempt clarifier and planner and the once-per-output reviewer and evaluator. The orchestrator feeds the **effective** budget from the resolved effective-safety config (overlay `safety.sprintBudget`, or the `--max-attempts`-derived `n × roleCount + 4`, else the seed default) into `checkSprintBudget`, using the same resolver result as the per-role check.
 
 **Every role counts toward the budget — even the single-attempt ones.** The clarifier and planner have no per-role ceiling (by definition they run once), so the per-role check never fires for them; but their attempts are real work and so they **do** count toward the sprint-wide total. The budget summation includes every role's attempts and special-cases none.
 
@@ -269,7 +274,9 @@ Beyond the attempt-count ceilings, the framework watches the **generator role sp
 2. Surfaces a `LoopDetected` structured error — the same `LoopDetected` error code, with `reason = "editOscillation"` and `role = "gan-generator"`. Its message is plain prose that names the attempt count and whether the generator repeated one edit or alternated between two, points the user at the run's trace directory under the central store, and tells them to adjust the prompt and re-run with `--recover`.
 3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code — the same code the other two halts use, distinct from the validation/contract exit codes.
 
-As with the other halts, a sprint halted on oscillation is recoverable via `--recover`, and unless the user changes the prompt the generator's next attempt halts again on the same history. Oscillation detection can be disabled via the project or user overlay, in which case only the attempt-count ceilings apply.
+As with the other halts, a sprint halted on oscillation is recoverable via `--recover`, and unless the user changes the prompt the generator's next attempt halts again on the same history.
+
+**Gated by the effective `oscillationDetection`.** Whether this check runs at all is the resolved effective-safety config's `oscillationDetection` boolean (overlay `safety.oscillationDetection`, else the default `true`). When it is `true` the orchestrator consults the detector as above; when it is `false` the orchestrator skips the oscillation check entirely and a generator that repeats fingerprints proceeds up to its per-role ceiling without an `editOscillation` halt — only the per-role ceiling and sprint-budget checks apply. The gate is on the **call site** (whether the orchestrator consults the detector), not on the detector itself: the framework's pure detector is unchanged, in keeping with A1's rule that the safety layer never modifies agent behaviour.
 
 ## Per-run state versus configuration
 
