@@ -1,4 +1,15 @@
-
+/**
+ * Top-level public API barrel for the ClaudeAgents framework package.
+ *
+ * This is the single module external consumers import from; it aggregates the
+ * stable surface of every internal subsystem — the config-server API version,
+ * the read/write/validate config tools, the run-store and worktree resolution
+ * layer, run locking and recovery, run enumeration and cleanup planning, the
+ * trace subsystem, and the shared result/config types. Everything re-exported
+ * here is intended public API; anything reachable only by deep import is
+ * internal and may change. Pure re-exports — this file holds no logic of its
+ * own, so the grouping below mirrors the subsystem boundaries.
+ */
 
 export { getApiVersion } from './config-server/index.js';
 

@@ -1,18 +1,39 @@
-
+/**
+ * Bridge between the config-server's F2 error model and trace event bodies.
+ *
+ * The emitter's `emit*` methods supply the envelope (sequence, type, timestamp,
+ * runId); this module's job is to build the *body* portion of trust and
+ * validation-abort events from upstream data — a resolved trust prompt, or a
+ * config-validation error. The `*Body` types are precisely the event minus its
+ * envelope, so a body produced here drops straight into the matching emit call.
+ *
+ * For validation aborts the key concern is faithfully but safely capturing the
+ * originating error: {@link extractF2Payload} copies the error's structured
+ * fields while dropping the noisy/non-portable `name` and `stack`.
+ */
 
 import { createError, type ConfigServerError, type ErrorCode } from '../config-server/errors.js';
 import type { TrustEventEvent, ValidationAbortEvent } from './events.js';
 
+/** A {@link TrustEventEvent} without its envelope fields — the part this module builds. */
 export type TrustEventBody = Omit<
   TrustEventEvent,
   'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
 >;
 
+/** A {@link ValidationAbortEvent} without its envelope fields. */
 export type ValidationAbortBody = Omit<
   ValidationAbortEvent,
   'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
 >;
 
+/**
+ * The outcome of a trust prompt, as produced upstream.
+ *
+ * @property promptVariant which prompt was shown (introduction vs re-prompt).
+ * @property userChoice the user's response.
+ * @property contentHash the config content hash the prompt concerned.
+ */
 export interface TrustResolution {
 
   promptVariant: 'subsequentChange' | 'initialIntroduction';
@@ -22,6 +43,10 @@ export interface TrustResolution {
   contentHash: string;
 }
 
+/**
+ * Project a {@link TrustResolution} into a trust-event body ready to emit.
+ * Pure mapping; no side effects, never throws.
+ */
 export function buildTrustEventBody(resolution: TrustResolution): TrustEventBody {
   return {
     promptVariant: resolution.promptVariant,
@@ -30,8 +55,17 @@ export function buildTrustEventBody(resolution: TrustResolution): TrustEventBody
   };
 }
 
+/** The validation stage discriminant, re-derived from the event type. */
 export type ValidationStage = ValidationAbortEvent['validationStage'];
 
+/**
+ * Structural shape of an F2-style config error. The index signature allows
+ * arbitrary extra structured fields, which {@link extractF2Payload} preserves.
+ *
+ * @property code the error code.
+ * @property message human-readable message.
+ * @property file / field / line optional source-location hints.
+ */
 export interface F2ErrorLike {
   code: string;
   message: string;
@@ -41,8 +75,16 @@ export interface F2ErrorLike {
   [extra: string]: unknown;
 }
 
+// Error properties that must NOT enter a trace payload: `name` is redundant
+// with `code`, and `stack` is environment-specific noise that would make the
+// trace non-deterministic and leak local paths.
 const NON_F2_KEYS: ReadonlySet<string> = new Set(['name', 'stack']);
 
+// Extract the portable structured payload from an F2 error. Prefer the error's
+// own toJSON() projection when it provides one (so a ConfigServerError controls
+// its serialised form); otherwise read its own enumerable keys. Either way,
+// drop the NON_F2_KEYS and any undefined value so the payload stays minimal
+// and deterministic.
 function extractF2Payload(error: F2ErrorLike): Record<string, unknown> {
   const maybeToJson = (error as { toJSON?: () => Record<string, unknown> }).toJSON;
   const source: Record<string, unknown> =
@@ -60,6 +102,15 @@ function extractF2Payload(error: F2ErrorLike): Record<string, unknown> {
   return payload;
 }
 
+/**
+ * Build a validation-abort body from an already-constructed F2-like error.
+ *
+ * @param stage which validation layer rejected the config.
+ * @param error the originating error; its `code` becomes `errorCode` and its
+ *   portable fields become `errorPayload` (sans `name`/`stack`, see
+ *   {@link extractF2Payload}).
+ * @returns the body, ready to pass to the emitter. Never throws.
+ */
 export function buildValidationAbortBody(
   stage: ValidationStage,
   error: F2ErrorLike,
@@ -71,6 +122,17 @@ export function buildValidationAbortBody(
   };
 }
 
+/**
+ * Convenience wrapper that constructs the error from a code + details and then
+ * builds its abort body — for call sites that have a code in hand rather than a
+ * thrown error.
+ *
+ * @param stage which validation layer rejected the config.
+ * @param code the framework error code to construct.
+ * @param details optional error details forwarded to {@link createError};
+ *   defaults to `{}`.
+ * @returns the validation-abort body. Never throws (constructs, does not raise).
+ */
 export function buildValidationAbortFromCode(
   stage: ValidationStage,
   code: ErrorCode,

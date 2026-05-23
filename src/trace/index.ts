@@ -1,4 +1,13 @@
-
+/**
+ * Public barrel for the `trace` subsystem.
+ *
+ * Re-exports the emitter, content-hashing helpers, filename/ref encodings,
+ * scan/reconcile/recovery utilities, the F2-integration body builders, the
+ * progress-summary formatters, the evidence-bundle verifier, the low-level
+ * store helpers, and the event type definitions. This is the only import
+ * surface other subsystems should depend on; the individual modules behind it
+ * are implementation detail. Pure re-exports — no runtime behaviour of its own.
+ */
 
 export {
   TraceEmitter,
