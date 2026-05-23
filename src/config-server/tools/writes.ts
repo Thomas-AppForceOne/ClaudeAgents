@@ -1,47 +1,4 @@
-/**
- * R1 sprint 6 — write tool implementations.
- *
- * Direct library entry points for every F2 write tool. The MCP wrapper in
- * `index.ts` delegates here; tests and downstream library callers may also
- * import these functions directly (per the dual-callable surface rule).
- *
- * Three categories per F2:
- *
- *  1. Zone-1 writes (real persistence):
- *     - `setOverlayField` / `appendToOverlayField` / `removeFromOverlayField`
- *       — operate on an overlay tier file (`<root>/.claude/gan/project.md`
- *       or `<userHome>/.claude/gan/user.md`). Composes-if-absent: if the
- *       overlay file does not exist, the helper creates it with the
- *       requested field plus `schemaVersion: 1`.
- *     - `updateStackField` / `appendToStackField` / `removeFromStackField`
- *       — operate on a stack file. Resolution goes through C5 (highest
- *       tier wins); writes typically land on the project-tier shadow
- *       (`.claude/gan/stacks/<name>.md`) when one exists.
- *
- *     Each of these follows the same five-step pipeline:
- *       1. Load the current file (or compose-if-absent for overlays).
- *       2. Apply the requested mutation in memory (deep clone first).
- *       3. Validate the new state through the schema validator. Cross-
- *          file invariants are not re-run on a single-file write — the
- *          orchestrator's next `validateAll` call exercises them.
- *       4. On validation failure: return `{ mutated: false, issues }`
- *          and persist nothing.
- *       5. On success: write via `yaml-block-writer` + `atomicWriteFile`,
- *          invalidate the cache, return `{ mutated: true, path, ... }`.
- *
- *  2. Trust writes (R5 S4):
- *     - `trustApprove` recomputes the project's aggregate hash, persists
- *       a record into the user-tier trust cache (`~/.claude/gan/trust-
- *       cache.json` via `cache-io.writeCache`), and emits an
- *       `action: 'approve'` audit-log line via `logTrustEvent`.
- *     - `trustRevoke` removes every approval for the project from the
- *       cache and emits an `action: 'revoke'` audit-log line.
- *
- *  3. Module no-ops (OQ4):
- *     - `setModuleState` / `appendToModuleState` / `removeFromModuleState`
- *       / `registerModule` return `{ mutated: false }` silently. Real
- *       module discovery ships with M1.
- */
+
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -87,32 +44,19 @@ import type { OverlayTier } from '../storage/overlay-loader.js';
 
 export type { Issue };
 
-/** Context shared by every write tool (logger + user-home override). */
 export interface WriteToolContext {
   logger?: Logger;
   userHome?: string;
-  /**
-   * Forwarded to the C5 stack resolver as the package-tier built-in
-   * directory. When unset, the resolver walks up from `import.meta.url`
-   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Home/env + git injection seams for the repo-keyed module-state store
-   * (F8). Production leaves this unset and uses the real seams; tests inject
-   * a fake home and a stub git seam so module-state writes are deterministic
-   * and need no real repo. See `ModuleStateStoreOptions`.
-   */
+
   moduleStateStore?: ModuleStateStoreOptions;
 }
 
-/** A canonical mutation result. */
 export type WriteResult =
   | { mutated: true; path: string }
   | { mutated: false; issues: Issue[] }
   | { mutated: false; reason: string };
-
-// ---- overlay writes -------------------------------------------------------
 
 export interface SetOverlayFieldInput {
   projectRoot: string;
@@ -196,8 +140,6 @@ export function removeFromOverlayField(
     removeAtPath(data, segments, input.value);
   });
 }
-
-// ---- stack writes ---------------------------------------------------------
 
 export interface UpdateStackFieldInput {
   projectRoot: string;
@@ -300,18 +242,11 @@ export function removeFromStackField(
   });
 }
 
-// ---- trust writes (R5 S4) -----------------------------------------------
-
 export interface TrustApproveInput {
   projectRoot: string;
-  /**
-   * Reserved for future client-supplied verification. v1 ignores any
-   * value supplied here and recomputes the aggregate hash from disk so
-   * the persisted approval cannot disagree with what the user is
-   * actually approving.
-   */
+
   contentHash?: string;
-  /** Optional free-form note. Stored verbatim alongside the record. */
+
   note?: string;
 }
 
@@ -320,26 +255,6 @@ export interface TrustApproveResult {
   record: TrustApproval;
 }
 
-/**
- * Approve the project's current overlay contents. The aggregate hash is
- * recomputed from disk via `computeTrustHash` (the supplied
- * `contentHash` argument is ignored in v1 — see the field doc).
- *
- * The approved record stores:
- *   - `projectRoot` — canonicalised via `canonicalizePath` (per F3).
- *   - `aggregateHash` — recomputed from disk.
- *   - `approvedAt` — ISO-8601 timestamp captured at approval time.
- *   - `approvedCommit` — git HEAD SHA of `projectRoot` when the project
- *     is a git working tree; omitted otherwise. The capture goes
- *     through `child_process.execFileSync('git', …)` and falls through
- *     silently on any failure (no git binary, not a git tree, detached
- *     state with no rev, etc.).
- *   - `note` — supplied verbatim if non-empty.
- *
- * Persists via `upsertApproval` + `writeCache` (no direct file IO).
- * Logs one `action: 'approve'` event via `logTrustEvent` so the audit
- * log captures every approval.
- */
 export function trustApprove(
   input: TrustApproveInput,
   ctx: WriteToolContext & { homeDir?: string } = {},
@@ -363,9 +278,6 @@ export function trustApprove(
   const newCache = upsertApproval(cache, record);
   writeCache(homeDir, newCache);
 
-  // F5 slice 2 — invalidate the resolved-config cache synchronously so
-  // the next `getResolvedConfig` reflects the approval. Closes the
-  // dogfooded bug where the trust prompt re-fired after `[a]`.
   invalidateCache(canonRoot);
 
   logTrustEvent({
@@ -386,16 +298,6 @@ export interface TrustRevokeResult {
   mutated: boolean;
 }
 
-/**
- * Revoke every approval for `projectRoot` from the user-tier trust
- * cache. `mutated` reflects whether at least one approval was actually
- * removed; revoking a project with no recorded approvals is a no-op
- * that returns `{ mutated: false }`.
- *
- * Always rewrites the cache file (even on the no-op branch) so the
- * file's existence reflects "we made a decision here". Logs one
- * `action: 'revoke'` event via `logTrustEvent`.
- */
 export function trustRevoke(
   input: TrustRevokeInput,
   ctx: WriteToolContext & { homeDir?: string } = {},
@@ -408,9 +310,6 @@ export function trustRevoke(
   writeCache(homeDir, newCache);
   const mutated = newCache.approvals.length !== beforeLength;
 
-  // F5 slice 2 — invalidate only on real state change; a no-op revoke
-  // (no matching approval for this project) leaves the resolved
-  // config unchanged, so the cache stays correct.
   if (mutated) invalidateForProject(input.projectRoot);
 
   logTrustEvent({
@@ -422,13 +321,6 @@ export function trustRevoke(
   return { mutated };
 }
 
-/**
- * Capture `git rev-parse HEAD` for `projectRoot`. Returns `undefined`
- * on any failure: missing git binary, non-git tree, detached/empty
- * repo, etc. The trust path must never abort because of git
- * environmental issues — `approvedCommit` is metadata, not
- * load-bearing.
- */
 function captureGitHead(projectRoot: string): string | undefined {
   try {
     const out = execFileSync('git', ['-C', projectRoot, 'rev-parse', 'HEAD'], {
@@ -441,8 +333,6 @@ function captureGitHead(projectRoot: string): string | undefined {
   }
 }
 
-// ---- module writes (M1) --------------------------------------------------
-
 export interface SetModuleStateInput {
   projectRoot: string;
   name: string;
@@ -450,25 +340,6 @@ export interface SetModuleStateInput {
   state: unknown;
 }
 
-/**
- * Persist the supplied `state` blob for module `name` at the named
- * `key` under the central, repo-keyed module-state store
- * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation;
- * M3-locked per-key layout). Atomic write via `atomicWriteFile`;
- * serialised with `stableStringify` so the on-disk JSON is canonical
- * (sorted keys, two-space indent, trailing newline) per F3
- * determinism. The `<repo-key>` is derived from `projectRoot` via F7's
- * git-common-dir resolution, so every worktree of a repo writes the
- * same shared file (the central F8 correctness fix).
- *
- * Whole-value replacement of the named key's blob. The `key` must
- * appear in the module manifest's `stateKeys` allowlist; an
- * undeclared key throws `UnknownStateKey` before any I/O. A module
- * whose manifest omits `stateKeys` cannot persist any state.
- *
- * Other declared keys for the same module are unaffected — each key
- * lives in its own file.
- */
 export function setModuleState(
   input: SetModuleStateInput,
   ctx: WriteToolContext = {},
@@ -478,32 +349,11 @@ export function setModuleState(
   const filePath = moduleStatePath(root, input.name, input.key, ctx.moduleStateStore);
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(input.state));
-  // F5 slice 2 — uniform invalidation discipline across every state-
-  // mutating tool. Module state is not part of the resolved-config
-  // snapshot today, but the contract is "no stale reads after a
-  // mutation" and invalidating here future-proofs the surface for
-  // the day module state surfaces into resolved config.
+
   invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
-/**
- * Recognised duplicate-handling policies for `appendToModuleState`.
- * Matches F2's contract for the corresponding overlay/stack append
- * tools:
- *
- *  - `'error'` (default): a duplicate aborts the write and returns
- *    `{ mutated: false, reason: 'duplicate-entry' }`.
- *  - `'skip'`: same outward result, but semantically "I expected
- *    this might already be there" — also no write.
- *  - `'allow'`: append unconditionally; for list shapes the list
- *    grows even with duplicates, for map shapes the existing key is
- *    overwritten.
- *
- * The default-when-absent is `'error'`; an unrecognised string is
- * rejected at input validation with `MalformedInput` (never silently
- * coerced to the default).
- */
 export type DuplicatePolicy = 'error' | 'skip' | 'allow';
 
 const DUPLICATE_POLICIES: ReadonlySet<DuplicatePolicy> = new Set(['error', 'skip', 'allow']);
@@ -514,47 +364,10 @@ export interface AppendToModuleStateInput {
   key: string;
   fieldPath: string;
   value: unknown;
-  /**
-   * How to handle a duplicate when the value at `fieldPath` already
-   * contains an entry that matches the new one. Default `'error'`.
-   * See `DuplicatePolicy` for the per-policy semantics. An
-   * unrecognised string throws `MalformedInput` before any I/O.
-   */
+
   duplicatePolicy?: DuplicatePolicy;
 }
 
-/**
- * Append `value` to the list-or-map at `fieldPath` inside the
- * module's state blob for the named `key`. Composes-if-absent: when
- * no state file exists for the key, treats the starting state as
- * `{}` and creates the list at the requested path. Loads, mutates,
- * writes via the same atomic pipeline as `setModuleState`.
- *
- * Shape rules (per F2 / M3, mirroring
- * `appendToOverlayField`/`appendToStackField` for keyed entries):
- *
- *   - The stored value at `fieldPath` may be an `Array<unknown>`
- *     (list-shape) or a `Record<string, unknown>` (map-shape).
- *     Anything else throws `ConfigServerError` with
- *     `code === 'MalformedInput'` whose message identifies the
- *     offending shape.
- *   - List-shape: `value` is appended; "duplicate" means deep-equal
- *     to an existing member.
- *   - Map-shape: the input `value` must be an object with a
- *     `key: string` property. The map property whose name equals
- *     `value.key` is the duplicate target.
- *
- * `duplicatePolicy` (default `'error'`) controls what happens on a
- * duplicate hit:
- *
- *   - `'error'` / `'skip'`: return
- *     `{ mutated: false, reason: 'duplicate-entry' }`; no write.
- *   - `'allow'`: append unconditionally; map-shape overwrites the
- *     existing property at `value.key`.
- *
- * The `key` parameter must appear in the manifest's `stateKeys`
- * allowlist; undeclared keys throw `UnknownStateKey` before any I/O.
- */
 export function appendToModuleState(
   input: AppendToModuleStateInput,
   ctx: WriteToolContext = {},
@@ -574,7 +387,7 @@ export function appendToModuleState(
   const cloned = deepClone(input.value);
 
   if (current === undefined) {
-    // Compose-if-absent: initialise as a single-element list.
+
     parent[lastKey] = [cloned];
   } else if (Array.isArray(current)) {
     const isDuplicate = current.some((entry) => deepEqual(entry, cloned));
@@ -609,18 +422,11 @@ export function appendToModuleState(
 
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(data));
-  // F5 slice 2 — invalidate on successful append (see setModuleState).
+
   invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
-/**
- * Resolve duplicate-policy shape and return a concrete
- * `DuplicatePolicy`. `undefined` falls through to the default
- * `'error'`. Any other non-recognised value throws
- * `MalformedInput` so unknown policy strings (e.g. `"replace"`) can
- * never silently coerce to the default.
- */
 function resolveDuplicatePolicy(value: unknown): DuplicatePolicy {
   if (value === undefined) return 'error';
   if (typeof value === 'string' && DUPLICATE_POLICIES.has(value as DuplicatePolicy)) {
@@ -634,12 +440,6 @@ function resolveDuplicatePolicy(value: unknown): DuplicatePolicy {
   });
 }
 
-/**
- * Walk `data` to the immediate parent of `segments[last]`, creating
- * intermediate objects on the way (matching the behaviour of
- * `appendAtPath`/`setAtPath`). Returns the parent record so the
- * caller can inspect the child's shape directly.
- */
 function navigateToParent(
   data: Record<string, unknown>,
   segments: string[],
@@ -659,11 +459,6 @@ function navigateToParent(
   return cursor;
 }
 
-/**
- * Extract the `key` string from an entry intended for a map-shaped
- * field. Returns the key when `entry` is an object with a non-empty
- * `key: string` property; returns `null` otherwise.
- */
 function extractEntryMapKey(entry: unknown): string | null {
   if (!isObject(entry)) return null;
   const k = entry['key'];
@@ -671,7 +466,6 @@ function extractEntryMapKey(entry: unknown): string | null {
   return k;
 }
 
-/** Human-readable shape descriptor used in `MalformedInput` messages. */
 function describeShape(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
@@ -685,31 +479,6 @@ export interface RemoveFromModuleStateInput {
   entryKey: string;
 }
 
-/**
- * Remove a single entry — addressed by `entryKey` — from the module's
- * state blob at the named `key`. Two stored shapes are supported (per
- * F2 / M3):
- *
- *   - **Map-shape**: the file at the repo-keyed store
- *     `<module-state-root>/<repo-key>/<name>/<key>.json` is a plain JSON
- *     object. `entryKey` matches the property name; the property is deleted.
- *   - **List-shape**: the file is a JSON array of records, each
- *     carrying a `key: string` field. `entryKey` matches that field;
- *     the matching member is filtered out.
- *
- * If `entryKey` is not found in either shape (or the file is absent),
- * the call is a silent no-op that returns
- * `{ mutated: false, reason: 'entry-not-found' }` and never touches
- * disk. Removing the last entry leaves `[]` / `{}` on disk — the
- * file is not auto-deleted.
- *
- * The `key` must appear in the manifest's `stateKeys` allowlist;
- * undeclared keys throw `UnknownStateKey` before any I/O.
- *
- * Anything other than a plain object or an array stored at `key` is
- * `MalformedInput` — `removeFromModuleState` has no defined meaning
- * against a scalar.
- */
 export function removeFromModuleState(
   input: RemoveFromModuleStateInput,
   ctx: WriteToolContext = {},
@@ -735,7 +504,7 @@ export function removeFromModuleState(
     const next = stored.slice();
     next.splice(idx, 1);
     atomicWriteFile(filePath, stableStringify(next));
-    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+
     invalidateCache(root);
     return { mutated: true, path: filePath };
   }
@@ -747,7 +516,7 @@ export function removeFromModuleState(
     const next: Record<string, unknown> = { ...stored };
     delete next[input.entryKey];
     atomicWriteFile(filePath, stableStringify(next));
-    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+
     invalidateCache(root);
     return { mutated: true, path: filePath };
   }
@@ -766,17 +535,6 @@ export interface RegisterModuleInput {
   manifest: unknown;
 }
 
-/**
- * `registerModule` is a runtime registration probe. The authoritative
- * registration set is computed by the loader on server start (per AC6
- * — collisions there halt server start). This tool reports whether the
- * named module is currently registered, so external callers can verify
- * that their assumptions hold without reaching for the loader directly.
- *
- * Returns `{ mutated: true }` to signal a successful registration probe;
- * `{ mutated: false, reason: 'unknown-module' }` when the named module
- * is not in the registry.
- */
 export function registerModule(
   input: RegisterModuleInput,
   _ctx: WriteToolContext = {},
@@ -787,10 +545,7 @@ export function registerModule(
   if (!found) {
     return { mutated: false, reason: `unknown-module:${input.name}` };
   }
-  // F5 slice 2 — invalidate on every `mutated: true` return. Today
-  // the registry is package-scoped and the probe is advisory, but
-  // honouring the contract here means the surface stays honest the
-  // day `registerModule` writes durable state.
+
   invalidateForProject(input.projectRoot);
   return { mutated: true, path: found.manifestPath };
 }
@@ -814,13 +569,6 @@ function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
-// ---- internals -----------------------------------------------------------
-
-/**
- * Resolve the absolute path of an overlay file for a given tier. Mirrors
- * the read-path resolver in `overlay-loader.ts`. Returns `null` if no path
- * can be determined (e.g. user tier with no resolvable home).
- */
 function overlayFilePathFor(
   tier: OverlayTier,
   projectRoot: string,
@@ -840,12 +588,6 @@ function overlayFilePathFor(
   }
 }
 
-/**
- * Persist an overlay-file mutation. Composes-if-absent: if the overlay
- * file does not exist, builds a minimal valid skeleton (`schemaVersion: 1`
- * + the requested mutation). Otherwise loads the file, applies the
- * mutation, validates, writes.
- */
 function persistOverlayMutation(
   filePath: string,
   tier: OverlayTier,
@@ -876,28 +618,22 @@ function persistOverlayMutation(
       data = deepClone(parsed.data) as Record<string, unknown>;
     }
   } else {
-    // Compose-if-absent: minimal valid overlay skeleton.
+
     data = { schemaVersion: 1 };
   }
 
   apply(data);
 
-  // Validate the resulting body against the overlay schema.
   const issues: Issue[] = [];
   validateOverlayBodyAgainstSchema(filePath, data, issues);
-  // Tier-aware forbidden-field guard (per C3 lines 71-75): a user-tier
-  // overlay declaring `planner.additionalContext`,
-  // `proposer.additionalContext`, `stack.override`, or
-  // `stack.cacheEnvOverride` is rejected before the file touches disk.
+
   if (tier === 'user') {
     checkUserOverlayForbiddenFields(filePath, data, issues);
   }
   if (issues.length > 0) return { mutated: false, issues };
 
-  // Build the new file source.
   const newSource = buildOverlaySource({ filePath, parsed, originalSource, data });
 
-  // Persist atomically.
   try {
     atomicWriteFile(filePath, newSource);
   } catch (e) {
@@ -907,21 +643,12 @@ function persistOverlayMutation(
     throw e;
   }
 
-  // Invalidate cache.
   invalidateCache(canonicalRoot);
-  // `tier` is part of the path (project.md / user.md / default.md) — it
-  // does not influence persistence beyond pathing, but we accept it as a
-  // parameter for symmetry with the read API.
+
   void tier;
   return { mutated: true, path: filePath };
 }
 
-/**
- * Persist a stack-file mutation. The file must already exist (no
- * compose-if-absent here — stacks are non-trivial enough that creating
- * one mid-run requires a deliberate workflow, not a side effect of a
- * single field write).
- */
 function persistStackMutation(
   filePath: string,
   canonicalRoot: string,
@@ -947,7 +674,6 @@ function persistStackMutation(
   const data = deepClone(parsed.data) as Record<string, unknown>;
   apply(data);
 
-  // Validate the resulting body against the stack schema.
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(filePath, data, issues);
   if (issues.length > 0) return { mutated: false, issues };
@@ -971,16 +697,6 @@ function persistStackMutation(
   return { mutated: true, path: filePath };
 }
 
-/**
- * Build the on-disk source for an overlay write. Three cases:
- *  - File did not exist → compose minimal source (canonical YAML markers,
- *    no surrounding prose). The skeleton serialises only the YAML body;
- *    the file becomes pure frontmatter.
- *  - File existed and the data is unchanged → return the original bytes
- *    (yaml-block-writer's deep-equal short-circuit).
- *  - File existed and the data changed → re-emit canonical YAML block
- *    flanked by the original prose.
- */
 function buildOverlaySource(input: {
   filePath: string;
   parsed: ParsedYamlBlock | null;
@@ -989,7 +705,7 @@ function buildOverlaySource(input: {
 }): string {
   const { parsed, originalSource, data } = input;
   if (parsed === null || originalSource === null) {
-    // Compose-if-absent — emit a canonical YAML block with no prose around it.
+
     return serializeYamlBlock(data);
   }
   return writeYamlBlock({
@@ -999,41 +715,15 @@ function buildOverlaySource(input: {
   });
 }
 
-/**
- * Drop the resolved-config cache entry for `canonicalRoot` after a
- * successful state-mutating write. F5 § Server-side cache coherence
- * requires this fire **before** the write tool returns, so a caller
- * that issues a write immediately followed by a read sees the post-
- * mutation state (the dogfooded `trustApprove` bug).
- *
- * Callers must pass an already-canonicalised root; the
- * `invalidateForProject` helper below covers the input-shape case.
- */
 function invalidateCache(canonicalRoot: string): void {
   const cache = getResolvedConfigCache();
   cache.invalidate(cacheKeyForProjectRoot(canonicalRoot));
 }
 
-/**
- * Convenience wrapper that canonicalises a write tool's input
- * `projectRoot` before invalidating. Used by the trust and module
- * write paths, which receive un-canonicalised `projectRoot` from
- * MCP callers; the overlay / stack write paths already canonicalise
- * upstream so they call `invalidateCache(root)` directly.
- */
 function invalidateForProject(projectRoot: string): void {
   invalidateCache(canonicalizePath(projectRoot));
 }
 
-// ---- field-path helpers --------------------------------------------------
-
-/**
- * Parse a dotted `fieldPath` (`planner.additionalContext`) into segments.
- * Returns `null` when the input is invalid (empty, non-string, or contains
- * empty segments). Numeric segments are kept as strings — array indexing
- * is intentionally not supported here; callers append/remove against
- * arrays via the dedicated helpers.
- */
 function parseFieldPath(fieldPath: unknown, _tool: string): string[] | null {
   if (typeof fieldPath !== 'string') return null;
   if (fieldPath.length === 0) return null;
@@ -1044,10 +734,6 @@ function parseFieldPath(fieldPath: unknown, _tool: string): string[] | null {
   return parts;
 }
 
-/**
- * Set the value at `segments` inside `data`. Creates intermediate objects
- * as needed. The final segment is overwritten.
- */
 function setAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1064,11 +750,6 @@ function setAtPath(data: Record<string, unknown>, segments: string[], value: unk
   cursor[segments[segments.length - 1]] = value;
 }
 
-/**
- * Append `value` to the array at `segments` inside `data`. Creates the
- * array if absent. Throws via `createError` if the existing value is not
- * an array.
- */
 function appendAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1097,12 +778,6 @@ function appendAtPath(data: Record<string, unknown>, segments: string[], value: 
   current.push(value);
 }
 
-/**
- * Remove every entry deep-equal to `value` from the array at `segments`
- * inside `data`. If the array is absent or the path does not exist, the
- * mutation is a silent no-op (so removing an entry that was never there
- * matches the orchestrator's idempotent intent).
- */
 function removeAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1117,8 +792,6 @@ function removeAtPath(data: Record<string, unknown>, segments: string[], value: 
   const filtered = current.filter((entry) => !deepEqual(entry, value));
   cursor[lastKey] = filtered;
 }
-
-// ---- helpers --------------------------------------------------------------
 
 function malformed(message: string): WriteResult {
   return {
@@ -1143,10 +816,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 function deepClone<T>(v: T): T {
   if (v === null || typeof v !== 'object') return v;
-  // Structured clone semantics on plain JSON-shaped data are sufficient
-  // here — YAML data does not contain Map/Set/Date instances. Fall back
-  // to JSON round-trip; faster than `structuredClone` for small payloads
-  // and avoids the rare prototype edge case.
+
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
