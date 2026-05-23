@@ -14,18 +14,18 @@ schemas and docker adjacent to the config server they serve.
 flowchart LR
     subgraph ENTRY["Entry points"]
         direction TB
-        SKILL["/gan skill\nskills/gan/"]
-        CLI["gan CLI\nsrc/cli/"]
+        SKILL["/gan skill"]
+        CLI["gan CLI"]
     end
 
     HOOK["Confinement hook\nPreToolUse"]
 
-    subgraph AL["Agent layer · agents/"]
+    subgraph AL["Agent layer"]
         direction TB
         PL["planner"] --> CP["contract-proposer"] --> CR["contract-reviewer"] --> GN["generator"] --> EV["evaluator\n+ evaluator-core"]
     end
 
-    subgraph CS["Config Server · src/config-server/ · MCP"]
+    subgraph CS["Config Server · MCP"]
         direction TB
         MT["Tool surface\nreads · writes · validate"]
         TG["Trust gate"]
@@ -34,10 +34,10 @@ flowchart LR
         MT --> TG --> RP --> ST
     end
 
-    SCH["schemas/"]
-    DK["docker module\nsrc/modules/docker/"]
+    SCH["schemas"]
+    DK["docker module"]
 
-    subgraph TR["Trace · src/trace/"]
+    subgraph TR["Trace"]
         direction LR
         EM["Emitter"]
         RC["Reconciler"]
@@ -45,10 +45,10 @@ flowchart LR
 
     subgraph ZN["Storage zones"]
         direction TB
-        Z1["zone 1 · config\n.claude/gan/"]
-        Z2R["zone 2 · runs\n~/.gan-runs-data/"]
-        Z2M["zone 2 · module state\n~/.gan-module-state/"]
-        Z3["zone 3 · cache\n.gan-state/"]
+        Z1["zone 1 · config"]
+        Z2R["zone 2 · runs"]
+        Z2M["zone 2 · module state"]
+        Z3["zone 3 · cache"]
     end
 
     SKILL      -->|"orchestrates"| AL
@@ -89,13 +89,13 @@ sequenceDiagram
 
     SK->>+PL: spawn with prompt + config snapshot
     PL->>CS: getResolvedConfig, getMergedSplicePoints
-    PL-->>-SK: spec.md written to zone 3
+    PL-->>-SK: spec written to zone 3
 
-    SK->>+CP: spawn with spec.md
+    SK->>+CP: spawn with spec
     CP->>CS: getResolvedConfig (security + doc surfaces)
-    CP-->>-SK: contract.md written to zone 3
+    CP-->>-SK: contract written to zone 3
 
-    SK->>+CR: spawn with contract.md
+    SK->>+CR: spawn with contract
     CR-->>-SK: verdict (approved / rejected)
 
     loop for each feature in contract
@@ -126,18 +126,18 @@ Called on every `getResolvedConfig` tool invocation.
 flowchart TD
     IN["MCP tool call\ngetResolvedConfig"]
 
-    subgraph TG["Trust gate · trust/"]
+    subgraph TG["Trust gate"]
         HC["Content-hash all overlay + stack files"]
         TP["Compare against approved hashes\nPrompt user if new or changed"]
         HC --> TP
     end
 
-    subgraph RP["Resolution pipeline · resolution/"]
+    subgraph RP["Resolution pipeline"]
         DT["Detection\nScan project for stack indicators"]
         SL["Stack loader\nBuilt-in → tier-3 → tier-2 → tier-1"]
         OL["Overlay loader\nUser → project tiers"]
         CM["Cascade merge\nOverlays applied on top of stacks"]
-        SV["Schema validation\nstack-v1.json · overlay-v1.json"]
+        SV["Schema validation"]
         IV["Invariants\n8 cross-field constraint checks"]
         DT --> SL --> OL --> CM --> SV --> IV
     end
@@ -159,30 +159,30 @@ What lives where, and what owns each zone.
 flowchart LR
     subgraph Z1["Zone 1 — config"]
         direction TB
-        OVP[".claude/gan/project.md\nproject overlay"]
-        OVU["~/.claude/gan/user.md\nuser overlay"]
-        CST[".claude/gan/stacks/\nstack customizations"]
-        CMC[".claude/gan/modules/\nmodule configs e.g. docker.yaml"]
+        OVP["project overlay"]
+        OVU["user overlay"]
+        CST["stack customizations"]
+        CMC["module configs"]
     end
 
-    subgraph Z2R["Zone 2a — runs\n~/.gan-runs-data/repo-key/"]
+    subgraph Z2R["Zone 2a — runs"]
         direction TB
-        RT["run-trace-*.ndjson\nstructured event log"]
-        RI["run-index.json"]
-        RA["recovery-anchor.json"]
-        RL["run-lock"]
+        RT["structured event log"]
+        RI["run index"]
+        RA["recovery anchor"]
+        RL["run lock"]
     end
 
-    subgraph Z2M["Zone 2b — module state\n~/.gan-module-state/repo-key/"]
+    subgraph Z2M["Zone 2b — module state"]
         direction TB
-        PR["docker/port-registry.json\ncross-worktree port allocation"]
+        PR["port registry\ncross-worktree port allocation"]
     end
 
-    subgraph Z3["Zone 3 — cache (ephemeral)\n.gan-state/"]
+    subgraph Z3["Zone 3 — cache (ephemeral)"]
         direction TB
-        SP["spec.md"]
-        CO["contract.md"]
-        EB["evidence-bundle.json"]
+        SP["spec"]
+        CO["contract"]
+        EB["evidence bundle"]
         SC["per-run scratch"]
     end
 
@@ -203,8 +203,7 @@ flowchart LR
 
 ## 5 — Evaluator-core internals
 
-`src/agents/evaluator-core/` is a pure TypeScript library loaded by the evaluator agent.
-`buildEvaluatorPlan` is its single entry point — a deterministic, no-I/O function that
+`buildEvaluatorPlan` is the single entry point — a deterministic, no-I/O function that
 produces a byte-stable `EvaluatorPlan` for the same inputs regardless of call order or process.
 
 ```mermaid
@@ -216,7 +215,7 @@ flowchart LR
         WTS["WorktreeState\nfiles[]\nfileContents?"]
     end
 
-    PB["buildEvaluatorPlan\nplan-builder.ts\nPure function · no I/O · deterministic\nOrchestrates all five builders"]
+    PB["buildEvaluatorPlan\nPure function · no I/O · deterministic\nOrchestrates all five builders"]
 
     subgraph BL["Builders · one per EvaluatorPlan section"]
         direction TB
