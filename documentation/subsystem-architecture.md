@@ -11,6 +11,9 @@ Related components are grouped: entry points together, trace below the agents th
 schemas and docker adjacent to the config server they serve.
 
 ```mermaid
+---
+title: Component architecture
+---
 flowchart LR
     subgraph ENTRY["Entry points"]
         direction TB
@@ -70,6 +73,9 @@ flowchart LR
 ## 2 — /gan run sequence
 
 ```mermaid
+---
+title: /gan run sequence
+---
 sequenceDiagram
     participant U as User
     participant SK as /gan skill
@@ -123,6 +129,9 @@ sequenceDiagram
 Called on every `getResolvedConfig` tool invocation.
 
 ```mermaid
+---
+title: Config server resolution pipeline
+---
 flowchart TD
     IN["MCP tool call\ngetResolvedConfig"]
 
@@ -156,6 +165,9 @@ flowchart TD
 What lives where, and what owns each zone.
 
 ```mermaid
+---
+title: Storage topology
+---
 flowchart LR
     subgraph Z1["Zone 1 — config"]
         direction TB
@@ -207,6 +219,9 @@ flowchart LR
 produces a byte-stable `EvaluatorPlan` for the same inputs regardless of call order or process.
 
 ```mermaid
+---
+title: Evaluator-core internals
+---
 flowchart LR
     subgraph IN["Inputs — assembled by the evaluator agent"]
         direction TB
