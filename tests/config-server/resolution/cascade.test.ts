@@ -1,3 +1,16 @@
+// Exercises cascadeOverlays — the C4 merge that folds the three overlay tiers
+// (default < user < project) into one effective view. The suite pins the
+// per-shape merge rules that the rest of the system relies on:
+//   - scalars: highest present tier wins;
+//   - string lists: lower-tier-first union, deduped by exact string;
+//   - keyed object lists (by name/command): union that preserves first-seen
+//     order while letting a higher tier override a matching key in place;
+//   - maps: deep-merged, higher tier wins per key;
+//   - the discardInherited wrapper (block- and field-level) for explicitly
+//     dropping inherited values, with field-level precedence over block-level;
+//   - malformed wrappers surfacing as MalformedInput rather than merging.
+// These ordering/precedence guarantees are the contract callers depend on, so
+// each case documents the exact expected shape rather than just "it merges".
 import { describe, expect, it } from 'vitest';
 
 import { cascadeOverlays } from '../../../src/config-server/resolution/cascade.js';
@@ -67,8 +80,12 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
       const out = (result.merged.proposer as Record<string, unknown>).additionalCriteria as Array<
         Record<string, unknown>
       >;
+      // Order is lower-tier first (A,B,C) then higher-tier newcomers (X,Y); the
+      // shared key B keeps its original slot (index 1) rather than moving to
+      // the end, even though its contents are replaced below.
       expect(out.map((o) => o.name)).toEqual(['A', 'B', 'C', 'X', 'Y']);
 
+      // The in-place override: B's value is the higher tier's (b-prime/8).
       expect(out[1]).toEqual({ name: 'B', description: 'b-prime', threshold: 8 });
     });
   });
@@ -98,6 +115,9 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
       const checks = (result.merged.evaluator as Record<string, unknown>).additionalChecks as Array<
         Record<string, unknown>
       >;
+      // Keyed by command: A,B,C from user, then D appended from project; the
+      // shared check-B holds its original index-1 slot but takes the project's
+      // on_failure value. Execution order is therefore stable across tiers.
       expect(checks.map((c) => c.command)).toEqual([
         './bin/check-A',
         './bin/check-B',
@@ -128,6 +148,9 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
     });
 
     it('block-level true with no replacement falls back to bare default', () => {
+      // discardInherited drops the user's runner block but supplies no
+      // replacement value, so the field disappears entirely (empty merged) and
+      // the dropped path is reported in `discarded`.
       const result = cascadeOverlays({
         default: null,
         user: { runner: { thresholdOverride: 7 } },
@@ -174,7 +197,9 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
     });
 
     it('field-level wins over block-level when both set', () => {
-
+      // The block says discard, but the field explicitly opts back in
+      // (discardInherited: false), so the more specific field-level directive
+      // wins: the user's rule is kept and the project's rule is unioned on top.
       const result = cascadeOverlays({
         default: null,
         user: {
@@ -197,6 +222,10 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
 
   describe('unknown wrapper rejection', () => {
     it('rejects { discardInherited, value, extra } as MalformedInput', () => {
+      // A discard wrapper may only carry discardInherited + value; the stray
+      // `extra` key makes the wrapper malformed. It surfaces as an issue
+      // (naming the offending key) and the merge fails closed to empty rather
+      // than guessing intent.
       const result = cascadeOverlays({
         default: null,
         user: null,
@@ -256,6 +285,8 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
     });
 
     it('no override anywhere → field omitted from merged view', () => {
+      // Present-but-empty tiers (distinct from null) still produce an empty
+      // merged view: a field absent everywhere is simply omitted, never seeded.
       const result = cascadeOverlays({
         default: {},
         user: {},

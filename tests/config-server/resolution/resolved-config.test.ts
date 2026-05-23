@@ -1,3 +1,11 @@
+// Pins the F2 "stable shape" contract of composeResolvedConfig: the full set
+// of top-level keys, their default values for a minimal project, and — most
+// importantly — determinism. The same project must serialise byte-identically
+// across calls, and stableStringify must sort keys at every depth so the
+// serialised form is a fixed point (re-serialising a parse of it yields the
+// same bytes). That stability is what lets downstream consumers hash/diff the
+// resolved config; a non-deterministic key order or a drifting key set would
+// break those consumers, so the assertions are deliberately exact.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +51,9 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     const r = await composeResolvedConfig(jsTsMinimal);
     const serialised = stableStringify(r);
 
+    // Fixed-point property: parsing the serialised form and re-serialising must
+    // reproduce the exact bytes. This holds only if stableStringify sorts keys
+    // recursively, so it doubles as a depth-wise sort check.
     const parsed = JSON.parse(serialised);
     const reSerialised = stableStringify(parsed);
     expect(serialised).toBe(reSerialised);

@@ -1,4 +1,23 @@
-
+// End-to-end coverage of the F7 slice-4 run lifecycle: run locking, run
+// enumeration, recovery anchoring, and cleanup — all anchored on the CENTRAL
+// store keyed by repo, never inside a worktree's .gan-state. The cross-cutting
+// invariants this suite guards:
+//   - the run lock lives at <store>/<repo-key>/run.lock and is shared across
+//     every worktree of the repo, so a live run in one worktree blocks another
+//     (and a stale/dead-pid lock is safely broken);
+//   - enumeration is repo-wide, read-only (progress.json byte-identical after),
+//     and identical from any worktree;
+//   - recovery refuses from the wrong worktree (naming where to recover from)
+//     and from a missing worktree (with recreate guidance), using canonical
+//     path comparison (slash/case tolerant);
+//   - cleanup is merge-aware on gan-created workspaces (delete only when merged
+//     or forced with --yes, and merge-check always precedes delete), NEVER
+//     touches a user-owned (1a) workspace, and always removes only the
+//     central-store run dir — never module-state / .claude/gan / .gan-cache.
+//   - the active-run guard on the central lock refuses cleanup of a live run.
+// The shell-safety cases (both behavioural and static-source) pin that hostile
+// branch names / paths reach git as single literal argv elements with no shell
+// interpolation, and that no secret/home-path literal is committed.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -58,10 +77,13 @@ afterEach(() => {
   }
 });
 
+// Argv-array git runner for the real-git cases.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
 }
 
+// Real repo with `develop` as the initial branch (this project's default base
+// branch) and gpgsign disabled so commits do not block on signing in CI.
 function initRepo(): string {
   const repo = makeTmp('cas-f7s4-repo-');
   git(repo, ['init', '-q', '-b', 'develop']);
@@ -74,6 +96,9 @@ function initRepo(): string {
   return repo;
 }
 
+// Materialises a run directory under the central store with a progress.json,
+// the way a real run would, so enumeration/recovery/cleanup have something to
+// operate on. Returns the run dir path.
 function seedRun(
   storeRoot: string,
   repoKey: string,
@@ -91,6 +116,8 @@ function seedRun(
   return runDir;
 }
 
+// A PID that is effectively never live (near INT32_MAX), used to forge a
+// "stale" lock so the stale-detection path can be exercised deterministically.
 const DEAD_PID = 2147483646;
 
 describe('run lock — anchored on the central store', () => {
@@ -138,6 +165,8 @@ describe('concurrent run — refused across two worktrees of the same repo', () 
     const wtB = path.join(makeTmp('cas-f7s4-wtb-'), 'linked');
     git(main, ['worktree', 'add', '-q', '-b', 'feature/b', wtB]);
 
+    // The two worktrees of one repo derive the same repo-key, hence the same
+    // lock path — that shared lock is what makes cross-worktree exclusion work.
     const keyMain = resolveRepoKey(main);
     const keyWtB = resolveRepoKey(wtB);
     expect(keyMain).toBe(keyWtB);
@@ -147,8 +176,11 @@ describe('concurrent run — refused across two worktrees of the same repo', () 
     const lockWtB = resolveRunLockPath(resolveStoreRoot(env), keyWtB);
     expect(lockWtB).toBe(lockMain);
 
+    // Hold the lock as if a run is live in worktree A.
     const handle = acquireRunLock({ lockPath: lockMain, runId: '20260522T180000-aaaa' });
 
+    // Worktree B's acquire must be refused, and the error must name the live
+    // holder's runId and pid (here this process) so the user can find it.
     let threw: unknown;
     try {
       acquireRunLock({ lockPath: lockWtB, runId: '20260522T180000-bbbb' });
@@ -163,6 +195,7 @@ describe('concurrent run — refused across two worktrees of the same repo', () 
     expect(err.message).toContain('20260522T180000-aaaa');
     expect(err.message).toContain(String(process.pid));
 
+    // Once A releases, B can acquire — the lock is exclusive, not permanent.
     releaseRunLock(handle);
     const handleB = acquireRunLock({ lockPath: lockWtB, runId: '20260522T180000-bbbb' });
     expect(readRunLock(lockWtB)!.runId).toBe('20260522T180000-bbbb');
@@ -174,6 +207,8 @@ describe('concurrent run — refused across two worktrees of the same repo', () 
     const lockPath = path.join(storeRoot, 'r-aaaaaaaaaaaa', 'run.lock');
     mkdirSync(path.dirname(lockPath), { recursive: true });
 
+    // Forge a lock owned by a dead pid; acquisition should break it (warning
+    // about staleness) rather than refuse.
     writeFileSync(
       lockPath,
       JSON.stringify({
@@ -227,6 +262,8 @@ describe('enumeration — repo-wide, read-only, same from any worktree', () => {
     expect(fromWtB).toEqual(fromMain);
   });
 
+  // Enumeration must never mutate run data: it reads progress.json but the
+  // file's bytes are unchanged afterwards.
   it('enumeration_repo_wide_from_any_worktree: read-only — every progress.json byte-identical after enumeration', () => {
     const storeRoot = makeTmp('cas-f7s4-store-');
     const repoKey = 'r-aaaaaaaaaaaa';
@@ -251,6 +288,8 @@ describe('enumeration — repo-wide, read-only, same from any worktree', () => {
     const repoKey = 'r-aaaaaaaaaaaa';
     const runsRoot = resolveRunsRoot(storeRoot, repoKey);
     mkdirSync(runsRoot, { recursive: true });
+    // A directory not matching the run-id grammar and a stray file are both
+    // ignored; only the properly-seeded run is enumerated.
     mkdirSync(path.join(runsRoot, 'not-a-run'), { recursive: true });
     writeFileSync(path.join(runsRoot, 'stray.txt'), 'x', 'utf8');
     seedRun(storeRoot, repoKey, '20260522T180000-0001', {});
@@ -282,6 +321,8 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
     const run = findRun(resolveRunsRoot(storeRoot, repoKey), id)!;
     const anchor = { worktreePath: run.workspace!.worktreePath!, branch: run.workspace!.branch! };
 
+    // The run was executed in wtOrigin; recovering from a different worktree
+    // (wtOther) is refused, and the message points the user back at wtOrigin.
     const fromOther = checkRecoveryAnchor({ runId: id, workspace: anchor, fromDir: wtOther });
     expect(fromOther.ok).toBe(false);
     expect(fromOther.refusal).toBe('wrong-worktree');
@@ -290,9 +331,12 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
         `(branch feature/origin); recover it from there.`,
     );
 
+    // From the correct worktree the same anchor passes.
     const fromOrigin = checkRecoveryAnchor({ runId: id, workspace: anchor, fromDir: wtOrigin });
     expect(fromOrigin.ok).toBe(true);
 
+    // A wrong-worktree refusal does not hide the run from enumeration — it is
+    // still listed (recovery is gated, not the run's visibility).
     const listedFromOther = enumerateRuns(resolveRunsRoot(storeRoot, repoKey)).map((r) => r.runId);
     expect(listedFromOther).toContain(id);
   });
@@ -310,6 +354,10 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
       workspace: { worktreePath: recordedPath, branch: 'feature/origin', createdByGan: true },
     });
 
+    // Delete the recorded worktree, then attempt recovery from an unrelated
+    // dir: the anchor's worktree no longer exists, so the refusal is
+    // "missing-worktree" with guidance to recreate it (distinct from the
+    // wrong-worktree case above).
     git(main, ['worktree', 'remove', '--force', wtOrigin]);
     const elsewhere = makeTmp('cas-f7s4-elsewhere-');
     const res = checkRecoveryAnchor({
@@ -329,6 +377,8 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
     const wt = makeTmp('cas-f7s4-canon-');
     const recorded = canonicalizePath(wt);
 
+    // A trailing-slash variant of the recorded path is canonically equal, so
+    // recovery is allowed.
     const slashed = checkRecoveryAnchor({
       runId: 'r1',
       workspace: { worktreePath: recorded + path.sep, branch: 'b' },
@@ -336,6 +386,8 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
     });
     expect(slashed.ok).toBe(true);
 
+    // Case-folding only on case-insensitive filesystems: an upper-cased path is
+    // the same place on darwin/win32, so the anchor still matches there.
     if (process.platform === 'darwin' || process.platform === 'win32') {
       const upper = checkRecoveryAnchor({
         runId: 'r1',
@@ -345,6 +397,7 @@ describe('recovery anchor — refuses from the wrong worktree', () => {
       expect(upper.ok).toBe(true);
     }
 
+    // A genuinely different directory is correctly rejected as wrong-worktree.
     const sibling = makeTmp('cas-f7s4-sibling-');
     const diff = checkRecoveryAnchor({
       runId: 'r1',
@@ -364,9 +417,13 @@ describe('cleanup — always removes the central-store run dir', () => {
     const runDir = seedRun(storeRoot, repoKey, id, {
       workspace: { worktreePath: '/canon/main', branch: 'develop', createdByGan: false },
     });
+    // The run dir lives under the central store, not under the worktree's
+    // .gan-state/runs — that is what makes run data survive worktree removal.
     expect(runDir.startsWith(storeRoot + path.sep)).toBe(true);
     expect(runDir).not.toContain(`.gan-state${path.sep}runs`);
 
+    // Workspace is user-owned (createdByGan:false) so no git work is needed;
+    // the no-op git seam suffices and only the run dir is removed.
     const run = findRun(resolveRunsRoot(storeRoot, repoKey), id)!;
     const plan = planRunCleanup(run, { fromDir: '/unused', git: () => '' });
     const outcome = executeRunCleanup(plan, { fromDir: '/unused', git: () => '', yes: true });
@@ -378,6 +435,10 @@ describe('cleanup — always removes the central-store run dir', () => {
 
 describe('cleanup — merge-aware on a gan-created workspace (real git)', () => {
 
+  // Builds a real gan-created run: a task branch in its own run-scoped worktree
+  // with one commit. Knobs let a test choose whether the branch is already
+  // merged into develop and whether it has been pushed to a remote, so the
+  // merge-aware cleanup paths can be exercised against real git.
   function setupGanRun(opts: {
     storeRoot: string;
     merged: boolean;
@@ -395,11 +456,13 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
     git(runScoped, ['commit', '-q', '-m', 'task work']);
 
     if (opts.merged) {
-
+      // Fold the task branch into develop so the merge-check sees it as merged.
       git(repo, ['merge', '-q', '--no-edit', branch]);
     }
 
     if (opts.withRemote) {
+      // Stand up a bare remote and push the branch so the remote-delete path
+      // has a real upstream to operate on.
       const remoteDir = path.join(makeTmp('cas-f7s4-remote-'), 'remote.git');
       git(repo, ['init', '-q', '--bare', remoteDir]);
       git(repo, ['remote', 'add', 'origin', remoteDir]);
@@ -428,12 +491,16 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
     const storeRoot = makeTmp('cas-f7s4-store-');
     const { repo, branch, run, runScoped } = setupGanRun({ storeRoot, merged: true, withRemote: true });
 
+    // realGit runs real git but records every argv array, so the test can
+    // both observe side effects and assert the exact commands issued.
     const argv: string[][] = [];
     const realGit: GitExec = (args, cwd) => {
       argv.push([...args]);
       return execFileSync('git', [...args], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
     };
 
+    // Merged + a known remote → the plan elects to delete the branch locally
+    // and on the remote.
     const plan = planRunCleanup(run, { fromDir: repo, git: realGit, remote: 'origin' });
     expect(plan.branchPlan.kind).toBe('delete-merged');
     expect((plan.branchPlan as { remote?: string }).remote).toBe('origin');
@@ -452,8 +519,10 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
     expect(outcome.branchDeletedRemote).toBe(true);
     expect(outcome.runDirRemoved).toBe(true);
 
+    // Safety ordering: the merge-check must run before any branch delete.
     assertMergeBeforeDelete(argv);
 
+    // The remote branch is deleted via `push --delete <branch>`.
     expect(
       argv.some((a) => a[0] === 'push' && a.includes('--delete') && a.includes(branch)),
     ).toBe(true);
@@ -470,6 +539,7 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
     };
     const warnings: string[] = [];
 
+    // Unmerged branch → the plan only warns; it will not delete unmerged work.
     const plan = planRunCleanup(run, { fromDir: repo, git: realGit });
     expect(plan.branchPlan.kind).toBe('warn-unmerged');
 
@@ -480,12 +550,16 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
       warn: (l) => warnings.push(l),
     });
 
+    // Without --yes the warning names the branch but no delete (local or
+    // remote) is issued; the branch survives.
     expect(warnings.join('\n')).toContain(branch);
     expect(outcome.branchDeletedLocal).toBe(false);
     expect(branchExists(repo, branch)).toBe(true);
     expect(argv.some((a) => a[0] === 'branch' && a[1] === '-D')).toBe(false);
     expect(argv.some((a) => a[0] === 'push' && a.includes('--delete'))).toBe(false);
 
+    // The worktree and run dir are still cleaned up regardless of the branch
+    // decision — only the branch is preserved.
     expect(existsSync(runScoped)).toBe(false);
     expect(outcome.runDirRemoved).toBe(true);
   });
@@ -509,12 +583,17 @@ describe('cleanup — merge-aware on a gan-created workspace (real git)', () => 
       warn: (l) => warnings.push(l),
     });
 
+    // --yes overrides the unmerged warning: the branch is still flagged in the
+    // warning AND actually deleted.
     expect(warnings.join('\n')).toContain(branch);
     expect(outcome.branchDeletedLocal).toBe(true);
     expect(git(repo, ['branch', '--list', branch]).trim()).toBe('');
     assertMergeBeforeDelete(argv);
   });
 
+  // Asserts the merge-check (`merge-base --is-ancestor`) was issued and, if any
+  // delete happened, that it came strictly after the check — never delete a
+  // branch before confirming its merge status.
   function assertMergeBeforeDelete(argv: string[][]): void {
     const mergeIdx = argv.findIndex(
       (a) => a[0] === 'merge-base' && a.includes('--is-ancestor'),
@@ -546,12 +625,17 @@ describe('cleanup — never touches a user-owned (1a) workspace', () => {
       return execFileSync('git', [...args], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
     };
 
+    // createdByGan:false means the workspace is the user's; the plan must do
+    // nothing to the branch ('none').
     const run = findRun(resolveRunsRoot(storeRoot, repoKey), id)!;
     const plan = planRunCleanup(run, { fromDir: repo, git: realGit });
     expect(plan.branchPlan.kind).toBe('none');
 
     const outcome = executeRunCleanup(plan, { fromDir: repo, git: realGit, yes: true });
 
+    // Only the central-store run dir is removed; the user's worktree and branch
+    // are left intact and NO mutating git command (worktree remove / branch -D
+    // / push --delete) is ever issued.
     expect(outcome.runDirRemoved).toBe(true);
     expect(existsSync(runDir)).toBe(false);
     expect(existsSync(userWt)).toBe(true);
@@ -578,6 +662,8 @@ describe('cleanup — active-run guard on the central lock', () => {
       'utf8',
     );
 
+    // A live lock (this process's pid) naming the target run blocks cleanup;
+    // the refusal names the runId + pid, and the run dir is left intact.
     const guard = checkActiveRunGuard(lockPath, [id]);
     expect(guard.ok).toBe(false);
     expect(guard.runId).toBe(id);
@@ -603,6 +689,8 @@ describe('cleanup — active-run guard on the central lock', () => {
       'utf8',
     );
 
+    // A dead-pid lock is not a live run, so the guard passes and cleanup
+    // proceeds to remove the run dir.
     const guard = checkActiveRunGuard(lockPath, [id]);
     expect(guard.ok).toBe(true);
 
@@ -620,6 +708,10 @@ describe('zone safety — slice-4 helpers never touch module-state / .claude/gan
     const main = initRepo();
     const repoKey = resolveRepoKey(main);
 
+    // Seed three "zones" the slice-4 helpers must never touch: module-state,
+    // the .claude/gan config overlay, and the .gan-cache. Each carries a
+    // sentinel payload so a byte-for-byte comparison after the full
+    // enumerate→recover→cleanup flow proves they were untouched.
     const moduleStateDir = path.join(main, '.gan-state', 'modules', 'dummy');
     mkdirSync(moduleStateDir, { recursive: true });
     const moduleStateFile = path.join(moduleStateDir, 'state.json');
@@ -668,6 +760,10 @@ describe('zone safety — slice-4 helpers never touch module-state / .claude/gan
 describe('shell_and_subprocess_safety — hostile branch/path stay single argv elements', () => {
   it('a hostile branch name and worktree path are passed as single argv elements; no canary', () => {
     const cwd = process.cwd();
+    // The branch/worktree strings embed shell-injection payloads (command
+    // substitution + a `touch CANARY`). If any value were ever interpolated
+    // into a shell, the canary file would be created — its absence at the end
+    // proves the values stayed inert literal argv elements.
     const canary = path.join(makeTmp('cas-f7s4-canary-'), 'CANARY');
     const hostileBranch = `feature/x$(touch ${canary});\`id\``;
     const hostileWorktree = `/tmp/wt$(touch ${canary})`;
@@ -702,6 +798,8 @@ describe('shell_and_subprocess_safety — hostile branch/path stay single argv e
       warn: () => {},
     });
 
+    // The hostile strings appear as exactly one argv element each, never split
+    // on the shell metacharacters they contain.
     const del = argv.find((a) => a[0] === 'branch' && a[1] === '-D');
     expect(del).toEqual(['branch', '-D', hostileBranch]);
     const wtRemove = argv.find((a) => a[0] === 'worktree' && a[1] === 'remove');
@@ -713,6 +811,9 @@ describe('shell_and_subprocess_safety — hostile branch/path stay single argv e
   it('REAL git: a hostile branch name reaches git as one literal arg, no canary side-effect', () => {
     const repo = initRepo();
 
+    // Same idea against real git: create a branch whose name carries shell
+    // redirection/separators, then run merge-check + delete on it. The CANARY
+    // file must not appear, proving git received the name as one literal arg.
     const hostileBranch = 'feature/x;true>CANARY&true';
     const canary = path.join(repo, 'CANARY');
     git(repo, ['branch', hostileBranch, 'develop']);
@@ -731,6 +832,12 @@ describe('shell_and_subprocess_safety — hostile branch/path stay single argv e
   });
 });
 
+// Source-text greps over the slice-4 files. They guard discipline that
+// behaviour tests cannot observe: no exec/execSync command-string API and no
+// `shell:true` (which would reopen injection); exactly one gated `branch -D`
+// that is preceded by a merge-check; canonicalisation routed through the shared
+// determinism module rather than ad-hoc realpath/lowercase/slice; and no
+// committed secret or absolute home-path literal.
 describe('static checks — argv-only subprocess + no committed secrets/home paths', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(here, '..', '..', '..');
@@ -796,6 +903,9 @@ describe('enumeration — absent runs root', () => {
   });
 
   it('planRunCleanup handles a missing branch (no-branch) without a git call', () => {
+    // A workspace with no recorded branch needs no merge analysis, so planning
+    // must short-circuit to a no-branch plan and never invoke git (the `called`
+    // flag stays false).
     let called = false;
     const plan: RunCleanupPlan = planRunCleanup(
       {

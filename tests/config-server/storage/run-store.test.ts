@@ -1,4 +1,18 @@
-
+// Covers the F7 run-store primitives that decide WHERE run data lives:
+//   - store-root precedence (GAN_RUNS_DATA env > marker file > default
+//     ~/.gan-state-equivalent), with ~ expanded and whitespace-only treated as
+//     unset;
+//   - the repo-key format <basename>-<sha256[:12]> derived from the CANONICAL
+//     path (so trailing-slash and, on darwin/win32, case-only variants collapse
+//     to one key);
+//   - run-dir relocation under <store>/<key>/runs/<id> (never inside the
+//     worktree's .gan-state/runs) and the O2 run-id grammar;
+//   - integration: the key is derived from the git common-dir parent (the main
+//     checkout) so it is stable across linked worktrees, and run data SURVIVES
+//     `git worktree remove --force`.
+// The static-source checks pin that all git access is argv-array execFile (no
+// exec/execSync command strings) and that canonicalisation is delegated to the
+// determinism module rather than re-implemented.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -41,6 +55,8 @@ afterEach(() => {
   }
 });
 
+// Hermetic dependency seam: homedir() points at a scratch dir and env is the
+// supplied map, so store-root resolution never reads the real environment.
 function fakeHomeEnv(env: NodeJS.ProcessEnv = {}): {
   home: string;
   deps: { homedir: () => string; env: NodeJS.ProcessEnv };
@@ -49,6 +65,8 @@ function fakeHomeEnv(env: NodeJS.ProcessEnv = {}): {
   return { home, deps: { homedir: () => home, env } };
 }
 
+// Writes the store-root marker file (precedence tier between env and default)
+// under the fake home.
 function writeMarker(home: string, contents: string): void {
   const markerPath = path.join(home, STORE_MARKER_RELPATH);
   mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -57,6 +75,7 @@ function writeMarker(home: string, contents: string): void {
 
 describe('resolveStoreRoot — precedence', () => {
   it('store_root_precedence_env_wins: GAN_RUNS_DATA wins over marker and default', () => {
+    // Env and marker disagree; env must win and the marker value must not leak.
     const { home, deps } = fakeHomeEnv({ GAN_RUNS_DATA: '/tmp/gan-runs-A' });
 
     writeMarker(home, '/tmp/gan-runs-B');
@@ -103,6 +122,9 @@ describe('resolveStoreRoot — precedence', () => {
 
 describe('computeRepoKey — format and determinism', () => {
   it('repo_key_format: <basename>-<first 12 hex of sha256(canonical path)>', () => {
+    // Recompute the key by hand to pin the exact derivation, then cross-check
+    // against the exported pattern/length constants so the format and the
+    // constants stay in lockstep.
     const repoRoot = makeTmp('myapp-');
     const canonical = canonicalizePath(repoRoot);
     const fullHash = createHash('sha256').update(canonical).digest('hex');
@@ -118,13 +140,15 @@ describe('computeRepoKey — format and determinism', () => {
   });
 
   it('repo_key_uses_determinism_pins: trailing slash + case differences hash equal on darwin', () => {
-
     const base = '/Repo/App';
     const variantSlash = '/Repo/App/';
     const variantCase = '/repo/app';
 
+    // Trailing slash never changes the key (canonicalisation strips it).
     expect(computeRepoKey(base)).toBe(computeRepoKey(variantSlash));
 
+    // Case-only differences collapse to one key only on case-insensitive
+    // filesystems; on Linux they would (correctly) differ, so guard the check.
     if (platform() === 'darwin' || platform() === 'win32') {
       expect(computeRepoKey(base)).toBe(computeRepoKey(variantCase));
       expect(computeRepoKey('/Repo/App/')).toBe(computeRepoKey('/repo/app'));
@@ -144,6 +168,8 @@ describe('resolveRunDir — relocation under the store', () => {
   });
 
   it('generateRunId produces the O2 grammar <YYYYMMDDTHHMMSS>-<4 hex>', () => {
+    // A fixed UTC clock pins the timestamp prefix exactly; the no-arg call (real
+    // clock + random suffix) still satisfies the grammar pattern.
     const id = generateRunId(new Date(Date.UTC(2026, 4, 22, 18, 0, 0)));
     expect(id.startsWith('20260522T180000-')).toBe(true);
     expect(RUN_ID_PATTERN.test(id)).toBe(true);
@@ -166,6 +192,7 @@ describe('resolveRunDir — relocation under the store', () => {
   });
 });
 
+// Argv-array git runner for the real-git integration cases.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd,
@@ -173,6 +200,7 @@ function git(cwd: string, args: string[]): string {
   }).toString();
 }
 
+// Real committed repo in a scratch dir (gpgsign off so commits never block).
 function initRepo(): string {
   const repo = makeTmp('cas-main-repo-');
   git(repo, ['init', '-q']);
@@ -191,6 +219,9 @@ describe('integration — main-worktree derivation and key stability', () => {
     const wt = path.join(makeTmp('cas-wt-parent-'), 'linked');
     git(main, ['worktree', 'add', '-q', '-b', 'feature/x', wt]);
 
+    // From inside a linked worktree, the derived root is the MAIN checkout
+    // (via the git common-dir parent), not the linked worktree itself — this is
+    // what makes the repo-key shared across worktrees below.
     const derivedFromWt = resolveMainWorktreeRoot(wt);
     expect(canonicalizePath(derivedFromWt)).toBe(canonicalizePath(main));
     expect(canonicalizePath(derivedFromWt)).not.toBe(canonicalizePath(wt));
@@ -221,12 +252,16 @@ describe('integration — run data survives worktree removal', () => {
 
     const runId = '20260522T180000-9c4f';
 
+    // Resolve the run store from inside the linked worktree, but force it onto
+    // the external store via GAN_RUNS_DATA.
     const resolved = resolveRunStore({
       runId,
       fromDir: wt,
       deps: { homedir: () => makeTmp('cas-home-survive-'), env: { GAN_RUNS_DATA: storeRoot } },
     });
 
+    // The run dir must live under the external store, never inside the worktree
+    // — that placement is precisely what lets it survive the removal below.
     expect(resolved.runDir.startsWith(storeRoot + path.sep)).toBe(true);
     expect(resolved.runDir).not.toContain('.gan-state/runs');
     expect(resolved.runDir.startsWith(canonicalizePath(wt))).toBe(false);
@@ -241,6 +276,8 @@ describe('integration — run data survives worktree removal', () => {
     const traceContent = '{"event":"start"}\n';
     writeFileSync(traceEvent, traceContent, 'utf8');
 
+    // Force-remove the worktree, then prove the run dir and its trace contents
+    // are still present and byte-identical: run data outlives the worktree.
     git(main, ['worktree', 'remove', '--force', wt]);
     expect(existsSync(wt)).toBe(false);
 
@@ -251,6 +288,11 @@ describe('integration — run data survives worktree removal', () => {
   });
 });
 
+// Source-text greps guarding subprocess discipline: run-store.ts (and the
+// git-exec helper it uses) must invoke git only via execFile/execFileSync with
+// an argv array — never exec/execSync command strings or template literals —
+// and must delegate path canonicalisation to the determinism module rather than
+// re-implementing realpath/lowercase.
 describe('shell_subprocess_safety_git_calls (static source check)', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(here, '..', '..', '..');
