@@ -13,7 +13,7 @@
  */
 
 import { createError, type ConfigServerError, type ErrorCode } from '../config-server/errors.js';
-import type { TrustEventEvent, ValidationAbortEvent } from './events.js';
+import type { TrustEventEvent, ValidationAbortEvent, SafetyHaltEvent } from './events.js';
 
 /** A {@link TrustEventEvent} without its envelope fields — the part this module builds. */
 export type TrustEventBody = Omit<
@@ -24,6 +24,12 @@ export type TrustEventBody = Omit<
 /** A {@link ValidationAbortEvent} without its envelope fields. */
 export type ValidationAbortBody = Omit<
   ValidationAbortEvent,
+  'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
+>;
+
+/** A {@link SafetyHaltEvent} without its envelope fields — what a builder here produces. */
+export type SafetyHaltBody = Omit<
+  SafetyHaltEvent,
   'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
 >;
 
@@ -140,4 +146,54 @@ export function buildValidationAbortFromCode(
 ): ValidationAbortBody {
   const error: ConfigServerError = createError(code, details);
   return buildValidationAbortBody(stage, error);
+}
+
+/**
+ * The loop-detection halt details a {@link buildLoopDetectedBody} call maps into
+ * a `safetyHalt` event body. These are the A1 `LoopDetected` halt-contract
+ * fields minus `role`, which becomes a top-level event field rather than part of
+ * the inlined payload.
+ *
+ * @property reason the camelCase discriminator (`roleCeilingExceeded` for the
+ *   per-role ceiling halt).
+ * @property role the kebab-case role id that triggered the halt.
+ * @property attempts how many attempts had been made.
+ * @property ceiling the configured ceiling that was hit.
+ * @property evidence the discriminator-specific evidence value (an array for
+ *   `roleCeilingExceeded`).
+ */
+export interface LoopDetectionHalt {
+  reason: string;
+  role: string;
+  attempts: number;
+  ceiling: number;
+  evidence: unknown;
+}
+
+/**
+ * Project loop-detection halt details into a `safetyHalt` event body with
+ * `safetyClass = "loopDetected"`.
+ *
+ * Mirrors {@link buildTrustEventBody} / {@link buildValidationAbortBody}: a pure
+ * mapping, no I/O, never throws. The triggering `role` becomes the event's
+ * top-level `role` field (where every event class carries the responsible role),
+ * while the loop-specific `reason` / `attempts` / `ceiling` / `evidence` are
+ * inlined into the small structured `payload` — consistent with the rest of A1's
+ * `LoopDetected` shape, so a trace reader recovers the halt detail without a
+ * separate payload file.
+ *
+ * @param halt the {@link LoopDetectionHalt} detail to project.
+ * @returns the {@link SafetyHaltBody}, ready to pass to the emitter. Never throws.
+ */
+export function buildLoopDetectedBody(halt: LoopDetectionHalt): SafetyHaltBody {
+  return {
+    safetyClass: 'loopDetected',
+    role: halt.role,
+    payload: {
+      reason: halt.reason,
+      attempts: halt.attempts,
+      ceiling: halt.ceiling,
+      evidence: halt.evidence,
+    },
+  };
 }

@@ -154,6 +154,7 @@ export {
   buildTrustEventBody,
   buildValidationAbortBody,
   buildValidationAbortFromCode,
+  buildLoopDetectedBody,
   formatHeartbeat,
   formatLlmCallSummary,
   formatWallclock,
@@ -177,6 +178,8 @@ export type {
   TrustResolution,
   TrustEventBody,
   ValidationAbortBody,
+  SafetyHaltBody,
+  LoopDetectionHalt,
   ValidationStage,
   F2ErrorLike,
   LlmCallMetrics,
@@ -187,6 +190,24 @@ export type {
   ContractCriterionLike,
   BundleCriterion,
 } from './trace/index.js';
+
+export {
+  DEFAULT_ATTEMPT_CEILINGS,
+  checkRoleCeiling,
+  buildRoleCeilingEvidence,
+  isRoleCeilingEvidence,
+  isRoleCeilingEvidenceEntry,
+  renderRoleCeilingMessage,
+  createLoopDetectedError,
+} from './safety/index.js';
+
+export type {
+  LoopDetectedReason,
+  LoopDetectedFields,
+  RoleCeilingEvidenceEntry,
+  CeilingDecision,
+  CheckRoleCeilingInput,
+} from './safety/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';
 export type {
