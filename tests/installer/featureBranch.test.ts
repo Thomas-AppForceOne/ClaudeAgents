@@ -1,3 +1,18 @@
+/**
+ * Coverage for the S3 feature-branch warning: when the framework repo is itself
+ * checked out on the in-progress `feature/stack-plugin-rfc` branch, install.sh
+ * warns the user the install may be mid-pivot / not functional.
+ *
+ * What this verifies: with git stubbed to report that branch name, the warning
+ * fires on stdout naming the branch and flagging it as mid-pivot/not-functional
+ * (AC8); and statically, that the trigger is a hardcoded literal in install.sh
+ * with NO env-var override knob (AC9).
+ *
+ * What it guards (WHY): the warning must not be silently disable-able. AC9
+ * forbids any `FEATURE_BRANCH`/`GAN_BRANCH`/`BRANCH_OVERRIDE` escape hatch, so a
+ * user can't accidentally (or be tricked into) suppressing the "this build is
+ * unfinished" notice. The branch name in the stubbed git body is DATA.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -25,6 +40,9 @@ describe('install.sh — S3 feature-branch warning', () => {
     cleanups.push(tmp);
     const v = packageVersion();
 
+    // Stub git so `rev-parse --abbrev-ref HEAD` (both the `-C <dir>` and bare
+    // forms the installer may use) reports the in-progress feature branch,
+    // triggering the warning; all other git calls pass through to the real one.
     writeStubBin(
       tmp.bin,
       'git',

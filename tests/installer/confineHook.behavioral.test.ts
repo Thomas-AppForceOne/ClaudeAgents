@@ -1,3 +1,24 @@
+/**
+ * Behavioral + static gate for the F7 confinement hook (`gan-confine.sh`),
+ * which the framework installs as a PreToolUse hook to keep agent file-writes
+ * inside the run's worktree / run-dir "zones".
+ *
+ * What this verifies: the rendered hook actually allows writes inside the
+ * declared zones and denies writes outside them, driven case-by-case from the
+ * committed `confine-paths.json` fixture (so the matrix is data, reviewed and
+ * version-controlled, not re-derived in code). It runs the real hook under
+ * bash with a JSON `tool_input` on stdin, exactly as Claude Code invokes it.
+ *
+ * What it guards (WHY): this is a security boundary. The suite locks in three
+ * regressions: (1) zones are sourced from the `GAN_WORKTREE` / `GAN_RUN_DIR`
+ * env vars the runner sets, NOT reconstructed from a project-root guess that an
+ * attacker could steer; (2) the hook contains no `eval` and every expansion of
+ * an attacker-influenced variable is inside a quoted span, so a malicious path
+ * cannot inject shell; (3) a dedicated adversarial fixture set, including
+ * "canary" bait paths, must never cause the canary file to be created. The
+ * canary existence checks are the actual proof that an injection attempt did
+ * not execute.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -72,6 +93,9 @@ function makeSandbox(): Sandbox {
   return { hookPath, home: tmp.home, worktree, rundir, canary: path.join(tmp.root, 'CANARY') };
 }
 
+// Fixture paths are stored with `{worktree}` / `{rundir}` / `{home}` /
+// `{canary}` placeholders so the committed JSON stays machine-independent; this
+// substitutes the live sandbox paths in before the case runs.
 function expand(value: string, sb: Sandbox): string {
   return value
     .split('{worktree}')
@@ -95,11 +119,16 @@ function runHook(
   runId: string | undefined,
   worktree: string,
 ): HookResult {
+  // Feed the hook exactly the shape Claude Code does: the candidate file path
+  // wrapped in a `tool_input` JSON object on stdin.
   const stdin = JSON.stringify({ tool_input: { file_path: candidate } });
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '',
     HOME: sb.home,
 
+    // CLAUDE_PROJECT_DIR is set to a path that is intentionally NOT the parent
+    // of the worktree, so case-1a can prove zones come from GAN_WORKTREE rather
+    // than a project-root reconstruction.
     CLAUDE_PROJECT_DIR: path.join(sb.home, 'project'),
     GAN_WORKTREE: worktree,
     GAN_RUN_DIR: sb.rundir,
@@ -151,6 +180,8 @@ describe('F7 confine hook behavioral path matrix (data-driven from confine-paths
     expect(tpl).not.toContain('.gan-state/runs/$GAN_RUN_ID/worktree');
     expect(tpl).not.toContain('.gan-state/runs/${GAN_RUN_ID}/worktree');
 
+    // Strip comment lines before scanning so a `#`-commented example can't
+    // trip the eval / quoting checks; only actual hook code is inspected.
     const codeLines = tpl
       .split('\n')
       .filter((l) => !l.trimStart().startsWith('#'));
@@ -158,6 +189,10 @@ describe('F7 confine hook behavioral path matrix (data-driven from confine-paths
       expect(line, `unexpected eval in: ${line}`).not.toMatch(/\beval\b/);
     }
 
+    // For every attacker-influenced variable, require each expansion to be
+    // immediately preceded by a `"` (inside a quoted string) or `/` (a quoted
+    // path prefix). An unquoted `$VAR` would let a crafted value word-split or
+    // inject — exactly the shell-injection class this gate forbids.
     const inputVars = ['GAN_WORKTREE', 'GAN_RUN_DIR', 'GAN_RUN_ID', 'CANDIDATE'];
     for (const line of codeLines) {
       for (const v of inputVars) {
@@ -222,6 +257,9 @@ describe('F7 security regression gate: adversarial cases (committed, not ad hoc)
 
   it('no injection-bait case anywhere in the matrix ever creates its canary', () => {
 
+    // Belt-and-braces sweep: run every case (cases + security) whose path,
+    // runId, or worktree embeds the `{canary}` bait, then assert the canary
+    // file still does not exist — i.e. no injection vector anywhere fired.
     const sb = makeSandbox();
     const baitCases = [...fixture.cases, ...fixture.security].filter(
       (c) => c.path.includes('{canary}') || (c.runId ?? '').includes('{canary}') || (c.worktree ?? '').includes('{canary}'),

@@ -1,3 +1,25 @@
+/**
+ * Coverage for `install.sh --uninstall`: removing what an install added while
+ * preserving everything it didn't.
+ *
+ * What this verifies:
+ * - S3-AC5: uninstall removes the framework's agent symlinks, the skill dir,
+ *   and the MCP entry from `~/.claude.json`, but LEAVES project zones
+ *   (`.gan-state` / `.gan-cache`), the project `.claude/gan/` overlay, the
+ *   single `.claude.json` backup, and the user's other `.claude.json` keys
+ *   intact; follow-up cleanup hints are emitted in backticks.
+ * - S3-AC6: uninstall is idempotent — two runs both exit 0 with no errors.
+ * - S3-AC7: uninstall against an already-clean HOME still exits 0 with a
+ *   helpful message.
+ * - builtin-stacks symlink: removed only when it points INTO the framework
+ *   install; a user-redirected symlink (pointing at their own dir) is left
+ *   alone, with a "points elsewhere; leaving alone" notice.
+ *
+ * What it guards (WHY): uninstall must be conservative — it deletes only
+ * framework-owned artifacts and never the user's data, project state, or a
+ * symlink the user repointed. The npm stubs answer `npm root -g` so the
+ * builtin-stacks target can be located; their shell bodies are DATA.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -110,6 +132,8 @@ describe('install.sh --uninstall', () => {
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(true);
     expect(existsSync(projectGanDir)).toBe(true);
     expect(existsSync(path.join(projectGanDir, 'overlay.md'))).toBe(true);
+    // The backup created at install time must survive uninstall unchanged —
+    // it's the user's safety net, not framework debris to clean up.
     const backupsAfter = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.backup-'));
     expect(backupsAfter).toEqual(backupsBefore);
 
@@ -151,6 +175,8 @@ describe('install.sh --uninstall', () => {
 
   it('removes builtin-stacks symlink when pointing into framework install', async () => {
 
+    // Point the builtin-stacks symlink INTO the (faked) framework install, so
+    // uninstall recognises it as framework-owned and removes it.
     const tmp = makeTmpHome({ withRepo: true });
     cleanups.push(tmp);
     const npmRoot = path.join(tmp.root, 'npm-root');
@@ -240,6 +266,9 @@ describe('install.sh --uninstall', () => {
     writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
     writeStubBin(tmp.bin, 'claude', 'exit 0');
 
+    // Here the symlink points at the user's OWN directory, not the framework
+    // install, so uninstall must treat it as user-redirected and leave it
+    // untouched (asserted via readlink + the "points elsewhere" notice below).
     const userTarget = path.join(tmp.root, 'my-own-stacks-dir');
     mkdirSync(userTarget, { recursive: true });
     const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');

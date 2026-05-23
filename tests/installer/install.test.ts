@@ -1,3 +1,37 @@
+/**
+ * End-to-end coverage for the S2 happy-path install plus the I2 permissions
+ * sprints. This is the broadest installer suite: it drives the real install.sh
+ * with fully stubbed npm / config-server / node / git and asserts on the whole
+ * resulting filesystem + `~/.claude.json` + `~/.claude/settings.json`.
+ *
+ * What this verifies (selected):
+ * - S2-AC1: a clean install copies agents (real files, not symlinks), links the
+ *   skill dir, registers the framework MCP entry with an absolute command path,
+ *   creates the `.gan-state` / `.gan-cache` zones, gitignores them, and leaves
+ *   no temp files.
+ * - S2-AC2: a second run is idempotent and does NOT re-invoke `npm install`.
+ * - S2-AC3: a version mismatch between the on-disk config-server and
+ *   package.json forces a reinstall.
+ * - S2-AC5/AC6: exactly one `.claude.json` backup per machine; the JSON is
+ *   written sorted-key / 2-space / trailing-newline.
+ * - S2-AC7: broken stale symlinks under `~/.claude/agents` & `skills` are pruned.
+ * - S2-AC8: a non-empty legacy `.gan/` is named as a hand-delete target (not a
+ *   hard abort); an empty one produces no warning.
+ * - S2-AC9: outside a git repo, zones/validate are skipped but symlinks + MCP
+ *   still happen.
+ * - S2-AC10 / G1: installer error prose obeys the F4 discipline.
+ * - I2 sprint 3/4: permission categories are merged additively into
+ *   settings.json (cat-1 only by default; everything under
+ *   `--approve-all-permissions`; cat-1 only under `--minimal-permissions`; the
+ *   two flags are mutually exclusive), re-runs add no duplicates, and
+ *   `--uninstall` strips framework-added entries while preserving user-authored
+ *   ones.
+ *
+ * What it guards (WHY): the install must be additive and reversible — it never
+ * clobbers a user's existing `.claude.json` / settings.json content, never
+ * leaves crash debris, and a second run is a no-op. The setup helper centralises
+ * the stub matrix so each test only states the variation it cares about.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -106,6 +140,9 @@ describe('install.sh — S2 happy-path install', () => {
     for (const name of readdirSync(agentSrc)) {
       if (!name.endsWith('.md')) continue;
       const target = path.join(tmp.home, '.claude', 'agents', name);
+      // Agents must be COPIED (real files), not symlinked — a symlink would
+      // break once the framework checkout moves. Content equality below proves
+      // the copy is faithful.
       const stat = lstatSync(target);
       expect(stat.isSymbolicLink()).toBe(false);
       expect(stat.isFile()).toBe(true);
@@ -157,6 +194,9 @@ describe('install.sh — S2 happy-path install', () => {
     const r2 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r2.exitCode).toBe(0);
 
+    // `npm root -g` is a read-only lookup the installer may repeat; filtering
+    // it out leaves only state-changing calls (notably `install`). The second
+    // run must make none — that is the idempotency guarantee.
     const stateChanging = readNpmInvocations(npmLog).filter((line) => !line.startsWith('root -g'));
     expect(stateChanging).toEqual([]);
 
@@ -175,6 +215,9 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('S2-AC3: version-probe triggers a reinstall when on-disk version mismatches package.json', async () => {
+    // The stub config-server reports a version that does NOT match the repo's
+    // package.json, so the installer should conclude the global install is
+    // stale and re-run `npm install -g`.
     const { tmp, pathOverride, cwd, npmLog } = setup({
       configServer: { version: '0.0.99-mismatched' },
       npm: { exitCode: 0 },
@@ -265,6 +308,9 @@ describe('install.sh — S2 happy-path install', () => {
 
     mkdirSync(path.join(tmp.home, '.claude', 'agents'), { recursive: true });
     mkdirSync(path.join(tmp.home, '.claude', 'skills'), { recursive: true });
+    // Seed dangling symlinks (targets deliberately don't exist) to stand in for
+    // agents/skills retired in a prior framework version; the installer should
+    // prune these broken links during the symlink-refresh pass.
     const broken1 = path.join(tmp.home, '.claude', 'agents', 'retired-agent.md');
     const broken2 = path.join(tmp.home, '.claude', 'skills', 'retired-skill');
     symlinkSync('/path/that/does/not/exist/agent.md', broken1);
@@ -338,6 +384,9 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('S2-AC10: F4 install-path discipline — npm failure stderr uses framework prose, no Node/npm prose tokens', async () => {
+    // No configServer stub here: with npm forced to exit 1, install fails before
+    // the version probe matters. The point is to inspect the installer's OWN
+    // error lines (prefixed `error:`), not npm's raw chatter.
     const { tmp, pathOverride, cwd } = setup({
 
       npm: { exitCode: 1, stderr: 'npm ERR! E_FAKE' },
@@ -535,6 +584,8 @@ describe('install.sh — S2 happy-path install', () => {
       permissions: { allow: string[] };
     };
 
+    // Tally each allow-entry: every count must be exactly 1, i.e. the merge
+    // added no duplicates of entries that were already granted.
     const counts = new Map<string, number>();
     for (const t of parsed.permissions.allow) counts.set(t, (counts.get(t) ?? 0) + 1);
     for (const [, n] of counts) expect(n).toBe(1);

@@ -1,3 +1,35 @@
+/**
+ * Coverage for the `--module-state-dir` install option: persisting a marker
+ * file that records where module state lives, and the resolver that reads it.
+ *
+ * What this verifies:
+ * - The flag writes the marker as a single trimmed RAW-PATH line (NOT JSON) at
+ *   the expected location, equal to the supplied path.
+ * - The Sprint-1 `resolveModuleStateRoot` reads exactly that marker; an env var
+ *   (`GAN_MODULE_STATE`) overrides it; removing the marker falls back to the
+ *   `~/.gan-module-state` default.
+ * - No flag in non-TTY mode means no prompt and the default is persisted; the
+ *   TTY prompt branch (exercised by a sourced, main-stripped copy of install.sh)
+ *   names `~/.gan-module-state` and an empty Enter selects it.
+ * - The F8 "parity-MINUS": a module-state install writes the marker but adds NO
+ *   settings.json allow rule and NO additionalDirectories entry (unlike
+ *   --runs-dir), and STATE_LOG records `module-state-dir-configured` but never a
+ *   `permission-granted` line.
+ * - `--uninstall` removes only the marker (touches no settings.json) and is
+ *   idempotent; partial-failure rollback removes a new marker / byte-restores a
+ *   pre-existing one with no tmp/preedit stragglers.
+ * - Shell-injection safety: a hostile path with metacharacters persists
+ *   literally and creates no side-effect; statically, install.sh has no `eval`
+ *   and double-quotes every module-state value expansion.
+ * - No absolute `/Users/...` or `/home/...` literal is committed in install.sh
+ *   or this test file (only the tilde default + runtime-derived values).
+ *
+ * What it guards (WHY): module state may hold sensitive data, so the installer
+ * must NOT auto-grant Claude Code read/write permission to it (the parity-MINUS
+ * vs runs-dir), the marker must be a plain path the resolver can read without a
+ * parser, and an attacker-controlled path must never inject shell. The driver
+ * scripts and `# shellcheck` lines are DATA inside string literals.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -72,6 +104,9 @@ function readSettings(home: string): SettingsShape {
   return JSON.parse(readFileSync(settingsPath(home), 'utf8')) as SettingsShape;
 }
 
+// Assert the module-state root was NOT granted any Claude Code permission —
+// the F8 parity-MINUS. An absent settings.json trivially satisfies this (no
+// grant possible), so we return early rather than fail.
 function expectNoModuleStateGrant(home: string, moduleStateRoot: string): void {
   if (!existsSync(settingsPath(home))) {
 
@@ -107,6 +142,9 @@ describe('install.sh --module-state-dir — marker persistence + resolver tie-in
 
     const raw = readFileSync(mp, 'utf8');
     expect(raw.trim()).toBe(moduleStateDir);
+    // The marker must be a bare path, not a JSON document — a successful
+    // JSON.parse would mean the format regressed to something the simple
+    // line-reading resolver couldn't consume.
     expect(() => JSON.parse(raw)).toThrow();
   });
 
@@ -154,9 +192,16 @@ describe('install.sh --module-state-dir — marker persistence + resolver tie-in
 
     const { tmp } = setup();
 
+    // Strip the trailing `main "$@"` so the script can be SOURCED (functions
+    // defined, nothing run), letting the driver below call one function in
+    // isolation.
     const installRaw = readFileSync(installScriptPath(), 'utf8');
     let trimmed = installRaw.replace(/\nmain "\$@"\s*$/, '\n');
 
+    // Force the prompt branch: the real code only prompts when stdin is a TTY
+    // (`[ -t 0 ]`), which the test harness is not. Rewrite that one guard
+    // (the first occurrence after the function header, to avoid touching any
+    // other `-t 0` test) to `elif true` so the prompt always fires.
     const fnHeader = 'resolve_module_state_dir() {';
     const headerIdx = trimmed.indexOf(fnHeader);
     expect(headerIdx).toBeGreaterThanOrEqual(0);
@@ -443,6 +488,10 @@ describe('install.sh --module-state-dir — shell/subprocess safety (no injectio
       expect(code).not.toMatch(/(^|[;&|]\s*)\beval\b/);
     }
 
+    // Walk each (comment-stripped) line as a tiny quote state machine: track
+    // whether we're inside single or double quotes, and whenever a `$` that
+    // begins one of the value variables appears, require it to be inside double
+    // quotes. This catches an unquoted expansion of an attacker-controlled path.
     const valueVarRe = /^(MODULE_STATE_DIR|MODULE_STATE_DIR_FLAG)(?![A-Za-z0-9_])/;
     for (const code of codeLines) {
       let inSingle = false;

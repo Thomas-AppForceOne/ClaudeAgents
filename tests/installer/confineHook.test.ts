@@ -1,3 +1,30 @@
+/**
+ * Install / uninstall coverage for the H1 confinement hook: writing the
+ * `gan-confine.sh` file and registering it in `~/.claude/settings.json` as a
+ * PreToolUse hook (and removing both on `--uninstall`).
+ *
+ * What this verifies, by acceptance criterion:
+ * - AC-A1: the hook is rendered byte-identical to the shipped template, is
+ *   executable, version-correct, and references the F1 zone vars.
+ * - AC-A2: registration uses the ABSOLUTE hook path and merges additively into
+ *   a pre-existing settings.json (unrelated hooks/keys survive).
+ * - AC-A3: re-running overwrites a stale hook and never duplicates the
+ *   registration; the settings file is byte-stable across re-runs.
+ * - AC-A6/A7/M2: a project-tier hook in the cwd suppresses nothing but DOES
+ *   fire the canonical override warning (with exact prose, backticked tokens,
+ *   and no bare runtime tokens), and the project file is never touched.
+ * - AC-A4: a failure after the hook write rolls back BOTH the partial hook and
+ *   the settings registration — a newly-created settings.json is removed, a
+ *   pre-existing one is byte-restored, and no tmp/preedit stragglers remain.
+ * - AC-A5 (uninstall): only the framework PreToolUse entry is stripped;
+ *   unrelated entries, near-miss commands, and user permissions survive.
+ *
+ * What it guards (WHY): the hook is a security control, so its registration
+ * must be exact (absolute path, single entry), non-destructive to user config,
+ * fully reversible on partial failure, and immune to shell injection via a
+ * repo path containing metacharacters. The `#!/bin/bash` strings and embedded
+ * shell here are DATA written into fixtures, not directives.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -77,6 +104,9 @@ function readSettings(home: string): SettingsShape {
   return JSON.parse(readFileSync(settingsPath(home), 'utf8')) as SettingsShape;
 }
 
+// Flatten every PreToolUse command string out of settings.json. Claude Code
+// accepts two shapes — a flat `{ command }` entry and a `{ hooks: [{ command }]
+// }` matcher group — so both are harvested to give a single list to assert on.
 function preToolUseCommands(settings: SettingsShape): string[] {
   const out: string[] = [];
   for (const entry of settings.hooks?.PreToolUse ?? []) {
@@ -166,9 +196,14 @@ describe('install.sh — H1 confinement hook write + registration', () => {
 
     const hp = hookPath(tmp.home);
 
+    // Corrupt the installed hook with stale content (an old `.gan/` zone hook),
+    // then re-run install to prove the second run overwrites it back to the
+    // current template rather than leaving the stale body in place.
     writeFileSync(hp, '#!/bin/bash\n# STALE legacy .gan/ zone hook\nexit 0\n');
     expect(readFileSync(hp, 'utf8')).not.toBe(renderedTemplate());
 
+    // Snapshot settings.json after the first install so we can later prove the
+    // re-run left it byte-identical (idempotent registration, no duplicate).
     const settingsAfterFirst = readFileSync(settingsPath(tmp.home), 'utf8');
 
     const second = await runInstall([], { home: tmp.home, pathOverride, cwd });
@@ -227,6 +262,8 @@ describe('install.sh — H1 confinement hook write + registration', () => {
       '#!/bin/bash\n# PROJECT-TIER OVERRIDE — sentinel content, do not touch.\nexit 0\n';
     writeFileSync(php, sentinel);
     chmodSync(php, 0o755);
+    // Capture the project hook's mtime so we can assert install never even
+    // rewrote it with identical bytes — the file must be left wholly untouched.
     const sentinelMtimeNs = statSync(php).mtimeMs;
 
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
@@ -267,6 +304,9 @@ describe('install.sh — H1 confinement hook write + registration', () => {
 
     expect(out).toContain('`gan hooks status`');
 
+    // F4 prose discipline: runtime tokens (npm/node/etc.) may appear only
+    // inside backticked code spans. Strip the backticked spans from the warning
+    // lines, then assert none of the forbidden tokens survive in bare prose.
     const warningLines = out
       .split('\n')
       .filter((l) => l.includes('confinement hook') || l.includes('gan hooks status'));
@@ -466,6 +506,10 @@ describe('install.sh --uninstall — H1 confinement hook removal + PreToolUse st
     writeFakeNpm(tmp.bin, { exitCode: 0, invocationLog: npmInvocationLog(tmp.root) });
     writeFakeConfigServer(tmp.bin, { version: packageVersion() });
 
+    // The repo dir name embeds a command-substitution and backtick payload; if
+    // any installer code path interpolated this path unquoted into a shell
+    // command, the `touch PWNED` would fire. The later existence checks confirm
+    // it never did.
     const hostileRepo = path.join(tmp.root, 'evil $(touch PWNED);` ` repo');
     mkdirSync(hostileRepo, { recursive: true });
     const { spawnSync } = await import('node:child_process');

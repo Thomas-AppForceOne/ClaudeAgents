@@ -1,3 +1,34 @@
+/**
+ * Coverage for the `--runs-dir` install option: persisting a store-root marker
+ * AND granting Claude Code permission to that directory in settings.json.
+ *
+ * What this verifies:
+ * - The flag writes the marker as a single trimmed RAW-PATH line (not JSON);
+ *   `resolveStoreRoot` reads exactly it; `GAN_RUNS_DATA` env overrides it;
+ *   removing the marker falls back to the `~/.gan-runs-data` default.
+ * - Non-TTY: no flag means no prompt, the default is persisted. TTY branch
+ *   (sourced, main-stripped install.sh with the `-t 0` guard rewritten) names
+ *   `~/.gan-runs-data` and an empty Enter selects it.
+ * - settings.json grant: adds three allow rules (Read/Write/Edit on
+ *   `<runsDir>/**`) plus an additionalDirectories entry, ADDITIVELY (unrelated
+ *   user entries survive) and IDEMPOTENTLY (a re-run is byte-stable, no
+ *   duplicates).
+ * - STATE_LOG ordering: `runs-dir-configured` precedes
+ *   `runs-dir-permission-granted`, and a `claude-settings-edited` preedit
+ *   snapshot is logged before the grant (so rollback can restore it).
+ * - `--uninstall` strips the three rules + additionalDirectories entry + marker
+ *   while preserving unrelated entries; idempotent.
+ * - Partial-failure rollback: removes a new marker / byte-restores settings.json
+ *   (rules gone) with no tmp/preedit stragglers.
+ * - Shell-injection safety + no committed home/store literal (same static gates
+ *   as the module-state suite).
+ *
+ * What it guards (WHY): unlike module-state, the runs dir DOES get an explicit
+ * Claude Code permission grant (this is the F8 "parity-PLUS"); that grant must
+ * be additive, idempotent, fully reversible, and snapshot-before-edit so a
+ * partial failure restores the user's settings byte-for-byte. The driver
+ * scripts and `# shellcheck` lines are DATA inside string literals.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -91,6 +122,8 @@ describe('install.sh --runs-dir — marker persistence + resolver tie-in', () =>
 
     const raw = readFileSync(mp, 'utf8');
     expect(raw.trim()).toBe(runsDir);
+    // Bare-path marker, not JSON: a parseable JSON body would mean the format
+    // regressed away from what the simple line-reading resolver expects.
     expect(() => JSON.parse(raw)).toThrow();
   });
 
@@ -132,6 +165,9 @@ describe('install.sh --runs-dir — marker persistence + resolver tie-in', () =>
 
     const { tmp } = setup();
 
+    // Strip `main "$@"` so the script can be sourced for function isolation,
+    // then force the prompt branch by rewriting the TTY guard (`[ -t 0 ]`,
+    // false under the test harness) to an always-true condition.
     const installRaw = readFileSync(installScriptPath(), 'utf8');
     let trimmed = installRaw.replace(/\nmain "\$@"\s*$/, '\n');
 
@@ -262,6 +298,10 @@ describe('install.sh --runs-dir — STATE_LOG (function-level)', () => {
     expect(lines).toContain(`runs-dir-configured:${runsDir}`);
     expect(lines).toContain(`runs-dir-permission-granted:${runsDir}`);
 
+    // Ordering matters for rollback: the marker must be configured before the
+    // permission is granted, and the settings preedit snapshot must be taken
+    // before the grant edits settings.json — otherwise a failure couldn't
+    // restore the file. Assert both happens-before relationships via log index.
     const idxConfigured = lines.indexOf(`runs-dir-configured:${runsDir}`);
     const idxGranted = lines.indexOf(`runs-dir-permission-granted:${runsDir}`);
     expect(idxConfigured).toBeLessThan(idxGranted);
@@ -451,6 +491,10 @@ describe('install.sh --runs-dir — shell/subprocess safety (no injection)', () 
       expect(code).not.toMatch(/(^|[;&|]\s*)\beval\b/);
     }
 
+    // Quote state machine over each comment-stripped line: track single/double
+    // quote nesting and, at every `$` that starts one of the store-root value
+    // variables, require it to be inside double quotes — an unquoted expansion
+    // of an attacker-controlled path is the injection vector this forbids.
     const valueVarRe = /^(RUNS_DIR|RUNS_DIR_FLAG|granted_store_root)(?![A-Za-z0-9_])/;
     for (const code of codeLines) {
       let inSingle = false;

@@ -1,3 +1,26 @@
+/**
+ * Coverage for install.sh's prerequisite checks (Node version floor + ceiling,
+ * git present, Claude Code present) and the few flags that bypass them.
+ *
+ * What this verifies:
+ * - F-AC4: Node below the 20.10 floor is rejected with a stderr error naming
+ *   Node and the floor.
+ * - I3 slice 2: a Node major ABOVE the tested-through ceiling only WARNS (and
+ *   the install proceeds, including JSON registration); Node exactly at the
+ *   ceiling does not warn; a missing-node error does not mention any ceiling.
+ * - F-AC5/AC6: missing git / missing Claude Code each abort with a naming error.
+ * - F-AC7 + --no-claude-code: skipping the Claude Code prerequisite still
+ *   completes and does NOT write `~/.claude.json`.
+ * - 20.10.0 and 22.x (LTS) pass the range check.
+ * - H1: `--help` against an empty HOME makes ZERO filesystem writes (home stays
+ *   empty, only the pre-created bin/ + home/ siblings exist).
+ *
+ * What it guards (WHY): prerequisite handling must fail-closed on too-old
+ * Node / missing tools but warn-not-die on too-new Node (so a future runtime
+ * doesn't lock users out), and read-only invocations like `--help` must never
+ * touch the disk. Each test stubs only the tools it needs via the StubSpec, so
+ * the absence of a tool is itself the condition under test.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { readdirSync, existsSync } from 'node:fs';
@@ -17,6 +40,12 @@ afterEach(() => {
   }
 });
 
+// Declares which prerequisite tools to stub for a given test. Omitting a field
+// leaves that tool OFF PATH, which is how the "missing X" cases are produced:
+// - nodeVersion: if set, stub `node --version` to report it (else node absent);
+// - withGit / withClaude: place a passing stub for that tool;
+// - withInstallStubs: also stub npm + config-server so the full install path
+//   can run to completion past the prerequisite gate.
 interface StubSpec {
 
   nodeVersion?: string;
@@ -224,6 +253,8 @@ describe('install.sh prerequisite checks', () => {
 
     expect(homeIsEmpty(tmp.home)).toBe(true);
 
+    // Beyond an empty home, assert nothing else materialised under the temp
+    // root either: only the `bin/` and `home/` that makeTmpHome pre-created.
     const siblings = readdirSync(tmp.root).sort();
     expect(siblings).toEqual(['bin', 'home']);
   });

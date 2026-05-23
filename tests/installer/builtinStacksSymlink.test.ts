@@ -1,3 +1,22 @@
+/**
+ * Behavioral coverage for the built-in stacks symlink that `install.sh` lays
+ * down at `~/.claude/gan/builtin-stacks` pointing at the globally-installed
+ * package's `stacks/` directory.
+ *
+ * What this verifies: the installer creates the symlink at the right target on
+ * a clean run; the operation is idempotent (a re-run leaves the same link, no
+ * error); a stale symlink pointing elsewhere is replaced; the final-status
+ * line names the link when created.
+ *
+ * What it guards (WHY): the link must never clobber user data. The regression
+ * this locks in is that a real file or real directory already sitting at the
+ * link path is left untouched (only a warning is emitted), and that the
+ * soft-failure paths — `npm root -g` failing, or the package's stacks dir not
+ * existing, or running on Windows — degrade to "warn + no symlink + exit 0"
+ * rather than aborting the whole install. The npm stub here is bespoke (it must
+ * answer `npm root -g`), hence the local {@link writeFakeNpmWithRoot} instead
+ * of the shared fake.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -34,6 +53,10 @@ interface SetupResult {
   expectedTarget: string;
 }
 
+// A fake npm specialised for this suite: the installer derives the package
+// location from `npm root -g`, so the stub must answer that subcommand. The
+// options let a test point the link at a different target (`rootValue`) or make
+// the lookup fail (`rootFails`) to exercise the soft-failure branch.
 function writeFakeNpmWithRoot(
   bin: string,
   invocationLog: string,
@@ -168,6 +191,9 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
+    // Pre-create a real directory (not a symlink) at the link path with a file
+    // inside it; the sentinel file proves the installer didn't recursively
+    // delete user content while declining to replace the directory.
     mkdirSync(s.linkPath, { recursive: true });
     const sentinel = path.join(s.linkPath, 'user-file');
     writeFileSync(sentinel, 'do not delete\n');
@@ -244,6 +270,8 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
+    // Force the platform probe to report a Windows (MINGW) uname so the
+    // installer takes its "symlinks unsupported here, skip silently" branch.
     writeStubBin(s.tmp.bin, 'uname', `printf '%s\\n' "MINGW64_NT-10.0"\nexit 0\n`);
 
     const r = await runInstall([], {
