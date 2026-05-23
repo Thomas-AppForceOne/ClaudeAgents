@@ -1,14 +1,4 @@
-/**
- * R3 sprint 2 — `gan stacks list`.
- *
- * Covers contract criterion F-AC5: the CLI's view of the active set
- * agrees with R1's `getActiveStacks()` library call. Verified against
- * two fixtures:
- *   - `js-ts-minimal/` — empty active set (no `package.json` at root,
- *     no `stack.override`).
- *   - `polyglot-webnode-synthetic/` — both `web-node` and
- *     `synthetic-second` activate (multi-stack guard rail).
- */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
@@ -21,7 +11,7 @@ describe('gan stacks list', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
     const lines = r.stdout.trim().split('\n');
-    // Multi-stack fixture: both stacks must be present.
+
     expect(lines).toContain('web-node');
     expect(lines).toContain('synthetic-second');
   });
@@ -42,7 +32,7 @@ describe('gan stacks list', () => {
     const lib = getActiveStacks({ projectRoot: fixture });
     const cli = await runGan(['stacks', 'list', '--project-root', fixture, '--json']);
     const parsed = JSON.parse(cli.stdout) as { active: string[] };
-    // Library and CLI agree byte-for-byte on the active list.
+
     expect(parsed.active).toEqual(lib.active);
   });
 

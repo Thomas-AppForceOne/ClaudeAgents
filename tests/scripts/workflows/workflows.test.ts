@@ -1,32 +1,4 @@
-/**
- * Static-analysis tests for the seven `.github/workflows/` YAML files.
- *
- * The workflows themselves do not run from this PR (we are on
- * `feature/stack-plugin-rfc`); their correctness is gated entirely
- * by these vitest assertions.
- *
- * What this file validates:
- *
- *   - All seven expected workflow filenames exist; the workflows
- *     directory contains EXACTLY those seven `.yml` files.
- *   - `shared-setup.yml` exposes a `workflow_call` trigger, pins
- *     `node-version:` to a value in `[20.10.0, 23.0.0)`, and runs
- *     `npm ci` + `npm run build`.
- *   - Each of the six category workflows triggers on both `push`
- *     and `pull_request`, references `./.github/workflows/shared-setup.yml`
- *     via a `uses:` line, and contains NO `node-version:` or
- *     `setup-node` substring (the contract centralises Node setup
- *     in the reusable workflow).
- *   - Every `npm run <name>` substring in a category workflow names
- *     an actual key in `package.json`'s `scripts` block.
- *   - Per-workflow command substrings (e.g. bare `npm test` in
- *     `test-modules.yml`, `npm run lint-stacks` AND `npm run pair-names`
- *     in `test-stack-lint.yml`, etc.).
- *
- * Imports are confined to `node:fs`, `node:path`, `node:url`, `yaml`,
- * and `vitest` — all already in `package.json`. No `child_process`,
- * no network, no shell-out.
- */
+
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,8 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
 const __filename = fileURLToPath(import.meta.url);
-// tests/scripts/workflows/workflows.test.ts → repo root is three
-// directories up.
+
 const REPO_ROOT = path.resolve(path.dirname(__filename), '..', '..', '..');
 const WORKFLOWS_DIR = path.join(REPO_ROOT, '.github', 'workflows');
 
@@ -60,17 +31,6 @@ function loadPackageScripts(): Record<string, string> {
   return pkg.scripts ?? {};
 }
 
-/**
- * Parse a workflow's `on:` trigger into a Set of trigger names.
- * Handles the three legal encodings:
- *   - sequence: `on: [push, pull_request]`
- *   - mapping:  `on:\n  push:\n  pull_request:`
- *   - string:   `on: workflow_call`
- *
- * Also defends against the YAML 1.1 boolean-coercion edge case
- * (`on` interpreted as `true`); `yaml@2.x` keeps `on` as a string,
- * but we check both keys to be safe.
- */
 function triggerNames(parsed: unknown): Set<string> {
   if (parsed === null || typeof parsed !== 'object') {
     return new Set();
@@ -92,11 +52,6 @@ function triggerNames(parsed: unknown): Set<string> {
   return new Set();
 }
 
-/**
- * Compare a `node-version:` value (e.g. `'20.10.0'`, `'20.x'`,
- * `'20'`) against the engines range `>=20.10.0 <23.0.0`. We accept
- * an `x` segment as a wildcard; missing segments are treated as 0.
- */
 function nodeVersionInRange(version: string): boolean {
   const parts = version
     .trim()
@@ -107,8 +62,6 @@ function nodeVersionInRange(version: string): boolean {
   const [majS, minS = '0', patS = '0'] = parts;
   if (majS === undefined) return false;
 
-  // Major must be a concrete integer (no `x` at major level — a
-  // bare `x` would be too loose for the contract).
   const major = Number(majS);
   if (!Number.isFinite(major)) return false;
 
@@ -116,11 +69,9 @@ function nodeVersionInRange(version: string): boolean {
   const patch = patS === 'x' ? 0 : Number(patS);
   if (!Number.isFinite(minor) || !Number.isFinite(patch)) return false;
 
-  // Lower bound: >= 20.10.0
   const geLower =
     major > 20 || (major === 20 && minor > 10) || (major === 20 && minor === 10 && patch >= 0);
 
-  // Upper bound: < 23.0.0
   const ltUpper = major < 23;
 
   return geLower && ltUpper;
@@ -134,8 +85,7 @@ describe('workflows: directory layout', () => {
 
   for (const filename of EXPECTED_FILES) {
     it(`includes ${filename}`, () => {
-      // readFileSync throws if the file is missing — explicit assert
-      // for clearer failure output.
+
       const contents = readWorkflow(filename);
       expect(contents.length).toBeGreaterThan(0);
     });
@@ -167,8 +117,7 @@ describe('workflows: shared-setup.yml', () => {
   });
 
   it('pins Node version in [20.10.0, 23.0.0)', () => {
-    // Extract the version literal from the first `node-version:`
-    // line. Accept single quotes, double quotes, or unquoted.
+
     const m = raw.match(/node-version:\s*['"]?([^'"\s]+)['"]?/);
     expect(m).not.toBeNull();
     const version = m![1];
@@ -268,15 +217,10 @@ describe('workflows: per-file command substrings', () => {
 
 describe('workflows: hygiene', () => {
   it('no workflow contains an absolute filesystem path', () => {
-    // A `uses: /foo/bar` or `run: /usr/local/bin/something` would
-    // be non-portable across runners; the spec disallows it.
-    // The only legitimate leading slash inside a workflow is the
-    // GitHub-Actions-relative `./.github/...` form.
+
     for (const filename of EXPECTED_FILES) {
       const raw = readWorkflow(filename);
-      // Match `: /...` or `:/...` after a key — but ignore `://`
-      // (which is a URL scheme) and ignore the workflow-call form
-      // `./.github/workflows/...` (relative, not absolute).
+
       const lines = raw.split('\n');
       for (const line of lines) {
         const m = line.match(/^\s*[A-Za-z_-]+:\s+(\S+)/);

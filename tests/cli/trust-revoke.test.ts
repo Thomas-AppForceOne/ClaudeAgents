@@ -1,10 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust revoke`.
- *
- * Verifies the explicit-`--project-root` requirement, the human-mode
- * `mutated: true` / `mutated: false` branches, and the end-to-end
- * approve-then-revoke flow against a tmp HOME.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -57,9 +51,7 @@ describe('gan trust revoke', () => {
       extraEnv: { HOME: home },
     });
     expect(r.exitCode).toBe(0);
-    // `logTrustEvent` writes a single audit-log line on stderr when
-    // `GAN_RUN_ID` is unset (per `logging/trust-log.ts`); the human
-    // surface of the command itself stays on stdout.
+
     expect(r.stdout).toMatch(/^No approvals to revoke for /);
   });
 

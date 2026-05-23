@@ -1,23 +1,4 @@
-/**
- * Overlay file loader.
- *
- * Loads a tier-specific overlay markdown file (default / user / project)
- * and parses its YAML frontmatter. Returns `null` when the requested tier
- * has no overlay file on disk — overlays are optional at every tier
- * (a project may ship without `.claude/gan/project.md`, a user may not
- * have `~/.claude/gan/user.md`, etc.).
- *
- * Tier file paths (per F1 / C4):
- *   - default — `<projectRoot>/.claude/gan/default.md`
- *     (default overlay is shipped *with* the project until E2 carves it
- *     into a packaged location; for R1 fixtures it lives at the same
- *     project-root location.)
- *   - user    — `<userHome>/.claude/gan/user.md`
- *   - project — `<projectRoot>/.claude/gan/project.md`
- *
- * Trust gating, cascade merging, and tier-specific field rules live in
- * later sprints (S4/S5). This loader is a pure file→data adapter.
- */
+
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,19 +13,16 @@ export type OverlayTier = 'default' | 'user' | 'project';
 export interface LoadedOverlay {
   data: unknown;
   prose: YamlBlockProse;
-  /** Absolute path to the overlay file that was loaded. */
+
   path: string;
-  /** Tier the overlay was loaded from. */
+
   tier: OverlayTier;
-  /** Raw YAML body bytes (for round-trip writes). */
+
   raw: string;
 }
 
 export interface LoadOverlayOptions {
-  /**
-   * Override for the user-tier home directory. Same semantics as
-   * `resolveStackFile`'s `userHome` parameter.
-   */
+
   userHome?: string;
 }
 
@@ -67,13 +45,6 @@ export function loadOverlay(
   };
 }
 
-/**
- * Load + ajv-validate an overlay tier. On parse or schema failure, returns
- * issues alongside whatever data could be loaded; never throws for
- * `MissingFile` / `InvalidYAML` / `MalformedInput`. Mirrors
- * `loadStackWithValidation`. A missing overlay file is OK at every tier
- * and yields `{ loaded: null, issues: [] }`.
- */
 export function loadOverlayWithValidation(
   tier: OverlayTier,
   projectRoot: string,

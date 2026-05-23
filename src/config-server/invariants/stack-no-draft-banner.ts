@@ -1,21 +1,4 @@
-/**
- * `stack.no_draft_banner` invariant (F3 catalog; sourced from R3).
- *
- * `gan stacks new` (R3, future) emits a stack file scaffold whose first
- * non-blank prose line is the literal banner:
- *
- *     # DRAFT — replace TODOs and remove this banner before committing.
- *
- * Removing the banner is the user's deliberate "I have replaced the
- * TODOs" act. A stack file at any tier that still carries the banner is
- * a half-finished scaffold and must not ship; this invariant fires hard.
- *
- * R3 has not landed yet, but per F3's note this rule is *catalogued as a
- * cross-file invariant precisely so it fires from `gan validate` /
- * `validateAll()` and from R4's `lint-stacks` without two implementations
- * having to agree on the rule*. The fixture seeds a banner manually so
- * the invariant is testable today.
- */
+
 
 import { createError } from '../errors.js';
 import { DRAFT_BANNER } from '../scaffold-banner.js';
@@ -32,10 +15,7 @@ export function checkStackNoDraftBanner(snapshot: ValidationSnapshot): Issue[] {
 }
 
 function hasDraftBanner(row: SnapshotStackRow): boolean {
-  // Inspect both the prose flanking the YAML block (the author's
-  // human-readable narrative) and — defensively — the raw row data, so a
-  // banner left in the YAML body via a stray `# DRAFT` description field
-  // also fires.
+
   if (row.prose) {
     if (firstNonBlankLineMatches(row.prose.before, DRAFT_BANNER)) return true;
     if (firstNonBlankLineMatches(row.prose.after, DRAFT_BANNER)) return true;

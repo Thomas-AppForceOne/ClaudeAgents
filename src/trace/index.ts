@@ -1,11 +1,4 @@
-/**
- * T1 — structured run trace, emission library (Sprint 2).
- *
- * Public barrel for the trace-emission surface. The orchestrator/agent path
- * (live wiring is Sprint 3) holds a `TraceEmitter`; downstream readers (A1,
- * O2, T2, V1) consume the reconciliation/classification helpers. Append-only
- * is structural — there is no in-place update/delete on this surface.
- */
+
 
 export {
   TraceEmitter,
@@ -62,7 +55,6 @@ export {
   type RoleAttemptState,
 } from './reconcile.js';
 
-// ---- Sprint 3: integration-event builders (F3.3, F3.4) ------------------
 export {
   buildTrustEventBody,
   buildValidationAbortBody,
@@ -74,7 +66,6 @@ export {
   type F2ErrorLike,
 } from './integration.js';
 
-// ---- Sprint 3: stderr progress-line formatters (F3.5, F3.6, F3.7) -------
 export {
   formatHeartbeat,
   formatLlmCallSummary,
@@ -86,7 +77,6 @@ export {
   type SprintSummaryAggregate,
 } from './progress.js';
 
-// ---- Sprint 3: evidence-bundle verifier (F3.2) --------------------------
 export {
   verifyEvidenceBundle,
   checkFailCompleteness,

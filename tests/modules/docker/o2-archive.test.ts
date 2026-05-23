@@ -1,12 +1,4 @@
-/**
- * M2 — O2 archive non-interference (AC14).
- *
- * Writes deterministic content to the docker module's M3-owned per-key
- * state file at `<scratch>/.gan-state/modules/docker/port-registry.json`,
- * runs the O2-style recovery surfaces (every module-touching API + validateAll),
- * and asserts SHA-256 byte-equality pre/post. The recovery flow must
- * leave docker module state untouched per F1 + O2 semantics.
- */
+
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -37,8 +29,7 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   let statePath: string;
   let preHash: string;
   let store: ModuleStateStoreScope;
-  // Deterministic content. The contract requires deterministic; we
-  // use a stable JSON literal so reruns produce the same hash.
+
   const deterministicContent =
     '{\n  "entries": {\n    "/canonical/worktree-a": {\n      "containerName": "app-a",\n      "port": 8080\n    }\n  },\n  "version": 1\n}\n';
 
@@ -46,9 +37,7 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-o2-archive-'));
-    // F8 repo-keyed store: `scratch` must be a real repo and writes go to a
-    // throwaway store root. The state file now lives at
-    // `<module-state-root>/<repo-key>/docker/port-registry.json`.
+
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     statePath = moduleStatePath(scratch, 'docker', 'port-registry');

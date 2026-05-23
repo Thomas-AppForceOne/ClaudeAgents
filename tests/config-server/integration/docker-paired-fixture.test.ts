@@ -1,22 +1,4 @@
-/**
- * M2 — docker-paired fixture integration test (AC10 + AC11 + AC12).
- *
- * Runs the config server against
- * `tests/fixtures/stacks/docker-paired/` with a hermetic
- * `modulesRoot` (a scratch directory containing a docker module
- * manifest with no prerequisites — so the test does not require Docker
- * on the running machine) and asserts:
- *
- *   - `getStack("docker")` returns the resolved data including
- *     `pairsWith: "docker"` from the project-tier file.
- *   - `validateAll()` produces zero pairs-with errors AND zero schema
- *     errors against the fixture.
- *   - `getResolvedConfig().modules.docker` reflects the four-field YAML
- *     config from `.claude/gan/modules/docker.yaml`.
- *
- * The fixture is the only docker-paired stack file in the repo (no
- * shipped `stacks/docker.md` at the repo root).
- */
+
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -60,8 +42,7 @@ describe('docker-paired fixture integration', () => {
     clearResolvedConfigCache();
     _resetModuleRegistrationCacheForTests();
     store = useTempModuleStateStore();
-    // Stage a hermetic docker module manifest with NO prerequisites so
-    // the test does not require Docker on the running machine.
+
     scratchModulesRoot = mkdtempSync(path.join(os.tmpdir(), 'm2-docker-paired-modules-'));
     const dockerStaging = path.join(scratchModulesRoot, 'docker');
     mkdirSync(dockerStaging, { recursive: true });
@@ -85,10 +66,6 @@ describe('docker-paired fixture integration', () => {
       JSON.stringify(dockerManifest, null, 2),
     );
 
-    // Stage a fake "package root" pointing at the same docker manifest
-    // so `setModuleState`/`getModuleState` (which resolve modules via
-    // `defaultModulesRoot()`) can find the `port-registry` state key
-    // in the manifest's `stateKeys` allowlist.
     scratchPkgRoot = mkdtempSync(path.join(os.tmpdir(), 'm2-docker-paired-pkgroot-'));
     const realPkg = path.join(
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'),
@@ -127,7 +104,7 @@ describe('docker-paired fixture integration', () => {
   it('the fixture stack file exists and is the only docker-paired stack file', () => {
     const stackPath = path.join(fixtureRoot, '.claude', 'gan', 'stacks', 'docker.md');
     expect(existsSync(stackPath)).toBe(true);
-    // No shipped repo-tier docker.md.
+
     expect(existsSync(path.join(repoRoot, 'stacks', 'docker.md'))).toBe(false);
   });
 
@@ -169,15 +146,11 @@ describe('docker-paired fixture integration', () => {
   });
 
   it('getResolvedConfig.modules.docker reflects fixture YAML config AND getModuleState returns persisted state when both exist', async () => {
-    // Stage a writable copy of the fixture so the test can persist
-    // module state without mutating the shared `tests/fixtures/...`
-    // tree. The original fixture must be byte-unchanged after the
-    // test run.
+
     const scratchProj = mkdtempSync(path.join(os.tmpdir(), 'gan-test-'));
     scratchProjects.push(scratchProj);
     cpSync(fixtureRoot, scratchProj, { recursive: true });
-    // F8: module state resolves through the repo-keyed store, keyed off the
-    // project's git-common-dir, so the scratch project must be a real repo.
+
     initGitRepo(scratchProj);
 
     const blob = {
@@ -192,13 +165,10 @@ describe('docker-paired fixture integration', () => {
     });
     expect(writeResult.mutated).toBe(true);
 
-    // Both the YAML config (copied from the fixture) and the
-    // persisted port-registry.json (just written) must coexist.
     expect(existsSync(path.join(scratchProj, '.claude', 'gan', 'modules', 'docker.yaml'))).toBe(
       true,
     );
-    // F8: the registry now lives in the repo-keyed store, not under
-    // `<scratchProj>/.gan-state/modules`.
+
     expect(existsSync(store.statePath(scratchProj, 'docker', 'port-registry'))).toBe(true);
 
     const r = await composeResolvedConfig(scratchProj, {

@@ -1,10 +1,4 @@
-/**
- * R3 sprint 4 — unit tests for `lib/scaffold.ts`.
- *
- * Covers contract criteria AC4 + AC5 + identity check that the scaffold's
- * re-exported `DRAFT_BANNER` is the same `===` binding as the canonical
- * constant in `src/config-server/scaffold-banner.ts`.
- */
+
 import { describe, expect, it } from 'vitest';
 
 import { buildScaffold, DRAFT_BANNER as SCAFFOLD_BANNER } from '../../../src/cli/lib/scaffold.js';
@@ -21,9 +15,6 @@ import {
   editedScaffoldBody as editedBody,
 } from '../helpers/scaffold-edit.js';
 
-// R6: `detection` is intentionally NO LONGER a scaffold key at
-// project/user tier (C5 / F3 detection.tier3_only). Every other stubbed
-// field is unchanged.
 const REQUIRED_KEYS = [
   'scope',
   'secretsGlob',
@@ -76,8 +67,7 @@ describe('buildScaffold — output shape', () => {
 
   it('contains a YAML frontmatter block delimited by `---` with schemaVersion: 1', () => {
     const out = buildScaffold('web-node');
-    // The frontmatter block opens and closes with a `---` line. The
-    // canonical R1 parser (`parseYamlBlock`) only accepts this form.
+
     expect(out).toMatch(/^[\s\S]*?\n---\n[\s\S]*?\n---\n/);
     expect(out).toContain('schemaVersion: 1');
   });
@@ -104,7 +94,7 @@ describe('buildScaffold — output shape', () => {
   it('contains a trailing prose section starting with `## Conventions`', () => {
     const out = buildScaffold('web-node');
     expect(out).toContain('## Conventions');
-    // The conventions section must come after the closing `---` marker.
+
     const closingMarker = out.lastIndexOf('\n---\n');
     const conventions = out.indexOf('## Conventions');
     expect(closingMarker).toBeGreaterThan(-1);
@@ -115,8 +105,7 @@ describe('buildScaffold — output shape', () => {
     const out = buildScaffold('web-node');
     expect(out.endsWith('\n')).toBe(true);
     expect(out.endsWith('\n\n\n')).toBe(false);
-    // The penultimate character should not be a newline (i.e. exactly one
-    // trailing newline, not two).
+
     const len = out.length;
     expect(len).toBeGreaterThan(1);
     expect(out[len - 2]).not.toBe('\n');
@@ -133,7 +122,7 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
   it('signature accepts both `project` and `user` tiers', () => {
     expect(typeof buildScaffold('acme-svc', 'project')).toBe('string');
     expect(typeof buildScaffold('acme-svc', 'user')).toBe('string');
-    // Default (no tier arg) keeps the legacy call site compiling.
+
     expect(typeof buildScaffold('acme-svc')).toBe('string');
   });
 
@@ -142,18 +131,18 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
       const out = buildScaffold('acme-svc', tier);
       const fm = frontmatter(out);
       expect('detection' in fm).toBe(false);
-      // Defence in depth: no bare `detection:` line anywhere in the body.
+
       expect(out).not.toMatch(/^\s*detection\s*:/m);
     });
 
     it(`activation comment names stack.override + both activation paths (${tier} tier)`, () => {
       const out = buildScaffold('acme-svc', tier);
       expect(out).toContain('stack.override');
-      // Same-name shadow path.
+
       expect(out).toMatch(/same `name:` shadows\/replaces it/);
-      // Forced-activation path.
+
       expect(out).toContain('being forced via `stack.override`');
-      // Without one of the two it never activates.
+
       expect(out).toContain('this');
       expect(out).toMatch(/Without one of those, this\s+# stack never becomes active/);
     });
@@ -198,9 +187,7 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
       expect(lines[1]).toBe(EXPECTED_SECOND_LINE);
       expect(out).toContain('"TODO/**/*"');
       expect(out).toContain('false  # TODO: replace before committing');
-      // The un-edited scaffold must still fail schema validation (TODO
-      // stubs produce schema-violating shapes) — R6 narrows the failure
-      // set, it does not make the raw scaffold spuriously valid.
+
       const issues: Issue[] = [];
       validateStackBodyAgainstSchema(
         `/virtual/acme-svc.md`,
@@ -217,10 +204,7 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
     expect(proj).not.toBe(user);
     expect(proj).toContain('project overlay (.claude/gan/project.md)');
     expect(user).toContain('user overlay (~/.claude/gan/user.md)');
-    // The activation comment now byte-matches the spec Examples block: the
-    // line ends "...`stack.override` in your" and the overlay name begins
-    // the next line. Everything outside the overlay-hint + tier-word lines
-    // is identical between tiers.
+
     const normalise = (s: string): string =>
       s
         .replace('project overlay (.claude/gan/project.md)', 'OVERLAY')

@@ -1,11 +1,4 @@
-/**
- * R3 sprint 2 — `gan stack show <name>`.
- * R3 sprint 3 — `gan stack update <name> <field> <value>`.
- *
- * Verifies that the CLI surfaces R1's `getStack()` shape including tier
- * provenance, and that the update path round-trips a value through R1's
- * `updateStackField` and is reflected by a follow-up `gan stack show`.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,9 +35,9 @@ describe('gan stack show', () => {
     expect(r.stdout).toContain('source tier:');
     expect(r.stdout).toContain('source path:');
     expect(r.stdout).toContain('data:');
-    // The fixture's web-node ships under the built-in tier.
+
     expect(r.stdout).toMatch(/source tier: builtin/);
-    // The data block shows core fields from the stack file.
+
     expect(r.stdout).toContain('"name": "web-node"');
     expect(r.stdout).toContain('"schemaVersion": 1');
   });
@@ -88,8 +81,7 @@ describe('gan stack show', () => {
       '--project-root',
       FIXTURE,
     ]);
-    // MissingFile maps to exit 2 (validation failure) per the locked
-    // exit-code table.
+
     expect(r.exitCode).toBe(2);
     expect(r.stdout).toBe('');
     expect(r.stderr).toMatch(/MissingFile/);
@@ -120,7 +112,6 @@ describe('gan stack update', () => {
     expect(after).toContain('vitest run');
     expect(after).not.toBe(before);
 
-    // `gan stack show --json` reflects the new value.
     const showR = await runGan(['stack', 'show', 'web-node', '--project-root', proj, '--json']);
     expect(showR.exitCode).toBe(0);
     const parsed = JSON.parse(showR.stdout) as { data: { lintCmd: string } };
@@ -215,8 +206,6 @@ describe('gan stack update', () => {
     const stackPath = path.join(proj, 'stacks', 'web-node.md');
     const before = readFileSync(stackPath, 'utf8');
 
-    // schemaVersion must remain `1`; setting it to a string violates the
-    // stack schema. R1 returns the schema issue and persists nothing.
     const r = await runGan([
       'stack',
       'update',
@@ -227,7 +216,7 @@ describe('gan stack update', () => {
       proj,
       '--json',
     ]);
-    // SchemaMismatch maps to exit 3 per the locked exit-code table.
+
     expect(r.exitCode).toBe(3);
     const parsed = JSON.parse(r.stdout) as { code: string };
     expect(parsed.code).toBe('SchemaMismatch');

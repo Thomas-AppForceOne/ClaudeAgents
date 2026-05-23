@@ -1,6 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks reset` spawn-based tests.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

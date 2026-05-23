@@ -1,16 +1,4 @@
-/**
- * R3 sprint 4 — `gan stacks new` spawn-based tests.
- *
- * Covers the dispatcher wiring and scaffold-contract criteria: default
- * tier writes to `<root>/.claude/gan/stacks/<name>.md`; R6 slice 2 adds
- * `--tier=user` writing to `<userHome>/.claude/gan/stacks/<name>.md`
- * (atomic, byte-equal to `buildScaffold(name, 'user')`); `--tier=repo` /
- * `builtin` / unknown / value-less forms rejected with a message naming
- * BOTH supported values; no-overwrite refusal at both tiers; atomic write
- * through `atomicWriteFile`; byte-for-byte equality with
- * `buildScaffold(name, tier)`; and the pre-existing `--tier=project|user`
- * help line is now behaviourally truthful.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -89,12 +77,6 @@ describe('gan stacks new — rejected tiers name both supported values (R6)', ()
     });
   }
 
-  // A bare `--tier` (no value) is intercepted by the centralised arg
-  // parser, which registers `--tier` as a value-requiring flag (the same
-  // spec used by `stacks customize` / `reset`). It still exits
-  // EXIT_BAD_ARGS (64) and names the flag; the "names both values" message
-  // is owned by readTier and exercised by the `--tier=` (empty value) case
-  // below, which reaches readTier rather than the parser.
   it('--tier with no value (bare boolean) exits 64 naming the flag', async () => {
     const proj = makeTmpProject();
     const r = await runGan(['stacks', 'new', 'web-node', '--tier', '--project-root', proj]);
@@ -128,9 +110,7 @@ describe('gan stacks new — --tier=user (R6 slice 2)', () => {
     });
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
-    // The command resolves the user home from the raw env value (same
-    // convention as `stacks customize`/`reset`), so the printed path is
-    // under `home`, NOT under the project root.
+
     const userTarget = path.join(home, '.claude', 'gan', 'stacks', 'my-rust.md');
     expect(existsSync(userTarget)).toBe(true);
     expect(r.stdout).toContain(userTarget);
@@ -151,7 +131,7 @@ describe('gan stacks new — --tier=user (R6 slice 2)', () => {
     const userTarget = path.join(home, '.claude', 'gan', 'stacks', 'my-rust.md');
     const written = readFileSync(userTarget, 'utf8');
     expect(written).toBe(buildScaffold('my-rust', 'user'));
-    // No leftover temp file from the atomic-by-rename write.
+
     const fs = await import('node:fs');
     const dir = path.join(home, '.claude', 'gan', 'stacks');
     expect(fs.readdirSync(dir)).toEqual(['my-rust.md']);
@@ -237,9 +217,9 @@ describe('gan stacks new — no-overwrite rule', () => {
     const proj = makeTmpProject();
     const canonicalRoot = canonicalizePath(proj);
     const dir = path.join(canonicalRoot, '.claude', 'gan', 'stacks');
-    // Pre-seed an existing file with sentinel content.
+
     const target = path.join(dir, 'web-node.md');
-    // mkdir manually since the seed file lives in nested dirs.
+
     const fs = await import('node:fs');
     fs.mkdirSync(dir, { recursive: true });
     const sentinel = 'EXISTING-DO-NOT-OVERWRITE\n';
@@ -254,7 +234,6 @@ describe('gan stacks new — no-overwrite rule', () => {
     const after = readFileSync(target, 'utf8');
     expect(after).toBe(sentinel);
 
-    // mtime preserved (best effort: fs may round; we accept equality).
     const afterStat = statSync(target);
     expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
     expect(afterStat.size).toBe(beforeStat.size);
@@ -291,22 +270,6 @@ describe('gan stacks new — argument errors', () => {
   });
 });
 
-/**
- * R6 headline contract, proven END-TO-END through the real `validateAll`
- * pipeline (schema + ALL phase-3 invariants, including
- * `stack.no_draft_banner` AND `detection.tier3_only`).
- *
- * The unit tests in `scaffold.test.ts` / `scaffold-regression-guard.test.ts`
- * validate the *parsed body* — they cannot exercise the banner invariant,
- * which inspects the file's prose. These tests scaffold via the real CLI,
- * perform the documented first-edit pass on the file's TEXT (remove the
- * DRAFT banner + replace every TODO stub), then run `validateAll` on the
- * resulting on-disk stack file. This is the exact journey the spec is about:
- * "follow the scaffold's instructions exactly → the file validates clean."
- *
- * A temporary, isolated user home is supplied to `validateAll` so discovery
- * never scans the developer's real `~/.claude/gan/stacks/`.
- */
 describe('gan stacks new — R6 headline contract, end-to-end through validateAll', () => {
   function makeIsolatedHome(): string {
     const dir = mkdtempSync(path.join(tmpdir(), 'gan-cli-isolated-home-'));
@@ -337,7 +300,7 @@ describe('gan stacks new — R6 headline contract, end-to-end through validateAl
       issues,
       `expected zero validateAll issues, got: ${JSON.stringify(issues, null, 2)}`,
     ).toEqual([]);
-    // The two historical traps are explicitly absent.
+
     expect(issues.some(PROSE_BANNER)).toBe(false);
     expect(issues.some(DETECTION_TIER3)).toBe(false);
   });
@@ -370,8 +333,6 @@ describe('gan stacks new — R6 headline contract, end-to-end through validateAl
     });
     expect(r.exitCode).toBe(0);
 
-    // No edit pass: the raw scaffold must still be rejected, and the
-    // rejection must be the banner invariant — NOT detection.tier3_only.
     const { issues } = validateAll(
       { projectRoot: canonicalizePath(proj) },
       { userHome: home },

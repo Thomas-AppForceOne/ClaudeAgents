@@ -1,17 +1,4 @@
-/**
- * R2 sprint 1 — temporary HOME / stub-bin scaffolding for installer tests.
- *
- * Each `makeTmpHome()` call creates an isolated tmp directory layout:
- *
- *   <tmpRoot>/
- *     home/         # passed as HOME to install.sh
- *     bin/          # prepended to PATH; tests put stub `node`, `git`,
- *                   # `claude` executables here.
- *     repo/         # optional fake repo (only created if requested)
- *
- * Returned `cleanup()` removes the whole layout. Tests register cleanups
- * via afterEach to keep tmp dirs from accumulating.
- */
+
 import {
   chmodSync,
   existsSync,
@@ -26,34 +13,23 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 export interface TmpHome {
-  /** Absolute path to the tmp root. */
+
   root: string;
-  /** Absolute path to the synthetic HOME dir. */
+
   home: string;
-  /** Absolute path to the stub-bin dir (prepend to PATH). */
+
   bin: string;
-  /** Absolute path to the synthetic repo dir (only if `withRepo: true`). */
+
   repo: string | null;
-  /** Removes the whole tmp layout. Idempotent. */
+
   cleanup(): void;
 }
 
 export interface MakeTmpHomeOptions {
-  /** If true, also creates `<root>/repo/` as a fresh git repository. */
+
   withRepo?: boolean;
 }
 
-/**
- * System utilities `install.sh` legitimately calls (`dirname`, `cat`, …).
- * They must remain resolvable when a test scrubs PATH down to a
- * stub-only directory; we symlink them into the stub bin from their
- * absolute paths so `command -v <util>` finds them via the stub bin.
- *
- * `node`, `git`, and `claude` are deliberately NOT in this list — those
- * are the prerequisites under test and live exclusively as stubs. Same
- * for `npm` and `claudeagents-config-server`, which the S2 install path
- * depends on but tests stub explicitly.
- */
 const SYSTEM_UTILITIES = [
   '/bin/cat',
   '/bin/sh',
@@ -78,12 +54,6 @@ const SYSTEM_UTILITIES = [
   '/usr/bin/sed',
 ];
 
-/**
- * Create an isolated tmp HOME + stub-bin layout for an installer test.
- *
- * Tests should call `cleanup()` (typically inside afterEach) to remove
- * the directory tree.
- */
 export function makeTmpHome(options: MakeTmpHomeOptions = {}): TmpHome {
   const root = mkdtempSync(path.join(tmpdir(), 'cas-installer-'));
   const home = path.join(root, 'home');
@@ -91,8 +61,6 @@ export function makeTmpHome(options: MakeTmpHomeOptions = {}): TmpHome {
   mkdirSync(home, { recursive: true });
   mkdirSync(bin, { recursive: true });
 
-  // Seed the stub bin with symlinks to safe system utilities so PATH
-  // overrides that exclude `/usr/bin` don't strand `dirname` etc.
   for (const src of SYSTEM_UTILITIES) {
     if (!existsSync(src)) continue;
     try {
@@ -128,23 +96,9 @@ export function makeTmpHome(options: MakeTmpHomeOptions = {}): TmpHome {
   };
 }
 
-/**
- * Write a stub executable into `bin/<name>` with the supplied bash body.
- * The stub is automatically marked executable.
- *
- * Example:
- *   writeStubBin(bin, 'node', 'echo "v20.10.0"');
- *
- * The body is executed under `/bin/bash`. Reading argv via `$1`, `$2`, …
- * works as expected.
- */
 export function writeStubBin(bin: string, name: string, body: string): string {
   const target = path.join(bin, name);
-  // If a previous entry (e.g. the symlink seeded for safe system
-  // utilities) exists at this path, remove it first. `writeFileSync`
-  // refuses to overwrite a symlink that points at a read-only system
-  // file like `/bin/mkdir`; an unconditional unlink lets us replace
-  // any prior entry with the new stub.
+
   try {
     rmSync(target, { force: true });
   } catch {

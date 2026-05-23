@@ -1,17 +1,4 @@
-/**
- * R3 sprint 2 — `gan config print [--json] [--project-root DIR]`.
- *
- * Calls R1's `getResolvedConfig({projectRoot})` in-process (per the
- * CLI-imports-library rule). `--json` emits the response verbatim through
- * `emitJson`; without `--json` we print a compact human-readable summary.
- *
- * Errors:
- *   - Bad `--project-root` (missing dir, etc.) → `MalformedInput` /
- *     `MissingFile` from `resolveProjectRoot`. Surfaced via `exitCodeFor`.
- *   - F2 `ConfigServerError` from the library → mapped via `exitCodeFor`.
- *   - Anything else (the framework's library being unreachable / not on
- *     disk) → exit 5 with an `install.sh` remediation pointer.
- */
+
 
 import { getResolvedConfig } from '../../index.js';
 import { runRead, type CommandResult } from '../lib/run-helpers.js';

@@ -45,20 +45,17 @@ describe('S2 read tools (one positive test per tool)', () => {
   });
 
   it('getResolvedConfig returns the full F2 shape', async () => {
-    // Reset the cache to make this test order-independent.
+
     const { clearResolvedConfigCache } =
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
     const result = await getResolvedConfig({ projectRoot: jsTsMinimal });
     expect(result.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(result.schemaVersions).toEqual({ stack: 1, overlay: 1 });
-    // js-ts-minimal has no package.json/tsconfig.json on disk, so detection
-    // produces an empty active set (no `generic` stack ships either).
+
     expect(result.stacks.active).toEqual([]);
     expect(result.stacks.byName).toEqual({});
-    // Overlay is the cascaded view; js-ts-minimal's project overlay only
-    // declares schemaVersion (which is filtered out), so the merged
-    // overlay is empty.
+
     expect(result.overlay).toEqual({});
     expect(result.discarded).toEqual([]);
     expect(result.additionalContext.planner).toEqual([]);
@@ -77,7 +74,7 @@ describe('S2 read tools (one positive test per tool)', () => {
     const { clearResolvedConfigCache } =
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
-    // js-ts-minimal has no package.json on disk; detection returns empty.
+
     const result = getActiveStacks({ projectRoot: jsTsMinimal });
     expect(result.active).toEqual([]);
   });
@@ -95,8 +92,7 @@ describe('S2 read tools (one positive test per tool)', () => {
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
     const result = getMergedSplicePoints({ projectRoot: jsTsMinimal });
-    // The js-ts-minimal fixture's project overlay has only schemaVersion;
-    // the cascade therefore returns an empty merged view.
+
     expect(result.mergedSplicePoints).toEqual({});
   });
 

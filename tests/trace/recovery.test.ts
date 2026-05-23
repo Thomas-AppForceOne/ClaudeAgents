@@ -1,17 +1,4 @@
-/**
- * T1 Sprint 3 — recovery continuation (F3.8).
- *
- * Covers contract criteria:
- *  - recovery_sequence_continuation_and_attempt_reconstruction
- *  - web_node_prototype_pollution (the recovery fold reuses scanEvents' guard)
- *
- * Two reconstructions, both purely from the existing trace (no external
- * counter file):
- *  (a) the resume sequence is one more than the highest present sequence, and
- *      a TraceEmitter constructed with that startSequence continues gaplessly;
- *  (b) per-role attempt-counter state equals the count (and highest
- *      attemptNumber) of agentAttempt events for that role.
- */
+
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -81,7 +68,7 @@ function milestone(seq: number): Record<string, unknown> {
 describe('recovery sequence continuation', () => {
   it('resumes at N+1 for a trace ending at sequence N (mixed event classes)', () => {
     const root = makeRoot();
-    // A trace ending at sequence 5, with a mix of classes.
+
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
     writeRawEvent(root, 2, milestone(2));
@@ -117,7 +104,6 @@ describe('recovery sequence continuation', () => {
     expect(ev3.sequenceNumber).toBe(3);
     expect(ev4.sequenceNumber).toBe(4);
 
-    // Gapless, no collision: 0..4 all present exactly once.
     const { events } = scanEvents(root);
     expect(events.map((e) => e.sequenceNumber)).toEqual([0, 1, 2, 3, 4]);
   });
@@ -133,8 +119,7 @@ describe('recovery sequence continuation', () => {
 describe('attempt-counter reconstruction (no external counter file)', () => {
   it('reconstructs per-role attempt count and highest attemptNumber from agentAttempt events', () => {
     const root = makeRoot();
-    // gan-generator: attempts 1, 2, 3 (count 3, highest 3).
-    // gan-evaluator: attempt 1 (count 1, highest 1).
+
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
     writeRawEvent(root, 2, agentAttempt(2, 'gan-evaluator', 1));
@@ -150,7 +135,7 @@ describe('attempt-counter reconstruction (no external counter file)', () => {
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
-    // No counter file exists on disk; the state came purely from the events.
+
     expect(state.nextSequence).toBe(5);
   });
 
@@ -193,9 +178,7 @@ describe('web_node_prototype_pollution (recovery fold reuses the guard)', () => 
   it('a malformed adversarial event is dropped by the scan and does not pollute the counter map or Object.prototype', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, agentAttempt(0, 'gan-generator', 1));
-    // An adversarial archived event carrying a __proto__ key. scanEvents (which
-    // reconstructRecoveryState reuses) guards against prototype pollution and
-    // classifies the file malformed rather than folding it in.
+
     const dir = eventsDir(root);
     writeFileSync(
       path.join(dir, eventFilename(1)),
@@ -204,16 +187,16 @@ describe('web_node_prototype_pollution (recovery fold reuses the guard)', () => 
     );
 
     const state = reconstructRecoveryState(root);
-    // The polluted key never reached any prototype chain.
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(({} as any).polluted).toBeUndefined();
     expect(Object.getPrototypeOf(state.attemptStateByRole)).toBeNull();
-    // Only the well-formed attempt was folded in.
+
     expect(state.attemptStateByRole['gan-generator']).toEqual({
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
-    // The malformed file did not contribute a counter for a forbidden key.
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((state.attemptStateByRole as any).polluted).toBeUndefined();
   });
@@ -241,20 +224,18 @@ describe('forward-compat: recovery past an unknown event class', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
-    // The trace ends with an event class this v1 reader does not know. It must
-    // still count for sequence continuation, or recovery would reuse seq 2.
+
     writeRawEvent(root, 2, unknownClass(2));
 
     const state = reconstructRecoveryState(root);
     expect(state.nextSequence).toBe(3);
     expect(nextRecoverySequence(root)).toBe(3);
-    // The unknown class is not folded into the known-class attempt counters.
+
     expect(state.attemptStateByRole['gan-generator']).toEqual({
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
 
-    // A TraceEmitter resuming at the reconstructed sequence continues gaplessly.
     const emitter = new TraceEmitter(
       { traceRoot: root, runId: RUN_ID, startSequence: state.nextSequence },
       fixedClock(),

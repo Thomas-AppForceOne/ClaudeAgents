@@ -1,37 +1,4 @@
 #!/usr/bin/env node
-/**
- * R4 sprint 1 — `lint-stacks` maintainer script.
- *
- * Walks `<projectRoot>/stacks/*.md` and applies two checks per file:
- *
- *   1. ScaffoldBannerPresent — the first non-blank prose line after the
- *      YAML block must NOT match the canonical DRAFT banner string.
- *      (The banner is a deliberate `gan stacks new` artefact; leaving
- *      it in is the framework's signal that the file is a half-finished
- *      scaffold.) The check imports the same `DRAFT_BANNER` constant
- *      that `gan stacks new` writes, so the two stay in lockstep.
- *
- *   2. SchemaMismatch — the YAML body parses against `stack-v1.json`
- *      (delegated to `validateStackBodyAgainstSchema`). All ajv errors
- *      are collected; the script does not short-circuit on the first
- *      violation.
- *
- * Per the single-implementation rule, both checks delegate to existing
- * code: the YAML parser, the schema validator, and the banner constant
- * are imported from `src/config-server/`. The script itself owns no
- * parsing or validation logic.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no failures);
- *   - 1 when one or more files fail either check;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message).
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
- */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -83,11 +50,11 @@ interface RunResult {
 }
 
 interface RunOptions {
-  /** Pre-canonicalised project root. */
+
   projectRoot: string;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
@@ -99,9 +66,7 @@ function listStackFiles(projectRoot: string): string[] {
     if (!stat.isDirectory()) return [];
     entries = readdirSync(stacksDir);
   } catch {
-    // Missing `stacks/` directory is a clean state, not an error: a
-    // brand-new project root with zero stack files is "0 checked, 0
-    // failed".
+
     return [];
   }
   const files: string[] = [];
@@ -117,8 +82,7 @@ function listStackFiles(projectRoot: string): string[] {
       // same behaviour.
     }
   }
-  // Sort lexicographically so per-fixture test output is deterministic
-  // without depending on filesystem enumeration order.
+
   files.sort();
   return files;
 }
@@ -160,7 +124,6 @@ function checkFile(absPath: string): ReportFailure[] {
     return failures;
   }
 
-  // Banner check: first non-blank line of the prose AFTER the YAML block.
   const banner = firstNonBlankLine(parsed.prose.after);
   if (banner === DRAFT_BANNER) {
     failures.push({
@@ -174,7 +137,6 @@ function checkFile(absPath: string): ReportFailure[] {
     });
   }
 
-  // Schema check.
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(absPath, parsed.data, issues);
   for (const issue of issues) {
@@ -217,11 +179,6 @@ export function run(opts: RunOptions): RunResult {
   };
 }
 
-/**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
- */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help'],

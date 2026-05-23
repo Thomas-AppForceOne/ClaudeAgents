@@ -1,14 +1,4 @@
-/**
- * Error factory for the @claudeagents/config-server.
- *
- * R1-locked rule: every error code from F2's enum is constructed via this
- * module. No inline `throw new Error(...)` anywhere else in the codebase.
- *
- * The shape mirrors F2's "Error model" section: `{ code, message, file?,
- * field?, line?, column?, remediation? }`. The factory returns plain objects
- * that can be `throw`n directly (they are real `Error` instances) and also
- * serialised to JSON for MCP responses without further massaging.
- */
+
 
 export type ErrorCode =
   | 'SchemaMismatch'
@@ -43,8 +33,7 @@ export interface ConfigServerErrorShape {
   line?: number;
   column?: number;
   remediation?: string;
-  // Free-form additional context (tool name, etc.) for code-specific details.
-  // Kept narrow on purpose: callers should prefer named fields above.
+
   [extra: string]: unknown;
 }
 
@@ -68,7 +57,7 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
   public readonly line?: number;
   public readonly column?: number;
   public readonly remediation?: string;
-  // Index signature so `[extra: string]: unknown` from the interface holds.
+
   [extra: string]: unknown;
 
   constructor(shape: ConfigServerErrorShape) {
@@ -97,11 +86,6 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
     }
   }
 
-  /**
-   * Returns a plain object suitable for JSON serialisation in MCP responses.
-   * The class itself serialises identically because every public field is an
-   * own enumerable property, but `toJSON()` makes the contract explicit.
-   */
   toJSON(): ConfigServerErrorShape {
     const out: ConfigServerErrorShape = {
       code: this.code,
@@ -142,13 +126,6 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
     'Module-state operation referenced a state key that is not declared in the module manifest.',
 };
 
-/**
- * Build a structured config-server error.
- *
- * @param code one of F2's enumerated error codes
- * @param details optional override fields; if `message` is omitted, a
- *   sensible default is used so every error has a non-empty message
- */
 export function createError(code: ErrorCode, details: ErrorDetails = {}): ConfigServerError {
   const { message: providedMessage, ...rest } = details;
   let message = providedMessage ?? DEFAULT_MESSAGES[code];

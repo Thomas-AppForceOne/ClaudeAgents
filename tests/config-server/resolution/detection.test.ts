@@ -35,7 +35,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
 
   beforeEach(() => {
     workRoot = mkdtempSync(path.join(tmpdir(), 'cas-detection-'));
-    // .claude/gan/project.md (overlay) so phase 1 considers the project.
+
     mkdirSync(path.join(workRoot, '.claude', 'gan'), { recursive: true });
     writeFileSync(path.join(workRoot, '.claude', 'gan', 'project.md'), STUB_OVERLAY);
   });
@@ -45,7 +45,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
   });
 
   it('non-empty stack.override → exactly that list, no auto-detection', () => {
-    // Two built-in stacks; only one matches detection. Override forces both.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
@@ -56,7 +56,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
       path.join(stacksDir, 'docker.md'),
       makeStackFile('docker', 'detection:\n  - Dockerfile'),
     );
-    // No package.json or Dockerfile on disk: auto-detection would match nothing.
+
     const snapshot = hydrateSnapshot(workRoot);
     const result = detectActiveStacks(snapshot, { stackOverride: ['web-node', 'docker'] });
     expect(result.active).toEqual(['docker', 'web-node']);
@@ -64,7 +64,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
   });
 
   it('empty stack.override after cascade → run auto-detection', () => {
-    // Seed a `package.json` so web-node's detection matches.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
@@ -79,7 +79,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
   });
 
   it('active-set union: overlapping detection rules activate every matching stack', () => {
-    // Two stacks both detecting on `package.json`; both must activate.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
@@ -101,15 +101,13 @@ describe('detectActiveStacks — C2 dispatch', () => {
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
       path.join(stacksDir, 'broken.md'),
-      // Empty pattern is rejected by picomatch v4 ("Expected pattern to be a
-      // non-empty string"). Our determinism.glob propagates the throw; the
-      // dispatcher catches it and emits MalformedInput.
+
       makeStackFile('broken', 'detection:\n  - ""'),
     );
     writeFileSync(path.join(workRoot, 'foo.txt'), 'irrelevant');
     const snapshot = hydrateSnapshot(workRoot);
     const result = detectActiveStacks(snapshot, {});
-    // Failed-closed: stack does not activate; an issue is emitted.
+
     expect(result.active).toEqual([]);
     expect(result.issues.length).toBeGreaterThanOrEqual(1);
     expect(result.issues[0].code).toBe('MalformedInput');
@@ -126,8 +124,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
   });
 
   it('override-named stack overrides auto-detection (skips detection rules)', () => {
-    // Two stacks, both with detection that would match; override only the
-    // second. Auto-detection is skipped and only the named one activates.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
@@ -136,7 +133,7 @@ describe('detectActiveStacks — C2 dispatch', () => {
     );
     writeFileSync(
       path.join(stacksDir, 'forced.md'),
-      // Forced stack's detection does NOT match.
+
       makeStackFile('forced', 'detection:\n  - never-existing-file'),
     );
     writeFileSync(path.join(workRoot, 'package.json'), '{}');
@@ -172,15 +169,14 @@ describe('detectActiveStacks — C2 dispatch', () => {
       ),
     );
     writeFileSync(path.join(workRoot, 'build.gradle.kts'), '');
-    // settings.gradle.kts deliberately absent → allOf fails.
+
     const snapshot = hydrateSnapshot(workRoot);
     const result = detectActiveStacks(snapshot, {});
     expect(result.active).toEqual([]);
   });
 
   it('detection: scope-filtered glob does not match files outside scope', () => {
-    // A detection glob like `src/**/package.json` shouldn't match a
-    // package.json at the project root.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(

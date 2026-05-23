@@ -1,9 +1,4 @@
-/**
- * Bundled JSON Schema documents. Importing the schemas via Node's ESM JSON
- * import attributes lets us ship them as compile-time data without a
- * runtime fs read, while still keeping the canonical files under
- * `<repo>/schemas/` (per F3).
- */
+
 
 import stackV1Json from '../../schemas/stack-v1.json' with { type: 'json' };
 import overlayV1Json from '../../schemas/overlay-v1.json' with { type: 'json' };
@@ -20,10 +15,6 @@ export const overlayV1: JsonSchema = overlayV1Json as JsonSchema;
 export const apiToolsV1: JsonSchema = apiToolsV1Json as JsonSchema;
 export const moduleManifestV1: JsonSchema = moduleManifestV1Json as JsonSchema;
 
-// T1 — structured run trace. The three schemas below are bundled the same
-// way as the others (compile-time JSON import attributes, no runtime fs
-// read) and validated through the shared ajv setup in
-// `validation/schema-check.ts`.
 export const runTraceV1: JsonSchema = runTraceV1Json as JsonSchema;
 export const runTraceIndexV1: JsonSchema = runTraceIndexV1Json as JsonSchema;
 export const evaluatorEvidenceBundleV1: JsonSchema = evaluatorEvidenceBundleV1Json as JsonSchema;

@@ -1,15 +1,4 @@
-/**
- * M2 — PortValidator tests.
- *
- * Covers AC6:
- *   - Windows branch throws PlatformNotSupported via the factory.
- *   - Linux branch decides bound-ness from `ss` stdout content (NOT
- *     exit code): a row containing LISTEN with `:<port>` -> false;
- *     no such row -> true. Both with exitCode === 0.
- *   - macOS branch parses `lsof` output.
- *   - The implementation file carries the `pin-#8` comment near the
- *     `ss` parsing block.
- */
+
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -83,12 +72,7 @@ describe('PortValidator.isPortFree', () => {
       path.join(repoRoot, 'src', 'modules', 'docker', 'PortValidator.ts'),
       'utf8',
     );
-    // The contract verifier searches for exitCode|status near `ss `; we
-    // assert directly: no `r.status` usage in the linux branch's
-    // bound-ness decision. The simpler check: ensure the linux branch
-    // does not contain `r.status === 0` style branching.
-    // We assert the file does not include the literal "exit code" used
-    // as a bound-ness check.
+
     expect(src).not.toMatch(/ss[^\n]*\n[^\n]*r\.status/);
   });
 });

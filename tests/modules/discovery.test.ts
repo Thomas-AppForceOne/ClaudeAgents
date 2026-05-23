@@ -1,10 +1,4 @@
-/**
- * M1 — Sprint M1 — discovery + manifest schema tests.
- *
- * Covers AC1–AC8: schema acceptance/rejection, JSON canonicalisation,
- * `loadModules` discovery + collisions, and the registered-modules
- * surface exposed via reads.
- */
+
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import AjvImport2020, { type ValidateFunction } from 'ajv/dist/2020.js';
@@ -40,7 +34,7 @@ function compileManifestValidator() {
 
 describe('module manifest schema (module-manifest-v1.json)', () => {
   it('manifest schema accepts docker example', () => {
-    // The example matches lines 25–38 of specifications/M1-modules-architecture.md.
+
     const dockerExample = {
       name: 'docker',
       schemaVersion: 1,
@@ -111,10 +105,7 @@ describe('module manifest schema (module-manifest-v1.json)', () => {
   it('does not mention the EOL-d engine version anywhere', () => {
     const schemaPath = path.join(repoRoot, 'schemas', 'module-manifest-v1.json');
     const text = readFileSync(schemaPath, 'utf8');
-    // Build the forbidden tokens via runtime concatenation so this test
-    // file does not literally contain the EOL-d version text. The
-    // assertions still cover both the proper-noun form and the
-    // engine-spec form.
+
     const eolMajor = '1' + '8';
     expect(text).not.toContain('Node ' + eolMajor);
     expect(text).not.toContain('node >=' + eolMajor);
@@ -147,8 +138,7 @@ describe('loadModules() discovery', () => {
 
   it('returns one ModuleRegistration per valid manifest', () => {
     const passingDir = path.join(fixturesRoot, 'prereq-passing');
-    // Mirror prereq-passing into the scratch root so we can have a
-    // hermetic single-module discovery target.
+
     const dst = path.join(scratch, 'prereq-passing');
     mkdirSync(dst, { recursive: true });
     writeFileSync(
@@ -237,8 +227,7 @@ describe('loadModules() discovery', () => {
 
   it('production callers can resolve the default modules root via defaultModulesRoot()', () => {
     const root = defaultModulesRoot();
-    // Path must terminate with src/modules — production callers should
-    // never need an env var or runtime knob.
+
     expect(root.endsWith(path.join('src', 'modules'))).toBe(true);
   });
 });
@@ -250,7 +239,7 @@ describe('listModules read tool integration', () => {
   it('surfaces the registered set; adding/removing fixture directories changes output on next loadModules()', () => {
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-list-'));
     try {
-      // Empty root → empty list.
+
       expect(loadModules(scratch)).toEqual([]);
 
       const dst = path.join(scratch, 'prereq-passing');

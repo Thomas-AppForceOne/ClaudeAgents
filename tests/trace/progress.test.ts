@@ -1,15 +1,4 @@
-/**
- * T1 Sprint 3 — the stderr progress-line formatters (F3.5, F3.6, F3.7).
- *
- * Covers contract criteria:
- *  - heartbeat_formatter_exact_string
- *  - per_llm_call_formatter_exact_string (both cache branches; latency form)
- *  - sprint_end_summary_formatter_aggregates_exact_string
- *
- * Every assertion is byte-exact against the spec.md format strings, and each
- * test confirms the output carries metadata only (no payload content: no
- * hashes, no prompt/response text).
- */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -42,7 +31,7 @@ describe('heartbeat_formatter_exact_string', () => {
   it('carries no token counts, latency, or payload content', () => {
     const out = formatHeartbeat('gan-generator');
     expect(out).toBe('[gan-generator] thinking...');
-    expect(out).not.toMatch(/\d/); // no numeric metadata
+    expect(out).not.toMatch(/\d/);
     expect(out).not.toContain('cache');
     expect(out).not.toContain(SHA);
   });
@@ -74,7 +63,7 @@ describe('per_llm_call_formatter_exact_string', () => {
       latencyMs: 8341,
       cacheHit: false,
     });
-    // spec example: 8341ms -> 8.3s
+
     expect(line).toBe('[gan-evaluator] 4096 in / 512 out / 0 cached / 8.3s [miss]');
   });
 
@@ -145,7 +134,7 @@ describe('sprint_end_summary_formatter_aggregates_exact_string', () => {
       llmCall(2, base + 2000, 4096, 512, 0),
       agentAttempt(3, base + 3000, 'gan-evaluator', 1),
       llmCall(4, base + 4000, 100, 50, 25),
-      // 4m23s span: last event at base + 263_000ms (263s = 4m23s)
+
       agentAttempt(5, base + 263_000, 'gan-generator', 2),
     ];
 

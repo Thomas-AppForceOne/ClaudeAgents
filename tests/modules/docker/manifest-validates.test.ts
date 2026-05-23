@@ -1,13 +1,4 @@
-/**
- * M2 — manifest schema acceptance + spec-body match.
- *
- * Asserts:
- *   - `src/modules/docker/manifest.json` validates against
- *     `schemas/module-manifest-v1.json`.
- *   - The manifest's documented fields match the M2 spec body's
- *     example: name, schemaVersion, pairsWith, prerequisites[0].command,
- *     non-empty errorHint, and the five-name `exports` array.
- */
+
 
 import AjvImport2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import { readFileSync } from 'node:fs';

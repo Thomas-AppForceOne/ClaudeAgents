@@ -53,10 +53,6 @@ const jsTsMinimalSrc = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'js-ts
 
 const tmpDirs: string[] = [];
 
-// F8: module-state writes resolve through the repo-keyed store, which derives
-// its key from the project root via `git rev-parse --git-common-dir`. Each test
-// project is therefore a real git repo, and a per-test store scope keeps writes
-// inside a throwaway root (never the user's real `~/.gan-module-state`).
 let moduleStore: ModuleStateStoreScope;
 
 function makeTmpProject(): string {
@@ -67,36 +63,14 @@ function makeTmpProject(): string {
   return dir;
 }
 
-/**
- * The repo-keyed module-state file a write to `(name, key)` from `proj` lands
- * at: `<module-state-root>/<repo-key>/<name>/<key>.json`. Replaces the old
- * `<proj>/.gan-state/modules/<name>/<key>.json` construction in assertions.
- */
 function moduleStateFile(proj: string, name: string, key: string): string {
   return moduleStore.statePath(proj, name, key);
 }
 
-/**
- * Stage a temp "package root" containing a `package.json` plus a
- * `src/modules/<name>/manifest.json` for each requested module. Used
- * to enable the M3 `stateKeys` allowlist gate in module-state tests:
- * `defaultModulesRoot()` resolves to `<override>/src/modules`, so any
- * module the test wants to write to must be registered here.
- *
- * Each entry `{ name, stateKeys }` becomes a minimal valid manifest
- * (no prerequisites, no exports) at
- * `<override>/src/modules/<name>/manifest.json`. The default
- * `pairsWith` is omitted (validation does not require it for
- * module-state writes).
- *
- * Tests must wrap their setup with
- * `withStagedModuleRoot([...])` (sets `GAN_PACKAGE_ROOT_OVERRIDE`,
- * resets caches) and tear down via `restoreStagedModuleRoot()`.
- */
 function stageModuleRoot(modules: Array<{ name: string; stateKeys: string[] }>): string {
   const root = mkdtempSync(path.join(tmpdir(), 'cas-writes-modroot-'));
   tmpDirs.push(root);
-  // `package.json` is mandatory for `packageRoot()` resolution.
+
   const realPkg = path.join(repoRoot, 'package.json');
   writeFileSync(path.join(root, 'package.json'), readFileSync(realPkg, 'utf8'));
   for (const m of modules) {
@@ -160,15 +134,14 @@ describe('updateStackField', () => {
     });
     expect(result.mutated).toBe(true);
     if (result.mutated === true) {
-      // Path is canonicalised (lowercased on macOS); accept any path that
-      // ends with the suffix the test wrote.
+
       expect(result.path.endsWith(path.join('stacks', 'web-node.md'))).toBe(true);
     }
 
     const after = readFileSync(stackPath, 'utf8');
     expect(after).not.toBe(before);
     expect(after).toContain('lintCmd: npm run lint:next');
-    // Prose tail (everything after the closing `---`) is byte-identical.
+
     expect(after.endsWith(proseTail)).toBe(true);
   });
 
@@ -180,8 +153,7 @@ describe('updateStackField', () => {
     const result = updateStackField({
       projectRoot: proj,
       name: 'web-node',
-      // `lintCmd` must be a string per the schema; passing an object should
-      // surface a SchemaMismatch issue.
+
       fieldPath: 'lintCmd',
       value: { not: 'a-string' },
     });
@@ -192,7 +164,7 @@ describe('updateStackField', () => {
     } else {
       throw new Error('expected issues');
     }
-    // File on disk is unchanged.
+
     expect(fileHash(stackPath)).toBe(beforeHash);
   });
 
@@ -201,8 +173,6 @@ describe('updateStackField', () => {
     const stackPath = path.join(proj, 'stacks', 'web-node.md');
     const beforeHash = fileHash(stackPath);
 
-    // Setting schemaVersion to 2 must fail the F3 exact-match rule and
-    // not persist.
     const result = updateStackField({
       projectRoot: proj,
       name: 'web-node',
@@ -259,7 +229,7 @@ describe('appendToStackField + removeFromStackField round trip', () => {
     expect(r2.mutated).toBe(true);
 
     const after = readFileSync(stackPath, 'utf8');
-    // The data round-trips structurally; the prose flanks survive.
+
     const { parseYamlBlock } =
       await import('../../../src/config-server/storage/yaml-block-parser.js');
     const parsedBefore = parseYamlBlock(before);
@@ -290,7 +260,7 @@ describe('setOverlayField', () => {
 
     const after = readFileSync(overlayPath, 'utf8');
     expect(after).toContain('docs/notes.md');
-    // Prose preserved byte-identically.
+
     expect(after.endsWith(proseAfter)).toBe(true);
   });
 
@@ -315,8 +285,7 @@ describe('setOverlayField', () => {
     const written = readFileSync(overlayPath, 'utf8');
     expect(written).toContain('schemaVersion: 1');
     expect(written).toContain('notes.md');
-    // The file should re-parse and re-validate cleanly: a follow-up
-    // setOverlayField returning identical data is a no-op (data unchanged).
+
     const r2 = setOverlayField({
       projectRoot: proj,
       tier: 'project',
@@ -331,9 +300,6 @@ describe('setOverlayField', () => {
     const overlayPath = path.join(proj, '.claude', 'gan', 'project.md');
     const beforeHash = fileHash(overlayPath);
 
-    // The overlay schema requires every key to be a known agent block;
-    // top-level `additionalProperties: false`. Pushing a top-level
-    // unknown key surfaces the violation.
     const result = setOverlayField({
       projectRoot: proj,
       tier: 'project',
@@ -375,10 +341,7 @@ describe('appendToOverlayField + removeFromOverlayField', () => {
     expect(r2.mutated).toBe(true);
 
     const after = readFileSync(overlayPath, 'utf8');
-    // The append leaves an empty `planner.additionalContext: []` field
-    // behind. The before/after may differ in whether the field is present;
-    // the contract guarantees the *value list* matches, not byte
-    // equivalence after a remove. So we re-load and check semantically.
+
     expect(after).not.toContain('a/b/c.md');
     void before;
   });
@@ -407,8 +370,7 @@ describe('trust writes (R5 S4)', () => {
 });
 
 describe('module writes (M3 per-key)', () => {
-  // Stage a fake package root with manifests for the test modules so
-  // `assertStateKeyAllowed` can resolve their `stateKeys` arrays.
+
   let savedOverride: string | undefined;
   let savedHome: string | undefined;
 
@@ -424,8 +386,7 @@ describe('module writes (M3 per-key)', () => {
       { name: 'mod-no-keys', stateKeys: [] },
     ]);
     process.env.GAN_PACKAGE_ROOT_OVERRIDE = stagedRoot;
-    // Isolate from the host's `~/.claude/gan/` so trust-cache reads
-    // never escape the staged environment.
+
     process.env.GAN_USER_HOME = stagedRoot;
     _resetPackageRootCacheForTests();
     _resetModuleRegistrationCacheForTests();
@@ -455,15 +416,14 @@ describe('module writes (M3 per-key)', () => {
     });
     expect(r.mutated).toBe(true);
     if (r.mutated === true) {
-      // F8: the on-disk path is in the repo-keyed store, not under
-      // `<projectRoot>/.gan-state/modules`.
+
       expect(r.path).toBe(moduleStateFile(proj, 'mod-x', 'port-registry'));
       expect(r.path.endsWith(path.join('mod-x', 'port-registry.json'))).toBe(true);
       expect(r.path).not.toContain(path.join('.gan-state', 'modules'));
       expect(r.path.startsWith(moduleStore.storeRoot + path.sep)).toBe(true);
     }
     expect(existsSync(moduleStateFile(proj, 'mod-x', 'port-registry'))).toBe(true);
-    // The legacy whole-blob path must NOT be written.
+
     expect(existsSync(moduleStateFile(proj, 'mod-x', 'state'))).toBe(false);
   });
 
@@ -490,7 +450,7 @@ describe('module writes (M3 per-key)', () => {
         state: { any: 1 },
       }),
     ).toThrow(/not-declared/);
-    // No file must have been created.
+
     expect(existsSync(path.dirname(moduleStateFile(proj, 'mod-x', 'port-registry')))).toBe(false);
   });
 
@@ -524,7 +484,7 @@ describe('module writes (M3 per-key)', () => {
 
   it('appendToModuleState default policy rejects a duplicate list entry without writing', () => {
     const proj = makeTmpProject();
-    // Seed with `{log: ['entry']}` — append 'entry' a second time.
+
     setModuleState({
       projectRoot: proj,
       name: 'mod-x',
@@ -547,7 +507,7 @@ describe('module writes (M3 per-key)', () => {
     } else {
       throw new Error('expected duplicate-entry reason');
     }
-    // Disk untouched.
+
     expect(fileHash(filePath)).toBe(beforeHash);
   });
 
@@ -762,9 +722,7 @@ describe('module writes (M3 per-key)', () => {
         key: 'port-registry',
         fieldPath: 'log',
         value: 'entry',
-        // Cast through `any` so the call compiles even with the
-        // strict `DuplicatePolicy` union — the runtime guard is
-        // what we're exercising.
+
         duplicatePolicy: 'replace' as unknown as 'error',
       }),
     ).toThrow(
@@ -853,7 +811,7 @@ describe('module writes (M3 per-key)', () => {
     expect(existsSync(fileTwo)).toBe(true);
     expect(JSON.parse(readFileSync(fileOne, 'utf8'))).toEqual({ v: 'one' });
     expect(JSON.parse(readFileSync(fileTwo, 'utf8'))).toEqual({ v: 'two' });
-    // The legacy whole-blob `state.json` must NOT exist alongside.
+
     expect(existsSync(moduleStateFile(proj, 'mod-multi', 'state'))).toBe(false);
   });
 
@@ -869,13 +827,7 @@ describe('module writes (M3 per-key)', () => {
 });
 
 describe('registerModule (success path)', () => {
-  // The success-path probe runs against the real `src/modules/` tree
-  // (M2's docker module). The docker module's manifest declares a
-  // `docker --version` prerequisite, so this test's behavior depends on
-  // whether `docker` is on PATH. We detect availability up front and
-  // skip the body cleanly when it is not — failing here on a CI runner
-  // without docker installed would be an environment error, not a code
-  // regression.
+
   let dockerAvailable = false;
   try {
     execFileSync('docker', ['--version'], { stdio: 'ignore' });
@@ -884,13 +836,6 @@ describe('registerModule (success path)', () => {
     dockerAvailable = false;
   }
 
-  // The global vitest setup pins `GAN_PACKAGE_ROOT_OVERRIDE` to an empty
-  // tmp dir to isolate tests from the framework's canonical `stacks/`
-  // directory. For this test we deliberately want the production
-  // resolution path — `defaultModulesRoot()` must point at the real
-  // repo's `src/modules/` so `getRegisteredModules()` discovers the
-  // docker manifest. We swap the override around the test body and
-  // restore it (plus the package-root cache) afterwards.
   let savedOverride: string | undefined;
 
   beforeEach(() => {
@@ -911,9 +856,7 @@ describe('registerModule (success path)', () => {
   });
 
   it('registerModule returns {mutated:true} for the docker module and listModules reflects it (skipped when docker not on PATH)', () => {
-    // Early-return when `docker` is not available on PATH: the module's
-    // prerequisite probe would fail and the test would be reporting on
-    // the host environment rather than the code under test.
+
     if (!dockerAvailable) return;
 
     const proj = makeTmpProject();
@@ -932,13 +875,11 @@ describe('cache invalidation', () => {
   it('drops the resolved-config cache entry after a successful write', async () => {
     const proj = makeTmpProject();
 
-    // Prime the cache.
     await getResolvedConfig({ projectRoot: proj });
     const cache = getResolvedConfigCache();
     const key = cacheKeyForProjectRoot(proj);
     expect(cache.get(key)).toBeDefined();
 
-    // A successful write must invalidate.
     const r = updateStackField({
       projectRoot: proj,
       name: 'web-node',
@@ -963,7 +904,7 @@ describe('cache invalidation', () => {
       value: { not: 'a-string' },
     });
     expect(r.mutated).toBe(false);
-    // Cache survives because no persistence occurred.
+
     expect(cache.get(key)).toBeDefined();
   });
 });
@@ -1022,18 +963,13 @@ describe('compose-if-absent + multi-write idempotency', () => {
     });
     expect(r2.mutated).toBe(true);
     const after2 = readFileSync(overlayPath, 'utf8');
-    // Same data → same bytes (yaml-block-writer's deep-equal short circuit
-    // returns the original source untouched).
+
     expect(after2).toBe(after1);
   });
 });
 
 describe('writeFileSync escape hatch verification', () => {
-  // This test guards the architectural rule rather than a behavior. If a
-  // future change adds a raw `writeFileSync` call outside `atomic-write.ts`,
-  // it should be deliberate. The grep for that lives in the verification
-  // commands; here we just sanity-check that the writes module imports the
-  // atomic helper (a smoke test against accidental regression).
+
   it('writes module references atomicWriteFile', () => {
     const src = readFileSync(
       path.join(repoRoot, 'src', 'config-server', 'tools', 'writes.ts'),
@@ -1067,7 +1003,7 @@ describe('user-tier writes', () => {
         }),
       );
     }
-    // File must NOT have been created on disk.
+
     const userOverlay = path.join(userHome, '.claude', 'gan', 'user.md');
     expect(existsSync(userOverlay)).toBe(false);
   });
@@ -1166,7 +1102,7 @@ describe('project-tier writes for fields forbidden at user tier (regression guar
     });
     expect(r.mutated).toBe(true);
     if (r.mutated === false && 'issues' in r) {
-      // Defensive: should not contain a forbidden-field rejection.
+
       expect(
         r.issues.some(
           (i) => i.code === 'MalformedInput' && i.field === 'planner.additionalContext',
@@ -1270,8 +1206,7 @@ describe('project-tier writes for fields forbidden at user tier (regression guar
 });
 
 describe('module state round-trip (M3 per-key)', () => {
-  // Reuse the staged fake package root so each module has a manifest
-  // declaring `port-registry` as an allowed state key.
+
   let savedOverride: string | undefined;
   let savedHome: string | undefined;
 
@@ -1338,11 +1273,6 @@ describe('module state round-trip (M3 per-key)', () => {
   it('appendToModuleState then removeFromModuleState round-trips through getModuleState', () => {
     const proj = makeTmpProject();
 
-    // Seed two top-level properties via append, each containing a list
-    // whose member carries a `key` field. The appended entries are now
-    // addressable by name from `removeFromModuleState`'s map-shape
-    // branch (the root of the per-key file is a map: top-level
-    // properties are the targetable `entryKey`s).
     const r1 = appendToModuleState({
       projectRoot: proj,
       name: 'mod-y',
@@ -1372,8 +1302,6 @@ describe('module state round-trip (M3 per-key)', () => {
       second: [{ key: 'second', port: 3001 }],
     });
 
-    // Map-shape removal: the file root is an object; entryKey 'first'
-    // matches the property name and that whole property is removed.
     const r3 = removeFromModuleState({
       projectRoot: proj,
       name: 'mod-y',

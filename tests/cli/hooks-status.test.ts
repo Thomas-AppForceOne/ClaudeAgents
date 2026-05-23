@@ -1,12 +1,4 @@
-/**
- * H1 sprint 4 — `gan hooks status` smoke coverage.
- *
- * Spawns the built CLI bin against a sandboxed $HOME and tmp project cwd so
- * the test never reads or writes the developer's real `~/.claude/`. Covers
- * the AC-A8 / AC-A9 surfaces, the absent-hook graceful path, the `--json`
- * round-trip, and the untrusted-content robustness posture. The full
- * matrix lands with sprint 5; this is the smoke + contract-critical layer.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +24,6 @@ function makeTmpDir(prefix: string): string {
   return d;
 }
 
-/** Seed a hook file at <root>/.claude/hooks/gan-confine.sh with `content`. */
 function seedHook(root: string, content: string): string {
   const dir = path.join(root, '.claude', 'hooks');
   mkdirSync(dir, { recursive: true });
@@ -183,10 +174,10 @@ describe('gan hooks status', () => {
     expect(r.stdout.endsWith('\n')).toBe(true);
     expect(r.stdout).toContain('\n  "');
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
-    // Top-level keys are sorted.
+
     const keys = Object.keys(parsed);
     expect(keys).toEqual([...keys].sort());
-    // Idempotent re-emit through the same path.
+
     const again = await runGan(['hooks', 'status', '--json'], { cwd, extraEnv: { HOME: home } });
     expect(again.stdout).toBe(r.stdout);
   });
@@ -211,7 +202,6 @@ describe('gan hooks status', () => {
     const home = makeTmpDir('gan-hooks-home-');
     seedHook(home, userHookHeader(CURRENT_VERSION));
 
-    // 5 MB of repeated text plus a .gan/ token.
     const bigCwd = makeTmpDir('gan-hooks-cwd-');
     const big = 'x'.repeat(5 * 1024 * 1024) + '\nif [[ "$p" == *.gan/* ]]; then :; fi\n';
     seedHook(bigCwd, big);
@@ -219,7 +209,6 @@ describe('gan hooks status', () => {
     expect(bigR.exitCode).toBe(0);
     expect(bigR.stderr).toBe('');
 
-    // Binary / NUL-byte content.
     const binCwd = makeTmpDir('gan-hooks-cwd-');
     const binDir = path.join(binCwd, '.claude', 'hooks');
     mkdirSync(binDir, { recursive: true });
@@ -245,10 +234,6 @@ describe('gan hooks status', () => {
     expect(parsed.userTier.present).toBe(true);
     expect(parsed.userTier.authoredVersion).toBe(null);
   });
-
-  // ---------------------------------------------------------------------
-  // F7 slice 3 — Active-run confinement zones (GAN_WORKTREE / GAN_RUN_DIR).
-  // ---------------------------------------------------------------------
 
   it('F7: with GAN_WORKTREE / GAN_RUN_DIR set, the human surface reports the resolved zones', async () => {
     const home = makeTmpDir('gan-hooks-home-');
@@ -302,7 +287,7 @@ describe('gan hooks status', () => {
     const home = makeTmpDir('gan-hooks-home-');
     const cwd = makeTmpDir('gan-hooks-cwd-');
     seedHook(home, userHookHeader(CURRENT_VERSION));
-    // No GAN_* vars in the env.
+
     const r = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');

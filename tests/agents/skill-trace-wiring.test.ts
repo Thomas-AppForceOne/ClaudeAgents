@@ -1,15 +1,4 @@
-/**
- * T1 Sprint 3 — structure check for the SKILL.md trace-wiring section (F3).
- *
- * Covers contract criterion:
- *  - skill_documents_runtime_wiring_points
- *
- * The Sprint-3 trace surfaces that are orchestrator/skill-runtime (not
- * unit-testable end-to-end) are DOCUMENTED in skills/gan/SKILL.md, each
- * naming the unit-tested helper/formatter it wires. This test asserts the
- * five wiring points are present and named, and that the prose carries no
- * ecosystem tool tokens (lint-no-stack-leak / error-text discipline).
- */
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,7 +35,7 @@ describe('skill_documents_runtime_wiring_points', () => {
   it('wiring point 2: trustEvent at trust-prompt resolution, naming buildTrustEventBody', () => {
     expect(skill).toContain('trustEvent');
     expect(skill).toContain('buildTrustEventBody');
-    // The [v]/[a]/[r]/[c] path and the no-collapse distinction.
+
     expect(skill).toMatch(/\[v\].{0,12}\[a\].{0,12}\[r\].{0,12}\[c\]/);
     expect(skill).toContain('runWithoutProjectCommands');
   });
@@ -77,9 +66,7 @@ describe('skill_documents_runtime_wiring_points', () => {
   });
 
   it('leaks no ecosystem-specific tool tokens (lint-no-stack-leak discipline)', () => {
-    // Scope the assertion to the run-trace section so unrelated prose is not
-    // accidentally constrained; the whole-file guarantee is the maintainer
-    // lint's job.
+
     const start = skill.indexOf('## Run-trace integration points');
     const end = skill.indexOf('## Spawn discipline', start);
     expect(start).toBeGreaterThan(-1);

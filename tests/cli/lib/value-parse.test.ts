@@ -1,13 +1,4 @@
-/**
- * R3 sprint 3 — `parseCliValue` unit tests.
- *
- * Covers every documented surface from `src/cli/lib/value-parse.ts`:
- *   - JSON literal parsing (booleans, numbers, arrays, objects, null).
- *   - Bare-string fallback for unquoted words.
- *   - Edge cases: empty string, JSON-with-leading-whitespace, hex-like
- *     bare words, the literal string `"null"` (quoted) vs the bare word
- *     `null`, deeply-nested JSON.
- */
+
 import { describe, expect, it } from 'vitest';
 import { parseCliValue } from '../../../src/cli/lib/value-parse.js';
 
@@ -41,7 +32,7 @@ describe('parseCliValue', () => {
   });
 
   it('parses JSON-quoted strings as the inner string', () => {
-    // `"hello"` is valid JSON whose value is the string `hello`.
+
     expect(parseCliValue('"hello"')).toBe('hello');
     expect(parseCliValue('""')).toBe('');
   });
@@ -49,10 +40,9 @@ describe('parseCliValue', () => {
   it('falls back to bare strings when JSON parse fails', () => {
     expect(parseCliValue('hello')).toBe('hello');
     expect(parseCliValue('docs/notes.md')).toBe('docs/notes.md');
-    // Multi-word ARGV is one shell-joined token; the value parser doesn't
-    // care about spaces.
+
     expect(parseCliValue('vitest run')).toBe('vitest run');
-    // Hex-like — not valid JSON, falls back to string.
+
     expect(parseCliValue('0xff')).toBe('0xff');
   });
 
@@ -66,7 +56,7 @@ describe('parseCliValue', () => {
   });
 
   it('JSON with leading whitespace still parses', () => {
-    // JSON.parse tolerates leading whitespace per the spec.
+
     expect(parseCliValue('   8  ')).toBe(8);
   });
 

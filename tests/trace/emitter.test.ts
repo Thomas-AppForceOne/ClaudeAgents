@@ -1,13 +1,4 @@
-/**
- * T1 Sprint 2 — the trace-emission library surface.
- *
- * Covers contract criteria:
- *  - sequence_monotonic_gapless
- *  - event_validates_against_schema (all seven classes, via getRunTraceValidator)
- *  - payload_naming_and_layout (10-digit pad, class enum, ext-by-type, ref encoding)
- *  - redaction_hashed_writes_no_payloads (full vs hashed)
- *  - append_only_superseding_corrections (no in-place mutation surface)
- */
+
 import { describe, expect, it, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,11 +18,10 @@ function makeRoot(): string {
   return path.join(dir, 'trace');
 }
 
-/** Fixed clock so timestamps are deterministic in tests. */
 function fixedClock(): () => number {
   let t = Date.parse('2026-05-21T19:47:20.000Z');
   return () => {
-    t += 1; // advance 1ms per event so first/last timestamps differ
+    t += 1;
     return t;
   };
 }
@@ -73,7 +63,6 @@ function toolInput(): ToolCallInput {
   };
 }
 
-/** Emit one of every class and return the emitter + events. */
 function emitOneOfEach(emitter: TraceEmitter) {
   const events = [
     emitter.emitOrchestratorMilestone({
@@ -114,7 +103,6 @@ describe('event_validates_against_schema — all seven classes', () => {
     const validate = getRunTraceValidator();
     const events = emitOneOfEach(emitter);
 
-    // Confirm we exercised exactly the seven known classes.
     const seen = new Set(events.map((e) => e.eventType));
     expect(seen).toEqual(KNOWN_EVENT_TYPES);
 
@@ -168,16 +156,14 @@ describe('payload_naming_and_layout', () => {
   it('writes payloads under payloads/ with 10-digit zero-pad, allowed class, and ext-by-type', () => {
     const root = makeRoot();
     const emitter = new TraceEmitter({ traceRoot: root, runId: RUN_ID }, fixedClock());
-    // Burn sequences so the toolCall lands on seq 42.
+
     for (let i = 0; i < 42; i += 1) emitter.emitOrchestratorMilestone({ milestone: 'tick' });
     const tool = emitter.emitToolCall(toolInput());
     expect(tool.sequenceNumber).toBe(42);
 
-    // arguments is structured (object) ⇒ .json; result is text (string) ⇒ .md
     expect(tool.argumentsRef).toBe('payloads/0000000042-gan-generator-arguments.json');
     expect(tool.resultRef).toBe('payloads/0000000042-gan-generator-result.md');
 
-    // No leading separator; POSIX separators only.
     for (const ref of [tool.argumentsRef, tool.resultRef]) {
       expect(ref.startsWith('/')).toBe(false);
       expect(ref.includes('\\')).toBe(false);
@@ -186,7 +172,6 @@ describe('payload_naming_and_layout', () => {
       expect(['prompt', 'response', 'arguments', 'result']).toContain(cls);
     }
 
-    // Files exist on disk under the payloads dir.
     const names = readdirSync(payloadsDir(root)).sort();
     expect(names).toEqual([
       '0000000042-gan-generator-arguments.json',
@@ -211,7 +196,7 @@ describe('payload_naming_and_layout', () => {
 
 describe('redaction_hashed_writes_no_payloads', () => {
   it('full mode writes payload content; hashed mode writes none but keeps hashes', () => {
-    // full
+
     const fullRoot = makeRoot();
     const full = new TraceEmitter(
       { traceRoot: fullRoot, runId: RUN_ID, redaction: 'full' },
@@ -223,7 +208,6 @@ describe('redaction_hashed_writes_no_payloads', () => {
     expect(fullLlm.promptRef).toMatch(/^[0-9a-f]{64}$/);
     expect(fullLlm.responseRef).toMatch(/^[0-9a-f]{64}$/);
 
-    // hashed
     const hashedRoot = makeRoot();
     const hashed = new TraceEmitter(
       { traceRoot: hashedRoot, runId: RUN_ID, redaction: 'hashed' },
@@ -232,18 +216,16 @@ describe('redaction_hashed_writes_no_payloads', () => {
     const hashedLlm = hashed.emitLlmCall(llmInput());
     const hashedTool = hashed.emitToolCall(toolInput());
 
-    // No payload files written at all (dir empty or absent).
     const payloadDirExists = existsSync(payloadsDir(hashedRoot));
     if (payloadDirExists) {
       expect(readdirSync(payloadsDir(hashedRoot))).toEqual([]);
     }
 
-    // Hashes are still recorded on the events.
     expect(hashedLlm.promptRef).toMatch(/^[0-9a-f]{64}$/);
     expect(hashedLlm.responseRef).toMatch(/^[0-9a-f]{64}$/);
-    // promptRef is content-identical to full mode (same logical request).
+
     expect(hashedLlm.promptRef).toBe(fullLlm.promptRef);
-    // toolCall refs are still populated (deterministic layout) in both modes.
+
     expect(hashedTool.argumentsRef).toBe(fullTool.argumentsRef);
     expect(hashedTool.resultRef).toBe(fullTool.resultRef);
   });
@@ -269,7 +251,7 @@ describe('append_only_superseding_corrections', () => {
     for (const m of methods) {
       expect(forbidden.test(m), `unexpected mutation method '${m}'`).toBe(false);
     }
-    // Only emit*/reconcile/peek*/get* style methods are public.
+
     expect(typeof surface.emitOrchestratorMilestone).toBe('function');
   });
 
@@ -286,7 +268,6 @@ describe('append_only_superseding_corrections', () => {
     const firstFile = path.join(eventsDir(root), `${'0'.repeat(9)}0.json`);
     const firstBytes = readFileSync(firstFile, 'utf8');
 
-    // A correction is a NEW superseding event with a higher sequence number.
     const correction = emitter.emitAgentAttempt({
       role: 'gan-generator',
       attemptNumber: 2,
@@ -296,9 +277,9 @@ describe('append_only_superseding_corrections', () => {
     });
 
     expect(correction.sequenceNumber).toBe(first.sequenceNumber + 1);
-    // The first event file is byte-for-byte unchanged (immutable).
+
     expect(readFileSync(firstFile, 'utf8')).toBe(firstBytes);
-    // Two distinct event files exist.
+
     const files = readdirSync(eventsDir(root)).filter((n) => n.endsWith('.json'));
     expect(files).toHaveLength(2);
   });

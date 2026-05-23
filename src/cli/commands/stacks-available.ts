@@ -1,26 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks available [--json]`.
- *
- * Lists every built-in stack file the framework ships at
- * `<packageRoot>/stacks/`. "Available" is distinct from "active" (`gan
- * stacks list`, which reports stacks whose detection rules currently match
- * the host project) and from "installed" (a customisation copied into a
- * higher tier via `gan stacks customize`). See the R3 spec's "Active vs.
- * available vs. installed" paragraph for the full distinction.
- *
- * Output:
- *   - human: `NAME  VERSION  DESCRIPTION` table with a header row, two-space
- *     gaps between columns, one row per `*.md` file. Empty directory prints
- *     `(no built-in stacks)`.
- *   - JSON: `{"stacks": [{description, name, path, schemaVersion}, ...]}`
- *     emitted via `emitJson` (sorted keys, two-space indent, trailing newline).
- *
- * Errors:
- *   - missing built-in directory → `MissingFile`, exit 2 (validation bucket).
- *   - parse failures on individual files are tolerated: the offending entry
- *     is skipped, with a one-line warning routed to stderr (so callers
- *     scripting against `--json` still see an empty / partial list and exit 0).
- */
+
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -42,15 +20,6 @@ interface AvailableStack {
   schemaVersion: number;
 }
 
-/**
- * Resolve the built-in stacks directory. Reads
- * `process.env.GAN_PACKAGE_ROOT_OVERRIDE` first as a test seam; otherwise
- * walks up from `import.meta.url` via the shared `packageRoot()` helper.
- *
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. Tests inject a
- *   tmp directory so they can stage a fixture stacks/ tree without touching
- *   the published package layout. Production callers leave it unset.
- */
 function resolveBuiltinStacksDir(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
   const root =
@@ -164,8 +133,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     stacks.push(entry);
   }
 
-  // Sort the parsed stacks by `name` for stable output (independent of file
-  // sort order — built-in `name` may differ from the file's basename).
   const sorted = stacks
     .slice()
     .sort((a, b) =>

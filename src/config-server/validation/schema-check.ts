@@ -1,22 +1,4 @@
-/**
- * Per-file schema validation primitives, shared between the storage
- * loaders and the `validateAll` pipeline.
- *
- * Two responsibilities:
- *
- *  1. Compile + cache the ajv validators for `stackV1` / `overlayV1`
- *     under R1's pinned options (`strict: true`, `allErrors: true`,
- *     `useDefaults: false`).
- *  2. Validate a parsed YAML body and append F2-shaped `Issue` objects
- *     to a caller-supplied list. Multiple violations in one body are all
- *     collected (no short-circuit). The `schemaVersion` exact-match rule
- *     (per F3) is enforced here as well, since the body schema does not
- *     declare `schemaVersion` (it is conceptually a frontmatter field
- *     consumed before ajv runs).
- *
- * `Issue` lives here so the loaders can return it without depending on
- * `tools/validate.ts` (which would create a circular import).
- */
+
 
 import AjvImport, { type ErrorObject, type ValidateFunction } from 'ajv';
 
@@ -28,11 +10,6 @@ import {
   evaluatorEvidenceBundleV1,
 } from '../schemas-bundled.js';
 
-// Ajv ships as CJS with `module.exports = Ajv`; under TS NodeNext +
-// `esModuleInterop`, the default-import binding resolves to the namespace
-// at type-check time but the constructor at runtime. We re-cast through
-// `unknown` and pick the `default` property when present so the call-site
-// stays a single-line `new Ajv(...)`.
 type AjvCtor = new (opts?: Record<string, unknown>) => {
   compile: (schema: unknown) => ValidateFunction;
 };
@@ -40,14 +17,6 @@ const Ajv: AjvCtor =
   ((AjvImport as unknown as { default?: AjvCtor }).default as AjvCtor | undefined) ??
   (AjvImport as unknown as AjvCtor);
 
-/**
- * F2-shaped validation issue. See the F2 error model for the full enum.
- *
- * `path` is the absolute filesystem path the issue was raised against
- * (when one applies). `field` is a JSON-pointer-style provenance string
- * from ajv (e.g. `/securitySurfaces/0/id`); absent for whole-file issues
- * such as `InvalidYAML`. Default severity is `'error'`.
- */
 export interface Issue {
   code: string;
   path?: string;
@@ -79,14 +48,6 @@ let runTraceValidator: ValidateFunction | null = null;
 let runTraceIndexValidator: ValidateFunction | null = null;
 let evaluatorEvidenceBundleValidator: ValidateFunction | null = null;
 
-/**
- * T1 run-trace event validator. Lazily compiled under the same pinned ajv
- * options as the stack/overlay validators (`strict: true`, `allErrors:
- * true`, `useDefaults: false`) — no parallel ajv configuration. Exposed so
- * the run-trace emission/reconciliation surface (Sprint 2) and the
- * schema-validation tests can validate a parsed event without re-deriving
- * the compile step.
- */
 export function getRunTraceValidator(): ValidateFunction {
   if (runTraceValidator !== null) return runTraceValidator;
   const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
@@ -95,7 +56,6 @@ export function getRunTraceValidator(): ValidateFunction {
   return compiled;
 }
 
-/** T1 run-trace index validator (same pinned ajv options). */
 export function getRunTraceIndexValidator(): ValidateFunction {
   if (runTraceIndexValidator !== null) return runTraceIndexValidator;
   const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
@@ -104,7 +64,6 @@ export function getRunTraceIndexValidator(): ValidateFunction {
   return compiled;
 }
 
-/** T1 evaluator evidence-bundle validator (same pinned ajv options). */
 export function getEvaluatorEvidenceBundleValidator(): ValidateFunction {
   if (evaluatorEvidenceBundleValidator !== null) return evaluatorEvidenceBundleValidator;
   const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
@@ -113,11 +72,6 @@ export function getEvaluatorEvidenceBundleValidator(): ValidateFunction {
   return compiled;
 }
 
-/**
- * Validate a stack file's parsed body against `stackV1` (plus the F3
- * exact-match `schemaVersion: 1` rule). Appends one or more issues to
- * `issues` on failure; returns silently on success.
- */
 export function validateStackBodyAgainstSchema(
   filePath: string,
   data: unknown,
@@ -144,9 +98,6 @@ export function validateStackBodyAgainstSchema(
   }
 }
 
-/**
- * Validate an overlay file's parsed body against `overlayV1`.
- */
 export function validateOverlayBodyAgainstSchema(
   filePath: string,
   data: unknown,
@@ -174,12 +125,6 @@ export function validateOverlayBodyAgainstSchema(
   }
 }
 
-/**
- * Per F3: every config file declares `schemaVersion` and the framework
- * checks for exact match before applying the body schema. Returns
- * `false` (and pushes a `SchemaMismatch` issue) when the file is missing
- * `schemaVersion` or carries a non-1 value; `true` otherwise.
- */
 function checkSchemaVersionExactMatch(
   filePath: string,
   data: Record<string, unknown>,
@@ -203,15 +148,6 @@ function checkSchemaVersionExactMatch(
   return false;
 }
 
-/**
- * Strip C1/C3 frontmatter-only fields (`name`, `description`,
- * `schemaVersion`) and the M1 cross-cutting field (`pairsWith`) before
- * passing the body to ajv. The body schema does not declare these
- * fields and `additionalProperties: false` would otherwise flag them as
- * violations. `schemaVersion` is consumed by the F3 schema-pick step;
- * `pairsWith` is consumed by the `pairs-with-consistency` invariant
- * (M1) — neither is part of the body schema's surface.
- */
 function stripFrontmatterFields(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(data)) {
@@ -221,12 +157,6 @@ function stripFrontmatterFields(data: Record<string, unknown>): Record<string, u
   return out;
 }
 
-/**
- * Convert an ajv error into an F2-shaped issue. F4 user-facing discipline
- * applies: shell remediation only, "the framework" instead of "ajv" or
- * "the validator", iOS-readable English. Ajv's terse strings ("must have
- * required property 'X'") are wrapped with friendlier framing.
- */
 function ajvErrorToIssue(filePath: string, err: ErrorObject, kind: 'stack' | 'overlay'): Issue {
   const field = err.instancePath || undefined;
   const baseMessage = ajvMessage(err, kind);

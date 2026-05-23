@@ -1,50 +1,4 @@
 #!/usr/bin/env node
-/**
- * R4 sprint 5 — `lint-error-text` maintainer script.
- *
- * CI backstop for the user-facing-error-text discipline (per F4 / the
- * project context's "Honor the user-facing error-text discipline" Do):
- * every user-visible string emitted by the agent, CLI, prompts, or
- * error paths must use shell remediation (`rm <path>`) not Node
- * remediation (`npm run …`), and must refer to "the framework" rather
- * than "the npm package". This script walks the canonical user-facing
- * surface (`src/config-server/**\/*.ts`, `src/cli/**\/*.ts`) and fails
- * when an emit-site line contains a forbidden ecosystem token.
- *
- * Forbidden tokens are read from `lint-no-stack-leak/forbidden.json` —
- * single source of truth (per anti-criterion AN8). This script does NOT
- * inline the token list.
- *
- * Emit-site heuristic. The script flags a line only when it both
- * matches an emit-site shape AND contains a forbidden token:
- *
- *   - `(message|remediation):\s*['"\`]`  — F2 structured-error fields.
- *   - `console\.error\s*\(.*['"\`]`     — direct stderr writes with a
- *                                         literal string.
- *   - `userOutput\s*\(.*['"\`]`         — userOutput-style helpers.
- *
- * Lines that mention a token outside an emit site (variable names,
- * comments, regex patterns, schema fields) do not fire. The discipline
- * applies to user-facing strings, not to the codebase's vocabulary.
- *
- * Allowlist (`./allowlist.json`, `paths` block only) exempts whole
- * files. New entries must carry a written justification (per the
- * allowlist-discipline rule).
- *
- * Per anti-criterion AN3, this script does not throw. Failures surface
- * as `ErrorTextLeakDetected` report entries.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no failures);
- *   - 1 when one or more emit-site lines contain a forbidden token;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message).
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
- */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -62,16 +16,11 @@ import {
 const ERROR_TEXT_LEAK_CODE = 'ErrorTextLeakDetected';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Script lives at `dist/scripts/lint-error-text/index.js`. Three `..`
-// segments reach the repo root (mirrors the other R4 scripts).
+
 const repoRoot = path.resolve(here, '..', '..', '..');
-// `allowlist.json` ships as source-tree data under
-// `<repo>/scripts/lint-error-text/` (tsc does not copy non-TS files to
-// dist). The script reads it at runtime from the source location.
+
 const defaultAllowlistFile = path.join(repoRoot, 'scripts', 'lint-error-text', 'allowlist.json');
-// Single source of truth for forbidden tokens lives next to
-// `lint-no-stack-leak`. Per anti-criterion AN8, this script does not
-// inline the list.
+
 const defaultForbiddenFile = path.join(repoRoot, 'scripts', 'lint-no-stack-leak', 'forbidden.json');
 
 interface ForbiddenFile {
@@ -117,15 +66,15 @@ interface RunResult {
 }
 
 interface RunOptions {
-  /** Pre-canonicalised scan root. */
+
   scanRoot: string;
-  /** Absolute path to the allowlist JSON file. */
+
   allowlistFile: string;
-  /** Absolute path to the forbidden-tokens JSON file. */
+
   forbiddenFile: string;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
@@ -137,11 +86,6 @@ const EMIT_SITE_PATTERNS: readonly RegExp[] = [
   /userOutput\s*\(.*['"`]/,
 ];
 
-/**
- * Recursively walk a directory and return absolute paths to every
- * `.ts` file, skipping standard build-artefact directories. Returns an
- * empty list if the directory does not exist.
- */
 function walkTsFiles(dir: string): string[] {
   let entries: string[];
   try {
@@ -170,10 +114,6 @@ function walkTsFiles(dir: string): string[] {
   return files;
 }
 
-/**
- * Build the scan list: every `.ts` file under `<scanRoot>/src/config-server/`
- * and `<scanRoot>/src/cli/`, sorted lexicographically.
- */
 function listScanFiles(scanRoot: string): string[] {
   const files: string[] = [];
   files.push(...walkTsFiles(path.join(scanRoot, 'src', 'config-server')));
@@ -310,11 +250,6 @@ function finalize(report: LintErrorTextReport, opts: RunOptions): RunResult {
   };
 }
 
-/**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
- */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help'],

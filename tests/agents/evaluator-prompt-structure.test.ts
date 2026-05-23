@@ -1,17 +1,4 @@
-/**
- * T1 Sprint 3 — structure check for the reconciled evaluator prompt (F3.1).
- *
- * Covers contract criterion:
- *  - evaluator_prompt_documents_bundle_shape
- *
- * The shape is schema-pinned (Sprint 1, evaluator-evidence-bundle-v1.json);
- * agents/gan-evaluator.md is the source of truth for HOW the bundle is
- * produced. This test asserts the prompt documents the T1 evidence-bundle
- * shape and the production guidance, that the legacy
- * {passed, feedback[], blockingConcerns[], overallSummary} prose is gone, and
- * that the prose carries no repo-internal process leak or ecosystem tool
- * tokens (lint-no-stack-leak / error-text discipline).
- */
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -80,11 +67,11 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
   });
 
   it('does NOT carry the legacy feedback-artifact shape', () => {
-    // The legacy top-level keys must be gone from the documented output shape.
+
     expect(prompt).not.toContain('"overallSummary"');
     expect(prompt).not.toContain('overallSummary');
     expect(prompt).not.toContain('blockingConcerns');
-    // The legacy per-entry score map shape.
+
     expect(prompt).not.toContain('"criterion": "criterion_name"');
   });
 
@@ -95,7 +82,7 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
 
   it('preserves the scoring discipline (1-10 against the per-criterion threshold)', () => {
     expect(prompt).toContain('threshold');
-    expect(prompt).toMatch(/1.?10/); // the 1-10 scale
+    expect(prompt).toMatch(/1.?10/);
   });
 
   it('leaks no repo-internal process references', () => {
@@ -120,27 +107,12 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
   });
 });
 
-/**
- * Q5 Sprint 3 — the evaluator prompt's `docLintCmd` snapshot input and the
- * doc-lint plan-coverage line. These are the prompt-layer assertions for
- * BEH-1 (absence-tolerance), BEH-3 (severity gates-or-warns + layer-(c)
- * gating), and the FUNC-4 plan-coverage line. The behaviour itself runs in
- * the evaluator agent (the layer that runs `auditCmd`/`lintCmd`); this test
- * proves the prompt instructs that behaviour by reference, with no restated
- * documentation standard and no ecosystem token.
- *
- * The slice helper scopes the field-content assertions to the `docLintCmd`
- * bullet so a token elsewhere (e.g. in the `auditCmd` bullet) cannot make a
- * doc-lint assertion pass spuriously.
- */
 function docLintBullet(): string {
   const marker = '`snapshot.activeStacks[*].docLintCmd`';
   const start = prompt.indexOf(marker);
   expect(start, 'docLintCmd snapshot-input bullet must exist').toBeGreaterThan(-1);
   const rest = prompt.slice(start);
-  // The bullet plus its sub-bullets, up to the next top-level snapshot
-  // bullet (`- \`snapshot.activeStacks[*].testCmd\``) which begins the
-  // next field.
+
   const nextField = rest.indexOf('- `snapshot.activeStacks[*].testCmd`');
   return nextField === -1 ? rest : rest.slice(0, nextField);
 }
@@ -154,11 +126,11 @@ describe('evaluator_prompt_documents_doc_lint_snapshot_input (BEH-1/BEH-3 prompt
     const bullet = docLintBullet();
     expect(bullet).toContain('absenceSignal');
     expect(bullet).toContain('absenceMessage');
-    // Surfaces the message as a warning.
+
     expect(bullet.toLowerCase()).toContain('warning');
-    // Does NOT score the documentation criterion as failed for absence alone.
+
     expect(bullet).toMatch(/do (\*\*)?not(\*\*)? score the documentation criterion as failed/i);
-    // Proceeds with the rest of the plan.
+
     expect(bullet.toLowerCase()).toContain('remainder of the plan');
   });
 
@@ -167,14 +139,14 @@ describe('evaluator_prompt_documents_doc_lint_snapshot_input (BEH-1/BEH-3 prompt
     expect(bullet).toContain('baseline');
     expect(bullet).toContain('delta');
     expect(bullet).toContain('absolute');
-    // delta = only the sprint's regression against the base ref.
+
     expect(bullet.toLowerCase()).toContain('base ref');
   });
 
   it('BEH-3 — the bullet documents the severity gates-or-warns routing', () => {
     const bullet = docLintBullet();
     expect(bullet).toContain('severity');
-    // blocker fails; warning records-and-surfaces; advisory routes onward and never blocks.
+
     expect(bullet).toMatch(/blocker.{0,40}fail/i);
     expect(bullet).toMatch(/warning.{0,60}record/i);
     expect(bullet).toMatch(/advisory.{0,80}never block/i);
@@ -193,13 +165,10 @@ describe('evaluator_prompt_documents_doc_lint_snapshot_input (BEH-1/BEH-3 prompt
 
   it('HYG-1 — the docLintCmd bullet restates no documentation-standard prose and carries no ecosystem token', () => {
     const bullet = docLintBullet();
-    // No restated standard: the bullet references the field, not the rule
-    // text (no "exported function"/"doc comment"/"parameter's meaning"
-    // prose that belongs in documentationSurfaces.template).
+
     expect(bullet.toLowerCase()).not.toContain("parameter's meaning");
     expect(bullet.toLowerCase()).not.toContain('doc comment');
-    // No ecosystem command string (e.g. the doc-lint command lives only in
-    // the owning stack file).
+
     for (const token of ['npm', 'doc-lint', 'package.json', 'pnpm', 'yarn']) {
       expect(bullet, `ecosystem token in docLintCmd bullet: ${token}`).not.toContain(token);
     }

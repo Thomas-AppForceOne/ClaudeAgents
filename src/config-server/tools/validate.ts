@@ -1,44 +1,4 @@
-/**
- * Full validation pipeline (phases 1 + 2 + 3 + 4).
- *
- * Direct library entry points for the three F2 validation tools:
- *
- *   - `validateAll({ projectRoot })` — runs the four-phase pipeline:
- *       phase 1 (discovery) → enumerates every stack file across the three
- *         tiers (project, user, built-in) and every overlay tier (default,
- *         user, project). Module discovery is a no-op (M1 lands real
- *         modules).
- *       phase 2 (schema validation) → validates each discovered file's body
- *         against `stackV1` / `overlayV1` via ajv. Multiple violations in
- *         one file are reported as multiple issues; a bad file does not
- *         halt the pipeline.
- *       phase 3 (cross-file invariants) → runs every R1-owned invariant
- *         from `src/config-server/invariants/` via `runAllInvariants`.
- *         Each invariant returns 0+ issues; all are collected (no
- *         short-circuit). Order is the registry's deterministic order
- *         (alphabetical by id).
- *       phase 4 (trust check, R5 S3) → delegates to
- *         `trust/integration.runTrustCheck`. Reports an
- *         `UntrustedOverlay` issue when the project declares commands
- *         and the current overlay hash is not approved in
- *         `~/.claude/gan/trust-cache.json`. Skipped when the project
- *         declares no commands; bypassed via the trust-mode env knob.
- *
- *   - `validateStack({ projectRoot, name })` — single-stack equivalent:
- *       loads the named stack via the C5 three-tier resolver, runs phase 2
- *       on that one file. Errors from the loader (`MissingFile`,
- *       `InvalidYAML`) are converted into issues, never thrown.
- *
- *   - `validateOverlay({ projectRoot, tier })` — single-overlay equivalent:
- *       loads the named overlay tier and runs phase 2 on the file. A
- *       missing overlay file is OK (overlays are optional at every tier);
- *       the function returns `{ issues: [] }` in that case.
- *
- * Issues are F2-shaped objects (see `Issue` in `validation/schema-check`).
- * Issues are not thrown; the orchestrator decides what is fatal. Only
- * structural errors (e.g. an input that fails `requireProjectRoot`)
- * propagate as `ConfigServerError`.
- */
+
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -69,10 +29,6 @@ import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidd
 
 export type { Issue };
 
-/**
- * Per-stack snapshot row. `data` and `prose` are absent if the file failed
- * to parse (the failure is recorded as an issue against the same path).
- */
 export interface SnapshotStackRow {
   tier: StackTier;
   path: string;
@@ -80,31 +36,18 @@ export interface SnapshotStackRow {
   prose?: { before: string; after: string };
 }
 
-/**
- * Per-overlay snapshot row. Same convention as the stack row.
- */
 export interface SnapshotOverlayRow {
   path: string;
   data?: unknown;
   prose?: { before: string; after: string };
 }
 
-/**
- * Per-module snapshot row. Populated in phase 1 from the module loader
- * registry; consumed by the `pairs-with-consistency` invariant and
- * surfaced through `validateAll` / `getResolvedConfig`.
- */
 export interface SnapshotModuleRow {
   name: string;
   manifestPath: string;
   pairsWith?: string;
 }
 
-/**
- * Validation snapshot threaded through phases 1 → 2 → 3. Phase 1 fills in
- * `stackFiles`, `overlays`, and `modules`; phase 2 appends to `issues`;
- * phase 3 invariants read the snapshot and append more `issues`.
- */
 export interface ValidationSnapshot {
   projectRoot: string;
   stackFiles: Map<string, SnapshotStackRow>;
@@ -132,50 +75,18 @@ export interface ValidateOverlayInput {
 }
 
 export interface ValidateContext {
-  /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
+
   userHome?: string;
-  /**
-   * Forwarded to the C5 stack resolver as the package-tier built-in
-   * directory. When unset, the resolver walks up from `import.meta.url`
-   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Override `process.env` for the trust check (R5 S3). Tests inject a
-   * controlled env so the trust-mode env var does not leak between
-   * cases.
-   */
+
   env?: NodeJS.ProcessEnv;
-  /**
-   * Override `os.homedir()` for the trust check (R5 S3). Tests inject a
-   * `mkdtempSync` directory so the trust cache lookup never reaches the
-   * real home directory.
-   */
+
   homeDir?: string;
-  /**
-   * Override the modules root used for M1 module discovery. Production
-   * callers leave this unset — the loader resolves
-   * `<packageRoot>/src/modules/`. Tests inject a fixture path so the
-   * registered module set is hermetic. NOT a runtime knob (no env var,
-   * no CLI flag); a test-only context parameter, mirroring `packageRoot`.
-   */
+
   modulesRoot?: string;
 }
 
-// ---- public API -----------------------------------------------------------
-
-/**
- * Run the full validation pipeline (phases 1 + 2 + 3 + 4).
- *
- * Phase 4 (R5 S3) is the trust gate: when the project's overlays
- * declare commands and the user has not approved the current overlay
- * contents, `validateAll` reports an `UntrustedOverlay` issue. Issue
- * order is stable: phase-1 discovery issues, then phase-2 schema
- * issues, then phase-3 invariant issues, then phase-4 trust issues.
- *
- * Returns a flat list of issues. An empty list means the project
- * passed every phase, including the trust gate.
- */
 export function validateAll(
   input: ValidateAllInput,
   ctx: ValidateContext = {},
@@ -188,12 +99,6 @@ export function validateAll(
   return { issues: snapshot.issues };
 }
 
-/**
- * Validate a single stack file, resolved through C5's three-tier lookup.
- * Returns issues for parse + schema failures. A `MissingFile` from the
- * resolver becomes a `MissingFile` issue (not a thrown error) so callers
- * receive a uniform shape.
- */
 export function validateStack(
   input: ValidateStackInput,
   ctx: ValidateContext = {},
@@ -223,11 +128,6 @@ export function validateStack(
   return { issues };
 }
 
-/**
- * Validate a single overlay tier. A missing overlay file is OK at every
- * tier (overlays are optional); the function returns `{ issues: [] }` in
- * that case.
- */
 export function validateOverlay(
   input: ValidateOverlayInput,
   ctx: ValidateContext = {},
@@ -252,8 +152,6 @@ export function validateOverlay(
   return { issues };
 }
 
-// ---- phase 1: discovery ---------------------------------------------------
-
 function createSnapshot(projectRoot: string): ValidationSnapshot {
   const root = canonicalizePath(projectRoot);
   return {
@@ -265,13 +163,6 @@ function createSnapshot(projectRoot: string): ValidationSnapshot {
   };
 }
 
-/**
- * Load registered modules from the configured root. Tests inject
- * `ctx.modulesRoot`; production callers fall through to
- * `defaultModulesRoot()` (`<packageRoot>/src/modules/`). When the
- * production directory does not exist (no concrete module yet on
- * disk), discovery returns `[]`.
- */
 function loadModuleRegistrationsFor(ctx: ValidateContext): ModuleRegistration[] {
   if (typeof ctx.modulesRoot === 'string' && ctx.modulesRoot.length > 0) {
     return loadModules(ctx.modulesRoot);
@@ -285,32 +176,15 @@ function loadModuleRegistrationsFor(ctx: ValidateContext): ModuleRegistration[] 
   try {
     return loadModules(prodRoot);
   } catch (e) {
-    // A schema-invalid manifest at the production root must not be
-    // swallowed; re-throw so the caller (server start, validateAll)
-    // surfaces the structured error per AC5. Tests that need an
-    // isolated module set inject `ctx.modulesRoot` and never hit this
-    // branch.
+
     if (e instanceof ConfigServerError) throw e;
     throw e;
   }
 }
 
-/**
- * Phase 1 — discovery.
- *
- * Enumerates every stack file across the three tiers and every overlay
- * tier. Stack files are keyed by `<tier>:<path>` so a fork at multiple
- * tiers (project shadow + built-in) records both. File-not-found is
- * **not** a phase-1 error; only `MissingFile` issues for *referenced*
- * files (e.g. an overlay's `stack.override` naming an unknown stack) are
- * raised here.
- *
- * Module discovery is a no-op until M1 ships.
- */
 function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
   const root = snapshot.projectRoot;
 
-  // Built-in stacks (PRIMARY): <packageRoot>/stacks/*.md
   const pkgRoot = resolvePackageRootForDiscovery(ctx.packageRoot);
   if (pkgRoot) {
     enumerateTierStacks(path.join(pkgRoot, 'stacks')).forEach((p) => {
@@ -318,20 +192,14 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
     });
   }
 
-  // Built-in stacks (FALLBACK): <projectRoot>/stacks/*.md
-  // Both primary and fallback rows are keyed by absolute path, so when the
-  // same stack name exists in both directories both rows survive (different
-  // absolute paths → different keys).
   enumerateBuiltinStacks(root).forEach((p) => {
     snapshot.stackFiles.set(`builtin:${p}`, { tier: 'builtin', path: p });
   });
 
-  // Project-tier stacks: <projectRoot>/.claude/gan/stacks/*.md
   enumerateTierStacks(path.join(root, '.claude', 'gan', 'stacks')).forEach((p) => {
     snapshot.stackFiles.set(`project:${p}`, { tier: 'project', path: p });
   });
 
-  // User-tier stacks: <userHome>/.claude/gan/stacks/*.md
   const userHome = resolveUserHomeForDiscovery(ctx.userHome);
   if (userHome) {
     enumerateTierStacks(path.join(userHome, '.claude', 'gan', 'stacks')).forEach((p) => {
@@ -339,7 +207,6 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
     });
   }
 
-  // Overlays: load each tier (each is optional; null is fine).
   const overlayLoadOpts = ctx.userHome ? { userHome: ctx.userHome } : {};
   for (const tier of ['default', 'user', 'project'] as const) {
     try {
@@ -360,22 +227,13 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
     }
   }
 
-  // Cross-tier reference check: project overlay's `stack.override` lists
-  // must name stacks that exist at some tier. Unknown names → MissingFile.
   checkStackOverrideReferences(snapshot, ctx);
 
-  // User-tier forbidden-field check (per C3 lines 71-75). The schema
-  // validates shape only; the tier gate lives here, alongside loader-time
-  // and write-time checks (per the schema-vs-tier separation rule).
   const userOverlay = snapshot.overlays.user;
   if (userOverlay) {
     checkUserOverlayForbiddenFields(userOverlay.path, userOverlay.data, snapshot.issues);
   }
 
-  // M1 module discovery. Production callers see an empty list when
-  // `<packageRoot>/src/modules/` does not exist; tests inject a
-  // fixture path via `ctx.modulesRoot`. Manifest schema failures and
-  // `ModuleCollision` propagate as structured errors (per AC5/AC6).
   const registrations = loadModuleRegistrationsFor(ctx);
   for (const reg of registrations) {
     const row: { name: string; manifestPath: string; pairsWith?: string } = {
@@ -389,12 +247,6 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
   }
 }
 
-/**
- * Enumerate `*.md` files in `<projectRoot>/stacks/`. Returns absolute
- * paths in `localeSort` order. Returns `[]` if the directory is absent —
- * absence is not an error here (the project may simply not declare any
- * built-in stacks). Sub-directories are skipped.
- */
 function enumerateBuiltinStacks(projectRoot: string): string[] {
   return enumerateTierStacks(path.join(projectRoot, 'stacks'));
 }
@@ -430,14 +282,6 @@ function resolveUserHomeForDiscovery(explicit?: string): string | null {
   return typeof home === 'string' && home.length > 0 ? home : null;
 }
 
-/**
- * Discovery-side counterpart to the resolver's package-root injection: tests
- * pass `ctx.packageRoot`; production callers leave it unset and we fall
- * through to `packageRoot()` which walks up from `import.meta.url`. Returns
- * `null` if the helper throws (e.g. running in an environment where
- * `@claudeagents/config-server`'s `package.json` cannot be located) — the
- * resolver itself reports the same failure mode upstream.
- */
 function resolvePackageRootForDiscovery(explicit?: string): string | null {
   if (typeof explicit === 'string' && explicit.length > 0) return explicit;
   try {
@@ -447,14 +291,6 @@ function resolvePackageRootForDiscovery(explicit?: string): string | null {
   }
 }
 
-/**
- * Check whether overlays referencing stacks via `stack.override` name a
- * stack the framework can resolve. Unknown names → `MissingFile` issue
- * naming the offending overlay file and the missing stack.
- *
- * Per C3, `stack.override` may be a bare list of names or a structured
- * `{ discardInherited, value: [...] }` wrapper. Both forms are honoured.
- */
 function checkStackOverrideReferences(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
   const opts: ResolveStackOptions = {};
   if (ctx.userHome) opts.userHome = ctx.userHome;
@@ -496,16 +332,6 @@ function extractOverrideNames(override: unknown): string[] {
   return [];
 }
 
-// ---- phase 2: schema validation ------------------------------------------
-
-/**
- * Phase 2 — per-file schema validation.
- *
- * Walks every discovered stack and overlay file; validates each against
- * its corresponding schema. A bad file contributes one or more issues but
- * does not halt the phase. Output ordering is deterministic: stack files
- * are visited in `localeSort` order of their snapshot key.
- */
 function runPhase2SchemaValidation(snapshot: ValidationSnapshot): void {
   const stackKeys = localeSort(Array.from(snapshot.stackFiles.keys()));
   for (const key of stackKeys) {
@@ -521,15 +347,6 @@ function runPhase2SchemaValidation(snapshot: ValidationSnapshot): void {
   }
 }
 
-/**
- * Read + parse + ajv-validate a stack file by absolute path. On parse
- * failure (`InvalidYAML` / `MalformedInput` / `MissingFile`), pushes one
- * issue and returns. On schema failure, pushes one issue per ajv error.
- *
- * If `prefetched` is supplied (phase 1 snapshot row), the freshly parsed
- * data + prose are written back into the row so phase 3 (S4) can use
- * the snapshot without re-reading.
- */
 function validateStackFileFromDisk(
   filePath: string,
   issues: Issue[],
@@ -569,46 +386,11 @@ function validateStackFileFromDisk(
   validateStackBodyAgainstSchema(filePath, data, issues);
 }
 
-// ---- phase 3: cross-file invariants ---------------------------------------
-
-/**
- * Phase 3 — cross-file invariants.
- *
- * Delegates to the registry under `src/config-server/invariants/` (per
- * R1's single-implementation rule). Each invariant runs against the
- * snapshot built by phases 1 + 2 and returns 0+ issues; the registry
- * concatenates without short-circuit so a violating invariant does not
- * mask later checks. Issues are merged into the snapshot's issue list
- * after phase-2 issues so callers see a stable phase-1 → phase-2 →
- * phase-3 ordering.
- *
- * The 8 R1-owned F3 invariants are: `pairsWith.consistency`,
- * `cacheEnv.no_conflict`, `additionalContext.path_resolves`,
- * `path.escape`, `overlay.tier_apiVersion`, `stack.tier_apiVersion`,
- * `detection.tier3_only`, `stack.no_draft_banner`. The 9th catalogued
- * invariant (`trust.approved`) is owned by R5 and is omitted until R5
- * ships.
- */
 function runPhase3Invariants(snapshot: ValidationSnapshot): void {
   const produced = runAllInvariants(snapshot);
   if (produced.length > 0) snapshot.issues.push(...produced);
 }
 
-// ---- phase 4: trust check (R5 S3) ----------------------------------------
-
-/**
- * Phase 4 — trust check.
- *
- * Delegates to `trust/integration.runTrustCheck`. The trust gate fires
- * only when the project-tier overlay declares commands the framework
- * would run; otherwise the phase is a no-op and `runTrustCheck`
- * returns `'skipped'`. Issues are appended after phase-3 issues to
- * preserve the stable phase ordering callers rely on.
- *
- * The trust-mode env var is read inside `runTrustCheck` only — this
- * phase wrapper passes through `ctx.env` and `ctx.homeDir` for tests
- * but does not consult either directly.
- */
 function runPhase4Trust(snapshot: ValidationSnapshot, ctx: ValidateContext): void {
   const result = runTrustCheck({
     projectRoot: snapshot.projectRoot,
@@ -618,8 +400,6 @@ function runPhase4Trust(snapshot: ValidationSnapshot, ctx: ValidateContext): voi
   });
   if (result.issues.length > 0) snapshot.issues.push(...result.issues);
 }
-
-// ---- helpers --------------------------------------------------------------
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -639,12 +419,6 @@ function issueFromConfigServerError(e: ConfigServerError): Issue {
   };
 }
 
-// ---- exported helpers for tests ------------------------------------------
-
-/**
- * Test-only helper: run only phase 1 and return the snapshot. Useful for
- * verifying discovery without paying for schema validation.
- */
 export function _runPhase1ForTests(
   projectRoot: string,
   ctx: ValidateContext = {},

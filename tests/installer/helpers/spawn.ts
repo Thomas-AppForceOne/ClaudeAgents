@@ -1,12 +1,4 @@
-/**
- * R2 sprint 1 — `install.sh` test harness.
- *
- * Shells out to `install.sh` via `child_process.spawn` under controlled env.
- * Bash itself is resolved once at module load against the host PATH so a
- * test that supplies a stub-only PATH still has an interpreter to launch
- * `install.sh` with — the PATH override only applies to processes the
- * spawned `install.sh` itself starts (e.g. `node`, `git`, `claude`).
- */
+
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -34,24 +26,17 @@ function resolveBash(): string {
 const bashPath = resolveBash();
 
 export interface RunInstallOptions {
-  /** Extra HOME to expose to `install.sh` (overrides the inherited HOME). */
+
   home?: string;
-  /**
-   * Directories to prepend to PATH (in order; first is searched first).
-   * If `pathOverride` is supplied, it wins; otherwise these are prepended
-   * to the inherited PATH.
-   */
+
   prependPath?: readonly string[];
-  /**
-   * Replace PATH wholesale (no inheritance from process.env.PATH). Use this
-   * when a test needs `install.sh` to see ONLY the supplied stubs.
-   */
+
   pathOverride?: string;
-  /** Working directory; defaults to the repo root. */
+
   cwd?: string;
-  /** Additional environment variables. */
+
   extraEnv?: Readonly<Record<string, string>>;
-  /** Timeout in milliseconds; defaults to 15s. */
+
   timeoutMs?: number;
 }
 

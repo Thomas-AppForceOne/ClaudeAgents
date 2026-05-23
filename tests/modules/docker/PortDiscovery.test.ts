@@ -1,16 +1,4 @@
-/**
- * M2 — PortDiscovery tests.
- *
- * Covers AC7: one named test per layer + one for throw-on-exhaustion.
- *
- *   1. Env-var layer (`options.envVar` is a NAME, read from process.env).
- *   2. PortRegistry lookup for the current worktree.
- *   3. `docker ps --filter name=...` parsing.
- *   4. options.fallbackPort.
- *
- * The env-var test stubs `process.env` (via the `env` option) and
- * asserts unset, "not-a-number", "99999" all fall through.
- */
+
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,11 +19,6 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
-/**
- * Stage a fake package root with the docker module's manifest so the
- * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
- * state key when PortRegistry routes writes through `setModuleState`.
- */
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'm2-disc-modroot-'));
   writeFileSync(
@@ -69,8 +52,7 @@ describe('PortDiscovery.discoverPort', () => {
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-discover-'));
-    // F8: repo-keyed module-state store — `scratch` must be a real repo so the
-    // PortRegistry lookup layer can persist/read its registry.
+
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -102,7 +84,7 @@ describe('PortDiscovery.discoverPort', () => {
   });
 
   it('layer 1 fall-through: unset, non-numeric, and out-of-range env values fall to next layer', async () => {
-    // Unset.
+
     let port = await discoverPort({
       envVar: 'TEST_DOCKER_PORT',
       env: {},
@@ -110,7 +92,6 @@ describe('PortDiscovery.discoverPort', () => {
     });
     expect(port).toBe(1111);
 
-    // Non-numeric.
     port = await discoverPort({
       envVar: 'TEST_DOCKER_PORT',
       env: { TEST_DOCKER_PORT: 'not-a-number' },
@@ -118,7 +99,6 @@ describe('PortDiscovery.discoverPort', () => {
     });
     expect(port).toBe(2222);
 
-    // Out of range.
     port = await discoverPort({
       envVar: 'TEST_DOCKER_PORT',
       env: { TEST_DOCKER_PORT: '99999' },
@@ -153,7 +133,7 @@ describe('PortDiscovery.discoverPort', () => {
 
   it('layer 4: fallbackPort is returned when previous layers do not match', async () => {
     const port = await discoverPort({
-      // No env var, no registry, no container pattern.
+
       fallbackPort: 4040,
     });
     expect(port).toBe(4040);
@@ -171,8 +151,7 @@ describe('PortDiscovery.discoverPort', () => {
   });
 
   it('source uses options.envVar as a key into process.env (not a literal port)', () => {
-    // Sourcecode probe — the contract verifier asserts the value
-    // is used as a key into process.env. We mirror that here.
+
     const here = path.dirname(fileURLToPath(import.meta.url));
     const repoRoot = path.resolve(here, '..', '..', '..');
     const src = readFileSync(

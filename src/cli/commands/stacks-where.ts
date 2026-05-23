@@ -1,23 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks where [<name>]`.
- *
- * No name → prints the absolute path to the framework's built-in stacks
- * directory (`<packageRoot>/stacks/`). Useful for users who want to know
- * "where does the framework keep its stacks?".
- *
- * Named → calls R1's `getStackResolution({projectRoot, name})` and prints
- * the resolved path with its tier provenance. Resolution follows C5's
- * four-tier order; the highest-priority tier wins.
- *
- * JSON shapes:
- *   - no name: `{kind: "builtin-directory", path}`.
- *   - named:   `{name, path, tier}`.
- *
- * Exit codes:
- *   - 0 on success;
- *   - 2 (validation bucket) when the named stack is missing in every tier
- *     (R1's `getStackResolution` raises `MissingFile`).
- */
+
 
 import path from 'node:path';
 
@@ -32,10 +13,6 @@ import { EXIT_OK, exitCodeFor } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 import type { StackTier } from '../../config-server/resolution/stack-resolution.js';
 
-/**
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. Mirrors the
- *   helper in `stacks-available.ts`.
- */
 function resolveBuiltinStacksDir(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
   const root =
@@ -48,7 +25,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   const name = parsed._[0];
 
-  // No name: print the built-in stacks directory and exit 0.
   if (name === undefined || name.length === 0) {
     let stacksDir: string;
     try {
@@ -77,7 +53,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: `${stacksDir}\n`, stderr: '', code: EXIT_OK };
   }
 
-  // Named: resolve via R1's stack resolver.
   let projectRoot: string;
   let projectRootDisplay: string;
   try {
@@ -98,10 +73,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return errorResult(e, wantJson);
   }
 
-  // Display-form path: swap the canonical project-root prefix for the
-  // case-preserving form so output reads as `/Users/...` not `/users/...`
-  // on macOS. The resolver returns a canonical path; only the rendered
-  // version differs.
   const resolvedPathDisplay =
     projectRoot !== projectRootDisplay && resolved.path.startsWith(projectRoot)
       ? projectRootDisplay + resolved.path.slice(projectRoot.length)

@@ -1,25 +1,4 @@
-/**
- * R3 sprint 2 — `gan config get <path> [--json] [--project-root DIR]`.
- *
- * Calls R1's `getResolvedConfig({projectRoot})` in-process; the dotted
- * path (e.g. `stacks.active`, `overlay.runner.thresholdOverride`) is
- * walked CLI-side via a simple split-and-reduce. The walker treats arrays
- * by numeric-string index (e.g. `stacks.active.0`) so callers can address
- * any leaf value reachable from the resolved config.
- *
- * Output:
- *   - `--json`: emit the value verbatim through `emitJson`. Even scalar
- *     values are valid JSON documents (a top-level string, number, or
- *     boolean is permitted by the F3 determinism contract).
- *   - human: print the value as JSON-encoded text (so booleans, numbers,
- *     and arrays round-trip cleanly), with a trailing newline. Strings
- *     are printed unquoted in the human form for ergonomics.
- *
- * Missing path / no value at the path → exit 1 with stderr "key not
- * found: <path>" (or the equivalent F2 error JSON under `--json`). Per
- * the contract this is a non-fatal "key not found" and uses generic
- * exit 1 rather than a validation/schema code.
- */
+
 
 import { getResolvedConfig } from '../../index.js';
 import { createError } from '../../config-server/errors.js';
@@ -33,7 +12,6 @@ import type { ParsedArgs } from '../lib/args.js';
 
 const SENTINEL = Symbol('config-get-missing');
 
-/** Walk a dotted path on a value. Returns SENTINEL when any segment is missing. */
 function walk(root: unknown, dotted: string): unknown | typeof SENTINEL {
   if (dotted.length === 0) return root;
   const segments = dotted.split('.');
@@ -52,18 +30,16 @@ function walk(root: unknown, dotted: string): unknown | typeof SENTINEL {
       cursor = obj[seg];
       continue;
     }
-    // Scalar mid-path — cannot descend further.
+
     return SENTINEL;
   }
   return cursor;
 }
 
-/** Render a value for the human (non-JSON) path. */
 function renderHuman(value: unknown): string {
   if (typeof value === 'string') return value + '\n';
   if (value === undefined) return '\n';
-  // Use stableStringify-equivalent via emitJson so nested objects look
-  // identical to the `--json` form. Trailing newline already included.
+
   return emitJson(value);
 }
 
@@ -95,11 +71,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   const value = walk(resolved, dotted);
   if (value === SENTINEL) {
-    // "Key not found" is intentionally generic exit 1, not a validation
-    // failure: the resolved config is fine; the caller asked for a path
-    // that does not exist. We pass the renderer a plain F2-shaped object
-    // (sentinel `code: 'KeyNotFound'`) rather than a thrown error — the
-    // factory enum is closed and `KeyNotFound` is a CLI-only category.
+
     const shape = {
       code: 'KeyNotFound',
       message: `key not found: ${dotted}`,

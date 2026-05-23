@@ -1,10 +1,4 @@
-/**
- * R3 sprint 1 — F2 error code → exit code mapping.
- *
- * Table-driven: one row per F2 code we currently handle. The default
- * (`undefined`) maps to 0; unknown codes map to 1 (generic) per the
- * locked rule in PROJECT_CONTEXT.md.
- */
+
 import { describe, expect, it } from 'vitest';
 import { exitCodeFor } from '../../../src/cli/lib/exit-codes.js';
 

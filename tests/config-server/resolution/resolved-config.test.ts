@@ -22,10 +22,10 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     const r: ResolvedConfig = await composeResolvedConfig(jsTsMinimal);
     expect(r.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(r.schemaVersions).toEqual({ stack: 1, overlay: 1 });
-    // No package.json on disk → empty active set, empty byName.
+
     expect(r.stacks.active).toEqual([]);
     expect(r.stacks.byName).toEqual({});
-    // Project overlay only declares schemaVersion → cascaded overlay empty.
+
     expect(r.overlay).toEqual({});
     expect(r.discarded).toEqual([]);
     expect(r.additionalContext.planner).toEqual([]);
@@ -42,7 +42,7 @@ describe('composeResolvedConfig — F2 stable shape', () => {
   it('keys are sorted at every depth (stableStringify round-trip property)', async () => {
     const r = await composeResolvedConfig(jsTsMinimal);
     const serialised = stableStringify(r);
-    // Manually-produced sorted serialisation should match.
+
     const parsed = JSON.parse(serialised);
     const reSerialised = stableStringify(parsed);
     expect(serialised).toBe(reSerialised);

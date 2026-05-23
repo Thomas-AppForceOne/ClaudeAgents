@@ -1,19 +1,4 @@
-/**
- * R3 sprint 1 — F4 prose-discipline backstop.
- *
- * Walks the entire help surface (top-level + every subcommand --help)
- * plus the unknown-flag and unknown-subcommand error paths via real
- * spawn invocations, and runs the CC-PROSE regex from the contract:
- *
- *   /(?<!`)\b(npm|node|Node|MCP server)\b(?!`)/
- *
- * Any match that is not immediately wrapped in backticks is a violation.
- *
- * This test is the runtime backstop for the user-facing-error-text
- * discipline (PROJECT_CONTEXT.md). It runs the CLI rather than parsing
- * the source so help text generated dynamically (e.g. interpolated
- * subcommand names) is also checked.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -94,9 +79,7 @@ describe('CLI prose discipline (F4 backstop)', () => {
       const violations = findViolations(r.stdout + r.stderr);
       expect(violations, `subcommand ${sub} stub`).toHaveLength(0);
     }
-    // Trust stub mentions R5 — an upper-case `R5` is fine; the regex tests
-    // for `Node`, not `R`, so the trust stub passes by construction. Verify
-    // explicitly anyway to lock the contract.
+
     const trust = await runGan(['trust', 'info']);
     const violations = findViolations(trust.stdout + trust.stderr);
     expect(violations).toHaveLength(0);
@@ -113,12 +96,6 @@ describe('CLI prose discipline (F4 backstop)', () => {
     }
   });
 
-  // S2 extension: renderer-owned success surfaces (no fixture data
-  // mixed in) obey the F4 prose discipline. We deliberately skip
-  // `stack show` here because the stack file's data block contains
-  // legitimate ecosystem-specific tokens (`npm run build`, etc.) that
-  // are user-provided content, not renderer prose. The other read
-  // subcommands print only renderer-owned text on the human path.
   it('S2 success renderer prose obeys discipline (config print, stacks list, modules list)', async () => {
     const fixture = stackFixturePath('js-ts-minimal');
     const cases: string[][] = [
@@ -141,15 +118,15 @@ describe('CLI prose discipline (F4 backstop)', () => {
   it('S2 error surfaces obey prose discipline', async () => {
     const fixture = stackFixturePath('js-ts-minimal');
     const cases: Array<{ argv: string[] }> = [
-      // Missing key.
+
       { argv: ['config', 'get', 'no.such.path', '--project-root', fixture] },
       { argv: ['config', 'get', 'no.such.path', '--project-root', fixture, '--json'] },
-      // Missing arg.
+
       { argv: ['config', 'get', '--project-root', fixture] },
       { argv: ['stack', 'show', '--project-root', fixture] },
-      // Unknown stack — surfaces F2 MissingFile.
+
       { argv: ['stack', 'show', 'definitely-not-a-stack', '--project-root', fixture] },
-      // Bad project root.
+
       { argv: ['config', 'print', '--project-root', '/definitely/not/a/dir'] },
     ];
     for (const c of cases) {
@@ -164,12 +141,6 @@ describe('CLI prose discipline (F4 backstop)', () => {
     }
   });
 
-  // S3 extension — write subcommands' renderer prose obeys discipline.
-  // We use a tmp project (write commands must not mutate the in-tree
-  // fixture). The success surface ("Updated <path> to <value> in <tier>
-  // overlay.") quotes user input in backticks so even if a user wrote a
-  // literal `npm` the backtick-wrap defuses the regex; the renderer
-  // prose itself contains no banned tokens.
   const tmpDirs: string[] = [];
 
   afterEach(() => {
@@ -192,7 +163,7 @@ describe('CLI prose discipline (F4 backstop)', () => {
 
   it('S3 write success-surface prose obeys discipline', async () => {
     const proj = makeTmpProject();
-    // config set success.
+
     const setR = await runGan([
       'config',
       'set',
@@ -210,8 +181,7 @@ describe('CLI prose discipline (F4 backstop)', () => {
         );
       }
     }
-    // stack update success — use a value the backtick wrap will neutralise
-    // any banned tokens in (`vitest run` is fine on its own).
+
     const updR = await runGan([
       'stack',
       'update',
@@ -235,12 +205,12 @@ describe('CLI prose discipline (F4 backstop)', () => {
   it('S3 write error surfaces obey prose discipline', async () => {
     const proj = makeTmpProject();
     const cases: Array<{ argv: string[] }> = [
-      // Missing args.
+
       { argv: ['config', 'set', '--project-root', proj] },
       { argv: ['config', 'set', 'runner.thresholdOverride', '--project-root', proj] },
       { argv: ['stack', 'update', '--project-root', proj] },
       { argv: ['stack', 'update', 'web-node', '--project-root', proj] },
-      // Invalid --tier values.
+
       {
         argv: [
           'config',
@@ -263,12 +233,7 @@ describe('CLI prose discipline (F4 backstop)', () => {
           proj,
         ],
       },
-      // Schema-violating writes for overlay → renderer prose only (no
-      // stack-file path leaks). The stack-update path embeds the stack
-      // file's absolute path in error output (e.g. `…/stacks/web-node.md`)
-      // which contains user-provided ecosystem tokens; we skip those for
-      // the same reason `stack show` is skipped above (user content, not
-      // renderer prose).
+
       {
         argv: ['config', 'set', 'unknownTopLevelKey', '"bogus"', '--project-root', proj],
       },
@@ -285,20 +250,14 @@ describe('CLI prose discipline (F4 backstop)', () => {
     }
   });
 
-  // F7 slice-3 extension — `gan hooks status` human surface (including the
-  // new Active-run confinement zones section) obeys prose discipline both
-  // outside a run (zones unset) and inside one (zones resolved). The zone
-  // env values are sandbox paths constructed at runtime, never hardcoded.
   it('F7 hooks-status human surface obeys prose discipline (out-of-run + in-run)', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'gan-prose-hooks-home-'));
     const cwd = mkdtempSync(path.join(tmpdir(), 'gan-prose-hooks-cwd-'));
     tmpDirs.push(home, cwd);
 
-    // Out of a run: GAN_RUN_ID absent → zones reported unset.
     const outOfRun = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
     expect(outOfRun.exitCode).toBe(0);
 
-    // In a run: zones resolved from the env.
     const inRun = await runGan(['hooks', 'status'], {
       cwd,
       extraEnv: {
@@ -322,7 +281,7 @@ describe('CLI prose discipline (F4 backstop)', () => {
   });
 
   it('S2 inner-dispatch error surfaces obey prose discipline', async () => {
-    // Unknown inner subcommand under each parent (e.g. `gan config nope`).
+
     const cases = [
       ['config'],
       ['config', 'nope'],

@@ -14,18 +14,12 @@ const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks');
 const cleanFixture = path.join(fixturesRoot, 'js-ts-minimal');
 const escapeFixture = path.join(fixturesRoot, 'invariant-path-escape');
 
-/**
- * Build a minimal project tree with a project overlay containing the
- * given `additionalContext` paths under `proposer.additionalContext`.
- * Returns the project root.
- */
 function makeProject(root: string, proposerPaths: string[], plannerPaths: string[] = []): void {
   const ganDir = path.join(root, '.claude', 'gan');
   mkdirSync(ganDir, { recursive: true });
   const stacksDir = path.join(root, 'stacks');
   mkdirSync(stacksDir, { recursive: true });
-  // Minimal stack so phase-1 discovery has something valid to chew on
-  // (though path-escape only inspects overlays).
+
   writeFileSync(
     path.join(stacksDir, 'web-node.md'),
     [
@@ -87,7 +81,7 @@ describe('path.escape (PathEscape) invariant', () => {
   });
 
   it('produces no issues when the path resolves inside the project root', () => {
-    // README.md is a sibling directory entry inside the project root.
+
     writeFileSync(path.join(scratch, 'README.md'), '# hi\n', 'utf8');
     makeProject(scratch, ['README.md']);
     const snapshot = _runPhase1ForTests(scratch);
@@ -117,14 +111,13 @@ describe('path.escape (PathEscape) invariant', () => {
   });
 
   it('fires PathEscape when a symlink under .claude/gan/ points outside the project root', () => {
-    // Outside-of-root file we will point a symlink at.
+
     const outsideDir = mkdtempSync(path.join(tmpdir(), 'r5-pesc-out-'));
     const outsideFile = path.join(outsideDir, 'secret.txt');
     writeFileSync(outsideFile, 'secret\n', 'utf8');
 
     try {
-      // Create the project and a symlink inside .claude/gan/ pointing at
-      // the outside file.
+
       makeProject(scratch, ['.claude/gan/escape-link.txt']);
       const linkPath = path.join(scratch, '.claude', 'gan', 'escape-link.txt');
       symlinkSync(outsideFile, linkPath);
@@ -140,7 +133,7 @@ describe('path.escape (PathEscape) invariant', () => {
   });
 
   it('does not fire when a symlink resolves to a path inside the project root', () => {
-    // Inside-of-root target.
+
     writeFileSync(path.join(scratch, 'target.txt'), 'hi\n', 'utf8');
 
     makeProject(scratch, ['.claude/gan/inside-link.txt']);
@@ -163,8 +156,7 @@ describe('path.escape (PathEscape) invariant', () => {
   it('does not throw on non-existent (but in-root) paths — owned by path_resolves', () => {
     makeProject(scratch, ['docs/missing.md']);
     const snapshot = _runPhase1ForTests(scratch);
-    // Non-existent in-root path is not reported by PathEscape (different
-    // invariant owns missing-file checks).
+
     expect(checkPathEscape(snapshot)).toEqual([]);
   });
 

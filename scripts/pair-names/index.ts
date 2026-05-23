@@ -1,31 +1,4 @@
 #!/usr/bin/env node
-/**
- * R4 sprint 2 — `pair-names` maintainer script.
- *
- * CI-time backstop for the `pairsWith.consistency` cross-file invariant
- * (per F3 catalog; sourced from M1 + C5). Discovers every stack file
- * the runtime would enumerate (built-in + user + project tier), hydrates
- * each row's `data`/`prose` from disk, and runs the canonical
- * `checkPairsWithConsistency` invariant. Each issue surfaces as a
- * report failure with its F2 code, message, and field path.
- *
- * Per the single-implementation rule (PROJECT_CONTEXT.md, R1-locked),
- * the YAML parser, the snapshot builder, and the invariant check are
- * imported from `src/config-server/`; this script owns no parsing or
- * pairing logic. The C5 verbatim remediation hint is built inside the
- * imported invariant and reproduced byte-for-byte.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no failures);
- *   - 1 when the invariant fires for at least one stack file;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message).
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
- */
 
 import { readFileSync } from 'node:fs';
 
@@ -71,28 +44,21 @@ interface RunResult {
 }
 
 interface RunOptions {
-  /** Pre-canonicalised project root. */
+
   projectRoot: string;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
-/**
- * Hydrate every stack row's `data`/`prose` from disk. Phase 1 only
- * records paths and tier provenance; the invariant needs the parsed
- * YAML body to read `pairsWith`. Mirrors the hydration pattern used in
- * `tests/config-server/invariants/pairs-with-consistency.test.ts`.
- */
 function hydrateSnapshot(snapshot: ReturnType<typeof _runPhase1ForTests>): void {
   for (const row of snapshot.stackFiles.values()) {
     let text: string;
     try {
       text = readFileSync(row.path, 'utf8');
     } catch {
-      // Unreadable row: leave `data`/`prose` unset. The invariant treats
-      // missing data as a no-op rather than fabricating a violation.
+
       continue;
     }
     try {
@@ -100,8 +66,7 @@ function hydrateSnapshot(snapshot: ReturnType<typeof _runPhase1ForTests>): void 
       row.data = parsed.data;
       row.prose = parsed.prose;
     } catch {
-      // YAML parse failure: leave `data`/`prose` unset. Schema-level
-      // parse errors are reported by `lint-stacks` (sprint 1), not here.
+
       continue;
     }
   }
@@ -147,11 +112,6 @@ export function run(opts: RunOptions): RunResult {
   };
 }
 
-/**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
- */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help'],

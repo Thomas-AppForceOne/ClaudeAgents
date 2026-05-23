@@ -1,19 +1,4 @@
-/**
- * Post-R audit Sprint 7 — built-in stacks symlink tests for `install.sh`.
- *
- * Covers the contract for `create_builtin_stacks_symlink()`:
- *   - Happy path: clean install creates `$HOME/.claude/gan/builtin-stacks`
- *     as a symlink pointing at `<npm root -g>/@claudeagents/config-server/stacks`.
- *   - Idempotency: a second install produces the same symlink, no errors.
- *   - Replaces stale: a pre-seeded symlink to a different path is replaced.
- *   - Refuses real directory: a real dir at the path is left intact.
- *   - Refuses real file: a regular file at the path is left intact.
- *   - `npm root -g` failure: install logs warning, exits 0, no symlink.
- *   - Missing packageRoot/stacks: install logs warning, exits 0, no symlink.
- *   - Windows skip: stub `uname` to print `MINGW64_NT-10.0` → no symlink, exit 0.
- *   - Final-status line: post-install stdout contains `built-in stacks` or
- *     `builtin-stacks` when the symlink was created.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
@@ -41,27 +26,14 @@ interface SetupResult {
   tmp: TmpHome;
   pathOverride: string;
   cwd: string;
-  /**
-   * Absolute path the fake `npm root -g` prints. Tests use this to seed
-   * (or not) a `<npm_root>/@claudeagents/config-server/stacks/` directory
-   * to exercise the various symlink-creation paths.
-   */
+
   npmRoot: string;
-  /** The expected symlink path. */
+
   linkPath: string;
-  /** The expected symlink target. */
+
   expectedTarget: string;
 }
 
-/**
- * Writes a fake `npm` that:
- *  - exits 0 on `install`-flavoured invocations and records them to
- *    `npmInvocationLog`;
- *  - prints `npmRoot` on `npm root -g`.
- *
- * If `rootFails` is true, `npm root -g` exits 1 with no output.
- * If `rootValue` is supplied, that value is printed instead of `npmRoot`.
- */
 function writeFakeNpmWithRoot(
   bin: string,
   invocationLog: string,
@@ -114,8 +86,6 @@ function baseSetup(): SetupResult {
 
   writeFakeNpmWithRoot(tmp.bin, npmInvocationLog(tmp.root), npmRoot);
 
-  // Make the version-probe match so npm install is skipped — we want the
-  // happy path to flow through to the symlink step regardless.
   writeFakeConfigServer(tmp.bin, { version: packageVersion() });
 
   const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
@@ -131,7 +101,6 @@ function baseSetup(): SetupResult {
   };
 }
 
-/** Seed `<npmRoot>/@claudeagents/config-server/stacks/` with a marker file. */
 function seedBuiltinStacks(npmRoot: string): string {
   const dir = path.join(npmRoot, '@claudeagents', 'config-server', 'stacks');
   mkdirSync(dir, { recursive: true });
@@ -178,7 +147,6 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
-    // Pre-seed a stale symlink that points somewhere else.
     mkdirSync(path.dirname(s.linkPath), { recursive: true });
     const stale = path.join(s.tmp.root, 'stale-target');
     mkdirSync(stale, { recursive: true });
@@ -200,7 +168,6 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
-    // Pre-seed a real directory at the would-be symlink path.
     mkdirSync(s.linkPath, { recursive: true });
     const sentinel = path.join(s.linkPath, 'user-file');
     writeFileSync(sentinel, 'do not delete\n');
@@ -212,12 +179,11 @@ describe('install.sh — built-in stacks symlink', () => {
     });
     expect(r.exitCode).toBe(0);
 
-    // Real directory survives intact (not converted to a symlink).
     const st = lstatSync(s.linkPath);
     expect(st.isDirectory()).toBe(true);
     expect(st.isSymbolicLink()).toBe(false);
     expect(existsSync(sentinel)).toBe(true);
-    // The installer warned rather than aborting.
+
     expect(r.stderr).toMatch(/warning:/);
   });
 
@@ -225,7 +191,6 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
-    // Pre-seed a real file at the would-be symlink path.
     mkdirSync(path.dirname(s.linkPath), { recursive: true });
     writeFileSync(s.linkPath, 'sentinel\n');
 
@@ -245,7 +210,7 @@ describe('install.sh — built-in stacks symlink', () => {
 
   it('npm root -g failure: install warns, no symlink, exits 0', async () => {
     const s = baseSetup();
-    // Re-stub npm so `npm root -g` fails.
+
     writeFakeNpmWithRoot(s.tmp.bin, npmInvocationLog(s.tmp.root), s.npmRoot, { rootFails: true });
 
     const r = await runInstall([], {
@@ -262,7 +227,6 @@ describe('install.sh — built-in stacks symlink', () => {
 
   it('missing packageRoot stacks dir: install warns, no symlink, exits 0', async () => {
     const s = baseSetup();
-    // Do NOT seed `<npmRoot>/@claudeagents/config-server/stacks/`.
 
     const r = await runInstall([], {
       home: s.tmp.home,
@@ -280,7 +244,6 @@ describe('install.sh — built-in stacks symlink', () => {
     const s = baseSetup();
     seedBuiltinStacks(s.npmRoot);
 
-    // Stub `uname` so the Windows-shell case branch fires.
     writeStubBin(s.tmp.bin, 'uname', `printf '%s\\n' "MINGW64_NT-10.0"\nexit 0\n`);
 
     const r = await runInstall([], {

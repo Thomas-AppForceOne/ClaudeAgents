@@ -1,25 +1,4 @@
-/**
- * R3 sprint 4 — `gan stacks new <name> [--tier=project] [--project-root DIR]`.
- *
- * Scaffolds a DRAFT-bannered stack file. `--tier=project` (the default)
- * writes to `<root>/.claude/gan/stacks/<name>.md`; `--tier=user` writes to
- * `<userHome>/.claude/gan/stacks/<name>.md` (the user-tier path per C5).
- * Any other value — including the legacy `repo`, `builtin`, or unknown
- * strings — exits 64 with a structured `MalformedInput` error whose
- * message names both supported values. There is no end-user-facing
- * builtin/repo scaffold target: built-in stacks ship inside the published
- * npm package and are surfaced via `gan stacks customize`.
- *
- * Refuses to overwrite an existing file (the scaffold-no-overwrite rule):
- * exits 1 with a clear stderr message naming the absolute path. The CLI
- * never exposes a `--force` flag in v1.
- *
- * Persistence flows through R1's `atomicWriteFile` so the write is
- * atomic-by-rename. Bytes written equal `buildScaffold(name, tier)`
- * byte-for-byte; tests assert that property.
- *
- * Exit codes flow through `lib/exit-codes.ts`; no numeric literals here.
- */
+
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -45,31 +24,18 @@ const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>([
   'user',
 ]);
 
-/**
- * Read and validate `--tier`. Returns the resolved tier (default `project`)
- * or a `ConfigServerError` describing the failure (rendered as exit 64).
- *
- * Both `project` and `user` are supported (R6 slice 2). Any other value —
- * including the legacy/deprecated `repo`/`builtin` tiers and unknown
- * strings, as well as the value-less / bare-boolean forms of `--tier` —
- * flows through the same `MalformedInput` rejection path, whose message
- * names BOTH supported values. There is no end-user-facing builtin/repo
- * scaffold target: built-in stacks ship inside the npm package (per E2's
- * distribution model) and are surfaced via `gan stacks customize`.
- */
 function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
   if (raw === true) {
-    // Bare `--tier` with no value. The arg parser normally intercepts this
-    // (the flag is registered as value-requiring), but defend it here too.
+
     return createError('MalformedInput', {
       field: '--tier',
       message: "--tier requires a value: 'project' or 'user'.",
     });
   }
   if (typeof raw !== 'string' || raw.length === 0) {
-    // `--tier=` with an empty value: "got ''" is accurate here.
+
     return createError('MalformedInput', {
       field: '--tier',
       message: "--tier must be 'project' or 'user' (got '').",
@@ -84,12 +50,6 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   return raw as ScaffoldTier;
 }
 
-/**
- * Resolve the absolute target path for the named stack at the given tier.
- * Project tier resolves under `projectRoot`; user tier resolves under the
- * user home `.claude/gan/stacks` directory (C5 user-tier path), independent
- * of `--project-root`.
- */
 function targetPathFor(
   projectRoot: string,
   tier: ScaffoldTier,
@@ -116,10 +76,6 @@ function renderHumanSuccess(name: string, tier: ScaffoldTier, target: string): s
   ].join('\n');
 }
 
-/**
- * Build the JSON success surface via the central deterministic emitter
- * (sorted keys, two-space indent, trailing newline).
- */
 function renderJsonSuccess(name: string, tier: ScaffoldTier, target: string): string {
   return emitJson({ name, tier, path: target, written: true });
 }
@@ -155,9 +111,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(target), code: EXIT_BAD_ARGS };
   }
 
-  // No-overwrite rule: refuse to clobber an existing file. Exit code is the
-  // canonical "generic failure" so scripts can distinguish overwrite
-  // refusal from validation failures.
   if (existsSync(target)) {
     const err = createError('MalformedInput', {
       file: target,

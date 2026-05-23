@@ -1,27 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks customize <name> [--tier=project|user] [--force]`.
- *
- * Copies a built-in stack file (`<packageRoot>/stacks/<name>.md`) into a
- * customisation tier so the user can edit it. Source is always the
- * built-in file directly; we deliberately do NOT route through
- * `getStackResolution` because resolution would prefer an existing
- * higher-tier copy — the customisation flow wants the framework's
- * default as the seed, even if a stale customisation already exists.
- *
- * Tiers:
- *   - `--tier=project` (default) → `<projectRoot>/.claude/gan/stacks/<name>.md`
- *   - `--tier=user`              → `<userHome>/.claude/gan/stacks/<name>.md`
- *
- * Refuses overwrite without `--force`. With `--force`, the existing copy
- * is replaced atomically via `atomicWriteFile`.
- *
- * Exit codes (per `lib/exit-codes.ts`):
- *   - 0 on success;
- *   - 1 (generic) on overwrite refusal (matches `gan stacks new` semantics);
- *   - 2 (validation) when the source built-in file is missing;
- *   - 64 on bad CLI arguments (missing name, invalid `--tier`, missing user
- *     home for `--tier=user`).
- */
+
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,10 +23,6 @@ type CustomizeTier = 'project' | 'user';
 
 const ALLOWED_TIERS: ReadonlySet<CustomizeTier> = new Set<CustomizeTier>(['project', 'user']);
 
-/**
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. Lets tests
- *   stage a tmp directory containing a built-in `stacks/` tree.
- */
 function resolveBuiltinStacksDir(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
   const root =
@@ -153,11 +126,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(targetOrErr), code: EXIT_BAD_ARGS };
   }
   const target = targetOrErr;
-  // Build the display-form target by swapping the canonical project-root
-  // prefix for the display-form one. This preserves the user's case (so
-  // "/Users/thak/..." doesn't read as "/users/thak/...") in the rendered
-  // success line while keeping `target` itself canonical for any
-  // internal use.
+
   const targetDisplay =
     projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
       ? projectRootDisplay + target.slice(projectRoot.length)

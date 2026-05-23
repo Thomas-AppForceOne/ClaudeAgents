@@ -1,28 +1,4 @@
-/**
- * Q5 Sprint 1 — body-schema validation tests for the two additive optional
- * stack fields `documentationSurfaces` and `docLintCmd`.
- *
- * The fields are exercised through the SAME ajv body-validation path the
- * `lint-stacks` script delegates to (`validateStackBodyAgainstSchema` in
- * `validation/schema-check.ts`, compiled under the pinned `strict: true`,
- * `allErrors: true`, `useDefaults: false` options) — not a parallel ajv
- * configuration. Per Q5's Sprint 1 plan the malformed-`docLintCmd` rejection
- * rides this existing path: the constraints are enum/oneOf-expressible, so no
- * bespoke check function is added and the rejection is purely schema-driven.
- *
- * Coverage:
- *   - FUNC-1: a body that omits BOTH fields still validates (additive optional);
- *     declaring either field does not require the other.
- *   - FUNC-2: a well-formed `documentationSurfaces` entry validates; an entry
- *     missing `id` or `template`, or carrying an unknown item property, is
- *     rejected with a `SchemaMismatch` issue.
- *   - FUNC-3: a well-formed `docLintCmd` (both the silent and non-silent
- *     branches, with optional `baseline`/`fallback`) validates.
- *   - FUNC-4: a malformed `docLintCmd` is rejected with a `SchemaMismatch`
- *     issue — (a) a `severity` outside the enum, (b) a missing `absenceMessage`
- *     when `absenceSignal` is not `silent`, (c) a `baseline` outside the enum,
- *     and the related missing-`severity` case.
- */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -32,12 +8,6 @@ import {
 
 const STACK_PATH = '/tmp/q5-stack.md';
 
-/**
- * Validate a stack body (the caller supplies the body without the
- * `schemaVersion` frontmatter field; this helper adds the F3-required
- * `schemaVersion: 1` so the body schema, not the version gate, is what is
- * under test) and return only the `SchemaMismatch` issues.
- */
 function schemaMismatches(body: Record<string, unknown>): Issue[] {
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(STACK_PATH, { schemaVersion: 1, ...body }, issues);
@@ -46,8 +16,7 @@ function schemaMismatches(body: Record<string, unknown>): Issue[] {
 
 describe('Q5 stack schema — additive optional fields', () => {
   it('FUNC-1: a body omitting both Q5 fields still validates', () => {
-    // Mirrors the shipped `stacks/web-node.md` shape before Q5: command
-    // fields + securitySurfaces, no documentationSurfaces / docLintCmd.
+
     const body = {
       scope: ['**/*.ts'],
       buildCmd: 'npm run build',

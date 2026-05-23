@@ -1,19 +1,4 @@
-/**
- * `stack.tier_apiVersion` invariant (F3 catalog; sourced from C1).
- *
- * Each active stack file's `schemaVersion` must match the API's known
- * stack schema version. Today the only known version is 1; mismatches
- * surface as an `InvariantViolation` issue (per S4's "no new error
- * codes" rule).
- *
- * Phase 2 already raises a `SchemaMismatch` issue per ajv when a stack
- * file's `schemaVersion` is wrong; this invariant is the cross-tier
- * sanity backstop — it ensures every stack file at every tier the
- * framework saw during phase 1 carries the expected API version, even
- * if a future phase 2 path lets one through. The catalog entry exists
- * because F3 owns the cross-file invariants list; deferring to phase 2
- * would couple the catalog to an implementation detail.
- */
+
 
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';

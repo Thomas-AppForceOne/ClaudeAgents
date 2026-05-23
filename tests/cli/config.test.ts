@@ -1,11 +1,4 @@
-/**
- * R3 sprint 2 — `gan config print` and `gan config get`.
- * R3 sprint 3 — `gan config set` (writes to project / user overlays).
- *
- * Covers contract criteria F-AC3 (`config print --json | jq` round-trip),
- * the dotted-path semantics of `config get` (including the missing-key
- * exit-1 path), and F-AC4 (round-trip `set` → resolved-config read).
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,7 +46,7 @@ describe('gan config print', () => {
     expect(r.stdout).toContain('\n  "');
 
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
-    // F2 stable-shape: every read returns these top-level keys.
+
     expect(parsed).toHaveProperty('apiVersion');
     expect(parsed).toHaveProperty('schemaVersions');
     expect(parsed).toHaveProperty('stacks');
@@ -62,7 +55,6 @@ describe('gan config print', () => {
     expect(parsed).toHaveProperty('additionalContext');
     expect(parsed).toHaveProperty('issues');
 
-    // Sorted-keys property: top-level keys come out in lex order.
     const keys = Object.keys(parsed);
     const sorted = [...keys].sort();
     expect(keys).toEqual(sorted);
@@ -78,7 +70,7 @@ describe('gan config print', () => {
 
   it('F-AC3: --json output parses cleanly via JSON.parse (jq-equivalent contract)', async () => {
     const r = await runGan(['config', 'print', '--project-root', FIXTURE, '--json']);
-    // Throws if the document isn't valid JSON.
+
     const parsed = JSON.parse(r.stdout) as { apiVersion: string };
     expect(typeof parsed.apiVersion).toBe('string');
   });
@@ -89,7 +81,7 @@ describe('gan config get', () => {
     const r = await runGan(['config', 'get', 'apiVersion', '--project-root', FIXTURE]);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
-    // Human form prints strings unquoted.
+
     expect(r.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
 
@@ -164,9 +156,6 @@ describe('gan config set', () => {
     expect(setR.stderr).toBe('');
     expect(setR.stdout).toMatch(/Updated `runner\.thresholdOverride` to `8` in project overlay/);
 
-    // The cascaded resolved config exposes the overlay tier under
-    // `overlay.<...>` per F2's stable shape; the round-trip must surface
-    // the just-written value.
     const getR = await runGan([
       'config',
       'get',
@@ -177,7 +166,6 @@ describe('gan config set', () => {
     expect(getR.exitCode).toBe(0);
     expect(getR.stdout.trim()).toBe('8');
 
-    // The on-disk overlay file reflects the write.
     const overlayPath = path.join(proj, '.claude', 'gan', 'project.md');
     const written = readFileSync(overlayPath, 'utf8');
     expect(written).toMatch(/runner:\s*[\r\n]+\s+thresholdOverride:\s*8/);
@@ -237,10 +225,7 @@ describe('gan config set', () => {
       proj,
       '--json',
     ]);
-    // setOverlayField + the schema rejects a bare string under
-    // additionalContext (which expects an array). The CLI surfaces the
-    // schema error with exit 2.
-    // SchemaMismatch maps to exit 3 per the locked exit-code table.
+
     expect(r.exitCode).toBe(3);
     const parsed = JSON.parse(r.stdout) as { code: string };
     expect(parsed.code).toBe('SchemaMismatch');
@@ -313,8 +298,6 @@ describe('gan config set', () => {
     const overlayPath = path.join(proj, '.claude', 'gan', 'project.md');
     const before = readFileSync(overlayPath, 'utf8');
 
-    // Top-level unknown key violates `additionalProperties: false` on the
-    // overlay schema.
     const r = await runGan([
       'config',
       'set',
@@ -324,7 +307,7 @@ describe('gan config set', () => {
       proj,
       '--json',
     ]);
-    // SchemaMismatch maps to exit 3 per the locked exit-code table.
+
     expect(r.exitCode).toBe(3);
     const parsed = JSON.parse(r.stdout) as { code: string };
     expect(parsed.code).toBe('SchemaMismatch');

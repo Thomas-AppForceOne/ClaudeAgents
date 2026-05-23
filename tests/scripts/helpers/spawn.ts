@@ -1,15 +1,4 @@
-/**
- * Test harness for R4 maintainer scripts.
- *
- * Spawns the built `dist/scripts/<name>/index.js` via the host Node so
- * each test runs the same compiled artefact that ships in CI. We pass
- * `--no-warnings` to keep the success-path stderr empty (the script
- * imports schemas-bundled.ts which loads JSON via `import attributes`
- * and emits an `ExperimentalWarning`).
- *
- * Mirrors the shape of `tests/cli/helpers/spawn.ts` and
- * `tests/installer/helpers/spawn.ts` so reviewers see one pattern.
- */
+
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -19,13 +8,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
 export interface RunScriptOptions {
-  /** Working directory; defaults to the repo root. */
+
   cwd?: string;
-  /** Additional env vars merged onto the inherited environment. */
+
   extraEnv?: Readonly<Record<string, string>>;
-  /** Override PATH wholesale. */
+
   pathOverride?: string;
-  /** Timeout in ms; defaults to 15s. */
+
   timeoutMs?: number;
 }
 
@@ -39,9 +28,6 @@ export function repoRootDir(): string {
   return repoRoot;
 }
 
-/**
- * Spawn a built maintainer script under `dist/scripts/<scriptName>/`.
- */
 export async function runScript(
   scriptName: string,
   args: readonly string[] = [],
@@ -62,8 +48,7 @@ export async function runScript(
   if (process.env.HOME !== undefined) {
     env.HOME = process.env.HOME;
   }
-  // Forward the test-isolation override so spawned scripts honour the
-  // same built-in package tier as in-process tests do (see tests/setup.ts).
+
   if (process.env.GAN_PACKAGE_ROOT_OVERRIDE !== undefined) {
     env.GAN_PACKAGE_ROOT_OVERRIDE = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
   }

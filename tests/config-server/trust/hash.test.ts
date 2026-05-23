@@ -6,8 +6,6 @@ import path from 'node:path';
 import { computeTrustHash } from '../../../src/config-server/trust/hash.js';
 import { canonicalizePath, localeSort } from '../../../src/config-server/determinism/index.js';
 
-// Empty SHA-256 digest, prefixed with the algorithm tag we emit. The literal
-// string is intentionally embedded so a grep can confirm the contract.
 const EMPTY_SHA256 = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const HEX_HASH_RE = /^sha256:[0-9a-f]{64}$/;
@@ -81,12 +79,10 @@ describe('computeTrustHash', () => {
     expect(result.aggregateHash).toMatch(HEX_HASH_RE);
     expect(result.files.length).toBe(4);
 
-    // Every entry is absolute.
     for (const f of result.files) {
       expect(path.isAbsolute(f)).toBe(true);
     }
 
-    // List equals localeSort(canonicalizedPaths) of exactly the expected set.
     const expectedRaw = [
       path.join(ganDir, 'project.md'),
       path.join(stacksDir, 'web-node.md'),
@@ -96,8 +92,6 @@ describe('computeTrustHash', () => {
     const expectedSorted = localeSort(expectedRaw.map((p) => canonicalizePath(p)));
     expect(result.files).toEqual(expectedSorted);
 
-    // Lexicographic order: each entry sorts at-or-after its predecessor under
-    // the same locale rule.
     const reSorted = localeSort(result.files);
     expect(result.files).toEqual(reSorted);
   });
@@ -107,7 +101,6 @@ describe('computeTrustHash', () => {
     writeFileSync(path.join(ganDirA, 'project.md'), 'hello\n', 'utf8');
     const hashA = computeTrustHash(root).aggregateHash;
 
-    // Tear down and rebuild with one extra trailing space.
     rmSync(root, { recursive: true, force: true });
     root = mkdtempSync(path.join(tmpdir(), 'r5-hash-'));
     const ganDirB = path.join(root, '.claude', 'gan');

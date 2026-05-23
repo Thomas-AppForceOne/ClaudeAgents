@@ -1,25 +1,4 @@
-/**
- * R1 sprint 7 integration test — full MCP handshake against the built
- * server binary.
- *
- *   1. Spawn `node ./dist/config-server/index.js` as a subprocess with
- *      `GAN_RUN_ID` set so logs route to the per-run log file under the
- *      project root.
- *   2. Send `initialize` (MCP), then `tools/list`. Assert every F2 tool
- *      name appears in the response.
- *   3. Call a representative read tool (`getResolvedConfig` against the
- *      `js-ts-minimal` fixture) and a representative write tool
- *      (`setOverlayField` against a temp-dir copy of the same fixture).
- *      Both must succeed with structured payloads. Then exercise the
- *      M1 module-state surface end-to-end via `setModuleState` followed
- *      by `getModuleState`, asserting the persisted blob round-trips
- *      verbatim through the MCP transport.
- *   4. Assert the per-run log file exists with at least one entry per
- *      tool call, and that overlay values, module-state values, and
- *      trust hashes never appear in the log (anonymisation contract).
- *   5. Close stdin and verify the subprocess exits cleanly within the
- *      timeout window.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
@@ -77,11 +56,6 @@ interface PendingDispatcher {
   awaitId(id: number, timeoutMs?: number): Promise<JsonRpcResponse>;
 }
 
-/**
- * Wire a JSON-RPC dispatcher around a child process's stdio. Lines on
- * stdout are parsed as JSON-RPC responses; awaiters keyed by request id
- * resolve when their matching response arrives.
- */
 function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher {
   const waiters = new Map<number, (r: JsonRpcResponse) => void>();
   const buffered: JsonRpcResponse[] = [];
@@ -113,7 +87,7 @@ function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher
       child.stdin.write(JSON.stringify(payload) + '\n');
     },
     awaitId(id, timeoutMs = 10_000) {
-      // Drain buffered responses for late-bound waiters.
+
       const buffered_match = buffered.findIndex((r) => r.id === id);
       if (buffered_match >= 0) {
         const r = buffered.splice(buffered_match, 1)[0];
@@ -139,26 +113,15 @@ describe('integration: MCP handshake (subprocess)', () => {
       throw new Error(`Build artefact not found at ${distEntry}; run npm run build first.`);
     }
 
-    // Build a temp project so writes don't pollute the committed fixture.
     const projectRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-'));
     cpSync(jsTsMinimal, projectRoot, { recursive: true });
     tmpDirs.push(projectRoot);
-    // F8: the server resolves module state through the repo-keyed store,
-    // keyed off the project's git-common-dir. Make the temp project a real
-    // repo and point GAN_MODULE_STATE (inherited by the subprocess below and
-    // the in-process path resolver) at a throwaway store root.
+
     initGitRepo(projectRoot);
     const moduleStore = useTempModuleStateStore();
     tmpDirs.push(moduleStore.storeRoot);
     envRestores.push(moduleStore.restore);
 
-    // Stage a fake package root containing a `docker` module manifest
-    // declaring `port-registry` as an allowed state key, so the M3
-    // allowlist gate finds the key when the subprocess processes
-    // `setModuleState` / `getModuleState` calls. Without this override
-    // the global vitest setup's empty fake root would leave the docker
-    // module unregistered and every write would reject with
-    // `UnknownStateKey`.
     const stagedPkgRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-pkgroot-'));
     tmpDirs.push(stagedPkgRoot);
     writeFileSync(
@@ -206,7 +169,6 @@ describe('integration: MCP handshake (subprocess)', () => {
 
     const rpc = dispatcherFor(child);
 
-    // 1. initialize
     rpc.send({
       jsonrpc: '2.0',
       id: 1,
@@ -220,11 +182,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     const init = await rpc.awaitId(1);
     expect(init.error).toBeUndefined();
 
-    // 2. tools/list — behavioural assertion: every advertised name is a
-    //    known F2 tool, and the two F5-slice-1-filtered NotImplemented
-    //    stubs are absent. Not coupled to the filter's implementation:
-    //    the test still passes when the filter logic changes, as long
-    //    as the surface contract holds.
     rpc.send({
       jsonrpc: '2.0',
       id: 2,
@@ -241,7 +198,6 @@ describe('integration: MCP handshake (subprocess)', () => {
       expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
     }
 
-    // 3a. Representative read tool: getResolvedConfig.
     rpc.send({
       jsonrpc: '2.0',
       id: 3,
@@ -260,7 +216,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(readPayload.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(readPayload.schemaVersions).toEqual({ stack: 1, overlay: 1 });
 
-    // 3b. Representative write tool: setOverlayField against the temp fixture.
     rpc.send({
       jsonrpc: '2.0',
       id: 4,
@@ -283,7 +238,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(writePayload.mutated).toBe(true);
     expect(typeof writePayload.path).toBe('string');
 
-    // 3c. Module-state write: setModuleState round-trips the blob to disk.
     const moduleStateBlob = {
       ports: [3000, 3001],
       settings: { healthy: true, label: 'mcp-handshake-module-state' },
@@ -314,8 +268,7 @@ describe('integration: MCP handshake (subprocess)', () => {
     >;
     expect(setStatePayload.mutated).toBe(true);
     expect(typeof setStatePayload.path).toBe('string');
-    // F8: the server writes to the repo-keyed store, not under
-    // `<projectRoot>/.gan-state/modules`.
+
     expect(setStatePayload.path as string).toBe(
       moduleStore.statePath(projectRoot, 'docker', 'port-registry'),
     );
@@ -324,7 +277,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     ).toBe(true);
     expect(setStatePayload.path as string).not.toContain(path.join('.gan-state', 'modules'));
 
-    // 3d. Module-state read: getModuleState returns the same blob verbatim.
     rpc.send({
       jsonrpc: '2.0',
       id: 6,
@@ -348,16 +300,11 @@ describe('integration: MCP handshake (subprocess)', () => {
       unknown
     >;
     expect(getStatePayload.state).toEqual(moduleStateBlob);
-    // Sanity-check the round-trip carried the labelled marker through.
+
     expect((getStatePayload.state as { settings: { label: string } }).settings.label).toBe(
       'mcp-handshake-module-state',
     );
 
-    // 3c. Error-path round-trip: malformed input (missing `name`) on a
-    // module-state tool must surface a structured error through the MCP
-    // envelope (isError: true + JSON-encoded ConfigServerError payload).
-    // Locks in the failure-shape contract for any caller relying on
-    // isError to detect tool failures over JSON-RPC.
     rpc.send({
       jsonrpc: '2.0',
       id: 7,
@@ -378,15 +325,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(errorPayload.code).toBe('MalformedInput');
     expect(typeof errorPayload.message).toBe('string');
 
-    // 3e. Module-state allowlist round-trip: a setModuleState call with
-    // an undeclared `key` must reject with a structured `UnknownStateKey`
-    // error over the MCP envelope. The manifest staged above declares
-    // only `port-registry`; `made-up-key` is therefore outside the
-    // allowlist. The error message must name both the module and the
-    // offending key (per the M3 spec). The made-up key string must not
-    // leak into the per-run log (anonymisation contract: state-key
-    // strings are caller-supplied identifiers and the dispatcher echoes
-    // only the anonymised arg shape).
     rpc.send({
       jsonrpc: '2.0',
       id: 8,
@@ -416,7 +354,6 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(unknownKeyPayload.message as string).toContain('docker');
     expect(unknownKeyPayload.message as string).toContain('made-up-key');
 
-    // 4. Per-run log file present and well-formed.
     const expectedLogPath = path.join(
       projectRoot,
       '.gan-state',
@@ -427,22 +364,17 @@ describe('integration: MCP handshake (subprocess)', () => {
     );
     expect(existsSync(expectedLogPath)).toBe(true);
     const logText = readFileSync(expectedLogPath, 'utf8');
-    // Every dispatched tool emitted at least one log line referencing it.
+
     expect(logText).toContain('"tool": "getResolvedConfig"');
     expect(logText).toContain('"tool": "setOverlayField"');
-    // Anonymisation contract: the overlay value we sent must never
-    // appear verbatim in the log (the dispatcher echoes only the
-    // anonymised arg shape).
+
     expect(logText).not.toContain('docs/notes.md');
-    expect(logText).not.toContain('"value"'); // forbidden meta key
+    expect(logText).not.toContain('"value"');
     expect(logText).not.toContain('"trustHash"');
     expect(logText).not.toContain('mcp-handshake-module-state');
-    // The undeclared state-key string passed in id-8 is caller-supplied
-    // identifier surface. The anonymiser redacts `key` to a presence
-    // flag, so the literal 'made-up-key' must never appear in the log.
+
     expect(logText).not.toContain('made-up-key');
 
-    // 5. Close stdin → subprocess exits cleanly.
     child.stdin.end();
     const exitInfo = await Promise.race([
       exitPromise,
@@ -451,8 +383,7 @@ describe('integration: MCP handshake (subprocess)', () => {
       ),
     ]);
     if (exitInfo.signal === ('TIMEOUT' as NodeJS.Signals)) {
-      // Failsafe: kill the child so the test cleanup doesn't leak. Then
-      // surface a clear failure.
+
       try {
         child.kill('SIGKILL');
       } catch {

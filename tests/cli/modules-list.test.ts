@@ -1,9 +1,4 @@
-/**
- * R3 sprint 2 — `gan modules list`.
- *
- * Locks the OQ4 no-op contract: until M1 ships, the CLI returns an empty
- * module list with a human-readable pre-M1 marker.
- */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';

@@ -1,10 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust info`.
- *
- * Spawns the built CLI bin against a fixture project with a tmp HOME
- * so the test's trust-cache reads/writes never touch the developer's
- * real `~/.claude/gan/`.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

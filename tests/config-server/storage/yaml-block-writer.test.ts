@@ -30,7 +30,7 @@ describe('writeYamlBlock', () => {
       '',
     ].join('\n');
     const parsed = parseYamlBlock(text);
-    // Build a *new* object with the same content, in the same key order.
+
     const same = {
       name: 'web-node',
       schemaVersion: 1,
@@ -45,8 +45,7 @@ describe('writeYamlBlock', () => {
   });
 
   it('preserves prose byte-identically and re-emits canonical YAML when data changes', () => {
-    // Note: the closing `---\n` itself is the closeMarker; prose.after
-    // starts on the *next* line.
+
     const text =
       '---\nname: x\nschemaVersion: 1\n---\n\n# Conventions\n\nProse with an apostrophe and a *character*.\n';
     const parsed = parseYamlBlock(text);
@@ -62,12 +61,10 @@ describe('writeYamlBlock', () => {
       newData: mutated,
     });
 
-    // Prose-after survives byte-identically (no leading prose in this
-    // fixture, so the prose-before check is a no-op).
     expect(out.endsWith(expectedAfter)).toBe(true);
-    // YAML body contains the mutated value.
+
     expect(out).toContain('name: y');
-    // Canonical markers.
+
     const idxOpen = out.indexOf('---\n');
     const idxClose = out.indexOf('---\n', idxOpen + 4);
     expect(idxOpen).toBeGreaterThanOrEqual(0);
@@ -97,7 +94,6 @@ describe('writeYamlBlock', () => {
       newData: mutated,
     });
 
-    // Re-parse the result and check prose still matches.
     const parsed2 = parseYamlBlock(out1);
     expect(parsed2.prose.before).toBe(parsed1.prose.before);
     expect(parsed2.prose.after).toBe(parsed1.prose.after);
@@ -153,7 +149,7 @@ describe('writeYamlBlock', () => {
     expect(out).toContain('<!-- a comment -->');
     expect(out).toContain('- bullet');
     expect(out).toContain('name: stack-y');
-    // The prose between the closing marker and EOF should match exactly.
+
     expect(out.endsWith(parsed.prose.after)).toBe(true);
   });
 });

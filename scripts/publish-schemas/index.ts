@@ -1,41 +1,4 @@
 #!/usr/bin/env node
-/**
- * R4 sprint 4 — `publish-schemas` maintainer script.
- *
- * Drift check for the published JSON Schema documents under
- * `<repo>/schemas/`. For each schema in the hard-coded list, the script:
- *
- *   1. Reads the on-disk bytes (failure → `SchemaMissing`).
- *   2. Parses the JSON (failure → `SchemaParseError`).
- *   3. Re-emits the parsed value via `stableStringify` (sorted keys,
- *      two-space indent, trailing newline — F3's determinism pin).
- *   4. Compares the on-disk bytes to the canonical form. Mismatch in
- *      `--dry-run` mode surfaces as `SchemaDrift`; in default (write)
- *      mode the script repairs the file in place via `atomicWriteFile`
- *      and reports the rewrite count.
- *
- * Per the R4 spec, this is a canonicalisation drift check: today the
- * `<repo>/schemas/` files ARE the source of truth, so the canonical form
- * is "parse-and-re-emit-yourself". When the domain specs (C1, C3, F2)
- * grow fenced JSON Schema blocks, the canonicalisation seam below
- * becomes the splice point for spec-extraction logic.
- *
- * Per the single-implementation rule, the script delegates serialisation
- * to `stableStringify` and writes via `atomicWriteFile` — no inline
- * `JSON.stringify` and no raw `fs.writeFileSync`.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no drift, or drift repaired in write mode);
- *   - 1 when one or more schemas drifted (in dry-run), are missing, or
- *     fail to parse;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message);
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
- */
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -52,17 +15,10 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
-// Hard-coded schema list. R4 forbids `readdirSync` / `opendir` / glob
-// auto-discovery in maintainer scripts (anti-criterion AN9): the schema
-// set is part of the published API and changes with a coordinated PR
-// per the schema-immutability rule, never silently with a new file on
-// disk.
 const SCHEMA_FILES = ['api-tools-v1.json', 'overlay-v1.json', 'stack-v1.json'] as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Script lives at `dist/scripts/publish-schemas/index.js`. After
-// `path.dirname`, `here` is `<repo>/dist/scripts/publish-schemas`, so
-// three `..` segments reach the repo root.
+
 const repoRoot = path.resolve(here, '..', '..', '..');
 const defaultSchemaRoot = path.join(repoRoot, 'schemas');
 
@@ -105,13 +61,13 @@ interface RunResult {
 }
 
 interface RunOptions {
-  /** Directory holding the schema set. */
+
   schemaRoot: string;
-  /** When true, report drift instead of rewriting. */
+
   dryRun: boolean;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
@@ -155,8 +111,6 @@ export function run(opts: RunOptions): RunResult {
       continue;
     }
 
-    // TODO(future): when domain specs (C1, C3, F2) gain fenced JSON Schema
-    // blocks, replace canonicalization-of-self with extraction-from-spec.
     const canonical = stableStringify(parsed);
 
     if (onDisk === canonical) {
@@ -203,11 +157,6 @@ export function run(opts: RunOptions): RunResult {
   };
 }
 
-/**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
- */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help', 'dry-run'],

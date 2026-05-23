@@ -1,15 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust list [--json]`.
- *
- * Calls R1's `trustList({}, {homeDir})` in-process. HOME is read from
- * `process.env.HOME ?? os.homedir()`. The output preserves the cache's
- * locale-sorted on-disk order.
- *
- * Exit codes:
- *   - 0  success (including the empty-cache case).
- *   - 1  generic failure (e.g. trust cache file unreadable / corrupt).
- *   - 5  framework library unreachable.
- */
+
 
 import os from 'node:os';
 

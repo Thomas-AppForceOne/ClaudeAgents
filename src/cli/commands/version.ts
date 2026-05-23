@@ -1,20 +1,4 @@
-/**
- * R3 sprint 1 — `gan version`.
- *
- * Reads:
- *   - apiVersion via R1's `getApiVersion()` library entry (in-process call,
- *     per the CLI-imports-library rule).
- *   - serverVersion (the framework's package version) from `package.json`.
- *   - schemas: every `<type>-vN.json` file under the package's `schemas/`
- *     directory, sorted under F3's locale-sensitive sort.
- *
- * On `--json`, emits a single sorted-key, two-space-indent, trailing-newline
- * JSON document on stdout (per F3 determinism + the round-trip rule).
- *
- * If the framework library cannot be reached — `getApiVersion()` throws or
- * `package.json` is unreadable — the command exits 5 with a remediation
- * pointer to `install.sh`. This satisfies F-AC6 of the R3 spec.
- */
+
 
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -38,12 +22,6 @@ interface CommandResult {
   code: number;
 }
 
-/**
- * Locate the framework's package root. From
- * `dist/cli/commands/version.js` this is three levels up
- * (`commands/` → `cli/` → `dist/` → `<root>`). Same shape from
- * `src/cli/commands/version.ts` under vitest.
- */
 function packageRoot(): string {
   const here = fileURLToPath(import.meta.url);
   return path.resolve(path.dirname(here), '..', '..', '..');
@@ -78,7 +56,7 @@ async function enumerateSchemas(): Promise<Array<{ name: string; version: number
     if (!m) continue;
     matched.push({ name: m[1]!, version: Number(m[2]!), raw: e });
   }
-  // Deterministic order: locale-sensitive sort by the file name, then drop `raw`.
+
   const sorted = localeSort(matched.map((x) => x.raw));
   return sorted.map((raw) => {
     const found = matched.find((x) => x.raw === raw)!;
@@ -101,10 +79,6 @@ function renderHuman(out: VersionOutput): string {
   return lines.join('\n') + '\n';
 }
 
-/**
- * Run `gan version`. Always returns a `CommandResult`; never throws. The
- * dispatcher writes stdout/stderr and exits with `code`.
- */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const wantJson = parsed.flags['json'] === true;
   try {

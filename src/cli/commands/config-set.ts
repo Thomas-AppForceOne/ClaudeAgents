@@ -1,35 +1,4 @@
-/**
- * R3 sprint 3 — `gan config set <path> <value> [--tier=project|user] [--json] [--project-root DIR]`.
- *
- * Calls R1's `setOverlayField({projectRoot, tier, fieldPath, value})` in-
- * process (per the CLI-imports-library rule). The CLI only validates the
- * `--tier` flag locally; everything else (path well-formedness, schema
- * compliance, atomic write) is the writes layer's job.
- *
- * Tier validation:
- *   - default tier: `project`.
- *   - allowed: `project`, `user`.
- *   - explicitly rejected (exit 64): `repo`, `default`, anything else.
- *     Per C3, the overlay cascade has three tiers — `default`, `user`,
- *     `project` — but the writable surface is `user` and `project` only;
- *     `default` is the agent's bare default and is never user-writable.
- *
- * Value parsing follows `parseCliValue`: try JSON literal first, fall
- * back to the bare string on parse error. So `gan config set foo.bar 8`
- * writes the number 8, `gan config set foo.bar true` writes a boolean,
- * `gan config set foo.bar hello` writes the string `"hello"`.
- *
- * Output:
- *   - human: `Updated <path> to <value> in <tier> overlay.` (stdout, exit 0)
- *   - JSON:  `{"path": "...", "tier": "...", "value": ..., "written": true}`
- *
- * Errors:
- *   - missing args / invalid tier → MalformedInput, exit 64.
- *   - write returns issues       → first issue's code maps via exitCodeFor;
- *                                   typically exit 2 (ValidationFailed) or 4.
- *   - write throws ConfigServerError → mapped via exitCodeFor.
- *   - anything else (library unreachable) → exit 5 with install.sh hint.
- */
+
 
 import { setOverlayField } from '../../index.js';
 import { ConfigServerError, createError } from '../../config-server/errors.js';
@@ -48,7 +17,6 @@ import { EXIT_BAD_ARGS, EXIT_OK, exitCodeFor } from '../lib/exit-codes.js';
 import type { OverlayTier } from '../../index.js';
 import type { ParsedArgs } from '../lib/args.js';
 
-/** Allowed tier values for `gan config set`. */
 type WritableOverlayTier = Extract<OverlayTier, 'project' | 'user'>;
 
 const ALLOWED_TIERS: ReadonlySet<WritableOverlayTier> = new Set<WritableOverlayTier>([
@@ -56,10 +24,6 @@ const ALLOWED_TIERS: ReadonlySet<WritableOverlayTier> = new Set<WritableOverlayT
   'user',
 ]);
 
-/**
- * Read and validate `--tier`. Returns the resolved tier (default `project`)
- * or a `ConfigServerError` describing the validation failure.
- */
 function readTier(parsed: ParsedArgs): WritableOverlayTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
@@ -124,9 +88,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   try {
     result = setOverlayField({ projectRoot, tier, fieldPath, value });
   } catch (e) {
-    // Library throwing here (rather than returning issues) is a hard
-    // error path — typically the framework library being absent. Fall
-    // through to the unreachable surface.
+
     if (e instanceof ConfigServerError) {
       return errorResult(e, wantJson);
     }
@@ -150,15 +112,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     };
   }
 
-  // mutation rejected. Two shapes possible:
-  //   { mutated: false, issues: Issue[] }
-  //   { mutated: false, reason: string }
-  // The first is the validation-failed branch; the second is reserved for
-  // trust loud-stub responses (not reachable from setOverlayField in R1)
-  // but kept for forward-compatibility.
   if ('issues' in result) {
-    // Use the first issue's code for the exit code; render every issue
-    // so the user sees the full picture.
+
     const first = result.issues[0];
     const code = exitCodeFor(first?.code);
     const shape = first
@@ -177,7 +132,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(shape), code };
   }
 
-  // `reason` branch — surface as a generic failure.
   const fallback = createError('NotImplemented', {
     message: `gan config set: write was rejected (reason: ${result.reason}).`,
   });

@@ -1,17 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust approve --project-root DIR [--note TEXT] [--json]`.
- *
- * Calls R1's `trustApprove({projectRoot, note}, {homeDir})` in-process.
- * `--project-root` is REQUIRED for trust-mutating subcommands (per the
- * R3-locked CLI surface): the command exits 64 if the flag is absent.
- * HOME is read from `process.env.HOME ?? os.homedir()`.
- *
- * Exit codes:
- *   - 0  success (record persisted to the trust cache).
- *   - 1  generic failure (e.g. trust cache I/O error).
- *   - 5  framework library unreachable.
- *   - 64 bad CLI arguments (missing `--project-root`).
- */
+
 
 import os from 'node:os';
 

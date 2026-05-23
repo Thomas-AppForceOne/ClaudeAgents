@@ -28,11 +28,6 @@ const missingModuleFixture = path.join(
   'pairs-with-stack-references-missing-module',
 );
 
-/**
- * Hydrate snapshot stack rows with their parsed data — phase 1 only loads
- * paths, phase 2 fills in `data`/`prose`. The invariants need `data`. We
- * read the file, parse the YAML block, and patch the row directly.
- */
 async function hydrateSnapshot(
   projectRoot: string,
   ctx: { modulesRoot?: string } = {},
@@ -70,18 +65,13 @@ describe('pairsWith.consistency invariant', () => {
     expect(issue.severity).toBe('error');
     expect(issue.field).toBe('/pairsWith');
     expect(issue.path).toContain('.claude/gan/stacks/docker.md');
-    // Byte-identical match with the C5 spec wording (template substituted
-    // with stackName='docker', the example used in C5 itself).
+
     const expected = buildShadowedPairsWithMessage('docker');
     expect(issue.message).toBe(expected);
   });
 
   it("matches the verbatim string quoted in C5's spec text", () => {
-    // Defence in depth against drift: read C5's spec and confirm our
-    // template reproduces the exact prose. C5 quotes the wording inside
-    // a markdown blockquote line (`> \`pairs-with.consistency: ...\``);
-    // strip the leading `> ` and the surrounding backticks, then assert
-    // byte-equality with the generated message.
+
     const c5Text = readFileSync(c5SpecPath, 'utf8');
     const generated = buildShadowedPairsWithMessage('docker');
     const lines = c5Text.split(/\r?\n/);
@@ -89,7 +79,7 @@ describe('pairsWith.consistency invariant', () => {
       (l) => l.startsWith('> ') && l.includes('pairs-with.consistency:'),
     );
     expect(quoteLine).toBeTruthy();
-    // The quote line is `> ` + `\`...\``. Strip both wrappers.
+
     const stripped = quoteLine!.replace(/^>\s+/, '').replace(/^`/, '').replace(/`$/, '');
     expect(stripped).toBe(generated);
   });
@@ -103,19 +93,12 @@ describe('pairsWith.consistency invariant', () => {
     expect(fired!.message).toBe(buildShadowedPairsWithMessage('docker'));
   });
 
-  // -------- AC9 four-case coverage --------------------------------------
-
   it('case 1 (soft-OK): module declares pairsWith but the stack omits it — no error', async () => {
-    // Modules root contains a single fixture module declaring
-    // `pairsWith: paired-soft-ok`. The fixture stack's project tier
-    // file omits `pairsWith`. Per the soft-OK rule, no error fires.
+
     const moduleScratch = path.join(moduleFixturesRoot);
-    // Stage a module manifest that pairs with paired-soft-ok via
-    // direct file inspection — no need to copy; the fixture itself
-    // is hermetic when injected.
+
     const snapshot = await hydrateSnapshot(softOkFixture);
-    // Inject the module row manually since the fixture under
-    // `tests/fixtures/modules/` isn't a paired module yet.
+
     snapshot.modules.push({
       name: 'paired-soft-ok-module',
       manifestPath: '/virtual/paired-soft-ok-module/manifest.json',
@@ -150,9 +133,7 @@ describe('pairsWith.consistency invariant', () => {
   });
 
   it('case 3 (shadowed-default): test imports the SHADOWED_DEFAULT_REMEDIATION constant', () => {
-    // AC10: assert the constant is exported and the substituted output
-    // round-trips correctly. The test body itself MUST NOT contain the
-    // multiline literal — the only reference is the imported constant.
+
     expect(typeof SHADOWED_DEFAULT_REMEDIATION).toBe('string');
     expect(SHADOWED_DEFAULT_REMEDIATION).toContain('<stackName>');
     const substituted = SHADOWED_DEFAULT_REMEDIATION.split('<stackName>').join('xyz');
@@ -161,8 +142,7 @@ describe('pairsWith.consistency invariant', () => {
 
   it('case 4 (stack references missing module): hard error', async () => {
     const snapshot = await hydrateSnapshot(missingModuleFixture);
-    // No modules registered. The fixture stack's `pairsWith: nonexistent-module`
-    // must fire the missing-module branch.
+
     const issues = checkPairsWithConsistency(snapshot);
     const fired = issues.find((i) => i.message.includes('nonexistent-module'));
     expect(fired).toBeTruthy();
@@ -170,10 +150,7 @@ describe('pairsWith.consistency invariant', () => {
   });
 
   it('case 3 (shadowed-default): the fixture creates NO new files at the actual repo-root stacks/', () => {
-    // AC11 guard. The fixture lives entirely under
-    // tests/fixtures/stacks/pairs-with-shadowed-default/. We assert
-    // the fixture's built-in copy is at <fixtureRoot>/stacks/, not
-    // at <repoRoot>/stacks/.
+
     const expected = path.join(
       shadowedDefaultFixture,
       'stacks',
@@ -181,7 +158,7 @@ describe('pairsWith.consistency invariant', () => {
     );
     const text = readFileSync(expected, 'utf8');
     expect(text).toContain('paired-shadowed (fixture-internal built-in)');
-    // The repo-root stacks/ must not have a paired-shadowed.md.
+
     let realRepoCopy: string | null = null;
     try {
       realRepoCopy = readFileSync(

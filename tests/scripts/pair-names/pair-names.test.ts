@@ -1,23 +1,4 @@
-/**
- * Integration tests for `scripts/pair-names/`.
- *
- * Spawns the built bin (`dist/scripts/pair-names/index.js`) under
- * controlled fixtures and asserts:
- *
- *   - clean fixture (`js-ts-minimal`) → exit 0, summary
- *     `1 stacks checked, 0 failed`.
- *   - shadowed fixture (`invariant-pairs-with-shadowed`) → exit 1,
- *     summary `2 stacks checked, 1 failed`; stderr names the
- *     `InvariantViolation` code, the `pairs-with.consistency` prose,
- *     `pairsWith: docker`, and the canonicalised absolute path of the
- *     project-tier `.claude/gan/stacks/docker.md` file.
- *   - `--json` against the shadowed fixture → stdout parses as JSON
- *     with the documented `{checked, failed, failures: [...]}` shape
- *     and a trailing newline; stderr is empty.
- *   - `--help` → exit 0, stdout names `Usage: pair-names`, stderr empty.
- *   - unknown flag → exit 64, stderr names the offending token and
- *     `--help`.
- */
+
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -29,9 +10,7 @@ const CLEAN_ROOT = path.join(FIXTURES, 'js-ts-minimal');
 const SHADOWED_ROOT = path.join(FIXTURES, 'invariant-pairs-with-shadowed');
 
 beforeAll(() => {
-  // Sanity: every fixture path exists. If a future refactor moves them
-  // we want the test to fail fast with a clear message rather than
-  // exit-1 on every assertion.
+
   for (const p of [CLEAN_ROOT, SHADOWED_ROOT]) {
     if (!existsSync(p)) {
       throw new Error(`fixture missing: ${p}`);
@@ -54,8 +33,7 @@ describe('pair-names bin', () => {
     expect(r.stderr).toContain('InvariantViolation');
     expect(r.stderr).toContain('pairs-with.consistency');
     expect(r.stderr).toContain('pairsWith: docker');
-    // The reported path is the canonicalised absolute path of the
-    // project-tier shadow file.
+
     const canonical = canonicalizePath(SHADOWED_ROOT);
     const stackPath = path.join(canonical, '.claude', 'gan', 'stacks', 'docker.md');
     expect(r.stderr).toContain(stackPath);

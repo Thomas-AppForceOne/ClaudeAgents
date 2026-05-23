@@ -25,7 +25,7 @@ function makeTmp(): string {
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) {
     try {
-      // Restore directory perms in case a test removed write access.
+
       chmodSync(d, 0o755);
     } catch {
       // Ignore.
@@ -73,13 +73,13 @@ describe('atomicWriteFile', () => {
 
   it('throws ConfigServerError when the target path itself is unwritable', () => {
     if (platform() === 'win32') {
-      // POSIX permission semantics; skip.
+
       return;
     }
     const dir = makeTmp();
     const target = path.join(dir, 'cant-write.md');
     writeFileSync(target, 'original\n', 'utf8');
-    // Drop write permission on the directory: rename will fail.
+
     chmodSync(dir, 0o555);
 
     let threw = false;
@@ -91,11 +91,10 @@ describe('atomicWriteFile', () => {
     }
     expect(threw).toBe(true);
 
-    // Restore perms so the cleanup hook can read the dir.
     chmodSync(dir, 0o755);
-    // Original file is intact.
+
     expect(readFileSync(target, 'utf8')).toBe('original\n');
-    // No temp leftovers.
+
     const remaining = readdirSync(dir);
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });
@@ -113,16 +112,13 @@ describe('atomicWriteFile', () => {
       expect(e).toBeInstanceOf(ConfigServerError);
     }
     expect(threw).toBe(true);
-    // Restore so cleanup can recurse.
+
     chmodSync(dir, 0o755);
   });
 
   it('on rename failure (target is a directory, not a file) leaves original intact + no temp leftovers', async () => {
     const dir = makeTmp();
-    // The "target" we hand in is actually a directory. `renameSync(tmp,
-    // target)` will fail because Node refuses to replace a non-empty
-    // directory. We pre-populate the target directory so the failure mode
-    // is a rename error rather than a directory-replacement.
+
     const target = path.join(dir, 'block-dir');
     const { mkdirSync } = await import('node:fs');
     mkdirSync(target);
@@ -137,10 +133,8 @@ describe('atomicWriteFile', () => {
     }
     expect(threw).toBe(true);
 
-    // Original directory still has its sentinel file intact.
     expect(readFileSync(path.join(target, 'sentinel'), 'utf8')).toBe('sentinel\n');
 
-    // No `*.tmp.*` leftovers in the parent dir.
     const remaining = readdirSync(dir);
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });

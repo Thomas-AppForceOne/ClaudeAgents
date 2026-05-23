@@ -1,17 +1,4 @@
-/**
- * R2 sprint 1 — prerequisite-check tests for `install.sh`.
- *
- * Each test builds a fresh stub-bin populated with controlled stubs for
- * `node`, `git`, and `claude`, then invokes `install.sh` with PATH set to
- * `<stubBin>:/bin` so coreutils (`cat`) still resolve while the prereq
- * tools are exclusively the test fixtures.
- *
- * Covers contract F-AC4..F-AC8 plus H1 on `--help`. Note that S2 turned
- * the install path from a no-op skeleton into real filesystem work, so
- * the original "no FS writes from --no-claude-code" promise no longer
- * holds for the install path — H1 only protects `--help` now (see
- * `help.test.ts` for the remaining H1 coverage).
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -31,16 +18,13 @@ afterEach(() => {
 });
 
 interface StubSpec {
-  /** If undefined, no `node` stub is created (= "not on PATH"). */
+
   nodeVersion?: string;
-  /** If true, a `git` stub is created. */
+
   withGit?: boolean;
-  /** If true, a `claude` stub is created. */
+
   withClaude?: boolean;
-  /**
-   * If true, also writes stubs for `npm` and `claudeagents-config-server`
-   * so the S2 install path can complete on a Node-prereq-pass run.
-   */
+
   withInstallStubs?: boolean;
 }
 
@@ -50,11 +34,7 @@ function setup(stubs: StubSpec): { tmp: TmpHome; pathOverride: string } {
 
   if (stubs.nodeVersion !== undefined) {
     const v = stubs.nodeVersion;
-    // Resolve the host `node` once at setup time so the stub can shell
-    // through to it for `node -p` / `node -e` calls (the install path
-    // depends on JSON manipulation via real Node). The PATH override
-    // means `install.sh` itself sees only the stubs, but the stub
-    // delegates to the absolute host path internally.
+
     const hostNode = process.execPath;
     writeStubBin(
       tmp.bin,
@@ -63,24 +43,14 @@ function setup(stubs: StubSpec): { tmp: TmpHome; pathOverride: string } {
     );
   }
   if (stubs.withGit) {
-    // Forward to the real `/usr/bin/git` so subcommands the install path
-    // exercises (e.g. `git rev-parse --show-toplevel`) behave correctly.
-    // A naive `echo "git stub"; exit 0` makes every git call print
-    // "git stub" and exit 0, so `prepare_zones` would then create
-    // `git stub/.gan-state/` relative to cwd. Forwarding keeps prereq
-    // checks satisfied (`command -v git` only inspects the executable)
-    // while ensuring `rev-parse --show-toplevel` fails with no stdout
-    // when there is no enclosing repo, so the install path's zone
-    // preparation is correctly skipped.
+
     writeStubBin(tmp.bin, 'git', 'exec /usr/bin/git "$@"\n');
   }
   if (stubs.withClaude) {
     writeStubBin(tmp.bin, 'claude', 'exit 0');
   }
   if (stubs.withInstallStubs) {
-    // Fake `npm` succeeds silently. Fake `claudeagents-config-server`
-    // reports the package.json version so the version-probe matches
-    // and the installer skips the `npm install -g .` invocation.
+
     const pkgPath = path.join(repoRootDir(), 'package.json');
     writeStubBin(tmp.bin, 'npm', 'exit 0');
     writeStubBin(
@@ -90,10 +60,6 @@ function setup(stubs: StubSpec): { tmp: TmpHome; pathOverride: string } {
     );
   }
 
-  // PATH: stub bin only. `makeTmpHome` symlinks safe system utilities
-  // (`dirname`, `cat`, …) into the stub bin so `install.sh` can run, but
-  // `node` / `git` / `claude` are exclusively the stubs the test sets up.
-  // Excluding `/usr/bin` means the system `git` on macOS is not visible.
   const pathOverride = tmp.bin;
   return { tmp, pathOverride };
 }
@@ -116,18 +82,7 @@ describe('install.sh prerequisite checks', () => {
   });
 
   it('I3 slice 2: a Node major above the tested-through ceiling warns on stderr and the install proceeds', async () => {
-    // Per `specifications/I3-uninstall-and-version-policy.md` § "Node
-    // version policy: warn-not-die for the upper bound", an install on a
-    // Node major above install.sh's `TESTED_THROUGH_NODE_MAJOR` constant
-    // emits a one-line stderr warning and continues. The constant is a
-    // tested-through ceiling, not a known-incompatibility cap; locking
-    // out users on newer majors silenced the dogfooding population most
-    // likely to file useful bug reports.
-    //
-    // Test with v99.0.0 — comfortably above any plausible ceiling so the
-    // test does not need to track bumps. The install path is exercised
-    // under `--no-claude-code` with `withInstallStubs` so the run reaches
-    // a successful exit, which is the load-bearing assertion.
+
     const { tmp, pathOverride } = setup({
       nodeVersion: 'v99.0.0',
       withGit: true,
@@ -139,33 +94,19 @@ describe('install.sh prerequisite checks', () => {
       pathOverride,
     });
     expect(result.exitCode).toBe(0);
-    // Warning must surface on stderr (where `log_warn` writes), naming
-    // both the user's version and the tested-through ceiling, and must
-    // signal that the install is continuing.
+
     expect(result.stderr).toContain('warning:');
-    // The version is rendered with the `v` prefix stripped, matching the
-    // existing `Node $stripped is too old` pattern in `check_node`. The
-    // assertion checks for the bare numeric version so it is not coupled
-    // to that rendering choice's specifics.
+
     expect(result.stderr).toContain('99.0.0');
     expect(result.stderr).toContain('newer than');
     expect(result.stderr).toContain('tested through');
     expect(result.stderr).toContain('install will continue');
-    // The warning routes the user to a concrete reporting destination
-    // (the install.sh `BUG_REPORT_URL` constant). Loose match on the
-    // hostname so the assertion does not lock the org/repo path against
-    // future moves.
+
     expect(result.stderr).toContain('github.com');
   });
 
   it('I3 slice 2: Node at the tested-through ceiling passes without firing the warning', async () => {
-    // Boundary-condition guard. The warning fires on `major > ceiling`,
-    // not `major >= ceiling`; a regression that flipped the comparison
-    // (or accidentally lowered the constant) would silently start
-    // warning users on the tested major. This test pins `25.x` is silent.
-    //
-    // NOTE: this test couples to `TESTED_THROUGH_NODE_MAJOR=25`. When the
-    // constant bumps, the `nodeVersion` literal here must bump in lockstep.
+
     const { tmp, pathOverride } = setup({
       nodeVersion: 'v25.6.1',
       withGit: true,
@@ -177,22 +118,13 @@ describe('install.sh prerequisite checks', () => {
       pathOverride,
     });
     expect(result.exitCode).toBe(0);
-    // Unrelated install-time warnings (e.g. "Could not resolve npm
-    // global root") may still fire — assert only that the
-    // tested-through warning specifically does not.
+
     expect(result.stderr).not.toContain('tested through');
     expect(result.stderr).not.toContain('newer than');
   });
 
   it('I3 slice 2: warn-not-die does not break the full install path with JSON registration', async () => {
-    // End-to-end coverage gap that the slice-2 first cut left: the
-    // earlier warn-not-die test runs under `--no-claude-code`, which
-    // skips `register_mcp_in_claude_json`. This test fires the warning
-    // AND lets the JSON registration path run, asserting both that the
-    // exit is 0 and that `~/.claude.json` is written. The risk hedged is
-    // a latent control-flow assumption that the warning text might
-    // interact with the rest of `main()` — purely additive in v1, but
-    // worth a regression guard.
+
     const { tmp, pathOverride } = setup({
       nodeVersion: 'v99.0.0',
       withGit: true,
@@ -206,12 +138,9 @@ describe('install.sh prerequisite checks', () => {
   });
 
   it('I3 slice 2: missing-`node` error does not reference an upper-bound ceiling', async () => {
-    // The constant rename also dropped the "and Node <=N" phrasing from
-    // the missing-Node prereq error: a tested-through ceiling has no
-    // meaning when there is no `node` on PATH, and naming an upper bound
-    // in that error reintroduces the old hard-fail mental model.
+
     const { tmp, pathOverride } = setup({
-      // No nodeVersion → `node` is not on PATH.
+
       withGit: true,
       withClaude: true,
     });
@@ -256,7 +185,7 @@ describe('install.sh prerequisite checks', () => {
       pathOverride,
     });
     expect(result.exitCode).toBe(0);
-    // Under --no-claude-code the JSON registration is skipped entirely.
+
     expect(existsSync(path.join(tmp.home, '.claude.json'))).toBe(false);
   });
 
@@ -292,18 +221,15 @@ describe('install.sh prerequisite checks', () => {
     const { tmp, pathOverride } = setup({});
     const result = await runInstall(['--help'], { home: tmp.home, pathOverride });
     expect(result.exitCode).toBe(0);
-    // The HOME directory must remain pristine.
+
     expect(homeIsEmpty(tmp.home)).toBe(true);
-    // And no sibling files in the tmp root other than the bin and home dirs.
+
     const siblings = readdirSync(tmp.root).sort();
     expect(siblings).toEqual(['bin', 'home']);
   });
 
   it('--no-claude-code against an empty tmp HOME does not write `~/.claude.json`', async () => {
-    // S2 note: the install path now writes plenty (symlinks, zones).
-    // This test asserts the narrower S2 invariant — under --no-claude-code,
-    // the JSON registration is the only path that touches `~/.claude.json`,
-    // and it is skipped.
+
     const { tmp, pathOverride } = setup({
       nodeVersion: 'v20.10.0',
       withGit: true,

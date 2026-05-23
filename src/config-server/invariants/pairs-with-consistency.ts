@@ -1,36 +1,4 @@
-/**
- * `pairsWith.consistency` invariant (F3 catalog; sourced from M1 + C5).
- *
- * Pairing is a **one-way declaration from the module to its stack**.
- * A module's `manifest.pairsWith: <stackName>` says "I belong alongside
- * the stack named X". Stacks need NOT enumerate paired modules — the
- * back-reference graph is deliberately avoided so that a module shipped
- * to the framework after a stack is canonicalised does not require a
- * coordinated edit to the stack file.
- *
- * Four cases the invariant adjudicates (per the M1 spec + C5 + the
- * "soft-OK pairsWith" rule documented in PROJECT_CONTEXT.md):
- *
- *   1. **Soft-OK.** A module declares `pairsWith: X`; the stack `X`
- *      exists at some tier with no `pairsWith` field; the project-tier
- *      file does NOT shadow a built-in. No error.
- *
- *   2. **Disagree.** Both sides declare `pairsWith` and the values
- *      don't match. Hard error.
- *
- *   3. **Shadowed-default (C5).** A project-tier stack file shadows a
- *      canonical built-in stack file that paired with a module, but
- *      the project-tier file omits `pairsWith`. Hard error using the
- *      C5 verbatim remediation string (see SHADOWED_DEFAULT_REMEDIATION).
- *
- *   4. **Stack references missing module.** A stack's `pairsWith: M`
- *      references a module name that is not registered. Hard error.
- *
- * The C5 verbatim remediation string is reproduced byte-for-byte from
- * `specifications/C5-stack-file-resolution.md`. It is exported as a
- * named constant `SHADOWED_DEFAULT_REMEDIATION` so tests can import and
- * assert byte-equality without copy-pasting the multiline string.
- */
+
 
 import path from 'node:path';
 
@@ -42,15 +10,6 @@ import type {
   ValidationSnapshot,
 } from '../tools/validate.js';
 
-/**
- * Verbatim C5 remediation string for the shadowed-default case. Read
- * by `buildShadowedPairsWithMessage` and exported so test code can
- * assert byte-equality without duplicating the multiline string.
- *
- * The literal is parameterised by `<stackName>` (placeholder) — the
- * call site substitutes it via `buildShadowedPairsWithMessage`. The
- * substituted result reproduces C5's quoted block character-for-character.
- */
 export const SHADOWED_DEFAULT_REMEDIATION =
   'pairs-with.consistency: project-tier stack file ".claude/gan/stacks/<stackName>.md" ' +
   'shadows the canonical "stacks/<stackName>.md" but does not declare pairsWith. The ' +
@@ -59,11 +18,6 @@ export const SHADOWED_DEFAULT_REMEDIATION =
   'project-tier file, or rename your file (e.g. .claude/gan/stacks/my-<stackName>-variant.md) ' +
   'and force its activation via stack.override in your project overlay.';
 
-/**
- * Build the C5 shadowed-default error message by substituting
- * `<stackName>` placeholders in `SHADOWED_DEFAULT_REMEDIATION` with the
- * actual stack name. The result is byte-identical to C5's quoted block.
- */
 export function buildShadowedPairsWithMessage(stackName: string): string {
   return SHADOWED_DEFAULT_REMEDIATION.split('<stackName>').join(stackName);
 }
@@ -71,7 +25,6 @@ export function buildShadowedPairsWithMessage(stackName: string): string {
 export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
 
-  // --- Stack-side (C5 shadowed-default) branch ----------------------------
   const projectRows = collectStackRowsByTier(snapshot, 'project');
   const builtinRows = collectStackRowsByTier(snapshot, 'builtin');
   const projectByName = byName(projectRows);
@@ -94,11 +47,6 @@ export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[]
     });
   }
 
-  // --- Module-side branches (M1) ------------------------------------------
-  // Pre-index resolved stacks by name (highest tier wins). Resolution:
-  // project > user > builtin. We pick whichever row's parsed body says
-  // `name === X` (or basename === X if `name` is missing) and prefer
-  // higher tiers.
   const allByName = new Map<string, SnapshotStackRow>();
   for (const tier of ['builtin', 'user', 'project'] as const) {
     for (const [name, row] of byName(collectStackRowsByTier(snapshot, tier))) {
@@ -108,7 +56,6 @@ export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[]
   const moduleNames = new Set<string>();
   for (const m of snapshot.modules) moduleNames.add(m.name);
 
-  // Disagree case (case 2): both sides declare pairsWith and they differ.
   for (const moduleRow of snapshot.modules) {
     if (typeof moduleRow.pairsWith !== 'string') continue;
     const stackRow = allByName.get(moduleRow.pairsWith);
@@ -119,8 +66,6 @@ export function checkPairsWithConsistency(snapshot: ValidationSnapshot): Issue[]
     issues.push(buildDisagreeIssue(moduleRow, stackRow, stackPairsWith));
   }
 
-  // Stack-references-missing-module case (case 4): a stack's pairsWith
-  // names a module that is not registered.
   for (const [stackName, stackRow] of allByName) {
     const stackPairsWith = readPairsWith(stackRow);
     if (typeof stackPairsWith !== 'string') continue;
@@ -180,12 +125,6 @@ function collectStackRowsByTier(
   return out;
 }
 
-/**
- * Index stack rows by stack-name. The name comes preferentially from the
- * YAML body's `name` field; if absent, falls back to the file basename
- * sans `.md` so a stack file that ships without an explicit name still
- * gets paired with its peer at another tier.
- */
 function byName(rows: SnapshotStackRow[]): Map<string, SnapshotStackRow> {
   const out = new Map<string, SnapshotStackRow>();
   for (const row of rows) {

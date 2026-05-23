@@ -1,19 +1,4 @@
-/**
- * `additionalContext.path_resolves` invariant (F3 catalog; sourced from
- * U3).
- *
- * Each path listed in `planner.additionalContext` /
- * `proposer.additionalContext` (overlay splice points) must resolve to a
- * file that exists inside the project root.
- *
- * F3 catalogues this rule at warning level — a missing file may be a
- * legitimate "early-authoring" state. We surface it as an issue with
- * `severity: 'warning'` so callers can render it in lint output without
- * blocking dev workflows. Files that *escape* the project root are out
- * of scope here; that case is owned by `path.escape` and the two
- * invariants run independently (escape check is a hard error, this one
- * is a warning).
- */
+
 
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -37,9 +22,7 @@ export function checkAdditionalContextPathResolves(snapshot: ValidationSnapshot)
     for (const target of PATH_BEARING_FIELDS) {
       const entries = extractPaths(row.data, target.block, target.field);
       for (const entry of entries) {
-        // Skip path-escapers — they are reported by `path.escape`. The
-        // two invariants are independent; reporting both for the same
-        // entry would double-count without adding information.
+
         if (escapesRoot(entry, snapshot.projectRoot, canonRoot)) continue;
         const absolute = path.isAbsolute(entry) ? entry : path.resolve(snapshot.projectRoot, entry);
         if (entryExists(absolute)) continue;
@@ -74,8 +57,7 @@ function entryExists(absolute: string): boolean {
   if (!existsSync(absolute)) return false;
   try {
     const st = statSync(absolute);
-    // Treat directories as non-existent for the purpose of this check —
-    // `additionalContext` lists files, not directories.
+
     return st.isFile();
   } catch {
     return false;

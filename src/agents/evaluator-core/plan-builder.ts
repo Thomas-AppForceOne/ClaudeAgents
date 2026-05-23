@@ -1,26 +1,4 @@
-/**
- * Top-level entry point for the E3 evaluator deterministic core.
- *
- * `buildEvaluatorPlan(snapshot, sprintPlan, worktreeState)` is a pure
- * function: same inputs produce byte-identical output across calls and
- * processes. It orchestrates the per-concern helpers:
- *
- *   - active stacks  → name + scope, sorted by name (E3 line 104)
- *   - secretsScans   → per-stack secretsGlob expansion against scope
- *   - auditCommands  → per-stack auditCmd (verbatim)
- *   - docLintInvocations → per-stack docLintCmd (Q5; verbatim, scoped)
- *   - buildTestLint  → first-active-stack-wins per phase
- *   - securitySurfacesInstantiated → C1 template instantiation
- *   - documentationSurfacesInstantiated → Q5 template instantiation
- *   - evaluatorAdditionalChecks    → cascaded splice point passthrough
- *
- * The carve-out reads no files. Callers (the orchestrator script in
- * `scripts/evaluator-pipeline-check/` per E3 line 112) are responsible
- * for assembling the snapshot from `getResolvedConfig()` plus parsed
- * stack bodies, the sprint plan from the planner agent's output, and
- * the worktree state from a file enumeration plus pre-loaded contents
- * for keyword matching.
- */
+
 
 import { buildAuditCommands } from './audit-commands.js';
 import { buildDocLintInvocations } from './doc-lint-invocations.js';
@@ -61,12 +39,6 @@ export function buildEvaluatorPlan(
   };
 }
 
-/**
- * Active stacks list, sorted by `name` per E3 normalisation rule (line
- * 104). The `scope` array is preserved in declaration order — it is
- * the stack file's authoritative ordering and downstream consumers
- * should treat it as opaque.
- */
 function buildActiveStacks(snapshot: EvaluatorCoreSnapshot): EvaluatorPlan['activeStacks'] {
   const rows = snapshot.activeStacks.map((s) => ({
     name: s.name,

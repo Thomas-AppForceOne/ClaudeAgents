@@ -1,10 +1,4 @@
-/**
- * M1 — Sprint M1 — barrel-prereq lifecycle tests.
- *
- * Covers AC12 + AC13: prerequisite commands run via execFileSync (no
- * shell), errorHint is reachable on failure, the prereq-passing fixture
- * loads cleanly.
- */
+
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -63,19 +57,14 @@ describe('module barrel prerequisite lifecycle', () => {
     expect(caught).toBeInstanceOf(ConfigServerError);
     const err = caught as ConfigServerError;
     expect(err.code).toBe('ModulePrerequisiteFailed');
-    // AC13: the literal errorHint sentinel must be reachable in the
-    // thrown error's message.
+
     expect(err.message).toContain('DOCKER_HINT_FIXTURE');
-    // Also reachable via details.errorHint (AC12 surface contract).
+
     expect((err as unknown as { errorHint?: string }).errorHint).toBe('DOCKER_HINT_FIXTURE');
   });
 
   it('does not invoke a shell — command is whitespace-split and dispatched via execFileSync', () => {
-    // We craft a manifest whose command relies on shell features
-    // (`$(...)` substitution). If a shell were used, the substitution
-    // would expand and the prereq would pass. With execFileSync +
-    // whitespace-split the literal `$(false)` becomes the second
-    // argument to the binary, which fails.
+
     const dir = path.join(scratch, 'no-shell-probe');
     mkdirSync(dir, { recursive: true });
     const manifest = {

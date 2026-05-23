@@ -1,37 +1,9 @@
-/**
- * R1 sprint 5 — C4 three-tier overlay cascade.
- *
- * Resolves a single merged overlay view from up to three tier inputs
- * (`default` < `user` < `project`, with project being the leaf and
- * authoritative on conflict). The cascade mechanics live here; the
- * per-splice-point merge rule is read from C3's catalog (encoded in the
- * `SPLICE_POINTS` table below). New splice points land by editing the
- * table and (optionally) the unit tests; new merge *rules* land by
- * extending `SpliceRule` and the dispatcher.
- *
- * Two-form `discardInherited` per C3:
- *  - **Block-level** — `<block>.discardInherited: true`. Drops every
- *    upstream value within that block before merging the higher tier.
- *  - **Field-level** — `<field>: { discardInherited: true, value?: X }`.
- *    Drops just that field's upstream contribution; the optional `value`
- *    provides a replacement, or the field falls back to the catalog
- *    default if `value` is absent.
- *
- * Field-level wins over block-level (more-specific wins). An unknown
- * structured wrapper (e.g. `{ unknown: ... }` on a field that does not
- * accept the structured form) is rejected as `MalformedInput`.
- *
- * Returns `{ merged, discarded, issues }`. `discarded` is a list of
- * `<block>.<field>` paths whose upstream contribution was dropped — used
- * by `composeResolvedConfig` to populate F2's `discarded` surface so O1
- * can show users which tiers their config silenced.
- */
+
 
 import { localeSort } from '../determinism/index.js';
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
 
-/** A splice-point merge rule, read from C3's catalog. */
 export type SpliceRule =
   | 'list-union-by-string'
   | 'list-union-by-key-name'
@@ -39,24 +11,17 @@ export type SpliceRule =
   | 'scalar-override'
   | 'deep-merge-cache-env';
 
-/** A single splice-point catalog entry. */
 export interface SpliceEntry {
-  /** Block name (top-level key under the overlay root). */
+
   block: string;
-  /** Field name (key under the block). */
+
   field: string;
-  /** Merge rule per C3's catalog. */
+
   rule: SpliceRule;
-  /** Bare default emitted when `discardInherited: true` has no replacement. */
+
   bareDefault: () => unknown;
 }
 
-/**
- * C3 splice-point catalog (data, not code). Keep this list in sync with
- * the table in `specifications/C3-overlay-schema.md` ("Splice-point
- * catalog (authoritative)"). Order is the table's order so debug dumps
- * read top-to-bottom like the spec.
- */
 export const SPLICE_POINTS: readonly SpliceEntry[] = [
   {
     block: 'stack',
@@ -114,37 +79,26 @@ export const SPLICE_POINTS: readonly SpliceEntry[] = [
   },
 ];
 
-/** Tier inputs to the cascade. `null` means the tier is absent. */
 export interface CascadeTiers {
   default: unknown | null;
   user: unknown | null;
   project: unknown | null;
 }
 
-/** Result of a cascade. */
 export interface CascadeResult {
-  /** Merged overlay object. Keys sorted at every depth by stableStringify. */
+
   merged: Record<string, unknown>;
-  /** Per-splice-point discard summary (`<block>.<field>` strings). */
+
   discarded: string[];
-  /** Hard errors raised during cascade (unknown wrapper, etc.). */
+
   issues: Issue[];
 }
 
-/**
- * Run the three-tier cascade per C4.
- *
- * @param tiers per-tier overlay bodies (`default` is the bottom; `project`
- *   is the leaf and the authoritative tier on conflict). Pass `null` for
- *   absent tiers; this is the same shape `loadOverlay` returns for a
- *   missing file.
- */
 export function cascadeOverlays(tiers: CascadeTiers): CascadeResult {
   const issues: Issue[] = [];
   const discarded: string[] = [];
   const merged: Record<string, unknown> = {};
 
-  // Validate each tier first; reject unknown structured wrappers fast.
   for (const tierName of ['default', 'user', 'project'] as const) {
     const data = tiers[tierName];
     if (data === null || data === undefined) continue;
@@ -162,7 +116,6 @@ export function cascadeOverlays(tiers: CascadeTiers): CascadeResult {
     return { merged, discarded, issues };
   }
 
-  // Cascade splice point by splice point. Each runs independently per C3.
   for (const entry of SPLICE_POINTS) {
     const { value, discarded: didDiscard } = resolveSplicePoint(entry, tiers);
     if (didDiscard) discarded.push(`${entry.block}.${entry.field}`);
@@ -173,31 +126,23 @@ export function cascadeOverlays(tiers: CascadeTiers): CascadeResult {
     (merged[entry.block] as Record<string, unknown>)[entry.field] = value;
   }
 
-  // Strip empty blocks so consumers don't see `proposer: {}` when nothing
-  // landed in it. The cascade is conservative: a block whose only field
-  // resolved to undefined (e.g. `runner.thresholdOverride` with no value
-  // anywhere) should not appear at all.
   for (const block of Object.keys(merged)) {
     const v = merged[block];
     if (isObject(v) && Object.keys(v).length === 0) delete merged[block];
   }
 
-  // Sort discarded for determinism.
   return { merged, discarded: localeSort(discarded), issues };
 }
 
 interface ResolvedField {
-  /** The resolved value, or `undefined` to omit the field entirely. */
+
   value: unknown;
-  /** Whether the resolution involved discarding upstream contribution. */
+
   discarded: boolean;
 }
 
 function resolveSplicePoint(entry: SpliceEntry, tiers: CascadeTiers): ResolvedField {
-  // Build per-tier "contributions". Each contribution carries:
-  //  - the raw value the tier supplied (may be a bare value or a structured
-  //    `{discardInherited, value?}` wrapper);
-  //  - whether the tier's *block-level* `discardInherited` is set.
+
   const contributions = (['default', 'user', 'project'] as const).map((t) => {
     const blockData = readBlock(tiers[t], entry.block);
     return {
@@ -208,15 +153,14 @@ function resolveSplicePoint(entry: SpliceEntry, tiers: CascadeTiers): ResolvedFi
     };
   });
 
-  // Walk default → user → project, merging into `acc` per the rule.
   let acc: unknown = entry.bareDefault();
   let everDiscarded = false;
-  let accDefined = false; // whether `acc` represents a real merged value yet
+  let accDefined = false;
 
   for (const c of contributions) {
-    // Determine the field-level form the tier supplied for this field.
+
     const fieldLevel = parseFieldLevel(c.raw);
-    // Field-level wins over block-level when both are set.
+
     const dropUpstream =
       fieldLevel.kind === 'wrapped' ? fieldLevel.discardInherited : c.blockDiscardInherited;
     if (dropUpstream) {
@@ -225,7 +169,6 @@ function resolveSplicePoint(entry: SpliceEntry, tiers: CascadeTiers): ResolvedFi
       accDefined = false;
     }
 
-    // Pull the bare value contributed by this tier (if any).
     const bare = fieldLevel.kind === 'wrapped' ? fieldLevel.value : fieldLevel.bare;
     if (bare === undefined) continue;
 
@@ -233,12 +176,6 @@ function resolveSplicePoint(entry: SpliceEntry, tiers: CascadeTiers): ResolvedFi
     accDefined = true;
   }
 
-  // For scalar-override, an undefined acc with no contribution stays undefined
-  // (no bare default to emit). For collection rules, the bare default ([],
-  // {}) is a valid resolved value when at least one tier discarded — so we
-  // emit it. When no tier supplied anything *and* no discard happened,
-  // collection rules also stay undefined so the field is omitted from the
-  // merged view.
   if (!accDefined && !everDiscarded) {
     return { value: undefined, discarded: false };
   }
@@ -250,13 +187,6 @@ type FieldLevelForm =
   | { kind: 'bare'; bare: unknown }
   | { kind: 'wrapped'; discardInherited: boolean; value: unknown };
 
-/**
- * Parse the per-tier raw value as either a bare value or a structured
- * `{discardInherited, value?}` wrapper. The wrapper detection mirrors
- * C3's schema: an object with a boolean `discardInherited` property, plus
- * an optional `value`. Anything else is treated as bare. Validation of
- * "unknown wrapper" shapes happens up front in `validateUnknownWrappers`.
- */
 function parseFieldLevel(raw: unknown): FieldLevelForm {
   if (raw === undefined) return { kind: 'bare', bare: undefined };
   if (isObject(raw) && typeof raw['discardInherited'] === 'boolean' && isWrapperShape(raw)) {
@@ -269,12 +199,6 @@ function parseFieldLevel(raw: unknown): FieldLevelForm {
   return { kind: 'bare', bare: raw };
 }
 
-/**
- * A field-level wrapper is exactly `{ discardInherited: boolean, value?: ... }`.
- * Anything else with extra keys is not a wrapper — it's a bare object the
- * field happens to take (e.g. a `cacheEnvOverride` map). The schema's oneOf
- * branches enforce this, but at runtime we double-check.
- */
 function isWrapperShape(o: Record<string, unknown>): boolean {
   for (const k of Object.keys(o)) {
     if (k !== 'discardInherited' && k !== 'value') return false;
@@ -282,13 +206,6 @@ function isWrapperShape(o: Record<string, unknown>): boolean {
   return true;
 }
 
-/**
- * Pre-validate wrappers across every block/field so we can fail closed
- * before merging. Specifically, a `{discardInherited, value?, ...extras}`
- * shape on any splice-point field is a `MalformedInput`. We do not check
- * for unknown blocks/fields here — that is the schema validator's job
- * (S3) and should not be repeated.
- */
 function validateUnknownWrappers(
   data: Record<string, unknown>,
   tierName: string,
@@ -299,9 +216,7 @@ function validateUnknownWrappers(
     if (!isObject(block)) continue;
     const raw = block[entry.field];
     if (!isObject(raw)) continue;
-    // Heuristic: if the field's raw value is an object AND it has
-    // `discardInherited` AND it has any *other* keys outside
-    // `{discardInherited, value}`, it's malformed.
+
     if ('discardInherited' in raw) {
       for (const k of Object.keys(raw)) {
         if (k !== 'discardInherited' && k !== 'value') {
@@ -329,8 +244,6 @@ function readBlock(tierData: unknown, block: string): Record<string, unknown> | 
   return v;
 }
 
-// ---- merge dispatcher ----------------------------------------------------
-
 function applyMerge(rule: SpliceRule, lower: unknown, higher: unknown): unknown {
   switch (rule) {
     case 'scalar-override':
@@ -351,7 +264,7 @@ function mergeStringList(lower: unknown, higher: unknown): unknown {
   const hi = Array.isArray(higher) ? higher.filter((v): v is string => typeof v === 'string') : [];
   const out: string[] = [];
   const seen = new Set<string>();
-  // Lower-tier-first ordering, dedup by exact string.
+
   for (const s of lo) {
     if (seen.has(s)) continue;
     seen.add(s);
@@ -365,16 +278,6 @@ function mergeStringList(lower: unknown, higher: unknown): unknown {
   return out;
 }
 
-/**
- * Merge two object lists keyed by `keyField`. Implements C4's
- * duplicate-key positioning rule:
- *
- *   lower [A, B, C] + higher [X, B', Y]  ->  [A, B', C, X, Y]
- *
- * - B' is matched to B by the key field; B' replaces B *in B's slot*.
- * - X and Y are new entries from the higher tier; they append after the
- *   resolved lower-tier list, in the higher tier's source order.
- */
 function mergeKeyedList(lower: unknown, higher: unknown, keyField: string): unknown {
   const lo = Array.isArray(lower) ? (lower as unknown[]).filter(isObject) : [];
   const hi = Array.isArray(higher) ? (higher as unknown[]).filter(isObject) : [];
@@ -407,17 +310,11 @@ function mergeKeyedList(lower: unknown, higher: unknown, keyField: string): unkn
       out.push(o);
     }
   }
-  // Append new entries (higher-tier keys not present in lower) in higher's
-  // source order. We already pushed them into `newEntries` above.
+
   for (const o of newEntries) out.push(o);
   return out;
 }
 
-/**
- * Deep merge for `stack.cacheEnvOverride`: a map of `<stack> -> <envVar> ->
- * <valueTemplate>`. Project keys win on duplicate at any depth; otherwise
- * additive.
- */
 function deepMergeCacheEnv(lower: unknown, higher: unknown): unknown {
   const lo = isObject(lower) ? lower : {};
   const hi = isObject(higher) ? higher : {};
@@ -442,10 +339,8 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-// Exported for tests and resolved-config consumers.
 export { isObject as _cascadeIsObject };
 
-/** Build a typed error for an unknown wrapper, in case callers want to throw. */
 export function unknownWrapperError(field: string, key: string): Error {
   return createError('MalformedInput', {
     field,

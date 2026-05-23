@@ -1,16 +1,4 @@
-/**
- * R3 sprint 4 — `gan validate` spawn-based tests.
- *
- * Covers contract criteria AC13-AC21:
- *   - clean fixture exits 0 with summary `0 issues found.`
- *   - schema-only fixture exits 2 with at least one issue line
- *   - invariant-bannered fixture exits 4 with `DRAFT` and `web-node.md`
- *     present in stdout
- *   - issue-line format matches the locked regex (AC18)
- *   - `--json` emits parseable JSON with a trailing newline (AC19)
- *   - end-to-end round-trip: scaffold a stack into a tmp dir, validate
- *     the dir → exit 4 citing `DRAFT` and the file basename (AC21)
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -71,7 +59,7 @@ describe('gan validate — schema-only failure (fixture: cli-validate-schema-vio
     expect(r.exitCode).toBe(2);
     const lines = r.stdout.split('\n').filter((l) => l.length > 0);
     expect(lines.length).toBeGreaterThan(1);
-    // At least one issue line matches the locked regex.
+
     const issueLines = lines.filter((l) => ISSUE_LINE_RE.test(l));
     expect(issueLines.length).toBeGreaterThan(0);
   });
@@ -129,9 +117,6 @@ describe('gan validate — end-to-end round-trip with `gan stacks new`', () => {
   it('scaffold a stack into a tmp project, then validate exits 4 citing DRAFT + the file basename', async () => {
     const proj = makeTmpProject();
 
-    // Seed a project-tier overlay so the project root is well-formed (matches
-    // the layout of fixtures used elsewhere). Without it, the scaffold flow
-    // still works, but seeding keeps the validate output predictable.
     const overlayDir = path.join(proj, '.claude', 'gan');
     mkdirSync(overlayDir, { recursive: true });
     writeFileSync(

@@ -4,21 +4,6 @@ import { fileURLToPath } from 'node:url';
 
 let cached: string | undefined;
 
-/**
- * Returns the absolute path to the directory containing this package's
- * package.json (`@claudeagents/config-server`). Cached after first call.
- *
- * Walks up from `import.meta.url` looking for the nearest ancestor
- * directory whose package.json declares `name === '@claudeagents/config-server'`.
- * Defends against monorepo parent package.json files at higher directories.
- *
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. When set, it
- * takes precedence over the import.meta.url walk and over the cached
- * value, so tests can isolate the built-in tier from the framework's
- * own `<repoRoot>/stacks/` directory without changing every callsite to
- * pass `packageRoot:` explicitly. Mirrors the pattern in the CLI
- * commands (`stacks-customize`, `stacks-available`, `stacks-where`).
- */
 export function packageRoot(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
   if (override !== undefined && override.length > 0) return override;
@@ -48,7 +33,6 @@ export function packageRoot(): string {
   }
 }
 
-/** For tests only: clears the cache. */
 export function _resetPackageRootCacheForTests(): void {
   cached = undefined;
 }

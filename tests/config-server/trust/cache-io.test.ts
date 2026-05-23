@@ -152,7 +152,7 @@ describe('trust/cache-io', () => {
       const cachePath = getTrustCachePath(homeDir);
       expect(existsSync(cachePath)).toBe(true);
       const stat = statSync(cachePath);
-      // Lower 9 bits should be 0o600.
+
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
@@ -162,8 +162,7 @@ describe('trust/cache-io', () => {
 
       const cachePath = getTrustCachePath(homeDir);
       const onDisk = readFileSync(cachePath, 'utf8');
-      // After upsertApproval the approvals would be sorted, but writeCache
-      // does not mutate; it serialises the exact `cache` argument.
+
       expect(onDisk).toBe(stableStringify(cache));
     });
 
@@ -239,12 +238,11 @@ describe('trust/cache-io', () => {
     });
 
     it('canonicalises the projectRoot lookup so non-canonical input still hits canonical entry', () => {
-      // Build an entry keyed off the canonical homeDir.
+
       const canonical = canonicalizePath(homeDir);
       const entry = sampleApproval({ projectRoot: canonical, aggregateHash: 'sha256:abc' });
       const cache: TrustCache = { schemaVersion: 1, approvals: [entry] };
-      // Pass the un-canonicalised homeDir (with a trailing slash) — should
-      // still resolve to the canonical form and match.
+
       const queryWithSlash = homeDir.endsWith(path.sep) ? homeDir : homeDir + path.sep;
       expect(lookupApproval(cache, queryWithSlash, 'sha256:abc')).toEqual(entry);
     });

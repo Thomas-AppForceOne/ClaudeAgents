@@ -1,6 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks customize` spawn-based tests.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -78,7 +76,7 @@ describe('gan stacks customize — project tier (default)', () => {
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     seedBuiltin(pkg, 'web-foo');
-    // Pre-seed an existing customisation.
+
     const projDir = path.join(canonicalizePathForDisplay(proj), '.claude', 'gan', 'stacks');
     mkdirSync(projDir, { recursive: true });
     const target = path.join(projDir, 'web-foo.md');
@@ -128,11 +126,7 @@ describe('gan stacks customize — user tier', () => {
   });
 
   it('writes to <userHome>/.claude/gan/stacks/<unique>.md when --tier=user is set', async () => {
-    // Companion of the "user tier" success case above; uses a unique
-    // stack name to avoid colliding with any leftover customisation in
-    // the dev machine's real $HOME (the harness inherits HOME by
-    // default; we explicitly reroute via GAN_USER_HOME so the user
-    // tier targets a fresh tmp dir).
+
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     const home = makeTmpDir('gan-test-customize-home-');

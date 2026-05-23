@@ -1,6 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks available` spawn-based tests.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -87,7 +85,7 @@ describe('gan stacks available — human surface', () => {
   it('skips malformed entries and emits a stderr warning', async () => {
     const pkg = makeFakePackageRoot();
     writeStack(pkg, 'good.md', VALID_STACK('good', 'fine'));
-    // Malformed: missing closing marker.
+
     writeStack(pkg, 'broken.md', '---\nname: broken\nschemaVersion: 1\n');
     const r = await runGan(['stacks', 'available'], {
       extraEnv: { GAN_PACKAGE_ROOT_OVERRIDE: pkg },
@@ -134,7 +132,7 @@ describe('gan stacks available --json', () => {
     expect(parsed.stacks[0]!.schemaVersion).toBe(1);
     expect(parsed.stacks[0]!.description).toBe('desc-a');
     expect(path.isAbsolute(parsed.stacks[0]!.path)).toBe(true);
-    // Sorted keys: description, name, path, schemaVersion.
+
     const firstEntry = JSON.stringify(Object.keys(parsed.stacks[0]!));
     expect(firstEntry).toBe(JSON.stringify(['description', 'name', 'path', 'schemaVersion']));
   });

@@ -23,11 +23,6 @@ const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks');
 const jsTsMinimal = path.join(fixturesRoot, 'js-ts-minimal');
 const trustCommandFiles = path.join(fixturesRoot, 'trust-command-files');
 
-/**
- * Build a discovery-only snapshot for a fixture so tests can feed
- * `runTrustCheck` without relying on validateAll's full pipeline (which
- * itself calls runTrustCheck).
- */
 function snapshotFor(fixtureRoot: string): ValidationSnapshot {
   return _runPhase1ForTests(fixtureRoot);
 }
@@ -150,9 +145,7 @@ describe('trust/integration — runTrustCheck', () => {
 
   it('(h) converts TrustCacheCorrupt into a single Issue (does not propagate)', () => {
     const snapshot = snapshotFor(trustCommandFiles);
-    // Plant a malformed cache file. We use the same disk path the
-    // cache module reads from; permissions must be 0600 so the corrupt
-    // check fires on JSON parse rather than on mode.
+
     const cacheDir = path.join(tmpHome, '.claude', 'gan');
     mkdirSync(cacheDir, { recursive: true });
     const cachePath = path.join(cacheDir, 'trust-cache.json');

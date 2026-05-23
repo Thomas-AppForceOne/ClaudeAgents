@@ -1,39 +1,15 @@
-/**
- * User-tier forbidden field check (per C3 lines 71-75).
- *
- * A user overlay (`~/.claude/gan/user.md`) declaring any of the four
- * tier-forbidden fields is a hard error at load and at write time:
- *
- *  - `planner.additionalContext`
- *  - `proposer.additionalContext`
- *  - `stack.override`
- *  - `stack.cacheEnvOverride`
- *
- * The check is **key-presence** based — declaring the key with an empty
- * value still fires the issue. Each forbidden field present in `data`
- * produces one `MalformedInput` issue; multiple forbidden fields produce
- * multiple issues, in deterministic alphabetical order:
- *   `planner.additionalContext`,
- *   `proposer.additionalContext`,
- *   `stack.cacheEnvOverride`,
- *   `stack.override`.
- *
- * This invariant is owned by the schema-vs-tier separation rule (C3 + F3):
- * the JSON Schema permits these fields unconditionally; the tier gate is
- * upstream, in this loader-time check.
- */
+
 
 import { type Issue } from './schema-check.js';
 
-/** Forbidden field paths in the canonical alphabetical order. */
 const FORBIDDEN_FIELDS: ReadonlyArray<{
-  /** Canonical dotted path used in the issue's `field` and message. */
+
   field: string;
-  /** Top-level YAML key. */
+
   block: 'planner' | 'proposer' | 'stack';
-  /** Sub-key under the block. */
+
   leaf: 'additionalContext' | 'cacheEnvOverride' | 'override';
-  /** Per-field rationale (mirrors C3 lines 72-74). */
+
   reason: string;
 }> = [
   {
@@ -64,11 +40,6 @@ const FORBIDDEN_FIELDS: ReadonlyArray<{
   },
 ];
 
-/**
- * Inspect a user-tier overlay's parsed data for tier-forbidden fields and
- * append one `MalformedInput` issue per declared field. The check is a
- * no-op if `data` is null, undefined, or not a plain object.
- */
 export function checkUserOverlayForbiddenFields(
   filePath: string,
   data: unknown,

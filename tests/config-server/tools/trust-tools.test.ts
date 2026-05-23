@@ -1,12 +1,4 @@
-/**
- * R5 sprint 4 — direct library coverage for the four trust MCP tools.
- *
- * Each test uses `mkdtempSync` for both the project root and the
- * cache home so the real `~/.claude/gan/trust-cache.json` is never
- * touched. The end-to-end case at the bottom exercises the full
- * round-trip through `validateAll` to confirm an approve flips the
- * `UntrustedOverlay` issue from present → absent.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -74,16 +66,12 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const approved1 = getTrustState({ projectRoot: proj }, { homeDir: home });
     expect(approved1.approved).toBe(true);
 
-    // Mutate the project overlay so the recomputed hash drifts from the
-    // approved hash. We append a comment line outside the YAML block so
-    // the schema stays valid; the trust hash covers full file bytes so
-    // even a comment edit invalidates the approval.
     const overlay = path.join(proj, '.claude', 'gan', 'project.md');
     writeFileSync(overlay, '\n# drifted comment\n', { flag: 'a' });
 
     const after = getTrustState({ projectRoot: proj }, { homeDir: home });
     expect(after.approved).toBe(false);
-    // Different hash than the approved one.
+
     expect(after.currentHash).not.toBe(approved1.approvedHash);
   });
 
@@ -125,9 +113,6 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const proj = makeTmpProject();
     const home = makeTmpHome();
 
-    // Initialise the project as a git working tree with one commit so
-    // `git rev-parse HEAD` resolves successfully. We isolate git config
-    // so the test is hermetic on machines without a global git identity.
     const gitEnv = {
       ...process.env,
       GIT_AUTHOR_NAME: 'r5-s4',
@@ -147,7 +132,6 @@ describe('trust tools — round-trip (R5 S4)', () => {
     expect(typeof result.record.approvedCommit).toBe('string');
     expect((result.record.approvedCommit as string).length).toBeGreaterThan(0);
 
-    // getTrustState surfaces the same approvedCommit.
     const state = getTrustState({ projectRoot: proj }, { homeDir: home });
     expect(state.approvedCommit).toBe(result.record.approvedCommit);
   });
@@ -155,7 +139,7 @@ describe('trust tools — round-trip (R5 S4)', () => {
   it('trustApprove omits approvedCommit when the project is not a git tree', () => {
     const proj = makeTmpProject();
     const home = makeTmpHome();
-    // The fixture copy is NOT a git tree (no `.git` directory).
+
     const result = trustApprove({ projectRoot: proj }, { homeDir: home });
     expect(result.record.approvedCommit).toBeUndefined();
 
@@ -168,8 +152,6 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const proj = makeTmpProject();
     const home = makeTmpHome();
 
-    // Before approval: validateAll under strict trust mode reports
-    // exactly one UntrustedOverlay issue.
     const beforeReport = validateAll(
       { projectRoot: proj },
       { env: { GAN_TRUST: 'strict' }, homeDir: home },
@@ -177,11 +159,8 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const beforeTrust = beforeReport.issues.filter((i) => i.code === 'UntrustedOverlay');
     expect(beforeTrust.length).toBe(1);
 
-    // Approve via the real tool — this both records and re-uses the
-    // single computeTrustHash + writeCache pipeline.
     trustApprove({ projectRoot: proj }, { homeDir: home });
 
-    // After approval: validateAll reports no UntrustedOverlay issue.
     const afterReport = validateAll(
       { projectRoot: proj },
       { env: { GAN_TRUST: 'strict' }, homeDir: home },

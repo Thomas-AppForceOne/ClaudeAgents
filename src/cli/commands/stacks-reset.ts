@@ -1,24 +1,4 @@
-/**
- * R-post sprint 6 — `gan stacks reset <name> [--tier=project|user]`.
- *
- * Drops a customisation copy at the named tier so the framework's built-in
- * default re-wins resolution (per C5's tier ordering).
- *
- * Idempotent: if the customisation does not exist at the chosen tier, the
- * command emits a one-line warning to stderr and exits 0. The shape of
- * "nothing to do" is reported in the JSON surface (`deleted: false,
- * reason: 'no-customization'`) so scripted callers can distinguish the
- * two cases without parsing exit codes.
- *
- * Tiers:
- *   - `--tier=project` (default) → `<projectRoot>/.claude/gan/stacks/<name>.md`
- *   - `--tier=user`              → `<userHome>/.claude/gan/stacks/<name>.md`
- *
- * Exit codes:
- *   - 0 on success or no-op;
- *   - 64 on bad CLI arguments (missing name, invalid `--tier`, missing user
- *     home for `--tier=user`).
- */
+
 
 import { existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -126,9 +106,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(targetOrErr), code: EXIT_BAD_ARGS };
   }
   const target = targetOrErr;
-  // Display-form target: swap canonical project-root prefix for the
-  // case-preserving form so the user sees `/Users/...` rather than the
-  // lowercased `/users/...`. See cli/lib/project-root.ts for the rationale.
+
   const targetDisplay =
     projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
       ? projectRootDisplay + target.slice(projectRoot.length)

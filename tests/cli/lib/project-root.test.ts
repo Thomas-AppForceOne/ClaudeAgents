@@ -1,14 +1,4 @@
-/**
- * R3 sprint 1 — `--project-root` resolution unit tests.
- *
- * Covers:
- *   - default-from-cwd
- *   - canonicalization (symlinks resolved, trailing-slash stripped,
- *     case-folded on Darwin/Win32 per F3)
- *   - explicit flag → `explicit: true`
- *   - non-existent path → throws
- *   - non-directory path → throws
- */
+
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

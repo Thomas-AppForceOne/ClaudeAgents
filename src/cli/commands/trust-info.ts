@@ -1,21 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust info [--project-root DIR] [--json]`.
- *
- * Calls R1's `getTrustState({projectRoot}, {homeDir})` in-process (per
- * the CLI-imports-library rule). Renders the approval state in either
- * a short human-readable summary or as deterministic JSON.
- *
- * `--project-root` defaults to the canonicalised form of the current
- * working directory (per R3's project-root helper). HOME is read from
- * `process.env.HOME ?? os.homedir()` so tests can drive the cache via
- * a `mkdtempSync` directory without touching the real `~/.claude/gan/`.
- *
- * Exit codes:
- *   - 0  success.
- *   - 1  trust cache unreadable / corrupt (`TrustCacheCorrupt` from R1).
- *   - 5  framework library unreachable.
- *   - 64 bad CLI arguments (e.g. `--project-root` set to a non-directory).
- */
+
 
 import os from 'node:os';
 

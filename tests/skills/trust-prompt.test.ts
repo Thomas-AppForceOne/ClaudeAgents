@@ -1,12 +1,4 @@
-/**
- * R5 sprint 4 — static content assertions for `skills/gan/trust-prompt.md`.
- *
- * The trust prompt is markdown the orchestrator (E1) presents to the
- * user. The file must contain every locked substring from R5's prompt
- * design (the `[v]` / `[a]` / `[r]` / `[c]` choice grid plus the two
- * `git diff` / `git log` follow-ups) so the discriminator can verify
- * the prompt without parsing markdown.
- */
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

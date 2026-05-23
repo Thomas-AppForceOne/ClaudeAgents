@@ -1,41 +1,4 @@
 #!/usr/bin/env node
-/**
- * E3 — `evaluator-pipeline-check` deterministic-core harness.
- *
- * For every bootstrap fixture under `tests/fixtures/stacks/`, the
- * harness:
- *
- *   1. Composes a resolved snapshot via R1's `composeResolvedConfig`
- *      (single-implementation rule — never re-implements resolution).
- *   2. Loads each active stack's parsed body via R1's `loadStack`.
- *   3. Reads the synthetic `sprint-plan.json` (planner output stand-in)
- *      and walks the fixture's worktree to build `WorktreeState`. File
- *      contents inside any active stack's scope are pre-loaded so the
- *      keyword-matching surfaces in `securitySurfaces` can fire without
- *      the carve-out reading from disk.
- *   4. Calls E1's pure `buildEvaluatorPlan(snapshot, sprintPlan,
- *      worktreeState)` from `src/agents/evaluator-core/`.
- *   5. Normalises the resulting plan per the rules in
- *      `tests/fixtures/normalise-rules.json` (sort arrays, sort in-place
- *      lists, strip volatile path prefixes).
- *   6. Diffs the byte-stable serialisation against the fixture's
- *      committed `expected-evaluator-plan.json`. Drift surfaces as an
- *      `EvaluatorPlanDrift` failure; a missing golden surfaces as
- *      `EvaluatorPlanMissing`.
- *
- * The fixture list is hard-coded — `invariant-*` and `invalid-*`
- * fixtures intentionally fail validation and would corrupt the seed if
- * auto-discovered. The hard-coded list also doubles as a guard rail:
- * removing one of the five fixtures requires `--allow-guardrail-removal`
- * (refused under `CI=1`) so the multi-stack contract cannot be silently
- * relaxed.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (or after `--update-goldens`).
- *   - 1 when one or more fixtures drifted, are missing a golden, or a
- *     known fixture has been removed without the override flag.
- *   - 64 when the caller passed an unknown flag.
- */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -65,11 +28,6 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
-/**
- * Hard-coded fixture set. Adding a fixture is a code change; removing
- * one without `--allow-guardrail-removal` is a hard error (per the
- * cross-stack capability assertion in E3 lines 90-98).
- */
 const KNOWN_FIXTURES = [
   'generic-fallback',
   'js-ts-minimal',
@@ -79,8 +37,7 @@ const KNOWN_FIXTURES = [
 ] as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Script runs from `dist/scripts/evaluator-pipeline-check/index.js`;
-// three `..` segments reach the repo root.
+
 const repoRoot = path.resolve(here, '..', '..', '..');
 const defaultFixtureRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks');
 const defaultNormaliseRules = path.join(repoRoot, 'tests', 'fixtures', 'normalise-rules.json');
@@ -129,23 +86,22 @@ interface RunResult {
 }
 
 interface RunOptions {
-  /** Directory holding the bootstrap fixture set. */
+
   fixtureRoot: string;
-  /** Path to the normalise-rules JSON document. */
+
   normaliseRulesPath: string;
-  /** When true, re-seed each fixture's golden instead of diffing. */
+
   updateGoldens: boolean;
-  /** When true, allow the run to proceed even if a known fixture is missing. */
+
   allowGuardrailRemoval: boolean;
-  /** When true, the run is under CI; --allow-guardrail-removal is refused. */
+
   ci: boolean;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
-/** Path to the per-fixture golden file. */
 function goldenPathFor(fixtureRoot: string, fixture: string): string {
   return path.join(fixtureRoot, fixture, 'expected-evaluator-plan.json');
 }
@@ -157,8 +113,6 @@ function readFileIfExists(absPath: string): string | null {
     return null;
   }
 }
-
-// ---- Normalise rules ------------------------------------------------------
 
 interface NormaliseRules {
   sortArrays: Array<{ path: string; by: string | string[] }>;
@@ -176,20 +130,10 @@ function loadNormaliseRules(rulesPath: string): NormaliseRules {
   };
 }
 
-/**
- * Apply the declared normalise rules to an evaluator plan. The carve-out
- * is already deterministic, so this layer only re-asserts the plan-wide
- * sort contract (per E3 line 104) and strips volatile path prefixes
- * matching the configured regex patterns. The rules file is the
- * reviewable contract for what the harness considers volatile vs.
- * load-bearing.
- */
 function applyNormaliseRules(plan: EvaluatorPlan, rules: NormaliseRules): EvaluatorPlan {
-  // Round-trip via JSON so we can mutate without aliasing the caller's
-  // object graph.
+
   const cloned = JSON.parse(JSON.stringify(plan)) as EvaluatorPlan;
 
-  // 1. Sort top-level arrays declared in `sortArrays`.
   for (const rule of rules.sortArrays) {
     const arr = (cloned as unknown as Record<string, unknown>)[rule.path];
     if (!Array.isArray(arr)) continue;
@@ -207,12 +151,10 @@ function applyNormaliseRules(plan: EvaluatorPlan, rules: NormaliseRules): Evalua
     });
   }
 
-  // 2. Sort in-place arrays referenced by dotted paths with `[*]` segments.
   for (const inPlacePath of rules.sortInPlace) {
     sortInPlaceByPath(cloned as unknown, inPlacePath);
   }
 
-  // 3. Strip volatile path prefixes from any string leaves we encounter.
   if (rules.stripPrefixes.length > 0) {
     const compiled = rules.stripPrefixes.map((p) => new RegExp('^' + p));
     stripPrefixesDeep(cloned as unknown, compiled);
@@ -221,11 +163,6 @@ function applyNormaliseRules(plan: EvaluatorPlan, rules: NormaliseRules): Evalua
   return cloned;
 }
 
-/**
- * Apply a locale sort to every array reached by `dottedPath`. Path
- * supports `[*]` to spread across array elements (e.g.
- * `secretsScans[*].files`).
- */
 function sortInPlaceByPath(root: unknown, dottedPath: string): void {
   const segments = dottedPath.split('.');
   walkAndSort(root, segments, 0);
@@ -247,7 +184,7 @@ function walkAndSort(node: unknown, segments: string[], idx: number): void {
     return;
   }
   const seg = segments[idx]!;
-  // Detect a `key[*]` shape and unfold the array spread.
+
   const arrSpread = seg.match(/^([^[]+)\[\*\]$/);
   if (arrSpread) {
     const key = arrSpread[1]!;
@@ -301,18 +238,6 @@ function applyStrip(s: string, compiled: readonly RegExp[]): string {
   return out;
 }
 
-// ---- Snapshot composition -------------------------------------------------
-
-/**
- * Assemble the evaluator-core inputs for a single fixture by composing
- * the F2 resolved snapshot, loading every active stack's parsed body,
- * walking the fixture's worktree, and reading the synthetic
- * `sprint-plan.json`.
- *
- * The harness is allowed to read files; only the carve-out under
- * `src/agents/evaluator-core/` must remain pure (per E3's "Reference
- * implementation" section).
- */
 async function assembleInputsForFixture(projectRoot: string): Promise<{
   snapshot: EvaluatorCoreSnapshot;
   sprintPlan: SprintPlan;
@@ -332,11 +257,7 @@ async function assembleInputsForFixture(projectRoot: string): Promise<{
     if (secretsGlob.length > 0) entry.secretsGlob = secretsGlob;
     const auditCmd = readAuditCmd(body['auditCmd']);
     if (auditCmd) entry.auditCmd = auditCmd;
-    // Parse `docLintCmd` from the stack body, parallel to `auditCmd`.
-    // Without this the carve-out never sees a `docLintCmd` and every
-    // golden's `docLintInvocations` would be empty, so the polyglot
-    // scope-isolation row (FUNC-2) and the per-declaring-stack row
-    // (FUNC-1) could never appear in a regenerated golden.
+
     const docLintCmd = readDocLintCmd(body['docLintCmd']);
     if (docLintCmd) entry.docLintCmd = docLintCmd;
     if (typeof body['buildCmd'] === 'string') entry.buildCmd = body['buildCmd'];
@@ -344,10 +265,7 @@ async function assembleInputsForFixture(projectRoot: string): Promise<{
     if (typeof body['lintCmd'] === 'string') entry.lintCmd = body['lintCmd'];
     const surfaces = readSurfaces(body['securitySurfaces']);
     if (surfaces.length > 0) entry.securitySurfaces = surfaces;
-    // `documentationSurfaces` parses through the identical reader: the two
-    // surface families are structurally the same shape, so one parser
-    // covers both. Pre-loading them here lets the polyglot golden exercise
-    // the documentation surface-half scope-isolation, not just security.
+
     const docSurfaces = readSurfaces(body['documentationSurfaces']);
     if (docSurfaces.length > 0) entry.documentationSurfaces = docSurfaces;
     activeStacks.push(entry);
@@ -388,22 +306,6 @@ function readAuditCmd(v: unknown): EvaluatorCoreSnapshot['activeStacks'][number]
   return out;
 }
 
-/**
- * Parse a stack-body `docLintCmd` block into the carve-out's `DocLintCmd`
- * shape, parallel to `readAuditCmd`. A `docLintCmd` is structurally
- * `auditCmd` plus the gating fields `severity` and `baseline`, so this
- * reader is `readAuditCmd` extended with those two — kept separate (not
- * folded into `readAuditCmd`) because the two stack fields are distinct
- * and a shared parser would have to invent a discriminator.
- *
- * Returns `undefined` for a stack that declares no `docLintCmd` or a
- * malformed one (missing `command`/`severity`); a stack with no doc-lint
- * tool contributes no `docLintInvocations` row, exactly as the schema's
- * "omitted = no deterministic doc-lint" default prescribes. The schema
- * (`lint-stacks`) is the real validator — this reader is only the
- * fixture-harness's structural surface, so it tolerates an absent field
- * rather than throwing.
- */
 function readDocLintCmd(v: unknown): DocLintCmd | undefined {
   if (v === null || typeof v !== 'object') return undefined;
   const obj = v as Record<string, unknown>;
@@ -415,10 +317,7 @@ function readDocLintCmd(v: unknown): DocLintCmd | undefined {
     : 'silent';
   const sev = obj['severity'];
   const validSeverities = ['blocker', 'warning', 'advisory'] as const;
-  // Default to `blocker` for an unrecognised/absent severity: the schema
-  // requires `severity`, so this only fires on a malformed fixture; a
-  // blocker default surfaces such a fixture loudly rather than silently
-  // downgrading it to advisory.
+
   const severity = (validSeverities as readonly string[]).includes(sev as string)
     ? (sev as 'blocker' | 'warning' | 'advisory')
     : 'blocker';
@@ -428,21 +327,12 @@ function readDocLintCmd(v: unknown): DocLintCmd | undefined {
     severity,
   };
   if (typeof obj['absenceMessage'] === 'string') out.absenceMessage = obj['absenceMessage'];
-  // Carry `baseline` only when the stack states it; the emission layer
-  // (`buildDocLintInvocations`) applies the `delta` default, so this
-  // reader must NOT pre-fill it — pre-filling here would hide whether the
-  // default ever fires in the goldens.
+
   const base = obj['baseline'];
   if (base === 'delta' || base === 'absolute') out.baseline = base;
   return out;
 }
 
-/**
- * Parse a stack-body surface array (`securitySurfaces` or
- * `documentationSurfaces`) into the carve-out's surface shape. The two
- * families are structurally identical, so a single reader serves both —
- * see the call sites in `assembleInputsForFixture`.
- */
 function readSurfaces(v: unknown): SecuritySurface[] {
   if (!Array.isArray(v)) return [];
   const out: SecuritySurface[] = [];
@@ -516,14 +406,6 @@ function readSprintPlan(projectRoot: string): SprintPlan {
   return { affectedFiles, criteria };
 }
 
-/**
- * Walk the fixture directory and build a `WorktreeState`. Excludes the
- * goldens (`expected-evaluator-plan.json`), the synthetic plan
- * (`sprint-plan.json`), and the framework's noisy directories. File
- * contents are pre-loaded for any path that matches at least one active
- * stack's `scope`, so the carve-out's keyword-matching surfaces can fire
- * without itself reading from disk.
- */
 function enumerateWorktree(
   projectRoot: string,
   activeStacks: readonly EvaluatorCoreSnapshot['activeStacks'][number][],
@@ -560,9 +442,6 @@ function enumerateWorktree(
   }
   out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'variant', numeric: false }));
 
-  // Pre-load contents for files inside any active stack's scope. Any
-  // surface with keyword triggers needs the content; surfaces without
-  // need only the path enumeration.
   const fileContents: Record<string, string> = {};
   for (const file of out) {
     const inAnyScope = activeStacks.some((stk) =>
@@ -579,11 +458,6 @@ function enumerateWorktree(
   return { files: out, fileContents };
 }
 
-/**
- * Cheap picomatch wrapper. The harness only needs scope filtering for
- * pre-loading file contents; the carve-out itself uses picomatch with
- * the same options for the actual decisions.
- */
 const _matcherCache = new Map<string, (p: string) => boolean>();
 function globMatchesPath(pattern: string, file: string): boolean {
   let matcher = _matcherCache.get(pattern);
@@ -594,15 +468,9 @@ function globMatchesPath(pattern: string, file: string): boolean {
   return matcher(file);
 }
 
-// ---- Run loop -------------------------------------------------------------
-
 export async function run(opts: RunOptions): Promise<RunResult> {
   const failures: ReportFailure[] = [];
 
-  // Pre-flight: refuse --allow-guardrail-removal under CI=1
-  // unconditionally, regardless of fixture state. The multi-stack guard
-  // rail must remain intact in CI; the override flag exists for local
-  // re-seeding only.
   if (opts.ci && opts.allowGuardrailRemoval) {
     const report: EvaluatorPipelineCheckReport = {
       kind: 'evaluator-pipeline-check',
@@ -621,8 +489,6 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     return finishReport(report, opts);
   }
 
-  // Guard rail: every known fixture must exist, else require the
-  // override flag.
   const presentFixtures: string[] = [];
   const missingFixtures: string[] = [];
   for (const fixture of KNOWN_FIXTURES) {
@@ -651,8 +517,6 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     // If `allowGuardrailRemoval && !ci`, the missing fixtures are skipped.
   }
 
-  // Skip the rest of the loop on the early "missing fixture" failures,
-  // unless the override is in effect.
   const fatalGuardrail = failures.length > 0 && !opts.allowGuardrailRemoval;
   const checked = presentFixtures.length;
 
@@ -749,9 +613,6 @@ function finishReport(report: EvaluatorPipelineCheckReport, opts: RunOptions): R
   };
 }
 
-/**
- * Bin entry. Tests invoke the compiled output via `child_process.spawn`.
- */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help', 'update-goldens', 'allow-guardrail-removal'],

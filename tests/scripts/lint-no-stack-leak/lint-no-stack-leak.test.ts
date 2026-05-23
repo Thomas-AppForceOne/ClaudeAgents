@@ -1,20 +1,4 @@
-/**
- * Integration tests for `scripts/lint-no-stack-leak/`.
- *
- * Spawns the built bin (`dist/scripts/lint-no-stack-leak/index.js`) and
- * asserts:
- *
- *   - default run (no flags) → exit 0; stdout matches
- *     `^[0-9]+ files scanned, 0 hits\n$`; stderr empty;
- *   - hermetic temp scan-root with a planted leaking agent file → exit 1;
- *     stderr contains `LeakDetected`;
- *   - `--json` clean run → stdout parses as JSON with the documented
- *     `{checked, failed, failures: []}` shape and a trailing newline;
- *   - unknown flag → exit 64;
- *   - hermetic temp scan-root + `--allowlist-file` pointing to a JSON
- *     whose transitional entry references a file with no forbidden
- *     token → exit 1; stderr contains `EmptyTransitionalEntry`.
- */
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,8 +72,7 @@ describe('lint-no-stack-leak bin', () => {
     const root = newTmpRoot();
     const agentsDir = path.join(root, 'agents');
     mkdirSync(agentsDir, { recursive: true });
-    // Planted file has zero forbidden tokens — the transitional entry
-    // covering it is therefore stale and must fire EmptyTransitionalEntry.
+
     const stale = path.join(agentsDir, 'stale.md');
     writeFileSync(stale, '# Stale agent\n\nNothing leaky here.\n', 'utf8');
 

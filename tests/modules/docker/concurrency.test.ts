@@ -1,15 +1,4 @@
-/**
- * M2 — concurrency test (AC13).
- *
- * Spawn 2 in-process clients writing to the same port-registry against
- * a shared registry root, with controlled scheduling (interleaved
- * awaits). Asserts:
- *   (a) writes serialise — the final on-disk JSON contains both
- *       entries.
- *   (b) two entries cannot share a port — PortRegistry refuses
- *       duplicate-port registration with a structured error from the
- *       central factory.
- */
+
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -29,12 +18,6 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
-/**
- * Stage a fake package root with the docker module's manifest so the
- * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
- * state key. Without this, every PortRegistry write would reject with
- * `UnknownStateKey`.
- */
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'm2-conc-modroot-'));
   writeFileSync(
@@ -68,8 +51,7 @@ describe('PortRegistry concurrency', () => {
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-concurrency-'));
-    // F8: repo-keyed module-state store — `scratch` must be a real repo and
-    // writes go to a throwaway store root.
+
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -101,8 +83,6 @@ describe('PortRegistry concurrency', () => {
     mkdirSync(wtA, { recursive: true });
     mkdirSync(wtB, { recursive: true });
 
-    // Interleaved scheduling: each register is a sync operation, but we
-    // spawn two micro-tasks that both write before the other reads.
     const taskA = (async () => {
       await Promise.resolve();
       regA.register(wtA, 8001, 'app-a');
@@ -113,8 +93,6 @@ describe('PortRegistry concurrency', () => {
     })();
     await Promise.all([taskA, taskB]);
 
-    // The disk state must contain both entries (last writer wins on
-    // conflict, but the keys differ here so both survive).
     const reg = new PortRegistry(scratch);
     const all = reg.getAll();
     expect(all).toHaveLength(2);

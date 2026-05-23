@@ -1,15 +1,4 @@
-/**
- * Unit tests for `scripts/lib/report.ts`.
- *
- * Covers the documented surface:
- *   - `formatReport` zero-failure path: empty stderr, summary on stdout.
- *   - `formatReport` failure path: per-failure stderr lines name the
- *     path, the issue code, and the message; summary stdout line stays
- *     a single sentence.
- *   - `formatReportJson` emits sorted-key two-space-indent JSON with a
- *     trailing newline (the F3 determinism shape) — we round-trip the
- *     output through JSON.parse to assert the documented schema.
- */
+
 import { describe, expect, it } from 'vitest';
 import {
   formatReport,
@@ -75,7 +64,7 @@ describe('formatReport (lint-stacks)', () => {
     };
     const out = formatReport(report);
     expect(out.stdout).toBe('2 stacks checked, 2 failed\n');
-    // One stderr line per failure record, terminated by `\n`.
+
     const lines = out.stderr.split('\n').filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain(FAILURE_A.path);
@@ -94,8 +83,7 @@ describe('formatReport (lint-stacks)', () => {
       failures: [FAILURE_A, second],
     };
     const out = formatReport(report);
-    // Two stderr lines (one per failure record), but the summary
-    // counts unique files.
+
     expect(out.stdout).toBe('1 stacks checked, 1 failed\n');
     const lines = out.stderr.split('\n').filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
@@ -111,10 +99,10 @@ describe('formatReportJson (lint-stacks)', () => {
     };
     const json = formatReportJson(report);
     expect(json.endsWith('\n')).toBe(true);
-    // Two-space indent per the F3 pin.
+
     expect(json).toContain('\n  "checked": 1');
     expect(json).toContain('\n  "failed": 1');
-    // Keys at every depth are sorted lexicographically: `code` < `message` < `path`.
+
     const codeIdx = json.indexOf('"code"');
     const messageIdx = json.indexOf('"message"');
     const pathIdx = json.indexOf('"path"');

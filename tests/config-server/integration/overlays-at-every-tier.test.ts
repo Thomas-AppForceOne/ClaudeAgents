@@ -1,18 +1,4 @@
-/**
- * R1 sprint 7 integration test — C4 cascade end to end at every tier.
- *
- * Builds a temp-dir fixture where each of default/user/project tiers
- * contributes a value to the cascade. Verifies:
- *
- *   - Per the C4 worked rule: lower `[A,B,C]` + higher `[X,B',Y]` resolves
- *     to `[A,B',C,X,Y]`. We exercise this on
- *     `proposer.additionalCriteria` (a `list-union-by-key-name` rule).
- *   - Scalar override: `runner.thresholdOverride` from the leaf tier wins.
- *   - Tier provenance is faithfully reflected in the resolved config.
- *
- * The fixture is constructed in a temp directory so the test does not
- * mutate any committed fixture and runs hermetically across CI shards.
- */
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -64,7 +50,6 @@ describe('integration: overlays at every tier (C4 cascade)', () => {
   it('runs the C4 worked rule on a list field and a scalar override', async () => {
     const { projectRoot, userHome } = makeTmpProjectAndUserHome();
 
-    // Default tier (lowest): contributes A, B, C with thresholdOverride 50.
     writeOverlay(
       path.join(projectRoot, '.claude', 'gan', 'default.md'),
       `---
@@ -86,8 +71,6 @@ runner:
 `,
     );
 
-    // User tier (middle): contributes nothing extra to the list, raises
-    // thresholdOverride to 75.
     writeOverlay(
       path.join(userHome, '.claude', 'gan', 'user.md'),
       `---
@@ -98,8 +81,6 @@ runner:
 `,
     );
 
-    // Project tier (leaf, highest): replaces B in-place with B', adds X, Y,
-    // and pushes thresholdOverride to 90.
     writeOverlay(
       path.join(projectRoot, '.claude', 'gan', 'project.md'),
       `---
@@ -121,14 +102,11 @@ runner:
 `,
     );
 
-    // Pre-condition: validateAll should be clean (no schema mismatches,
-    // no invariants tripped).
     const validation = validateAll({ projectRoot }, { userHome });
     expect(validation.issues).toEqual([]);
 
     const r = await getResolvedConfig({ projectRoot }, { userHome });
 
-    // Assert C4 worked rule on the list field: [A, B', C, X, Y].
     const merged = r.overlay as Record<string, Record<string, unknown>>;
     const criteria = merged.proposer.additionalCriteria as Array<{
       name: string;
@@ -136,16 +114,12 @@ runner:
       threshold: number;
     }>;
     expect(criteria.map((c) => c.name)).toEqual(['A', 'B', 'C', 'X', 'Y']);
-    // B' replaced B in-place: the description tells us which tier won.
+
     const b = criteria.find((c) => c.name === 'B');
     expect(b?.description).toBe('from-project-overrides-default');
 
-    // Assert scalar override: project tier wins (90).
     expect(merged.runner.thresholdOverride).toBe(90);
 
-    // Tier provenance is implicit in the cascade output (the higher-tier
-    // entry's data won), but we also assert that the cascade marked
-    // nothing as discarded — this is a pure additive cascade.
     expect(r.discarded).toEqual([]);
   });
 });

@@ -1,30 +1,4 @@
-/**
- * `path.escape` invariant (F3 catalog; sourced from F4).
- *
- * Surfaces filesystem path escapes under the F2 `PathEscape` error code.
- * R5 introduced this dedicated invariant; the post-R audit deduplication
- * collapsed an earlier duplicate (which fired the same rule under
- * `InvariantViolation`) into this file, leaving a single implementation.
- *
- * The check walks every overlay tier and inspects the path-bearing
- * splice points (`planner.additionalContext`, `proposer.additionalContext`).
- * For each candidate it resolves against the project root, canonicalises
- * via F3's `canonicalizePath`, and checks descendant-of-root. A path
- * that does not exist on disk is *not* an issue here — that case is
- * owned by `additional-context.path_resolves` (a warning). Non-existent
- * paths are skipped, not double-reported.
- *
- * Issues are emitted with:
- *   - `code: 'PathEscape'` (per F2)
- *   - `severity: 'error'`
- *   - `path: entry` — the original (un-resolved) path string from the
- *     overlay, so users can grep for it
- *   - `field: '/planner/additionalContext'` or `/proposer/additionalContext`
- *   - `message`: built via `createError('PathEscape', ...)` so the wording
- *     funnels through the central factory.
- *
- * The check never throws.
- */
+
 
 import path from 'node:path';
 
@@ -74,11 +48,7 @@ function evaluateEntry(
   snapshot: ValidationSnapshot,
 ): Issue | null {
   const absolute = path.isAbsolute(entry) ? entry : path.resolve(snapshot.projectRoot, entry);
-  // `canonicalizePath` falls back to `path.resolve` when the file is
-  // missing, so it does not throw; defensively wrap it anyway so a
-  // future change can never escalate a missing-path case into a thrown
-  // exception (the `path_resolves` invariant owns missing-path
-  // reporting).
+
   let canonical: string;
   try {
     canonical = canonicalizePath(absolute);

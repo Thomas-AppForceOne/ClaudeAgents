@@ -1,13 +1,4 @@
-/**
- * T1 Sprint 3 — the evidence-bundle verifier (F3.2).
- *
- * Covers contract criteria:
- *  - evidence_bundle_verifier_validates_against_schema (reuse Sprint-1
- *    validator; ajv errors surfaced, not swallowed)
- *  - evidence_bundle_join_key_invariant (set membership against the contract)
- *  - evidence_bundle_ref_integrity (<eventType>:<seq> resolves; empty array OK)
- *  - evidence_bundle_fail_carries_repro_and_delta (semantic re-assert)
- */
+
 import { describe, expect, it } from 'vitest';
 
 import { verifyEvidenceBundle, checkFailCompleteness } from '../../src/trace/evidence-bundle.js';
@@ -17,7 +8,6 @@ import type { TraceEvent } from '../../src/trace/events.js';
 const RUN_ID = '20260521T194720-6752';
 const SHA = 'c'.repeat(64);
 
-/** A small trace: an llmCall at seq 42 and a toolCall at seq 43. */
 function trace(): TraceEvent[] {
   return [
     {
@@ -52,7 +42,6 @@ function trace(): TraceEvent[] {
 
 const CONTRACT = [{ name: 'tls_required_for_sensitive_traffic' }, { name: 'prototype_pollution' }];
 
-/** A fully-valid bundle: one pass criterion, one fail criterion (complete). */
 function validBundle(): unknown {
   return {
     sprintNumber: 2,
@@ -98,12 +87,12 @@ describe('evidence_bundle_verifier_validates_against_schema', () => {
 
   it('rejects a verdict outside the enum and surfaces the ajv error (not swallowed)', () => {
     const bundle = validBundle() as { criteria: { verdict: string }[] };
-    bundle.criteria[0]!.verdict = 'almost'; // not in pass|fail|blocked|skipped
+    bundle.criteria[0]!.verdict = 'almost';
     const result = verifyEvidenceBundle(bundle, CONTRACT, trace());
     expect(result.schemaValid).toBe(false);
     expect(result.ok).toBe(false);
     expect(result.schemaErrors.length).toBeGreaterThan(0);
-    // The same Sprint-1 validator would reject it independently.
+
     expect(getEvaluatorEvidenceBundleValidator()(bundle)).toBe(false);
     expect(result.failures.some((f) => f.check === 'schema')).toBe(true);
   });
@@ -153,7 +142,7 @@ describe('evidence_bundle_ref_integrity', () => {
 
   it('rejects a ref whose eventType does not match the event at that sequence', () => {
     const bundle = validBundle() as { criteria: { evidence: { traceEventRefs: string[] } }[] };
-    // seq 42 is an llmCall, not a toolCall.
+
     bundle.criteria[0]!.evidence.traceEventRefs = ['toolCall:42'];
     const result = verifyEvidenceBundle(bundle, CONTRACT, trace());
     expect(result.ok).toBe(false);
@@ -205,10 +194,6 @@ describe('evidence_bundle_fail_carries_repro_and_delta', () => {
     expect(result.ok).toBe(false);
   });
 
-  // The semantic invariant is asserted IN ADDITION to the schema: a future
-  // schema relaxation must not silently drop the guarantee. We exercise the
-  // standalone predicate directly so its independence from the schema gate is
-  // demonstrable (the verifier wires this exact predicate).
   it('checkFailCompleteness names BOTH missing requirements for a bare fail criterion', () => {
     const missing = checkFailCompleteness({
       verdict: 'fail',

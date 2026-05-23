@@ -32,7 +32,7 @@ describe('loadStack', () => {
     const result = loadStack('web-node', invalidFixture);
     expect(result.sourceTier).toBe('builtin');
     const data = result.data as Record<string, unknown>;
-    // S2 loader must not enforce schemaVersion; it just round-trips.
+
     expect(data.schemaVersion).toBe(999);
   });
 

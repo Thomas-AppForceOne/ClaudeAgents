@@ -68,7 +68,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
         Record<string, unknown>
       >;
       expect(out.map((o) => o.name)).toEqual(['A', 'B', 'C', 'X', 'Y']);
-      // The B' override carries the higher tier's content (b-prime) at B's slot.
+
       expect(out[1]).toEqual({ name: 'B', description: 'b-prime', threshold: 8 });
     });
   });
@@ -123,8 +123,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
         },
       });
       expect((result.merged.stack as Record<string, unknown>).override).toEqual(['project-stack']);
-      // The block-level discard records discardedness for every splice point
-      // in `stack`.
+
       expect(result.discarded).toContain('stack.override');
     });
 
@@ -134,9 +133,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
         user: { runner: { thresholdOverride: 7 } },
         project: { runner: { discardInherited: true } },
       });
-      // Bare default for thresholdOverride is `undefined` per C3 — the
-      // field is omitted from the merged view; runner block becomes empty
-      // and is stripped.
+
       expect(result.merged).toEqual({});
       expect(result.discarded).toContain('runner.thresholdOverride');
     });
@@ -171,16 +168,13 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
           generator: { additionalRules: { discardInherited: true } },
         },
       });
-      // Bare default for additionalRules is [].
+
       expect((result.merged.generator as Record<string, unknown>).additionalRules).toEqual([]);
       expect(result.discarded).toContain('generator.additionalRules');
     });
 
     it('field-level wins over block-level when both set', () => {
-      // The block declares discardInherited: true which would normally
-      // drop `additionalRules` AND `additionalChecks` upstream contributions.
-      // But field-level `additionalRules.discardInherited: false` overrides
-      // for that one field — preserving its merge semantics.
+
       const result = cascadeOverlays({
         default: null,
         user: {
@@ -193,8 +187,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
           },
         },
       });
-      // Because the field-level says discardInherited: false, the user's
-      // 'user-rule' is preserved and 'project-rule' appends.
+
       expect((result.merged.generator as Record<string, unknown>).additionalRules).toEqual([
         'user-rule',
         'project-rule',
@@ -217,7 +210,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
       const issue = result.issues[0];
       expect(issue.code).toBe('MalformedInput');
       expect(issue.message).toContain('extra');
-      // Hard error: the cascade does not produce a merged view for this run.
+
       expect(result.merged).toEqual({});
     });
   });

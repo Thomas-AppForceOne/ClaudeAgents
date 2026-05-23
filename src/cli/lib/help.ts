@@ -1,20 +1,4 @@
-/**
- * R3 sprint 1 — help-text registry.
- *
- * Per the R3-locked help-output rule (PROJECT_CONTEXT.md): all help goes
- * to stdout and exits 0; help text never references maintainer-only
- * scripts and obeys the F4 prose discipline (no bare `npm`, `node`,
- * `Node`, or `MCP server` outside backticks).
- *
- * 80-col hard wrap, no ANSI color, R2 `install.sh --help` style: usage
- * line, flag/subcommand block, examples, exit codes.
- *
- * Subcommands that ship in S2-S4 already have help entries here so the
- * help surface is complete from S1 onward — a `gan stacks list --help`
- * works even though `gan stacks list` itself is a stub. This satisfies
- * F-AC8 (per-subcommand help) up front and keeps the prose-discipline
- * test honest across the whole help surface.
- */
+
 
 const HEADER = `gan — ClaudeAgents configuration tool`;
 
@@ -22,7 +6,6 @@ const SKILL_VS_CLI =
   `Note: to run a sprint, use the /gan skill in Claude Code; this CLI ` +
   `manages configuration only.`;
 
-/** Subcommand names in the order they appear in help output. */
 export const SUBCOMMAND_NAMES: readonly string[] = Object.freeze([
   'version',
   'validate',
@@ -35,7 +18,6 @@ export const SUBCOMMAND_NAMES: readonly string[] = Object.freeze([
   'help',
 ]);
 
-/** One-line description per top-level subcommand. */
 const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   version: 'Print API version, framework version, and on-disk schemas.',
   validate: 'Run validateAll() and print a structured report.',
@@ -48,10 +30,6 @@ const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   help: 'Show help for a subcommand.',
 });
 
-/**
- * Lines printed for the global flag block. Used both by the top-level
- * help and by subcommand help.
- */
 const GLOBAL_FLAGS_BLOCK: readonly string[] = Object.freeze([
   '  -h, --help              Show this help and exit.',
   '      --json              Emit JSON on stdout (read subcommands only).',
@@ -68,11 +46,6 @@ const EXIT_CODES_BLOCK: readonly string[] = Object.freeze([
   '  64  Bad CLI arguments',
 ]);
 
-/**
- * Render the top-level `gan --help` body. Always written to stdout, exit
- * 0. The contract in R3 spec acceptance criteria requires that this
- * surface lists every subcommand and mentions every global flag.
- */
 export function renderTopLevelHelp(): string {
   const lines: string[] = [];
   lines.push(HEADER);
@@ -106,7 +79,7 @@ interface SubcommandHelp {
   description: string;
   flags?: readonly string[];
   examples: readonly string[];
-  /** Subset of exit codes relevant to this subcommand. */
+
   exitCodes: readonly string[];
 }
 
@@ -304,12 +277,6 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
   },
 });
 
-/**
- * Render per-subcommand help. If the name is unknown, the function returns
- * the top-level help body (callers should treat unknown names as a
- * dispatcher-level concern; the help renderer is forgiving here so the
- * `help` subcommand and the bare `--help` paths both stay non-fatal).
- */
 export function renderSubcommandHelp(name: string): string {
   const entry = SUBCOMMAND_HELP[name];
   if (!entry) {
@@ -341,7 +308,6 @@ export function renderSubcommandHelp(name: string): string {
   return lines.join('\n');
 }
 
-/** Public list of subcommand names that have a help entry. */
 export function subcommandHelpNames(): readonly string[] {
   return Object.freeze(Object.keys(SUBCOMMAND_HELP).slice());
 }

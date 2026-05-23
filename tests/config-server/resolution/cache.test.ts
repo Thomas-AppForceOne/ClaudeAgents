@@ -51,7 +51,7 @@ describe('Cache singleton + composeResolvedConfig', () => {
       path.join(workRoot, '.claude', 'gan', 'project.md'),
       ['---', 'schemaVersion: 1', '---', '', ''].join('\n'),
     );
-    // A built-in stack so phase 1 has something to discover.
+
     const stacksDir = path.join(workRoot, 'stacks');
     mkdirSync(stacksDir, { recursive: true });
     writeFileSync(
@@ -81,24 +81,23 @@ describe('Cache singleton + composeResolvedConfig', () => {
 
   it('user-side disk edits do NOT invalidate the cache (frozen-snapshot rule)', async () => {
     const a = await composeResolvedConfig(workRoot);
-    // Change the project overlay on disk between calls; the cache must
-    // continue to serve the original snapshot.
+
     appendFileSync(path.join(workRoot, 'package.json'), '{}');
     const b = await composeResolvedConfig(workRoot);
     expect(stableStringify(a)).toBe(stableStringify(b));
-    // Active should still be empty (no package.json existed at first call).
+
     expect(b.stacks.active).toEqual([]);
   });
 
   it('invalidate(canonicalRoot) forces a fresh compose', async () => {
     const a = await composeResolvedConfig(workRoot);
     expect(a.stacks.active).toEqual([]);
-    // Add the package.json now.
+
     writeFileSync(path.join(workRoot, 'package.json'), '{}');
-    // Without invalidation, the cache returns the stale view.
+
     const stale = await composeResolvedConfig(workRoot);
     expect(stale.stacks.active).toEqual([]);
-    // Invalidate the entry; the next call recomputes.
+
     const cache = getResolvedConfigCache();
     cache.invalidate(cacheKeyForProjectRoot(workRoot));
     const fresh = await composeResolvedConfig(workRoot);
@@ -122,18 +121,17 @@ describe('Cache singleton + composeResolvedConfig', () => {
       const cache = getResolvedConfigCache();
       await composeResolvedConfig(workRoot);
       await composeResolvedConfig(otherRoot);
-      // Both must be cached (the singleton's size grew by two from the
-      // post-beforeEach state).
+
       const sized = cache as unknown as { size?: () => number };
       if (typeof sized.size === 'function') {
         expect(sized.size()).toBeGreaterThanOrEqual(2);
       }
-      // And invalidating one must not affect the other.
+
       cache.invalidate(cacheKeyForProjectRoot(workRoot));
       if (typeof sized.size === 'function') {
         expect(sized.size()).toBeGreaterThanOrEqual(1);
       }
-      // The other entry is still hit (no recompute = same object reference).
+
       const b1 = await composeResolvedConfig(otherRoot);
       const b2 = await composeResolvedConfig(otherRoot);
       expect(b1).toBe(b2);

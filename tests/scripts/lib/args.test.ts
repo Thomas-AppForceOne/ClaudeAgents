@@ -1,14 +1,4 @@
-/**
- * Unit tests for `scripts/lib/args.ts`.
- *
- * Exercises the documented surface:
- *   - recognised boolean flags (`--json`, `--quiet`, `--help`)
- *   - recognised string flag (`--project-root <value>`, `--project-root=value`)
- *   - unknown flags collected in `unknown` (no throw)
- *   - positionals (non-flag tokens)
- *   - canonical `projectRoot` derivation (default `process.cwd()`,
- *     overridable via `--project-root`)
- */
+
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseArgs } from '../../../scripts/lib/index.js';
@@ -78,8 +68,7 @@ describe('parseArgs (scripts)', () => {
 
   it('--project-root with no following value: collected as unknown (missing value)', () => {
     const r = parseArgs(['--project-root'], SPEC);
-    // No value follows → flagged as unknown so the caller can map to
-    // BAD_ARGS instead of inventing a value.
+
     expect(r.unknown).toEqual(['--project-root']);
   });
 
@@ -89,8 +78,7 @@ describe('parseArgs (scripts)', () => {
   });
 
   it('explicit --project-root canonicalises the supplied path', () => {
-    // Use a directory that definitely exists so canonicalizePath
-    // resolves through realpathSync.native.
+
     const target = path.resolve(process.cwd());
     const r = parseArgs(['--project-root', target], SPEC);
     expect(r.projectRoot).toBe(canonicalizePath(target));

@@ -1,26 +1,4 @@
-/**
- * R2 sprint 2 — happy-path install tests for `install.sh`.
- *
- * Covers S2-AC1..S2-AC10:
- *   AC1  — clean install end-to-end: symlinks, JSON, zones, .gitignore,
- *          no leftover `.tmp.*` files.
- *   AC2  — idempotency: a second run produces no duplicates and does
- *          not re-invoke `npm`.
- *   AC3  — version-probe triggers reinstall when the on-disk binary
- *          reports a version different from `package.json`.
- *   AC4  — `--no-claude-code` skips MCP registration entirely.
- *   AC5  — single backup per machine (re-run produces no second file).
- *   AC6  — sorted-key JSON write (lex order, 2-space indent, trailing
- *          newline).
- *   AC7  — stale-symlink prune (pre-seed broken symlinks → removed).
- *   AC8  — pre-existing `.gan/` is named, not a hard abort; final
- *          status mentions the path and a `rm -rf` hint in backticks.
- *   AC9  — outside a git repo: zones not created, validate skipped,
- *          symlinks + MCP still happen.
- *   AC10 — F4 install-path discipline: when `npm install -g .` fails,
- *          stderr uses framework prose (no Node/npm prose tokens) and
- *          the retry command appears in backticks.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
@@ -53,17 +31,17 @@ afterEach(() => {
 });
 
 interface SetupOptions {
-  /** Node version to report from the stub. Default `v20.10.0`. */
+
   nodeVersion?: string;
-  /** Initialise a git repo at `<root>/repo/`. Default true. */
+
   withRepo?: boolean;
-  /** Pre-existing `.gan/` directory at the repo top. Default false. */
+
   withPreexistingGan?: boolean;
-  /** Fake-config-server options. If omitted, no stub written. */
+
   configServer?: FakeConfigServerOptions;
-  /** Fake-npm options. If omitted, no stub written. */
+
   npm?: Omit<FakeNpmOptions, 'invocationLog'>;
-  /** If true, write a `claude` stub (default true). */
+
   withClaude?: boolean;
 }
 
@@ -123,9 +101,6 @@ describe('install.sh — S2 happy-path install', () => {
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // Real-file copies for every agent under `agents/` (NOT symlinks —
-    // post-symlink-to-copy migration). The install must be self-contained
-    // so the source repo can be moved or deleted post-install.
     const repoRoot = repoRootDir();
     const agentSrc = path.join(repoRoot, 'agents');
     for (const name of readdirSync(agentSrc)) {
@@ -134,24 +109,19 @@ describe('install.sh — S2 happy-path install', () => {
       const stat = lstatSync(target);
       expect(stat.isSymbolicLink()).toBe(false);
       expect(stat.isFile()).toBe(true);
-      // Content matches the source.
+
       expect(readFileSync(target, 'utf8')).toBe(readFileSync(path.join(agentSrc, name), 'utf8'));
     }
 
-    // Real-directory copy at `~/.claude/skills/gan` (NOT a symlink).
     const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
     const skillStat = lstatSync(skillTarget);
     expect(skillStat.isSymbolicLink()).toBe(false);
     expect(skillStat.isDirectory()).toBe(true);
-    // Content matches the source — at least SKILL.md.
+
     expect(readFileSync(path.join(skillTarget, 'SKILL.md'), 'utf8')).toBe(
       readFileSync(path.join(repoRoot, 'skills', 'gan', 'SKILL.md'), 'utf8'),
     );
 
-    // `~/.claude.json` written with the registration entry. The command
-    // is the absolute path to the bin (resolved via `command -v` at
-    // install time) so macOS GUI-launched apps that inherit a minimal
-    // PATH can still find the bin.
     const cj = readClaudeJson(tmp.home);
     expect(cj).not.toBeNull();
     const mcp = (cj!.parsed as { mcpServers: Record<string, unknown> }).mcpServers;
@@ -166,10 +136,8 @@ describe('install.sh — S2 happy-path install', () => {
     expect(path.isAbsolute(entry.command)).toBe(true);
     expect(entry.command.endsWith('claudeagents-config-server')).toBe(true);
 
-    // No leftover atomic-write tmp files.
     assertNoTmpFiles(tmp.home);
 
-    // Zones created in the git repo, with .gitignore entries.
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(true);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(true);
     const gi = readFileSync(path.join(cwd, '.gitignore'), 'utf8');
@@ -189,26 +157,20 @@ describe('install.sh — S2 happy-path install', () => {
     const r2 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r2.exitCode).toBe(0);
 
-    // The version-probe matches package.json on both runs, so `npm
-    // install` is never invoked. (Read-only `npm root -g` calls from
-    // `create_builtin_stacks_symlink` are benign and ignored here.)
     const stateChanging = readNpmInvocations(npmLog).filter((line) => !line.startsWith('root -g'));
     expect(stateChanging).toEqual([]);
 
-    // .gitignore must not have duplicates.
     const gi = readFileSync(path.join(cwd, '.gitignore'), 'utf8');
     const stateLines = gi.split('\n').filter((l) => l === '.gan-state/');
     const cacheLines = gi.split('\n').filter((l) => l === '.gan-cache/');
     expect(stateLines).toHaveLength(1);
     expect(cacheLines).toHaveLength(1);
 
-    // Skill directory still exists as a real directory after re-run.
     const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
     const skillStat = lstatSync(skillTarget);
     expect(skillStat.isSymbolicLink()).toBe(false);
     expect(skillStat.isDirectory()).toBe(true);
 
-    // No tmp leftovers from atomic writes.
     assertNoTmpFiles(tmp.home);
   });
 
@@ -222,7 +184,7 @@ describe('install.sh — S2 happy-path install', () => {
     expect(result.exitCode).toBe(0);
     const calls = readNpmInvocations(npmLog);
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    // The expected call is `npm install -g .`.
+
     expect(calls[0]).toContain('install');
     expect(calls[0]).toContain('-g');
   });
@@ -242,11 +204,10 @@ describe('install.sh — S2 happy-path install', () => {
     });
     expect(result.exitCode).toBe(0);
     expect(existsSync(path.join(tmp.home, '.claude.json'))).toBe(false);
-    // Defense in depth: no backup either.
+
     const stragglers = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.backup-'));
     expect(stragglers).toEqual([]);
 
-    // Symlinks still happened.
     expect(existsSync(path.join(tmp.home, '.claude', 'skills', 'gan'))).toBe(true);
   });
 
@@ -257,7 +218,6 @@ describe('install.sh — S2 happy-path install', () => {
       npm: { exitCode: 0 },
     });
 
-    // Pre-seed an existing `~/.claude.json` so the backup path is taken.
     writeFileSync(path.join(tmp.home, '.claude.json'), '{"existing":true}\n');
 
     const r1 = await runInstall([], { home: tmp.home, pathOverride, cwd });
@@ -278,8 +238,6 @@ describe('install.sh — S2 happy-path install', () => {
       npm: { exitCode: 0 },
     });
 
-    // Pre-seed `~/.claude.json` with keys in *non-sorted* order to
-    // force the sort path to actually do work.
     writeFileSync(
       path.join(tmp.home, '.claude.json'),
       JSON.stringify({ z: 1, a: 2, mcpServers: { z: { args: [] } } }, null, 2) + '\n',
@@ -292,7 +250,6 @@ describe('install.sh — S2 happy-path install', () => {
     expect(cj).not.toBeNull();
     assertSortedKeys(cj!.raw);
 
-    // Belt-and-braces: the registration entry made it through.
     const mcp = (cj!.parsed as { mcpServers: Record<string, unknown> }).mcpServers;
     expect(mcp['claudeagents-config']).toBeDefined();
 
@@ -306,7 +263,6 @@ describe('install.sh — S2 happy-path install', () => {
       npm: { exitCode: 0 },
     });
 
-    // Pre-seed broken symlinks under both directories.
     mkdirSync(path.join(tmp.home, '.claude', 'agents'), { recursive: true });
     mkdirSync(path.join(tmp.home, '.claude', 'skills'), { recursive: true });
     const broken1 = path.join(tmp.home, '.claude', 'agents', 'retired-agent.md');
@@ -319,10 +275,9 @@ describe('install.sh — S2 happy-path install', () => {
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // Both broken symlinks should be gone after pruning.
     expect(existsSync(broken1)).toBe(false);
     expect(existsSync(broken2)).toBe(false);
-    // Lstat must also fail (symlink itself removed, not just dangling).
+
     expect(() => lstatSync(broken1)).toThrow();
     expect(() => lstatSync(broken2)).toThrow();
   });
@@ -338,12 +293,10 @@ describe('install.sh — S2 happy-path install', () => {
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // The directory still exists (the installer must not delete it).
     expect(existsSync(path.join(cwd, '.gan'))).toBe(true);
 
-    // The path is named in stdout.
     expect(result.stdout).toContain(path.join(cwd, '.gan'));
-    // And the remediation hint mentions `rm -rf` in backticks.
+
     expect(result.stdout).toMatch(/`rm -rf [^`]+\.gan`/);
   });
 
@@ -353,16 +306,12 @@ describe('install.sh — S2 happy-path install', () => {
       configServer: { version: v },
       npm: { exitCode: 0 },
     });
-    // Create an EMPTY .gan/ at the repo top (no README, no nested files).
+
     mkdirSync(path.join(cwd, '.gan'), { recursive: true });
 
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // The empty directory must NOT be flagged: no "legacy `.gan/`" hint,
-    // no `rm -rf` remediation, no mention of the .gan path in the
-    // final-status block. The directory itself remains on disk
-    // (installer never deletes user content).
     expect(result.stdout).not.toContain('legacy `.gan/`');
     expect(result.stdout).not.toMatch(/`rm -rf [^`]+\.gan`/);
     expect(existsSync(path.join(cwd, '.gan'))).toBe(true);
@@ -375,34 +324,28 @@ describe('install.sh — S2 happy-path install', () => {
       npm: { exitCode: 0 },
       withRepo: false,
     });
-    // Run with cwd at the tmp root (no git repo above).
+
     const cwd = tmp.root;
 
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).toBe(0);
 
-    // No zones created at the tmp root.
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(false);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(false);
 
-    // Symlinks + MCP registration still happened.
     expect(existsSync(path.join(tmp.home, '.claude', 'skills', 'gan'))).toBe(true);
     expect(existsSync(path.join(tmp.home, '.claude.json'))).toBe(true);
   });
 
   it('S2-AC10: F4 install-path discipline — npm failure stderr uses framework prose, no Node/npm prose tokens', async () => {
     const { tmp, pathOverride, cwd } = setup({
-      // Leave config-server stub off so version-probe is empty and the
-      // installer takes the `install_mcp_server` path.
+
       npm: { exitCode: 1, stderr: 'npm ERR! E_FAKE' },
     });
 
     const result = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(result.exitCode).not.toBe(0);
 
-    // The installer's own message (not the captured npm stderr) must
-    // satisfy CC-PROSE. Find lines from the installer (prefixed with
-    // `error:`) and run the prose check against those.
     const errorLines = result.stderr
       .split('\n')
       .filter((l) => l.startsWith('error:'))
@@ -416,18 +359,11 @@ describe('install.sh — S2 happy-path install', () => {
       );
     }
 
-    // The retry-command hint must appear in backticks.
     expect(errorLines).toMatch(/`npm install -g \.`/);
   });
 
   it('I2 sprint 3a: non-TTY install adds only category 1 (framework MCP) to permissions.allow', async () => {
-    // Per `specifications/I2-install-user-facing-surfaces.md` § "Non-TTY
-    // behavior": when stdin/stdout are not a TTY (CI, scripted
-    // invocations, every test in this file), `configure_permissions`
-    // skips the prompt sequence and adds only category 1 — the
-    // framework MCP server, the only category whose absence would
-    // break /gan entirely. Other categories stay unset; the user can
-    // re-run install.sh interactively to add them.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -442,10 +378,8 @@ describe('install.sh — S2 happy-path install', () => {
     const raw = readFileSync(settingsPath, 'utf8');
     const parsed = JSON.parse(raw) as { permissions: { allow: string[] } };
 
-    // Category 1 is present.
     expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
-    // Categories 2+ are NOT present (sample assertions on entries that
-    // would be added if the merge over-fired).
+
     expect(parsed.permissions.allow).not.toContain('Read');
     expect(parsed.permissions.allow).not.toContain('Write');
     expect(parsed.permissions.allow).not.toContain('Bash(git status:*)');
@@ -453,10 +387,7 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('I2 sprint 3a: settings.json is written sorted-key + 2-space-indent + trailing newline', async () => {
-    // Mirror of the existing `~/.claude.json` write contract (S2-AC6),
-    // applied to the new `~/.claude/settings.json` path. Keys must be
-    // sorted; indentation must be 2 spaces; the file must end with a
-    // single newline.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -469,31 +400,23 @@ describe('install.sh — S2 happy-path install', () => {
     const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
     const raw = readFileSync(settingsPath, 'utf8');
     expect(raw.endsWith('\n')).toBe(true);
-    expect(raw.endsWith('\n\n')).toBe(false); // exactly one trailing newline.
-    // 2-space indent: the first nested key after the opening brace
-    // should be preceded by exactly two spaces.
+    expect(raw.endsWith('\n\n')).toBe(false);
+
     expect(raw).toMatch(/\n  "permissions":/);
-    // Sorted keys: re-stringify with sortedness and confirm match.
+
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     assertSortedKeys(raw);
     expect(typeof parsed['permissions']).toBe('object');
   });
 
   it('I2 sprint 3a: pre-existing user entries in permissions.allow survive the merge', async () => {
-    // The merge must be additive, not destructive. A user who
-    // pre-authored their own `permissions.allow` entry — say, a
-    // project-specific tool the framework knows nothing about — must
-    // see that entry preserved after install. Otherwise the install
-    // would silently destroy user customisation, the worst kind of
-    // failure mode.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
       npm: { exitCode: 0 },
     });
 
-    // Pre-seed a settings.json with a user entry the framework would
-    // not add on its own.
     const settingsPath = path.join(tmp.home, '.claude', 'settings.json');
     mkdirSync(path.dirname(settingsPath), { recursive: true });
     writeFileSync(
@@ -512,10 +435,7 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('I2 sprint 3b: --approve-all-permissions adds every catalog tool to permissions.allow', async () => {
-    // Per `specifications/I2-install-user-facing-surfaces.md` § "Override
-    // flags": `--approve-all-permissions` grants categories 1-8 without
-    // prompting. Useful for CI runners that test the framework end-to-
-    // end.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -533,15 +453,14 @@ describe('install.sh — S2 happy-path install', () => {
     const raw = readFileSync(settingsPath, 'utf8');
     const parsed = JSON.parse(raw) as { permissions: { allow: string[] } };
 
-    // Spot-check entries from each non-required category.
-    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*'); // cat 1
-    expect(parsed.permissions.allow).toContain('Read'); // cat 2
-    expect(parsed.permissions.allow).toContain('Agent'); // cat 3
-    expect(parsed.permissions.allow).toContain('Bash(git status:*)'); // cat 4
-    expect(parsed.permissions.allow).toContain('Bash(git commit:*)'); // cat 5
-    expect(parsed.permissions.allow).toContain('Bash(npm test:*)'); // cat 6
-    expect(parsed.permissions.allow).toContain('Bash(npm install:*)'); // cat 7
-    expect(parsed.permissions.allow).toContain('Bash(ls:*)'); // cat 8
+    expect(parsed.permissions.allow).toContain('mcp__claudeagents-config__*');
+    expect(parsed.permissions.allow).toContain('Read');
+    expect(parsed.permissions.allow).toContain('Agent');
+    expect(parsed.permissions.allow).toContain('Bash(git status:*)');
+    expect(parsed.permissions.allow).toContain('Bash(git commit:*)');
+    expect(parsed.permissions.allow).toContain('Bash(npm test:*)');
+    expect(parsed.permissions.allow).toContain('Bash(npm install:*)');
+    expect(parsed.permissions.allow).toContain('Bash(ls:*)');
   });
 
   it('I2 sprint 3b: --minimal-permissions adds only category 1', async () => {
@@ -586,11 +505,7 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('I2 sprint 3b: idempotent re-run after categories already granted adds no duplicates', async () => {
-    // Pre-seed settings.json with categories 1 + 2 entries already
-    // present. A re-run (non-TTY default = minimal, which is just
-    // category 1) must not duplicate them and must not add anything
-    // further: the additive merge sees every approved entry is already
-    // present and the file content is preserved.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -619,22 +534,19 @@ describe('install.sh — S2 happy-path install', () => {
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
       permissions: { allow: string[] };
     };
-    // No duplicates: each entry appears exactly once.
+
     const counts = new Map<string, number>();
     for (const t of parsed.permissions.allow) counts.set(t, (counts.get(t) ?? 0) + 1);
     for (const [, n] of counts) expect(n).toBe(1);
-    // Pre-existing entries preserved exactly.
+
     for (const t of preExisting) expect(parsed.permissions.allow).toContain(t);
-    // Category 3+ entries still absent (re-run did not add new categories).
+
     expect(parsed.permissions.allow).not.toContain('Agent');
     expect(parsed.permissions.allow).not.toContain('Bash(git status:*)');
   });
 
   it('I2 sprint 3b: --uninstall strips framework-added entries but preserves user-authored entries', async () => {
-    // Per the I2 acceptance criterion: "removes only the entries
-    // matching the framework's category templates; user-authored entries
-    // in `permissions.allow` are left intact." Pre-seed a mix of
-    // framework + user entries; uninstall; assert the result.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -673,20 +585,16 @@ describe('install.sh — S2 happy-path install', () => {
       permissions?: { allow?: string[] };
     };
     const remaining = parsed.permissions?.allow ?? [];
-    // User entries preserved.
+
     expect(remaining).toContain('MyOwnTool');
     expect(remaining).toContain('AnotherUserTool');
-    // Framework entries gone.
+
     expect(remaining).not.toContain('mcp__claudeagents-config__*');
     expect(remaining).not.toContain('Read');
   });
 
   it('I2 sprint 4: --reconfigure-permissions runs cleanly in non-TTY mode (no prompt; no error)', async () => {
-    // The interactive re-prompt is only useful in TTY mode; in non-TTY
-    // the flag is a no-op (the default-minimal branch fires regardless).
-    // This test confirms the flag does not crash, error, or change the
-    // result vs. a default install — a regression that left the flag
-    // unparsed would surface as an "unknown flag" exit-2 error.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -704,14 +612,7 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('I2 sprint 4: --no-claude-code skips configure_permissions (no settings.json written)', async () => {
-    // Regression guard for the wiring: configure_permissions lives
-    // inside the `if [ "$skip_claude_code" -eq 0 ]` block in main(),
-    // so --no-claude-code must skip it entirely. The original
-    // --no-claude-code test only asserted `~/.claude.json` is absent;
-    // this asserts the symmetric `~/.claude/settings.json` is also
-    // absent. Without the guard, a refactor that moved the call out
-    // of the block would silently start writing settings.json on CI
-    // installs that opted out of Claude Code entirely.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },
@@ -729,16 +630,7 @@ describe('install.sh — S2 happy-path install', () => {
   });
 
   it('I2 sprint 1: post-install success message contains both the restart hint and the `/gan --help` hint', async () => {
-    // Per `specifications/I2-install-user-facing-surfaces.md` § "Post-
-    // install message: name the next step", the success message must
-    // tell the user (a) to restart Claude Code and (b) what to type
-    // first after restart. The `/gan --help` hint is significant because
-    // it short-circuits before validation, giving a fresh user something
-    // concrete to run before they have authored an overlay or a sprint.
-    //
-    // Loose substring assertions so trivial wording adjustments do not
-    // break the test, but tight enough to catch either line being
-    // dropped wholesale.
+
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = setup({
       configServer: { version: v },

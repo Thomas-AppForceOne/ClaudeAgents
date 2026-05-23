@@ -1,15 +1,4 @@
-/**
- * M2 barrel — prerequisite check fires at module-evaluation time.
- *
- * The barrel runs `docker --version` via `child_process.execFileSync`
- * before re-exporting any utility. We exercise both branches:
- *
- *   1. **Failure path.** `execFileSync` is mocked to throw; importing
- *      the barrel rejects with a `ConfigServerError` whose message
- *      includes the manifest's `errorHint`.
- *   2. **Success path.** `execFileSync` is mocked to return successfully;
- *      the barrel exposes all five manifest names.
- */
+
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
 

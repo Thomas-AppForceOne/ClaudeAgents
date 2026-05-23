@@ -1,17 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust revoke --project-root DIR [--json]`.
- *
- * Calls R1's `trustRevoke({projectRoot}, {homeDir})` in-process.
- * `--project-root` is REQUIRED — trust-mutating subcommands never
- * default to the current working directory. HOME is read from
- * `process.env.HOME ?? os.homedir()`.
- *
- * Exit codes:
- *   - 0  success (whether or not any approval was actually removed).
- *   - 1  generic failure (e.g. trust cache I/O error).
- *   - 5  framework library unreachable.
- *   - 64 bad CLI arguments (missing `--project-root`).
- */
+
 
 import os from 'node:os';
 

@@ -59,9 +59,7 @@ describe('validateAll', () => {
     const result = validateAll({ projectRoot: invalidSchemaMismatch });
     const schemaMismatches = result.issues.filter((i) => i.code === 'SchemaMismatch');
     expect(schemaMismatches.length).toBeGreaterThan(0);
-    // Every schema-mismatch issue from this fixture should carry a non-empty
-    // field (JSON-pointer-style) tying the message to a specific path in the
-    // YAML body.
+
     for (const issue of schemaMismatches) {
       expect(typeof issue.field).toBe('string');
       expect((issue.field ?? '').length).toBeGreaterThan(0);
@@ -70,14 +68,13 @@ describe('validateAll', () => {
   });
 
   it('returns multiple issues for a file with multiple schema violations', () => {
-    // The fixture has TWO violations: securitySurfaces[0] missing 'template',
-    // and secretsGlob[0] violating pattern "^[^.]". Both must be reported.
+
     const result = validateAll({ projectRoot: invalidSchemaMismatch });
     const issuesForFile = result.issues.filter(
       (i) => i.code === 'SchemaMismatch' && (i.path ?? '').endsWith('web-node.md'),
     );
     expect(issuesForFile.length).toBeGreaterThanOrEqual(2);
-    // One of them mentions securitySurfaces (missing template), one mentions secretsGlob.
+
     const mentionsTemplate = issuesForFile.some(
       (i) => i.message.includes('template') || (i.field ?? '').includes('securitySurfaces'),
     );
@@ -101,7 +98,7 @@ describe('validateAll', () => {
     const missing = findIssue(result.issues, (i) => i.code === 'MissingFile');
     expect(missing).toBeTruthy();
     expect(missing!.message).toContain('never-defined-stack');
-    // The issue is raised against the offending overlay file.
+
     expect(missing!.path).toContain('project.md');
   });
 
@@ -116,17 +113,12 @@ describe('validateAll', () => {
   });
 
   it('does not halt the pipeline on a single bad file (collects across the project)', () => {
-    // The invalid-schema-mismatch fixture has only one stack file; no overlay.
-    // Sanity check that the pipeline returns issues without throwing.
+
     expect(() => validateAll({ projectRoot: invalidSchemaMismatch })).not.toThrow();
   });
 
   it('surfaces both invariants in one run for the invariant-multi-violation fixture', () => {
-    // The fixture combines two invariants:
-    //  - cacheEnv.no_conflict (NODE_VERSION 20 vs 22 across two built-in stacks)
-    //  - path.escape (proposer.additionalContext: ../../etc/passwd)
-    // Both must surface in a single validateAll() pass — phase 3 runs every
-    // invariant without short-circuit.
+
     const result = validateAll({ projectRoot: invariantMultiViolation });
     const cacheEnvFired = result.issues.find(
       (i) =>
@@ -284,9 +276,7 @@ describe('validateOverlay', () => {
   });
 
   it('flags MissingFile on the invalid-missing-file project overlay (cross-ref check is in validateAll)', () => {
-    // validateOverlay runs body schema validation only; cross-overlay
-    // reference checks live in validateAll's phase 1. The overlay itself
-    // is structurally valid.
+
     const result = validateOverlay({ projectRoot: invalidMissingFile, tier: 'project' });
     expect(result.issues).toEqual([]);
   });
@@ -309,10 +299,7 @@ describe('phase 1 discovery (smoke)', () => {
   });
 
   it('enumerates built-in stacks from BOTH packageRoot/stacks and projectRoot/stacks (dual fallback)', () => {
-    // Set up a tmp packageRoot with `stacks/web-node.md`, distinct from the
-    // js-ts-minimal fixture's own `stacks/web-node.md`. Phase 1 must enumerate
-    // both, keyed by absolute path — same stack name in both directories
-    // surfaces two `builtin:` rows.
+
     const pkgRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-pkg-')));
     const projRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-proj-')));
     try {
@@ -333,13 +320,9 @@ describe('phase 1 discovery (smoke)', () => {
       const builtinRows = Array.from(snapshot.stackFiles.entries()).filter(([k]) =>
         k.startsWith('builtin:'),
       );
-      // Both web-node files surface as separate `builtin:` rows (different
-      // absolute paths → different keys).
+
       expect(builtinRows.length).toBeGreaterThanOrEqual(2);
 
-      // The snapshot's project-tier rows go through `canonicalizePath`, which
-      // lowercases on Darwin / Win32. Compare via case-insensitive prefix
-      // checks so the assertion is portable.
       const lc = (s: string) => s.toLowerCase();
       const paths = builtinRows.map(([, row]) => row.path);
       const underPkg = paths.find((p) => lc(p).startsWith(lc(pkgRoot)));
@@ -358,7 +341,7 @@ describe('MCP transport — validateAll over stdio (subprocess)', () => {
   it('responds to validateAll via tools/call with an issue list', async () => {
     const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
     if (!existsSync(distEntry)) {
-      // The build is the discriminator's job; skip if it has not yet run.
+
       return;
     }
     const child = spawn(process.execPath, [distEntry], {
@@ -438,7 +421,7 @@ describe('MCP transport — validateAll over stdio (subprocess)', () => {
     const text = callResp!.result.content[0].text;
     const payload = JSON.parse(text) as { issues: Issue[] };
     expect(Array.isArray(payload.issues)).toBe(true);
-    // The fixture has at least 2 schema-mismatch issues.
+
     expect(payload.issues.length).toBeGreaterThan(0);
     expect(payload.issues.some((i) => i.code === 'SchemaMismatch')).toBe(true);
   });

@@ -1,19 +1,4 @@
-/**
- * Q5 Sprint 2 — documentation-surface instantiation tests.
- *
- * Exercises `buildDocumentationSurfacesInstantiated` and the union
- * `isKnownSurfaceId` existence-check as pure functions over typed data,
- * mirroring the security-surface coverage in `plan-builder.test.ts`. The
- * documentation family instantiates through the identical C1 protocol, so
- * these tests assert the same guarantees: verbatim template, scope ∩
- * stack-scope intersect, keyword gate, cross-stack `<stack>.<id>`
- * namespace (never deduped by bare id), and the polyglot
- * cross-contamination guard.
- *
- * Test naming is load-bearing: the discriminator greps for the labels
- * 'instantiation', 'cross-stack', 'polyglot', 'cross-contamination',
- * 'suppress', 'deterministic', 'web-node only'.
- */
+
 
 import { describe, expect, it } from 'vitest';
 
@@ -27,14 +12,6 @@ import type {
   WorktreeState,
 } from '../../../src/agents/evaluator-core/index.js';
 
-// ---- Fixture helpers ----------------------------------------------------
-
-/**
- * The `public_contract_completeness` template, authored verbatim here so
- * the verbatim-instantiation assertions compare against a fixed string
- * rather than re-reading the stack file (which would make the test pass
- * trivially even if instantiation mangled the template).
- */
 const DOC_PUBLIC_CONTRACT_TEMPLATE =
   "Every exported function, class, or type documents each parameter's meaning, " +
   'failure modes, side effects, and invariants.';
@@ -46,8 +23,7 @@ function webNodeStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
   return {
     name: 'web-node',
     scope: ['**/*.ts', '**/*.tsx'],
-    // A security surface alongside the doc surfaces, so the union
-    // existence-check has a real security id to find in the same stack.
+
     securitySurfaces: [
       {
         id: 'route_input_validation',
@@ -73,19 +49,13 @@ function webNodeStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
   };
 }
 
-// A second active stack that declares the SAME bare documentation-surface
-// id as web-node, over a scope DISJOINT from web-node's `.ts` glob (it
-// scopes `.synth` files only). The disjoint scope is what makes the
-// cross-contamination guard testable: a `.synth` file is in this stack's
-// scope but not web-node's, so web-node's surfaces must never match it
-// even when it carries web-node's keyword.
 function secondStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
   return {
     name: 'synthetic-second',
     scope: ['**/*.synth'],
     documentationSurfaces: [
       {
-        // Deliberately the SAME bare id as web-node's first doc surface.
+
         id: 'public_contract_completeness',
         template: 'synthetic-second variant of the public-contract rule',
         triggers: {
@@ -96,8 +66,6 @@ function secondStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
     ],
   };
 }
-
-// ---- Tests --------------------------------------------------------------
 
 describe('buildDocumentationSurfacesInstantiated', () => {
   it('instantiation, web-node only — keyword fires in scope yields one verbatim row', () => {
@@ -118,15 +86,13 @@ describe('buildDocumentationSurfacesInstantiated', () => {
 
     const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
 
-    // The keyword surface fires (export function) AND the scope-only
-    // surface fires (any in-scope .ts) → two rows.
     const ids = rows.map((r) => `${r.stack}.${r.id}`);
     expect(ids).toContain('web-node.public_contract_completeness');
     expect(ids).toContain('web-node.comments_explain_why_not_what');
 
     const pc = rows.find((r) => r.id === 'public_contract_completeness');
     expect(pc).toBeTruthy();
-    // Template is verbatim, byte-for-byte (no interpolation per C1).
+
     expect(pc!.templateText).toBe(DOC_PUBLIC_CONTRACT_TEMPLATE);
     expect(pc!.triggerEvidence.keywordsHit).toEqual(['export function']);
     expect(pc!.appliesToFiles).toEqual(['src/api.ts']);
@@ -137,7 +103,7 @@ describe('buildDocumentationSurfacesInstantiated', () => {
       activeStacks: [webNodeStack()],
       mergedSplicePoints: {},
     };
-    // A .md file is outside web-node's scope (**/*.ts, **/*.tsx).
+
     const sprintPlan: SprintPlan = { affectedFiles: ['docs/README.md'], criteria: [] };
     const worktree: WorktreeState = {
       files: ['docs/README.md'],
@@ -157,15 +123,14 @@ describe('buildDocumentationSurfacesInstantiated', () => {
     const sprintPlan: SprintPlan = { affectedFiles: ['src/internal.ts'], criteria: [] };
     const worktree: WorktreeState = {
       files: ['src/internal.ts'],
-      // No `export …` keyword present: the keyworded surface must NOT fire.
+
       fileContents: { 'src/internal.ts': 'const local = 1;\n' },
     };
 
     const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
 
     const ids = rows.map((r) => r.id);
-    // The keyworded surface is absent; the scope-only surface still fires
-    // because the file is in scope (a scope-only surface needs no keyword).
+
     expect(ids).not.toContain('public_contract_completeness');
     expect(ids).toContain('comments_explain_why_not_what');
   });
@@ -189,27 +154,19 @@ describe('buildDocumentationSurfacesInstantiated', () => {
 
     const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
 
-    // Both same-id surfaces present, keyed by the qualified <stack>.<id> —
-    // never deduplicated by the bare id `public_contract_completeness`.
     const sameIdRows = rows.filter((r) => r.id === 'public_contract_completeness');
     expect(sameIdRows.length).toBe(2);
     const qualified = sameIdRows.map((r) => `${r.stack}.${r.id}`);
     expect(qualified).toContain('web-node.public_contract_completeness');
     expect(qualified).toContain('synthetic-second.public_contract_completeness');
 
-    // Output sorted by (stack, id): synthetic-second sorts before web-node.
     const allKeys = rows.map((r) => `${r.stack}.${r.id}`);
     const sortedKeys = [...allKeys].sort((a, b) => a.localeCompare(b));
     expect(allKeys).toEqual(sortedKeys);
   });
 
   it('polyglot cross-contamination — a doc surface from stack A never fires on a stack-B-only file', () => {
-    // web-node's doc surfaces are scoped to .ts/.tsx; synthetic-second's to
-    // **/*.synth (disjoint). Touch ONLY a `.synth` file that deliberately
-    // carries web-node's `export function` keyword. web-node's surface must
-    // emit NO row (the .synth file is outside web-node's stack scope), even
-    // though the keyword is present — that is the guard. synthetic-second's
-    // surface fires, since the file is in its scope.
+
     const snapshot: EvaluatorCoreSnapshot = {
       activeStacks: [webNodeStack(), secondStack()],
       mergedSplicePoints: {},
@@ -222,11 +179,9 @@ describe('buildDocumentationSurfacesInstantiated', () => {
 
     const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
 
-    // Zero web-node rows: its surfaces never saw the out-of-scope file.
     const webNodeRows = rows.filter((r) => r.stack === 'web-node');
     expect(webNodeRows).toEqual([]);
 
-    // synthetic-second's surface fired on its own in-scope file.
     const syn = rows.find((r) => r.stack === 'synthetic-second');
     expect(syn).toBeTruthy();
     expect(syn!.appliesToFiles).toEqual(['data/decoy.synth']);
@@ -283,10 +238,7 @@ describe('isKnownSurfaceId (suppress union existence-check)', () => {
   });
 
   it('suppress — drops the targeted doc criterion while the other doc criteria remain', () => {
-    // Model the suppress behaviour the proposer applies: instantiate, then
-    // filter out any qualified id the user listed in suppressSurfaces. The
-    // existence-check above governs whether that listing is a real drop or
-    // an unknown-id warning; here we assert the drop itself.
+
     const sprintPlan: SprintPlan = { affectedFiles: ['src/api.ts'], criteria: [] };
     const worktree: WorktreeState = {
       files: ['src/api.ts'],
@@ -298,10 +250,9 @@ describe('isKnownSurfaceId (suppress union existence-check)', () => {
     const kept = rows.filter((r) => !suppress.includes(`${r.stack}.${r.id}`));
     const keptIds = kept.map((r) => `${r.stack}.${r.id}`);
 
-    // The suppressed criterion is gone; the other doc criterion remains.
     expect(keptIds).not.toContain('web-node.comments_explain_why_not_what');
     expect(keptIds).toContain('web-node.public_contract_completeness');
-    // The suppression target was a real union member (a valid drop).
+
     expect(isKnownSurfaceId(snapshot, suppress[0]!)).toBe(true);
   });
 });

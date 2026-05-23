@@ -1,33 +1,4 @@
-/**
- * T1 Sprint 1 — round-trip validation tests for the three new schemas
- * (`run-trace-v1.json`, `run-trace-index-v1.json`,
- * `evaluator-evidence-bundle-v1.json`).
- *
- * The schemas are exercised through the SAME pinned ajv setup the runtime
- * uses (`getRunTraceValidator` / `getRunTraceIndexValidator` /
- * `getEvaluatorEvidenceBundleValidator` in `validation/schema-check.ts`,
- * compiled under `strict: true`, `allErrors: true`, `useDefaults: false`)
- * — not a parallel ajv configuration. A schema-authoring mistake (e.g. a
- * strict-mode-illegal construct) surfaces here as a compile-time throw,
- * which is the point: a malformed schema must fail CI, not a user's run.
- *
- * Coverage:
- *   - F1.1: one valid example of EACH of the seven event classes
- *     validates; a malformed/missing-envelope event is rejected; a
- *     known-class event missing a required class-specific field is
- *     rejected.
- *   - F1.2 (forward-compat): a documented v1-reader skip routine tolerates
- *     (a) an unknown-but-additive discriminator value within a known class
- *     and (b) an unknown event-class type, skipping the latter with a
- *     structured warning rather than throwing.
- *   - F1.3: a valid index validates; a malformed index is rejected.
- *   - F1.4: a fully-populated bundle validates; the conditional-required
- *     contract (fail ⇒ reproductionCommand + deltaFromContract; pass ⇒
- *     reproductionCommand) is enforced; a skipped criterion with empty
- *     traceEventRefs validates.
- *   - Field encodings: representative valid values pass and at least one
- *     out-of-encoding value per constraint is rejected.
- */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -37,14 +8,12 @@ import {
 } from '../../src/config-server/validation/schema-check.js';
 import { runTraceV1 } from '../../src/config-server/schemas-bundled.js';
 
-/** Common envelope shared by every event example. */
 const ENVELOPE = {
   sequenceNumber: 0,
   timestamp: '2026-05-21T19:47:20.123Z',
   runId: '20260521T194720-6752',
 } as const;
 
-/** One valid example per event class (envelope + class-specific fields). */
 const VALID_EVENTS: Record<string, Record<string, unknown>> = {
   orchestratorMilestone: {
     ...ENVELOPE,
@@ -124,10 +93,7 @@ describe('run-trace-v1 schema: the seven event classes', () => {
   });
 
   it('uses a oneOf discriminated union over exactly the seven known classes', () => {
-    // Structural assertion: the schema's known set is the seven classes,
-    // keyed on the eventType discriminator (oneOf branches each pin an
-    // eventType const). This is the v1 KNOWN set; tolerant skipping of
-    // unknowns is a reader concern (see the forward-compat suite below).
+
     const allOf = runTraceV1.allOf as Array<Record<string, unknown>>;
     const unionEntry = allOf.find((e) => Array.isArray(e.oneOf));
     expect(unionEntry).toBeTruthy();
@@ -235,22 +201,6 @@ describe('run-trace-v1 schema: field-encoding constraints', () => {
   });
 });
 
-/**
- * A documented v1-reader skip routine (F1.2 forward-compatibility).
- *
- * The schema's oneOf is the v1 KNOWN set of event classes, so the schema
- * itself does NOT — and per T1's additive-evolution contract MUST NOT —
- * accept an unknown event-class type (that would force every later spec
- * that adds a class to bump the schema version). Tolerance is the READER's
- * job: a v1 reader validates known classes against the schema, but for an
- * event whose eventType is outside the v1 known set it SKIPS the event with
- * a structured warning rather than erroring.
- *
- * Within a known class, an unknown-but-additive discriminator value (e.g. a
- * new `safetyHalt.safetyClass` reserved for a future spec) still validates
- * against the schema directly, because the class discriminators are open
- * patterns rather than closed enums — so the reader passes it through.
- */
 const V1_KNOWN_EVENT_TYPES = new Set([
   'orchestratorMilestone',
   'agentAttempt',
@@ -266,12 +216,6 @@ interface ReaderResult {
   warnings: Array<{ reason: string; eventType: unknown; sequenceNumber: unknown }>;
 }
 
-/**
- * Reads a sequence of events with v1-only schema knowledge. Never throws on
- * an unknown event-class type or an unknown discriminator value: known
- * classes are validated and accepted; unknown event-class types are skipped
- * with a structured warning.
- */
 function readV1Trace(events: Array<Record<string, unknown>>): ReaderResult {
   const validate = getRunTraceValidator();
   const result: ReaderResult = { accepted: [], warnings: [] };
@@ -283,10 +227,9 @@ function readV1Trace(events: Array<Record<string, unknown>>): ReaderResult {
         eventType,
         sequenceNumber: event.sequenceNumber,
       });
-      continue; // structured warning, no throw — forward-compat skip.
+      continue;
     }
-    // Known class: validate. An additive (unknown-but-permitted)
-    // discriminator value within the class still passes the open schema.
+
     validate(event);
     result.accepted.push(event);
   }
@@ -295,10 +238,7 @@ function readV1Trace(events: Array<Record<string, unknown>>): ReaderResult {
 
 describe('run-trace-v1 forward-compatibility (F1.2)', () => {
   it('tolerates an unknown-but-additive discriminator value within a known class', () => {
-    // `tokenBudgetExceeded` is a safetyHalt.loopDetected reason reserved for
-    // T3 via the additive-discriminator rule. Here we use an additive
-    // safetyClass value to model the same evolution: it must validate
-    // against v1 without a schema bump.
+
     const validate = getRunTraceValidator();
     const additive = {
       ...ENVELOPE,
@@ -310,7 +250,6 @@ describe('run-trace-v1 forward-compatibility (F1.2)', () => {
     };
     expect(validate(additive)).toBe(true);
 
-    // And the reader passes it through without a warning.
     const out = readV1Trace([additive]);
     expect(out.warnings).toHaveLength(0);
     expect(out.accepted).toHaveLength(1);

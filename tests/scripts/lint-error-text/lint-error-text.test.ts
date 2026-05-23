@@ -1,19 +1,4 @@
-/**
- * Integration tests for `scripts/lint-error-text/`.
- *
- * Spawns the built bin (`dist/scripts/lint-error-text/index.js`) and
- * asserts:
- *
- *   - default run (no flags) → exit 0; stdout matches
- *     `^[0-9]+ files scanned, 0 hits\n$`; stderr empty;
- *   - hermetic temp scan-root with a planted emit-site leak → exit 1;
- *     stderr contains `ErrorTextLeakDetected`;
- *   - bare-token outside an emit site (string assignment, comment) →
- *     exit 0 (the heuristic is emit-site-scoped, not vocabulary-wide);
- *   - `--json` clean run → stdout parses as JSON with the documented
- *     `{checked, failed, failures: []}` shape and a trailing newline;
- *   - unknown flag → exit 64.
- */
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

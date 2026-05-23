@@ -13,9 +13,7 @@ describe('logging/trust-log', () => {
   beforeEach(() => {
     tmpCwd = mkdtempSync(path.join(tmpdir(), 'r5-trust-log-'));
     originalRunId = process.env.GAN_RUN_ID;
-    // Vitest worker threads forbid `process.chdir`. Spy on `process.cwd`
-    // so the trust-log module sees the temp dir as its working
-    // directory without us actually chdir-ing.
+
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tmpCwd);
   });
 
@@ -44,15 +42,12 @@ describe('logging/trust-log', () => {
     } finally {
       spy.mockRestore();
     }
-    // No stderr writes — outside a /gan run, the trust event stream is
-    // suppressed entirely so CLI output / test stderr stay clean.
+
     expect(writes.length).toBe(0);
-    // No file written either: `.gan-state/` should not have been
-    // created under tmpCwd.
+
     const stateDir = path.join(tmpCwd, '.gan-state');
     if (existsSync(stateDir)) {
-      // If the dir exists for some unrelated reason, it must be empty
-      // of trust-log artifacts.
+
       const entries = readdirSync(stateDir);
       expect(entries).toEqual([]);
     } else {
@@ -74,7 +69,7 @@ describe('logging/trust-log', () => {
     const contents = readFileSync(expected, 'utf8');
     expect(contents).toContain('"action": "check"');
     expect(contents).toContain('"hash": "sha256:abc"');
-    // One JSON record per call → one line.
+
     expect(contents.split('\n').filter((l) => l.length > 0).length).toBe(1);
   });
 
@@ -101,7 +96,7 @@ describe('logging/trust-log', () => {
     });
     const expected = path.join(tmpCwd, '.gan-state', 'runs', 'run-keys', 'logs', 'trust.log');
     const line = readFileSync(expected, 'utf8');
-    // Keys should appear in alphabetical order: action < hash < projectRoot < result < timestamp.
+
     const idxAction = line.indexOf('"action"');
     const idxHash = line.indexOf('"hash"');
     const idxProjectRoot = line.indexOf('"projectRoot"');

@@ -1,18 +1,4 @@
-/**
- * M2 — ContainerHealth tests.
- *
- * Covers AC8:
- *   - Happy path: server returns expectStatus -> waitForHealthy resolves
- *     to `true`.
- *   - Timeout path: hung/wrong-status server -> TimeoutError with
- *     diagnostic detail.
- *   - Per-poll abort: at least 2 poll attempts within a 5s budget
- *     against a slow-responding server (verifies the per-poll
- *     `Math.min(2000, remaining)` bound).
- *
- * The tests inject a `fetchImpl` shim so we exercise the polling logic
- * without binding sockets.
- */
+
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -64,8 +50,7 @@ describe('ContainerHealth.waitForHealthy', () => {
     let attempts = 0;
     const fetchImpl: typeof fetch = async (_url, init) => {
       attempts += 1;
-      // Mimic a "hung" fetch: resolve only when the AbortSignal fires
-      // (so the per-poll timeout bound is exercised).
+
       return new Promise<Response>((resolve, reject) => {
         const sig = (init as RequestInit | undefined)?.signal as AbortSignal | undefined;
         if (sig) {
@@ -89,8 +74,7 @@ describe('ContainerHealth.waitForHealthy', () => {
     }
     expect(caught).toBeTruthy();
     expect((caught as { code?: string }).code).toBe('TimeoutError');
-    // The per-poll bound is min(2000, remaining); a 5s budget gives
-    // at least 2 polls.
+
     expect(attempts).toBeGreaterThanOrEqual(2);
   }, 10000);
 

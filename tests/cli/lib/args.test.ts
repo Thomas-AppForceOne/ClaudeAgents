@@ -1,14 +1,4 @@
-/**
- * R3 sprint 1 — bespoke arg parser unit tests.
- *
- * Exercises every documented surface from `src/cli/lib/args.ts`:
- *   - `--flag=value` and `--flag value`
- *   - `--` terminator
- *   - repeated flags
- *   - missing-value rejection
- *   - unknown-flag detection (without throwing)
- *   - short-form `-h` aliasing
- */
+
 import { describe, expect, it } from 'vitest';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec } from '../../../src/cli/lib/args.js';
 
@@ -46,7 +36,7 @@ describe('parseArgs', () => {
     expect(r.error).toBeUndefined();
     expect(r.doubleDashSeen).toBe(true);
     expect(r._).toEqual(['--json', '--project-root', 'xyz']);
-    // Crucially, --json after -- is NOT honored as a flag.
+
     expect(r.flags['json']).toBe(false);
   });
 

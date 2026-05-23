@@ -1,41 +1,4 @@
-/**
- * R1 sprint 2 + sprint 5 — read tool implementations.
- *
- * Direct library entry points for all 11 F2 read tools. The MCP wrapper in
- * `index.ts` delegates here; tests and downstream library callers may also
- * import these functions directly (per the dual-callable surface rule).
- *
- * S2 coverage:
- *  - `getApiVersion` — real (delegated to `index.ts`'s implementation; the
- *    real handler lives there for bootstrap reasons and is re-exported in
- *    the public index).
- *  - `getStack` / `getOverlay` / `getStackResolution` — real reads via the
- *    storage + resolution layers.
- *  - `getTrustState` — real (R5 S4): recomputes the project's aggregate
- *    trust hash, looks it up in the user-tier trust cache, and reports
- *    the approval state. `getTrustDiff` remains the deferred stub (the
- *    structured per-file diff is not in v1's scope).
- *  - `trustList` — real (R5 S4): lists every approval recorded in the
- *    cache.
- *  - `getModuleState` / `listModules` — no-op (zero modules) per OQ4.
- *  - `getStackConventions` / `getOverlayField` are NOT in this sprint's
- *    scope — they remain `NotImplemented` stubs in `index.ts`.
- *
- * S5 upgrades:
- *  - `getResolvedConfig` — full F2 stable shape via `composeResolvedConfig`.
- *    Cached per canonical project root by the cache singleton; consecutive
- *    calls return byte-identical JSON.
- *  - `getActiveStacks` — derived from the resolved config (active set).
- *  - `getMergedSplicePoints` — derived from the resolved config (the
- *    cascaded overlay with `stack` block stripped, since it is observed
- *    via `getActiveStacks` instead).
- *
- * Determinism:
- *  - Any string sort goes through `localeSort`.
- *  - `projectRoot` is canonicalised via `canonicalizePath` before downstream
- *    use so callers cannot smuggle distinct casings.
- *  - Glob match (detection) goes through `determinism.glob` (picomatch v4).
- */
+
 
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -67,25 +30,14 @@ import { computeTrustHash } from '../trust/hash.js';
 import { readCache, type TrustApproval } from '../trust/cache-io.js';
 import { _runPhase1ForTests } from './validate.js';
 
-/** Common options passed to every read tool. */
 export interface ReadToolContext {
-  /** Optional logger override (tests inject a spy). Defaults to `getLogger()`. */
+
   logger?: Logger;
-  /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
+
   userHome?: string;
-  /**
-   * Forwarded to the C5 stack resolver as the package-tier built-in
-   * directory. When unset, the resolver walks up from `import.meta.url`
-   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Home/env + git injection seams for the repo-keyed module-state store
-   * (F8). Production leaves this unset and uses the real `os.homedir`,
-   * `process.env`, and `execFileSync('git', …)` seams; tests inject a fake
-   * home (so no real marker leaks) and a stub git seam (so no real repo is
-   * required) to make module-state resolution deterministic.
-   */
+
   moduleStateStore?: ModuleStateStoreOptions;
 }
 
@@ -97,9 +49,7 @@ let cachedMeta: PackageMeta | null = null;
 
 function readPackageMetaSync(): PackageMeta {
   if (cachedMeta) return cachedMeta;
-  // Read `package.json` from the package root located via the shared
-  // helper (which walks up from `import.meta.url` and verifies the
-  // package name). Avoids duplicating the walk-up logic here.
+
   const pkgPath = path.join(resolvePackageRoot(), 'package.json');
   const raw = readFileSync(pkgPath, 'utf8');
   const parsed = JSON.parse(raw) as { version: string };
@@ -138,11 +88,6 @@ export interface GetActiveStacksInput {
   projectRoot: string;
 }
 
-/**
- * Return the active stack set per C2 dispatch. Derived from the cached
- * resolved config (so the dispatch math runs once per project root per
- * server-process lifetime).
- */
 export function getActiveStacks(
   input: GetActiveStacksInput,
   ctx: ReadToolContext = {},
@@ -187,13 +132,6 @@ export interface GetMergedSplicePointsInput {
   projectRoot: string;
 }
 
-/**
- * Return the cascaded overlay (the merged splice-point view) per C4.
- * The returned shape mirrors C3's splice-point catalog: keys are agent
- * role names (`planner`, `proposer`, `evaluator`, etc.) and values are
- * the splice-point payloads. The `stack` block is included so consumers
- * can read the resolved `override` / `cacheEnvOverride`.
- */
 export function getMergedSplicePoints(
   input: GetMergedSplicePointsInput,
   ctx: ReadToolContext = {},
@@ -225,23 +163,6 @@ export interface GetTrustStateResult {
   summary?: GetTrustStateSummary;
 }
 
-/**
- * Real implementation (R5 S4). Recomputes the project's aggregate trust
- * hash, looks it up in the user-tier trust cache (`~/.claude/gan/trust-
- * cache.json`), and returns the approval state.
- *
- *  - Approved: matching `(canonical projectRoot, aggregateHash)` pair
- *    found in the cache. The result echoes the stored `approvedAt` and,
- *    when present, the `approvedCommit` SHA captured at approve time.
- *  - Not approved: no match. The result includes a small summary derived
- *    from the project-tier overlay (today: count of
- *    `evaluator.additionalChecks` entries) so callers can present the
- *    user with a concrete description of what would be approved.
- *
- * Pure read: never mutates the cache and never logs. Path comparisons go
- * through `canonicalizePath` (per F3 determinism); hash recomputation
- * routes through `computeTrustHash` (per the single-implementation rule).
- */
 export function getTrustState(
   input: GetTrustStateInput,
   ctx: ReadToolContext & { homeDir?: string } = {},
@@ -268,10 +189,6 @@ export function getTrustState(
     return result;
   }
 
-  // Unapproved: derive a small summary so the caller (the trust prompt)
-  // can describe what it would be approving. We re-use the phase-1
-  // discovery snapshot helper to load the project-tier overlay without
-  // duplicating the loader pipeline here.
   const summary = computeProjectSummary(input.projectRoot, ctx);
   return {
     approved: false,
@@ -284,12 +201,6 @@ export interface GetTrustDiffInput {
   projectRoot: string;
 }
 
-/**
- * Deferred per R5 S4 — the structured per-file trust diff is a future
- * task (the prompt's `[v]` flow today suggests a `git diff` invocation
- * instead). The stub returns the same shape it has shipped since R1 so
- * existing consumers continue to compile.
- */
 export function getTrustDiff(
   _input: GetTrustDiffInput,
   ctx: ReadToolContext = {},
@@ -301,23 +212,12 @@ export function getTrustDiff(
   return { diff: [], reason: 'trust-diff-deferred' };
 }
 
-/**
- * Reserved for future filtering knobs (e.g. by host or by recency). v1
- * takes no input — see `trustList` below. Kept as a type alias rather
- * than an interface so the empty shape does not trip
- * `no-empty-object-type` lint.
- */
 export type TrustListInput = Record<string, never>;
 
 export interface TrustListResult {
   approvals: TrustApproval[];
 }
 
-/**
- * List every approval in the user-tier trust cache. Pure read: never
- * mutates the cache. Output preserves the cache's on-disk order (already
- * locale-sorted by `<projectRoot><aggregateHash>` per `cache-io.ts`).
- */
 export function trustList(
   _input: TrustListInput = {},
   ctx: ReadToolContext & { homeDir?: string } = {},
@@ -326,20 +226,6 @@ export function trustList(
   return { approvals: cache.approvals };
 }
 
-/**
- * Build the trust-state summary for the unapproved branch. Counts
- * command-declaring fields in the project-tier overlay only — user-tier
- * and default-tier overlays are not part of the trust gate today (per
- * `trust/integration.ts`). The two counted shapes are the bare list form
- * (`evaluator.additionalChecks: [...]`) and the structured wrapper form
- * (`evaluator.additionalChecks: { discardInherited, value: [...] }`),
- * matching the predicate in `trust/integration.projectDeclaresCommands`.
- *
- * `perStackOverridesCount` is reserved for the per-stack
- * `auditCmd`/`buildCmd`/`testCmd`/`lintCmd` override count — that surface
- * is post-E1 work (tracked alongside `trust/integration.ts`), so v1
- * returns `0` here.
- */
 function computeProjectSummary(
   projectRoot: string,
   ctx: ReadToolContext = {},
@@ -370,20 +256,6 @@ export interface GetModuleStateInput {
   key: string;
 }
 
-/**
- * Real read (M3 per-key). Loads the persisted JSON blob at the central,
- * repo-keyed module-state store
- * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation; the
- * repo-key is derived from `projectRoot` via F7's git-common-dir resolution,
- * so all worktrees of a repo read the same file). Returns `null` when the
- * file does not exist; throws via the factory on read/parse failure so
- * callers can distinguish "no state" from "corrupt state".
- *
- * Reads against a `key` that the module manifest does not declare
- * also return `null` (consistent with "no file") rather than throwing
- * — tooling that probes for keys is a legitimate use case, and there
- * is no risk of corrupting durable state on a read.
- */
 export function getModuleState(
   input: GetModuleStateInput,
   ctx: ReadToolContext = {},
@@ -396,14 +268,6 @@ export interface ListModulesInput {
   projectRoot: string;
 }
 
-/**
- * Real read (M1). Returns the names of every registered module (i.e.
- * every module whose `manifest.json` was discovered and validated by
- * the loader). The `projectRoot` argument is unused today — module
- * registration is package-scoped, not per-project — but kept on the
- * input shape for forward-compatibility with future per-project
- * configuration views.
- */
 export function listModules(
   input: ListModulesInput,
   _ctx: ReadToolContext = {},
@@ -433,25 +297,6 @@ export interface GetResolvedConfigInput {
   projectRoot: string;
 }
 
-/**
- * Return the F2 stable-shape resolved config. Cached per canonical project
- * root by the `cache.ts` singleton; consecutive calls return byte-identical
- * JSON (per F2's snapshot freshness rule).
- *
- * The returned shape:
- *
- *  - `apiVersion` — package semver.
- *  - `schemaVersions` — `{ stack: 1, overlay: 1 }`.
- *  - `stacks: { active, byName }` — active set + per-stack metadata
- *    (tier, path, schemaVersion).
- *  - `overlay` — cascaded overlay (the merged splice-point view).
- *  - `discarded` — list of `<block>.<field>` paths whose upstream
- *    contribution was discarded by `discardInherited` somewhere in the
- *    cascade.
- *  - `additionalContext` — path-resolution status for `planner` and
- *    `proposer` additionalContext entries.
- *  - `issues` — sorted list of every validation/cascade/detection issue.
- */
 export async function getResolvedConfig(
   input: GetResolvedConfigInput,
   ctx: ReadToolContext = {},
@@ -466,7 +311,6 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Validate that `projectRoot` is a non-empty string; throw `MalformedInput` otherwise. */
 export function requireProjectRoot(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.projectRoot !== 'string' || input.projectRoot.length === 0) {
     throw createError('MalformedInput', {
@@ -478,7 +322,6 @@ export function requireProjectRoot(input: unknown, tool: string): string {
   return input.projectRoot;
 }
 
-/** Validate that `name` is a non-empty string; throw `MalformedInput` otherwise. */
 export function requireName(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.name !== 'string' || input.name.length === 0) {
     throw createError('MalformedInput', {
@@ -490,7 +333,6 @@ export function requireName(input: unknown, tool: string): string {
   return input.name;
 }
 
-/** Validate that `tier` is one of the three overlay tiers. */
 export function requireOverlayTier(input: unknown, tool: string): OverlayTier {
   if (!isObject(input) || typeof input.tier !== 'string') {
     throw createError('MalformedInput', {

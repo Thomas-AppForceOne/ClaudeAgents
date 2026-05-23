@@ -1,20 +1,4 @@
-/**
- * R1 sprint 7 integration test — F2 acceptance scenario for a clean
- * web-node project (the `js-ts-minimal` fixture).
- *
- * Asserts:
- *   1. `validateAll` returns zero issues.
- *   2. `getResolvedConfig` returns the full F2 stable shape with every
- *      top-level field present.
- *   3. The serialised payload matches the snapshot at
- *      `__snapshots__/clean-web-node.json`. Snapshot drift is intentional
- *      and surfaces as a test failure so future refactors notice schema
- *      changes against this clean fixture.
- *
- * The fixture has no `package.json` on disk, so detection produces an
- * empty active set — which is the F2 contract for a project with no
- * detected stack. We assert that explicitly.
- */
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -41,7 +25,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
 
   it('getResolvedConfig returns the full F2 stable shape', async () => {
     const r = await getResolvedConfig({ projectRoot: jsTsMinimal });
-    // Top-level keys:
+
     expect(Object.keys(r).sort()).toEqual([
       'additionalContext',
       'apiVersion',
@@ -66,8 +50,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
 
   it('serialised payload matches the on-disk snapshot', async () => {
     const r = await getResolvedConfig({ projectRoot: jsTsMinimal });
-    // Replace the only non-deterministic field (apiVersion) with a token
-    // so the snapshot is stable across version bumps.
+
     const stable = { ...r, apiVersion: '<api-version>' } as typeof r;
     const serialised = stableStringify(stable);
     if (process.env.UPDATE_GOLDENS === '1' || !existsSync(snapshotPath)) {

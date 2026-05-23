@@ -1,9 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust list`.
- *
- * Verifies the empty-cache human surface, the JSON shape, and the
- * approve-then-list end-to-end.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

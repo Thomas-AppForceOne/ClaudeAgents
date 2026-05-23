@@ -1,20 +1,4 @@
-/**
- * F7 slice 1 — central run-data store resolution + repo keying.
- *
- * Covers the sprint-1 contract criteria:
- *   - store_root_precedence_env_wins
- *   - store_root_precedence_marker_then_default
- *   - repo_key_format
- *   - repo_key_derived_from_git_common_dir_parent (integration)
- *   - repo_key_uses_determinism_pins
- *   - repo_key_stable_across_linked_worktrees (integration)
- *   - run_dir_relocated_under_store
- *   - run_dir_survives_worktree_removal (integration)
- *   - store_paths_outside_any_worktree
- *
- * The shell-safety criterion (shell_subprocess_safety_git_calls) is enforced
- * statically over the source — see the assertions at the bottom of this file.
- */
+
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -57,8 +41,6 @@ afterEach(() => {
   }
 });
 
-// Build a StoreEnv whose `homedir` points at a throwaway dir, so the real
-// `~/.claude/gan/runs-data-dir` marker never leaks into these tests.
 function fakeHomeEnv(env: NodeJS.ProcessEnv = {}): {
   home: string;
   deps: { homedir: () => string; env: NodeJS.ProcessEnv };
@@ -76,12 +58,12 @@ function writeMarker(home: string, contents: string): void {
 describe('resolveStoreRoot — precedence', () => {
   it('store_root_precedence_env_wins: GAN_RUNS_DATA wins over marker and default', () => {
     const { home, deps } = fakeHomeEnv({ GAN_RUNS_DATA: '/tmp/gan-runs-A' });
-    // A marker pointing elsewhere must be ignored when the env var is set.
+
     writeMarker(home, '/tmp/gan-runs-B');
 
     const storeRoot = resolveStoreRoot(deps);
     expect(storeRoot).toBe(path.normalize('/tmp/gan-runs-A'));
-    // Does NOT pick up the marker's value.
+
     expect(storeRoot).not.toContain('gan-runs-B');
   });
 
@@ -95,7 +77,6 @@ describe('resolveStoreRoot — precedence', () => {
 
   it('store_root_precedence_marker_then_default (b): default expands homedir, never a literal ~', () => {
     const { home, deps } = fakeHomeEnv({});
-    // No marker file written.
 
     const storeRoot = resolveStoreRoot(deps);
     expect(storeRoot).toBe(path.join(home, DEFAULT_STORE_DIRNAME));
@@ -129,7 +110,7 @@ describe('computeRepoKey — format and determinism', () => {
 
     const key = computeRepoKey(repoRoot);
     expect(key).toBe(expected);
-    // The 12-char tail is the literal prefix of the full digest.
+
     expect(REPO_KEY_HASH_TAIL.test(key)).toBe(true);
     const tail = key.slice(key.length - REPO_KEY_HASH_LENGTH);
     expect(tail).toBe(fullHash.slice(0, REPO_KEY_HASH_LENGTH));
@@ -137,10 +118,7 @@ describe('computeRepoKey — format and determinism', () => {
   });
 
   it('repo_key_uses_determinism_pins: trailing slash + case differences hash equal on darwin', () => {
-    // Behavioural check that the case-folding canonicalizePath is used. On
-    // darwin/win32 two spellings differing only by case + trailing slash must
-    // produce the SAME key; on Linux (case-sensitive) they legitimately differ
-    // by case, so we only assert the trailing-slash invariance there.
+
     const base = '/Repo/App';
     const variantSlash = '/Repo/App/';
     const variantCase = '/repo/app';
@@ -169,7 +147,7 @@ describe('resolveRunDir — relocation under the store', () => {
     const id = generateRunId(new Date(Date.UTC(2026, 4, 22, 18, 0, 0)));
     expect(id.startsWith('20260522T180000-')).toBe(true);
     expect(RUN_ID_PATTERN.test(id)).toBe(true);
-    // A freshly-generated id (random suffix) also matches.
+
     expect(RUN_ID_PATTERN.test(generateRunId())).toBe(true);
   });
 
@@ -188,9 +166,6 @@ describe('resolveRunDir — relocation under the store', () => {
   });
 });
 
-// ---- integration: real temp repo + linked worktrees ----------------------
-
-/** Run git with an argv array (never a shell string) inside `cwd`. */
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd,
@@ -245,21 +220,18 @@ describe('integration — run data survives worktree removal', () => {
     git(main, ['worktree', 'add', '-q', '-b', 'feature/survive', wt]);
 
     const runId = '20260522T180000-9c4f';
-    // Resolve the run store FROM the linked worktree, with the env override.
+
     const resolved = resolveRunStore({
       runId,
       fromDir: wt,
       deps: { homedir: () => makeTmp('cas-home-survive-'), env: { GAN_RUNS_DATA: storeRoot } },
     });
 
-    // The run dir is built verbatim from the (env-supplied) store root, so it
-    // sits under the store and never under the worktree.
     expect(resolved.runDir.startsWith(storeRoot + path.sep)).toBe(true);
     expect(resolved.runDir).not.toContain('.gan-state/runs');
     expect(resolved.runDir.startsWith(canonicalizePath(wt))).toBe(false);
     expect(resolved.runDir.startsWith(wt + path.sep)).toBe(false);
 
-    // Write a marker file + a trace/ subdir inside the run dir.
     const traceDir = path.join(resolved.runDir, 'trace');
     mkdirSync(traceDir, { recursive: true });
     const markerFile = path.join(resolved.runDir, 'progress.json');
@@ -269,19 +241,15 @@ describe('integration — run data survives worktree removal', () => {
     const traceContent = '{"event":"start"}\n';
     writeFileSync(traceEvent, traceContent, 'utf8');
 
-    // Remove the worktree the run was started from.
     git(main, ['worktree', 'remove', '--force', wt]);
     expect(existsSync(wt)).toBe(false);
 
-    // The store run directory and its contents survive, byte-identical.
     expect(existsSync(resolved.runDir)).toBe(true);
     expect(existsSync(traceDir)).toBe(true);
     expect(readFileSync(markerFile, 'utf8')).toBe(markerContent);
     expect(readFileSync(traceEvent, 'utf8')).toBe(traceContent);
   });
 });
-
-// ---- static security check: shell_subprocess_safety_git_calls ------------
 
 describe('shell_subprocess_safety_git_calls (static source check)', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
@@ -293,24 +261,18 @@ describe('shell_subprocess_safety_git_calls (static source check)', () => {
 
   it('uses execFile/execFileSync/spawn with an args array, never exec/execSync', () => {
     expect(storeSrc).toContain('execFileSync');
-    // The shell-string subprocess APIs `exec`/`execSync` must not be imported
-    // from child_process, and must not be called. `execFile`/`execFileSync`
-    // (argv-array form) and a locally-named `exec` parameter that defaults to
-    // execFileSync are fine — the prohibition is on the bare `exec`/`execSync`
-    // command-string APIs.
-    expect(/\bexec\b\s*,/.test(storeSrc)).toBe(false); // not in an import list
+
+    expect(/\bexec\b\s*,/.test(storeSrc)).toBe(false);
     expect(/\bexecSync\b/.test(storeSrc)).toBe(false);
     expect(/child_process['"]\)?\.exec\s*\(/.test(storeSrc)).toBe(false);
-    // Every git call passes an argv array (no interpolated command string).
+
     expect(/exec\w*\(\s*['"]git['"]\s*,\s*\[/.test(storeSrc)).toBe(true);
-    // No template-literal command string is ever fed to a subprocess API.
+
     expect(/exec\w*\(\s*`/.test(storeSrc)).toBe(false);
   });
 
   it('does not re-implement realpath/lowercase/slash-strip outside the determinism import', () => {
-    // repo_key_uses_determinism_pins (static half): the store source must not
-    // call realpathSync directly nor .toLowerCase() on a path; it imports
-    // canonicalizePath from the determinism module instead.
+
     expect(storeSrc).toContain("from '../determinism/index.js'");
     expect(storeSrc).toContain('canonicalizePath');
     expect(/realpathSync/.test(storeSrc)).toBe(false);
@@ -318,8 +280,7 @@ describe('shell_subprocess_safety_git_calls (static source check)', () => {
   });
 
   it('passes the git rev-parse invocation as an argv array', () => {
-    // The git-common-dir derivation now lives in the shared git-exec module;
-    // verify the argv-array invocation at its new home.
+
     const gitExecSrc = readFileSync(
       path.join(repoRoot, 'src', 'config-server', 'storage', 'git-exec.ts'),
       'utf8',

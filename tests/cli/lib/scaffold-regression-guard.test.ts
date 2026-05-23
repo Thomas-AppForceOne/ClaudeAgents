@@ -1,35 +1,4 @@
-/**
- * R6 sprint 3 — closing regression guard for the tier-aware scaffold.
- *
- * This is test-only. It adds no production behaviour beyond R6 sprints
- * 1 + 2; it pins the R6 contract so later work cannot silently regress
- * it. Three guards:
- *
- *  1. The UN-EDITED scaffold (as emitted by `buildScaffold`, for both
- *     tiers) STILL fails validation, and the failure set is attributable
- *     to the DRAFT banner + the command/scope/secrets TODO stubs (the
- *     intentional "finish me" friction) — and explicitly does NOT include
- *     a `detection.tier3_only` `InvariantViolation` and does NOT include a
- *     C1 detection parse rejection (`SchemaMismatch` on `/detection`).
- *     The point: R6 NARROWED the failure set, it did not make the raw
- *     scaffold spuriously valid.
- *
- *  2. The FULLY-EDITED scaffold (every TODO stub replaced with a
- *     schema-valid value, DRAFT banner + second-line CI warning removed)
- *     passes with ZERO residual structural invariants, for BOTH `project`
- *     and `user` tiers — with explicit, named assertions that no
- *     `detection.tier3_only` `InvariantViolation` and no C1 `/detection`
- *     parse rejection are present.
- *
- *  3. tier→body selection remains centralised in `buildScaffold` (one
- *     function, one tier argument) and was not scattered across call
- *     sites (`stacks-new.ts` calls `buildScaffold` exactly once with the
- *     resolved tier; the two tiers differ only in the activation-comment
- *     overlay phrase).
- *
- * Spec: specifications/R6-tier-aware-stack-scaffold.md (Bite-size note,
- * slice 3 — "the closing guard").
- */
+
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -55,14 +24,6 @@ const repoRoot = path.resolve(here, '..', '..', '..');
 const TIERS = ['project', 'user'] as const;
 type Tier = (typeof TIERS)[number];
 
-/**
- * Run the full structural validation surface against a parsed stack body
- * at a given tier: C1 schema (`validateStackBodyAgainstSchema`, which
- * includes the schema's `/detection` parse rejection) PLUS the
- * `detection.tier3_only` cross-file invariant. Returns the combined,
- * structured issue list — callers assert on `code`/`field`, not just a
- * count.
- */
 function structuralIssues(
   name: string,
   tier: Tier,
@@ -80,17 +41,12 @@ function structuralIssues(
   return issues;
 }
 
-/** True if the issue set contains a `detection.tier3_only`
- * `InvariantViolation` (the pre-R6 trap on the `/detection` field). */
 function hasDetectionTier3Invariant(issues: Issue[]): boolean {
   return issues.some(
     (i) => i.code === 'InvariantViolation' && (i.field ?? '') === '/detection',
   );
 }
 
-/** True if the issue set contains a C1 parse-time rejection of a
- * `detection` block (a `SchemaMismatch` raised against `/detection` —
- * C1's schema rejecting project/user-tier detection at parse time). */
 function hasC1DetectionParseRejection(issues: Issue[]): boolean {
   return issues.some(
     (i) =>
@@ -104,21 +60,17 @@ describe('R6 closing guard — un-edited scaffold still fails (narrowed, not rem
     it(`un-edited ${tier}-tier scaffold STILL fails validation`, () => {
       const out = buildScaffold('acme-svc', tier);
       const issues = structuralIssues('acme-svc', tier, frontmatter(out));
-      // Non-empty issue set: R6 did NOT make the raw scaffold valid.
+
       expect(issues.length).toBeGreaterThan(0);
     });
 
     it(`un-edited ${tier}-tier failure is attributable to the TODO stubs`, () => {
       const out = buildScaffold('acme-svc', tier);
       const issues = structuralIssues('acme-svc', tier, frontmatter(out));
-      // The TODO stubs produce schema-violating shapes (e.g. auditCmd is
-      // a string, securitySurfaces empty-but-stubbed, scope a TODO glob).
+
       const schemaIssues = issues.filter((i) => i.code === 'SchemaMismatch');
       expect(schemaIssues.length).toBeGreaterThan(0);
-      // The DRAFT banner + second-line CI warning are present in the raw
-      // text (the banner-invariant friction the scaffold deliberately
-      // keeps; full end-to-end banner firing is covered by the
-      // stack.no_draft_banner invariant suite).
+
       const nonBlank = out.split('\n').filter((l) => l.trim().length > 0);
       expect(nonBlank[0]).toBe(DRAFT_BANNER);
       expect(nonBlank[1]).toBe(SECOND_LINE);
@@ -151,7 +103,7 @@ describe('R6 closing guard — edited scaffold passes with zero residual invaria
     });
 
     it(`fully-edited ${tier}-tier scaffold: no detection.tier3_only InvariantViolation (named)`, () => {
-      // Positive, self-documenting assertion of the SPECIFIC pre-R6 trap.
+
       const issues = structuralIssues('acme-svc', tier, editedBody('acme-svc', tier));
       expect(hasDetectionTier3Invariant(issues)).toBe(false);
       expect(
@@ -162,8 +114,7 @@ describe('R6 closing guard — edited scaffold passes with zero residual invaria
     it(`fully-edited ${tier}-tier scaffold: parses cleanly under C1 (no /detection parse rejection)`, () => {
       const issues = structuralIssues('acme-svc', tier, editedBody('acme-svc', tier));
       expect(hasC1DetectionParseRejection(issues)).toBe(false);
-      // Distinct from invariant-absence: the C1 schema itself raised no
-      // SchemaMismatch at all for the edited body.
+
       expect(issues.some((i) => i.code === 'SchemaMismatch')).toBe(false);
     });
 
@@ -171,7 +122,7 @@ describe('R6 closing guard — edited scaffold passes with zero residual invaria
       const out = buildScaffold('acme-svc', tier);
       const fm = frontmatter(out);
       expect('detection' in fm).toBe(false);
-      // Defence in depth: no bare `detection:` line anywhere in the body.
+
       expect(out).not.toMatch(/^\s*detection\s*:/m);
     });
 
@@ -208,8 +159,7 @@ describe('R6 closing guard — tier→body selection stays centralised in buildS
       path.join(repoRoot, 'src', 'cli', 'commands', 'stacks-new.ts'),
       'utf8',
     );
-    // Strip line comments, block comments and the import line so we count
-    // real invocations, not the symbol import or doc-comment mentions.
+
     const code = src
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n')
@@ -218,11 +168,9 @@ describe('R6 closing guard — tier→body selection stays centralised in buildS
       .join('\n');
     const calls = code.match(/buildScaffold\s*\(/g) ?? [];
     expect(calls.length).toBe(1);
-    // The single call passes the resolved tier through (one function, one
-    // tier argument), not a per-tier literal.
+
     expect(code).toMatch(/buildScaffold\(\s*name\s*,\s*tier\s*\)/);
-    // The command resolves the tier once via readTier and never branches
-    // on the tier value to assemble scaffold body content.
+
     expect(code).toContain('const tier = readTier(parsed);');
     expect(code).not.toMatch(/buildScaffold\([^)]*['"]project['"]/);
     expect(code).not.toMatch(/buildScaffold\([^)]*['"]user['"]/);

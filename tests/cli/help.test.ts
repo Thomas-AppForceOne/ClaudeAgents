@@ -1,9 +1,4 @@
-/**
- * R3 sprint 1 — top-level + per-subcommand help, unknown-flag handling.
- *
- * Covers contract criteria F-AC7 (top-level help), F-AC8 (per-subcommand
- * help), and F-AC9 (unknown-flag → exit 64, unknown-subcommand → exit 64).
- */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 
@@ -13,13 +8,13 @@ describe('gan help surface', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
     expect(r.stdout).toContain('gan');
-    // Skill-vs-CLI line is part of the contract (R3 spec, help-text section).
+
     expect(r.stdout).toContain('Note: to run a sprint, use the /gan skill');
-    // Subcommand list — every name from the surface table.
+
     for (const sub of ['version', 'validate', 'config', 'stacks', 'stack', 'modules', 'trust']) {
       expect(r.stdout).toContain(sub);
     }
-    // Global flags + exit-code table.
+
     expect(r.stdout).toContain('--json');
     expect(r.stdout).toContain('--project-root');
     expect(r.stdout).toContain('Exit codes');

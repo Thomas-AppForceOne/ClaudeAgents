@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { repoRootDir } from './spawn.js';
 
-/** Render the source-of-truth confine-hook template for the running framework version. */
 export function renderedTemplate(): string {
   const root = repoRootDir();
   const version = (

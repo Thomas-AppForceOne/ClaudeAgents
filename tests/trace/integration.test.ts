@@ -1,14 +1,4 @@
-/**
- * T1 Sprint 3 — integration-event builders (F3.3, F3.4).
- *
- * Covers contract criteria:
- *  - validation_abort_builder_preserves_f2_payload_verbatim
- *  - trust_event_builder_maps_choices
- *
- * Each builder produces an event BODY; we envelope it (the way the emitter
- * would) and assert the enveloped event validates against run-trace-v1.json
- * via getRunTraceValidator.
- */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -22,7 +12,6 @@ import { getRunTraceValidator } from '../../src/config-server/validation/schema-
 const RUN_ID = '20260521T194720-6752';
 const SHA = 'b'.repeat(64);
 
-/** Envelope a class body the way TraceEmitter would, for schema validation. */
 function envelope(eventType: string, body: Record<string, unknown>): Record<string, unknown> {
   return {
     sequenceNumber: 7,
@@ -99,12 +88,10 @@ describe('validation_abort_builder_preserves_f2_payload_verbatim', () => {
 
     const body = buildValidationAbortBody('overlay', error);
 
-    // errorCode is the PascalCase F2 code, preserved exactly.
     expect(body.errorCode).toBe('PathEscape');
-    // validationStage is the supplied stage.
+
     expect(body.validationStage).toBe('overlay');
-    // errorPayload deep-equals the source F2 payload — every field present,
-    // unchanged, none dropped, none renamed.
+
     expect(body.errorPayload).toEqual(sourcePayload);
     expect(body.errorPayload.code).toBe('PathEscape');
     expect(body.errorPayload.message).toBe(
@@ -133,7 +120,7 @@ describe('validation_abort_builder_preserves_f2_payload_verbatim', () => {
     const error = createError('ValidationFailed', { message: 'Validation failed.' });
     const body = buildValidationAbortBody('stack', error);
     expect(body.errorPayload).toEqual({ code: 'ValidationFailed', message: 'Validation failed.' });
-    // No file/field/line keys leaked in when the source had none.
+
     expect(Object.keys(body.errorPayload).sort()).toEqual(['code', 'message']);
   });
 

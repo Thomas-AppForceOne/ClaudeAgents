@@ -1,20 +1,4 @@
-/**
- * Integration tests for `scripts/lint-stacks/`.
- *
- * Spawns the built bin (`dist/scripts/lint-stacks/index.js`) under
- * controlled fixtures and asserts:
- *
- *   - empty stacks dir → exit 0, summary `0 stacks checked, 0 failed`.
- *   - clean fixture → exit 0, summary `1 stacks checked, 0 failed`.
- *   - draft-banner fixture → exit 1, stderr names the absolute path
- *     and the `ScaffoldBannerPresent` issue code.
- *   - schema-violation fixture → exit 1, stderr names the
- *     `SchemaMismatch` issue code.
- *   - `--json` against draft-banner → stdout parses as JSON with the
- *     documented `{checked, failed, failures: [...]}` shape and a
- *     trailing newline.
- *   - unknown flag → exit 64.
- */
+
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -29,9 +13,7 @@ const SCHEMA_ROOT = path.join(FIXTURES, 'schema-violation');
 const DOCLINT_ROOT = path.join(FIXTURES, 'malformed-doclintcmd');
 
 beforeAll(() => {
-  // Sanity: every fixture path exists. If a future refactor moves them
-  // we want the test to fail fast with a clear message rather than
-  // exit-1 on every assertion.
+
   for (const p of [EMPTY_ROOT, CLEAN_ROOT, DRAFT_ROOT, SCHEMA_ROOT, DOCLINT_ROOT]) {
     if (!existsSync(p)) {
       throw new Error(`fixture missing: ${p}`);
@@ -59,8 +41,7 @@ describe('lint-stacks bin', () => {
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe('1 stacks checked, 1 failed\n');
     expect(r.stderr).toContain('ScaffoldBannerPresent');
-    // The reported path is the canonicalised absolute path; the
-    // fixture's project root is canonicalised, then `/stacks/` joined.
+
     const canonical = canonicalizePath(DRAFT_ROOT);
     const stackPath = path.join(canonical, 'stacks', 'web-node.md');
     expect(r.stderr).toContain(stackPath);
@@ -77,11 +58,7 @@ describe('lint-stacks bin', () => {
   });
 
   it('Q5: malformed docLintCmd fixture → exit 1, stderr names `SchemaMismatch`', async () => {
-    // The fixture is schemaVersion-valid (so it clears the F3 version
-    // gate) but carries a docLintCmd with an out-of-enum `severity` and a
-    // missing `absenceMessage` for a non-silent `absenceSignal`. The body
-    // schema must reject it through the existing ajv body validation —
-    // proving Q5's docLintCmd rejection rides `lint-stacks` for free.
+
     const r = await runScript('lint-stacks', ['--project-root', DOCLINT_ROOT]);
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe('1 stacks checked, 1 failed\n');

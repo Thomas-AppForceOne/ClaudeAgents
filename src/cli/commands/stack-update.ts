@@ -1,28 +1,4 @@
-/**
- * R3 sprint 3 — `gan stack update <name> <field> <value> [--json] [--project-root DIR]`.
- *
- * Calls R1's `updateStackField({projectRoot, name, fieldPath, value})` in-
- * process. Stack writes have a different tier model than overlay writes
- * (per C5): the writes layer always lands the mutation on the resolved
- * stack file, which for the canonical update flow is the project-tier
- * shadow at `.claude/gan/stacks/<name>.md`. The CLI does not expose
- * `--tier` for `stack update`; doing so would invite users to attempt
- * built-in-tier writes (forbidden — repo-tier stacks are mutated by their
- * owners, not by the CLI).
- *
- * Value parsing follows `parseCliValue`: try JSON literal first, fall
- * back to the bare string. Same semantics as `gan config set`.
- *
- * Output:
- *   - human: `Updated <field> on stack <name> to <value>.` (stdout, exit 0)
- *   - JSON:  `{"name": "...", "path": "...", "tier": "project", "value": ..., "written": true}`
- *
- * Errors:
- *   - missing args                 → MalformedInput, exit 64.
- *   - unknown stack / missing file → MissingFile from R1, exit 2.
- *   - schema rejection             → first issue code maps via exitCodeFor.
- *   - library unreachable          → exit 5 with install.sh hint.
- */
+
 
 import { updateStackField } from '../../index.js';
 import { ConfigServerError, createError } from '../../config-server/errors.js';

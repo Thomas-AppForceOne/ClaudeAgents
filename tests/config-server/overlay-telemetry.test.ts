@@ -1,21 +1,4 @@
-/**
- * T1 Sprint 1 — F1.5: the `telemetry.tracePayloads` overlay addition.
- *
- * Exercises the new splice point through the SAME overlay validator the
- * `validateAll` pipeline uses (`validateOverlayBodyAgainstSchema` in
- * `validation/schema-check.ts`). The validator strips C3 frontmatter and
- * enforces the F3 `schemaVersion: 1` exact-match rule before applying the
- * body schema, so each body below carries `schemaVersion: 1`.
- *
- * Assertions:
- *   - an overlay setting telemetry.tracePayloads:"full" validates;
- *   - an overlay setting "hashed" validates;
- *   - the cascade wrapper form ({discardInherited, value}) validates,
- *     matching the file's existing scalar splice-point shape;
- *   - an out-of-enum value ("plaintext") is rejected;
- *   - existing overlay shapes still validate (regression guard for the
- *     one-field additive edit).
- */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -25,7 +8,6 @@ import {
 
 const FILE = '/tmp/overlay-telemetry.test/project.md';
 
-/** Run the overlay validator and return the issues it raised. */
 function validate(body: Record<string, unknown>): Issue[] {
   const issues: Issue[] = [];
   validateOverlayBodyAgainstSchema(FILE, { schemaVersion: 1, ...body }, issues);
@@ -55,7 +37,7 @@ describe('overlay-v1: telemetry.tracePayloads (F1.5)', () => {
     const issues = validate({ telemetry: { tracePayloads: 'plaintext' } });
     expect(issues.length).toBeGreaterThan(0);
     expect(issues.every((i) => i.code === 'SchemaMismatch')).toBe(true);
-    // F4 user-facing-text discipline: messages name the file, not "ajv".
+
     for (const i of issues) {
       expect(i.message.toLowerCase()).not.toContain('ajv');
     }

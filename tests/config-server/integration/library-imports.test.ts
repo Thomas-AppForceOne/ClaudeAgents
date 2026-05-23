@@ -1,17 +1,4 @@
-/**
- * R1 sprint 7 integration test — library import surface.
- *
- * Confirms that every public API function the spec promises is reachable
- * via `from '../../../src/index.ts'` (the package's `main` entry point).
- * Each function is asserted to be a function (typeof === 'function');
- * one read function is invoked end to end as a smoke test to ensure the
- * re-export wiring runs.
- *
- * The list below is the union of F2 reads (minus the two deferred past
- * S2 — `getStackConventions` / `getOverlayField`), F2 writes, and the
- * three validate functions. If a future sprint exports a new function
- * via `src/index.ts`, this test should be updated to cover it.
- */
+
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

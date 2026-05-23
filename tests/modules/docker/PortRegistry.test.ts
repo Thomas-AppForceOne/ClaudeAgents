@@ -1,16 +1,4 @@
-/**
- * M2 — PortRegistry tests.
- *
- * Covers AC4:
- *   - constructor takes a project root.
- *   - register/lookup round-trip.
- *   - getAll returns array of entries sorted by worktreePath.
- *   - release removes entry.
- *   - on-disk JSON shape: {version: 1, entries: {...}} at M3's per-key
- *     module-state path `.gan-state/modules/docker/port-registry.json`.
- *   - persistence routes through `setModuleState` / `loadModuleState`
- *     (PortRegistry never imports `atomicWriteFile` or names a path).
- */
+
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -34,13 +22,6 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
-/**
- * Stage a fake package root with the docker module's manifest so the
- * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
- * state key. Without this, every PortRegistry write would reject with
- * `UnknownStateKey` (the global vitest setup pins
- * `GAN_PACKAGE_ROOT_OVERRIDE` to an empty tmp dir).
- */
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'm2-portreg-modroot-'));
   const realPkg = path.join(repoRoot, 'package.json');
@@ -72,9 +53,7 @@ describe('PortRegistry', () => {
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-portregistry-'));
-    // F8: module state now lives in the repo-keyed store, derived from the
-    // project root via git-common-dir. Make `scratch` a real repo so the key
-    // resolves, and point the store at a throwaway root.
+
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -147,8 +126,7 @@ describe('PortRegistry', () => {
     const wt = path.join(scratch, 'wt-disk');
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 7000, 'app-disk');
-    // F8 owns the path: <module-state-root>/<repo-key>/<name>/<key>.json,
-    // keyed by the repo (not <projectRoot>/.gan-state/modules/...).
+
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
     expect(filePath).toBe(store.statePath(scratch, 'docker', 'port-registry'));
     expect(filePath.startsWith(store.storeRoot + path.sep)).toBe(true);
@@ -185,18 +163,7 @@ describe('PortRegistry', () => {
   });
 
   it('does not import the registry-file IO helpers directly (routes through M1)', async () => {
-    // Source-level guarantee that PortRegistry is a pure consumer of
-    // the M1 module-state surface for the registry FILE: no import of
-    // atomicWriteFile or a node:fs *read* helper, no path string for
-    // the on-disk registry file. We grep the import lines specifically
-    // so doc-comments mentioning those names (intentionally, to explain
-    // what we *don't* do) don't trip the assertion.
-    //
-    // F8 prune-on-load needs ONE filesystem fact — whether a keyed
-    // worktree DIRECTORY still exists — taken via `existsSync` through
-    // an injectable probe. That is a probe of the worktree, not registry
-    // -file IO and not a registry-path join, so it does not violate the
-    // black-box rule the rest of this assertion guards.
+
     const src = readFileSync(
       path.join(__dirname, '..', '..', '..', 'src', 'modules', 'docker', 'PortRegistry.ts'),
       'utf8',
@@ -210,9 +177,7 @@ describe('PortRegistry', () => {
     expect(imports).not.toMatch(/writeFileSync/);
     expect(imports).toMatch(/setModuleState/);
     expect(imports).toMatch(/loadModuleState/);
-    // The only node:fs import permitted is the worktree-existence probe
-    // for prune-on-load; PortRegistry must not pull in fs read/write
-    // helpers for the registry file itself.
+
     const fsImportLines = imports.split('\n').filter((l) => /from ['"]node:fs['"]/.test(l));
     for (const line of fsImportLines) {
       expect(line).toMatch(/existsSync/);

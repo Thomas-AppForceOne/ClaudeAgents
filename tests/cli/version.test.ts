@@ -1,8 +1,4 @@
-/**
- * R3 sprint 1 — `gan version` + `--json` round-trip determinism.
- *
- * Covers contract criterion F-AC1.
- */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 
@@ -20,17 +16,17 @@ describe('gan version', () => {
     const r = await runGan(['version', '--json']);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
-    // Trailing newline (F3 determinism rule).
+
     expect(r.stdout.endsWith('\n')).toBe(true);
-    // Two-space indent.
+
     expect(r.stdout).toContain('\n  "');
-    // Parse cleanly.
+
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(parsed).toHaveProperty('apiVersion');
     expect(parsed).toHaveProperty('serverVersion');
     expect(parsed).toHaveProperty('schemas');
     expect(Array.isArray(parsed.schemas)).toBe(true);
-    // Sorted keys at the top level: apiVersion < schemas < serverVersion.
+
     const keys = Object.keys(parsed);
     expect(keys).toEqual(['apiVersion', 'schemas', 'serverVersion']);
   });
@@ -44,7 +40,7 @@ describe('gan version', () => {
       expect(typeof s.name).toBe('string');
       expect(typeof s.version).toBe('number');
     }
-    // Includes the schemas R1 ships on disk.
+
     const names = parsed.schemas.map((s) => s.name);
     expect(names).toContain('stack');
     expect(names).toContain('overlay');

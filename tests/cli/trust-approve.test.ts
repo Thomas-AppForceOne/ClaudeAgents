@@ -1,9 +1,4 @@
-/**
- * R5 sprint 4 — `gan trust approve`.
- *
- * Trust-mutating subcommands require `--project-root` explicitly; the
- * test asserts the exit-64 contract on the missing-flag path.
- */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,7 +29,7 @@ function makeTmpHome(): string {
 
 describe('gan trust approve', () => {
   it('--help prints usage / examples / exit codes and exits 0', async () => {
-    // No HOME override needed — help paths never touch the trust cache.
+
     const r = await runGan(['trust', 'approve', '--help']);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
@@ -57,9 +52,7 @@ describe('gan trust approve', () => {
       extraEnv: { HOME: home },
     });
     expect(r.exitCode).toBe(0);
-    // `logTrustEvent` writes a single audit-log line on stderr when
-    // `GAN_RUN_ID` is unset (per `logging/trust-log.ts`); the human
-    // surface of the command itself stays on stdout.
+
     expect(r.stdout).toMatch(/^Approved /);
     expect(r.stdout).toMatch(/sha256:/);
   });
