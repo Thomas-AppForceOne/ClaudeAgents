@@ -26,12 +26,13 @@ const EMPTY_ROOT = path.join(FIXTURES, 'empty');
 const CLEAN_ROOT = path.join(FIXTURES, 'clean');
 const DRAFT_ROOT = path.join(FIXTURES, 'draft-banner');
 const SCHEMA_ROOT = path.join(FIXTURES, 'schema-violation');
+const DOCLINT_ROOT = path.join(FIXTURES, 'malformed-doclintcmd');
 
 beforeAll(() => {
   // Sanity: every fixture path exists. If a future refactor moves them
   // we want the test to fail fast with a clear message rather than
   // exit-1 on every assertion.
-  for (const p of [EMPTY_ROOT, CLEAN_ROOT, DRAFT_ROOT, SCHEMA_ROOT]) {
+  for (const p of [EMPTY_ROOT, CLEAN_ROOT, DRAFT_ROOT, SCHEMA_ROOT, DOCLINT_ROOT]) {
     if (!existsSync(p)) {
       throw new Error(`fixture missing: ${p}`);
     }
@@ -73,6 +74,35 @@ describe('lint-stacks bin', () => {
     const canonical = canonicalizePath(SCHEMA_ROOT);
     const stackPath = path.join(canonical, 'stacks', 'web-node.md');
     expect(r.stderr).toContain(stackPath);
+  });
+
+  it('Q5: malformed docLintCmd fixture → exit 1, stderr names `SchemaMismatch`', async () => {
+    // The fixture is schemaVersion-valid (so it clears the F3 version
+    // gate) but carries a docLintCmd with an out-of-enum `severity` and a
+    // missing `absenceMessage` for a non-silent `absenceSignal`. The body
+    // schema must reject it through the existing ajv body validation —
+    // proving Q5's docLintCmd rejection rides `lint-stacks` for free.
+    const r = await runScript('lint-stacks', ['--project-root', DOCLINT_ROOT]);
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toBe('1 stacks checked, 1 failed\n');
+    expect(r.stderr).toContain('SchemaMismatch');
+    const canonical = canonicalizePath(DOCLINT_ROOT);
+    const stackPath = path.join(canonical, 'stacks', 'web-node.md');
+    expect(r.stderr).toContain(stackPath);
+  });
+
+  it('Q5: --json against malformed docLintCmd → SchemaMismatch in the failures list', async () => {
+    const r = await runScript('lint-stacks', ['--project-root', DOCLINT_ROOT, '--json']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toBe('');
+    const parsed = JSON.parse(r.stdout) as {
+      checked: number;
+      failed: number;
+      failures: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(parsed.checked).toBe(1);
+    expect(parsed.failed).toBeGreaterThanOrEqual(1);
+    expect(parsed.failures.some((f) => f.code === 'SchemaMismatch')).toBe(true);
   });
 
   it('A21: --json against draft-banner → stdout parses as JSON, trailing newline', async () => {
