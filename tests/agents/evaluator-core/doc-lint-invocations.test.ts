@@ -1,4 +1,27 @@
-
+/**
+ * buildDocLintInvocations emission suite (FUNC-1/FUNC-3/FUNC-4) — pins how the
+ * evaluator-core deterministic plan derives its per-stack doc-lint rows from a
+ * snapshot's active stacks. (Execution semantics of an emitted row are tested
+ * separately in doc-lint-execution-semantics.)
+ *
+ * Emission contract:
+ * - one row per stack that DECLARES a docLintCmd, none for a stack without the
+ *   field (a non-declaring stack contributes nothing).
+ * - each row carries its OWNING stack's scope/command/severity/baseline/
+ *   absenceSignal copied verbatim — never another stack's scope, and severities
+ *   are kept distinct per stack, not normalised.
+ * - `baseline` is the one defaulted field: a stack that omits it gets `delta`
+ *   filled at emission, while its other fields stay as declared.
+ * - the carve-out does NO absence detection and consults no worktree/diff input
+ *   (asserted via the function's arity), keeping emission a pure projection of
+ *   the snapshot.
+ * - output is deterministic: sorted by stack name and byte-identical across
+ *   repeated calls.
+ *
+ * The final block (FUNC-4) proves buildEvaluatorPlan wires this array onto the
+ * assembled plan, equal to calling buildDocLintInvocations directly, and empty
+ * when there are no active stacks.
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -144,6 +167,8 @@ describe('buildDocLintInvocations (FUNC-1/FUNC-3 plan emission)', () => {
     const [row] = buildDocLintInvocations(snapshot);
     expect(row!.absenceSignal).toBe('warning');
 
+    // Arity of exactly 1 proves emission is a pure projection of the snapshot:
+    // it takes no worktree/diff argument, so it cannot perform absence detection.
     expect(buildDocLintInvocations.length).toBe(1);
   });
 

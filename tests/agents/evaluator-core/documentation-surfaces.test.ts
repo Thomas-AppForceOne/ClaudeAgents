@@ -1,4 +1,33 @@
-
+/**
+ * Documentation-surface instantiation suite — pins how a stack's declared
+ * documentationSurfaces become concrete plan rows against a sprint's touched
+ * files, and how the surface-id union is queried.
+ *
+ * buildDocumentationSurfacesInstantiated firing rules:
+ * - a surface instantiates only when an in-scope touched file exists; the
+ *   template text is carried VERBATIM (no interpolation) and triggerEvidence
+ *   records which keywords/files matched.
+ * - a keyword-gated surface (public_contract_completeness) fires only when its
+ *   keyword appears in an in-scope file, while a scope-only surface
+ *   (comments_explain_why_not_what) fires for any in-scope file regardless of
+ *   keyword. So a file with no matching keyword yields the scope-only row but
+ *   not the keyworded one.
+ * - polyglot isolation: two stacks declaring the SAME bare surface id produce
+ *   two DISTINCT rows keyed by `<stack>.<id>` (no dedup), and a surface from
+ *   stack A never fires on a file that is only inside stack B's scope.
+ * - output is sorted by qualified id and byte-identical across calls.
+ *
+ * isKnownSurfaceId (the suppress-list existence check) treats the
+ * documentation and security surface ids as ONE namespace: a real doc id and a
+ * real security id are both "known", an id in neither set is unknown (routing
+ * to a non-aborting warning rather than an abort), an id qualified by an
+ * inactive stack is unknown, and a bare id with no `<stack>.` qualifier is
+ * never matched. The closing test shows a suppress entry drops exactly its
+ * targeted doc criterion while the others survive.
+ *
+ * The DOC_*_TEMPLATE constants are the verbatim standard text; asserting
+ * equality against them is what proves "no interpolation".
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -131,6 +160,8 @@ describe('buildDocumentationSurfacesInstantiated', () => {
 
     const ids = rows.map((r) => r.id);
 
+    // The file is in-scope but contains no `export ...` keyword: the
+    // keyword-gated surface must NOT fire, yet the scope-only surface still does.
     expect(ids).not.toContain('public_contract_completeness');
     expect(ids).toContain('comments_explain_why_not_what');
   });
@@ -171,6 +202,9 @@ describe('buildDocumentationSurfacesInstantiated', () => {
       activeStacks: [webNodeStack(), secondStack()],
       mergedSplicePoints: {},
     };
+    // The decoy file is in stack-B (synth) scope but its content carries a
+    // web-node keyword (`export function`); web-node's surface must still NOT
+    // fire on it, because the file is outside web-node's scope.
     const sprintPlan: SprintPlan = { affectedFiles: ['data/decoy.synth'], criteria: [] };
     const worktree: WorktreeState = {
       files: ['data/decoy.synth'],

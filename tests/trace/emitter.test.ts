@@ -1,3 +1,29 @@
+/**
+ * TraceEmitter contract suite — proves the emission surface upholds the
+ * append-only run-trace invariants the recovery/reconcile layers depend on.
+ *
+ * What this guards (one assertion family per describe block):
+ * - schema conformance: every one of the seven event classes the emitter can
+ *   produce validates against run-trace-v1.json, both as the in-memory object
+ *   and after round-tripping through the atomic on-disk write.
+ * - sequence allocation: numbers are strictly increasing, gapless, and
+ *   non-negative across mixed classes, and a non-zero `startSequence` resumes
+ *   without a gap or collision — the property recovery relies on to continue
+ *   an interrupted run.
+ * - payload layout: payload files land under `payloads/` with a 10-digit
+ *   zero-padded sequence prefix, an allowed payload class suffix, and the
+ *   extension implied by the payload kind (.md for text, .json for arguments),
+ *   never an absolute or backslashed path.
+ * - redaction: `full` writes payload bodies to disk while `hashed` writes
+ *   none, yet BOTH record the same content-hash refs — so a redacted trace is
+ *   still verifiable by hash. Full is the default when redaction is unset.
+ * - append-only: the emitter exposes no update/overwrite/delete method, and a
+ *   re-emitted "correction" produces an ADDITIONAL event file (superseding by
+ *   appending), never an in-place mutation of the prior event's bytes.
+ *
+ * A fixed clock and per-test temp roots keep every assertion deterministic and
+ * hermetic; the afterEach reaps the temp dirs.
+ */
 
 import { describe, expect, it, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -18,6 +44,10 @@ function makeRoot(): string {
   return path.join(dir, 'trace');
 }
 
+// Monotonic +1ms-per-tick clock: removes wall-clock nondeterminism so
+// timestamps are reproducible, and guarantees each event gets a distinct,
+// strictly-increasing instant (the emitter still treats sequenceNumber, not
+// the clock, as the authoritative order).
 function fixedClock(): () => number {
   let t = Date.parse('2026-05-21T19:47:20.000Z');
   return () => {
@@ -63,6 +93,9 @@ function toolInput(): ToolCallInput {
   };
 }
 
+// Emits exactly one event of each of the seven known classes, in a fixed
+// order, so a single fixture can drive both the "all classes validate" and
+// "sequence is gapless across mixed classes" checks.
 function emitOneOfEach(emitter: TraceEmitter) {
   const events = [
     emitter.emitOrchestratorMilestone({
@@ -103,6 +136,9 @@ describe('event_validates_against_schema — all seven classes', () => {
     const validate = getRunTraceValidator();
     const events = emitOneOfEach(emitter);
 
+    // Asserting the produced set equals KNOWN_EVENT_TYPES is what makes this a
+    // completeness check: if a new event class is added without a fixture here,
+    // this fails rather than silently skipping the new class.
     const seen = new Set(events.map((e) => e.eventType));
     expect(seen).toEqual(KNOWN_EVENT_TYPES);
 
@@ -157,10 +193,14 @@ describe('payload_naming_and_layout', () => {
     const root = makeRoot();
     const emitter = new TraceEmitter({ traceRoot: root, runId: RUN_ID }, fixedClock());
 
+    // Burn 42 sequence numbers so the next event lands at seq 42 — a
+    // two-digit value chosen to exercise the 10-digit zero-pad in the filename.
     for (let i = 0; i < 42; i += 1) emitter.emitOrchestratorMilestone({ milestone: 'tick' });
     const tool = emitter.emitToolCall(toolInput());
     expect(tool.sequenceNumber).toBe(42);
 
+    // arguments are structured (.json), result is free text (.md) — extension
+    // is chosen by payload kind, not a fixed default.
     expect(tool.argumentsRef).toBe('payloads/0000000042-gan-generator-arguments.json');
     expect(tool.resultRef).toBe('payloads/0000000042-gan-generator-result.md');
 
@@ -216,6 +256,8 @@ describe('redaction_hashed_writes_no_payloads', () => {
     const hashedLlm = hashed.emitLlmCall(llmInput());
     const hashedTool = hashed.emitToolCall(toolInput());
 
+    // Hashed mode may never create the payloads dir at all; tolerate either
+    // absent-dir or empty-dir, but forbid any actual payload file.
     const payloadDirExists = existsSync(payloadsDir(hashedRoot));
     if (payloadDirExists) {
       expect(readdirSync(payloadsDir(hashedRoot))).toEqual([]);
@@ -224,6 +266,9 @@ describe('redaction_hashed_writes_no_payloads', () => {
     expect(hashedLlm.promptRef).toMatch(/^[0-9a-f]{64}$/);
     expect(hashedLlm.responseRef).toMatch(/^[0-9a-f]{64}$/);
 
+    // The key redaction invariant: the ref is the SAME hash whether or not the
+    // body was written, so a hashed trace remains verifiable against a body
+    // produced elsewhere.
     expect(hashedLlm.promptRef).toBe(fullLlm.promptRef);
 
     expect(hashedTool.argumentsRef).toBe(fullTool.argumentsRef);
@@ -243,6 +288,9 @@ describe('append_only_superseding_corrections', () => {
   it('exposes no update/overwrite/delete entry point on the emission surface', () => {
     const emitter = new TraceEmitter({ traceRoot: makeRoot(), runId: RUN_ID }, fixedClock());
     const surface = emitter as unknown as Record<string, unknown>;
+    // Enforce append-only structurally, by inspecting the prototype's method
+    // names rather than behaviour: any method whose name implies mutation is a
+    // contract violation regardless of what it does.
     const proto = Object.getPrototypeOf(emitter);
     const methods = Object.getOwnPropertyNames(proto).filter(
       (n) => n !== 'constructor' && typeof (proto as Record<string, unknown>)[n] === 'function',
@@ -265,6 +313,8 @@ describe('append_only_superseding_corrections', () => {
       outputArtifactPath: 'a.json',
       disposition: 'failed',
     });
+    // Capture the first event's exact bytes so we can prove the correction
+    // below leaves them untouched (no in-place rewrite).
     const firstFile = path.join(eventsDir(root), `${'0'.repeat(9)}0.json`);
     const firstBytes = readFileSync(firstFile, 'utf8');
 

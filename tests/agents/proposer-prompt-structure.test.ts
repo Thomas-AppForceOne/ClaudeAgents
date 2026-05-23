@@ -1,3 +1,32 @@
+/**
+ * gan-contract-proposer prompt-structure suite — reads the SHIPPED
+ * agents/gan-contract-proposer.md verbatim and asserts the proposer is told to
+ * source documentation criteria the same disciplined way it sources security
+ * criteria, keeping prompt and stack-data contract aligned.
+ *
+ * What it guards:
+ * - a dedicated "Sourcing documentation criteria" section exists and names
+ *   documentationSurfaces (specifically snapshot.activeStacks[*].documentation-
+ *   Surfaces) as its source array.
+ * - the four-step protocol: intersect triggers.scope with the stack's own
+ *   scope, gate on triggers.keywords, copy the template VERBATIM (no
+ *   interpolation), and require a rationale — stated to be the IDENTICAL
+ *   protocol as the security section, and that a neither-trigger surface
+ *   instantiates unconditionally on any in-scope touched file.
+ * - keying discipline: criteria are keyed by `<stack-name>.<surface-id>`, the
+ *   prompt explicitly does NOT deduplicate by bare id, and doc + security
+ *   surface ids share one namespace.
+ * - the "What you do not do" list forbids restating any documentation standard,
+ *   asserting the standard lives only in the stacks' documentationSurfaces, not
+ *   in the prompt.
+ *
+ * Boundary discipline: the documentation section must leak no repo-internal
+ * process references and no ecosystem-specific tokens (lint-no-stack-leak).
+ *
+ * documentationSection() isolates that one section (heading to next `## `) so
+ * the leak and protocol checks target it precisely. All string/regex literals
+ * are expected prompt content, not code.
+ */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';

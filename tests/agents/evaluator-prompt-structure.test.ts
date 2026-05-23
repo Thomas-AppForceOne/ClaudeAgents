@@ -1,3 +1,35 @@
+/**
+ * gan-evaluator prompt-structure suite — reads the SHIPPED agents/gan-evaluator.md
+ * verbatim and asserts the prompt documents the contract the evaluator-core
+ * code enforces, so prompt and code can never drift apart.
+ *
+ * Two concerns:
+ * 1. Evidence-bundle shape (T1): the prompt must spell out the artifact path,
+ *    the top-level fields, the per-criterion fields, the four verdict values,
+ *    the join key against the contract criterion `name`, how to gather
+ *    traceEventRefs as `<eventType>:<sequenceNumber>`, a deterministic
+ *    reproductionCommand, how to fill deltaFromContract, and that a `fail`
+ *    verdict carries BOTH repro + delta. It must NOT carry the legacy
+ *    feedback-artifact shape, and must preserve the scoring/plan guidance.
+ * 2. Doc-lint snapshot input (BEH-1/2/3, FUNC-4): a `docLintCmd` bullet must
+ *    document absence-tolerance, baseline delta-vs-absolute, severity
+ *    gates-or-warns routing, and layer-(c) per-criterion gating with no
+ *    special-casing.
+ *
+ * Boundary discipline (the load-bearing negative assertions): the shipped
+ * prompt must leak NO repo-internal process references (roadmap.md,
+ * PROJECT_CONTEXT, etc.) and NO ecosystem-specific tokens (npm, package.json,
+ * tsconfig.json, ...), enforcing lint-no-stack-leak — the framework prompt is
+ * the product and must stay stack-agnostic.
+ *
+ * docLintBullet() slices out just the docLintCmd bullet (from its marker to the
+ * next snapshot-input bullet) so the BEH/HYG assertions target that one bullet
+ * rather than the whole prompt — e.g. HYG-1 checks the bullet itself carries no
+ * ecosystem token and restates no documentation-standard prose.
+ *
+ * The string and regex tokens here are search terms / expected prompt content,
+ * not code.
+ */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';

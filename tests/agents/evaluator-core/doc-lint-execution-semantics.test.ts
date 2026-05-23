@@ -1,4 +1,29 @@
-
+/**
+ * Doc-lint execution-semantics suite — specifies how an EMITTED doc-lint
+ * invocation row (the plan field built by buildDocLintInvocations) is routed at
+ * evaluation time. The plan emission itself is tested in doc-lint-invocations;
+ * here the local routeDocLintFinding models the three BEH rules the evaluator
+ * must apply when it actually runs a row against a host.
+ *
+ * BEH-1 absence-tolerance: a doc-lint tool missing on the host never fails the
+ * attempt. `absenceSignal: 'warning'` surfaces a warning (parallel to auditCmd
+ * absence handling); `'silent'` surfaces nothing — but neither fails.
+ * BEH-2 baseline: `delta` only scores a finding the diff INTRODUCED (a
+ * pre-existing finding in the base ref is excused), whereas `absolute` scores
+ * any finding including pre-existing ones.
+ * BEH-3 severity routing: a scored finding gates or warns by severity —
+ * `blocker` fails the attempt, `warning` records/surfaces without failing,
+ * `advisory` routes onward and never blocks.
+ *
+ * The final block covers layer (c): documentation criteria gate through the
+ * ordinary per-criterion score-vs-threshold path (scoreCriterion), with no
+ * special-casing — and passing every functional criterion does NOT rescue a
+ * run whose gating doc criterion scored below threshold.
+ *
+ * routeDocLintFinding and scoreCriterion are local reference models of the
+ * routing/scoring rules, kept here so the BEH semantics are pinned even though
+ * the production evaluator wires them elsewhere.
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -46,6 +71,8 @@ function routeDocLintFinding(
     return { failsAttempt: false, routesOnward: false };
   }
 
+  // BEH-2 crux: in `absolute` mode every finding is scored; in `delta` mode
+  // only a finding the diff introduced (not pre-existing in the base ref) is.
   const scored = row.baseline === 'absolute' ? true : !finding.preExisting;
   if (!scored) {
     return { failsAttempt: false, routesOnward: false };
@@ -205,6 +232,8 @@ describe('BEH-3 — layer (c) documentation criteria gate via the per-criterion 
 
   it('layer (c) — passing every functional criterion but failing a gating doc criterion is NOT a passing run', () => {
 
+    // The run passes only if functional criteria pass AND no gating doc
+    // criterion fails — a failing doc criterion vetoes an otherwise-green run.
     const functionalPass = scoreCriterion(9, 8) === 'pass';
     const docCriterionFails = scoreCriterion(5, 8) === 'fail';
     const runPasses = functionalPass && !docCriterionFails;

@@ -1,3 +1,31 @@
+/**
+ * GAN skill trace-wiring suite — reads the SHIPPED skills/gan/SKILL.md verbatim
+ * and asserts it documents every point where the orchestrator must wire the
+ * run-trace library into the loop, so the operational contract stays in the
+ * skill that drives the loop, not just in the trace code.
+ *
+ * It checks a dedicated "Run-trace integration points" section names the four
+ * core event classes (orchestratorMilestone / agentAttempt / llmCall /
+ * toolCall) and documents five wiring points, each by its helper name:
+ * 1. heartbeat (`[<role>] thinking...` via formatHeartbeat) emitted to stderr
+ *    before an agent's first LLM call; also the per-call and sprint-end
+ *    summary formatters.
+ * 2. trustEvent at trust-prompt resolution (buildTrustEventBody), including the
+ *    [v]/[a]/[r]/[c] choice keys and the runWithoutProjectCommands outcome.
+ * 3. validationAbort on validateAll() abort (buildValidationAbortBody) with the
+ *    payload preserved verbatim.
+ * 4. `--recover` reconstructing resume sequence + attempt counters
+ *    (reconstructRecoveryState) gaplessly, with NO external counter file.
+ * 5. the A1 safetyHalt with safetyClass=loopDetected against the reserved
+ *    extension point.
+ *
+ * Boundary discipline: the section must say "the framework" (not a runtime
+ * name), state traces are never transmitted off-machine, and — scoped to the
+ * region between the section heading and the next `## Spawn discipline` heading
+ * — leak no ecosystem-specific tokens (lint-no-stack-leak).
+ *
+ * The string/regex literals are expected SKILL.md content, not code.
+ */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';

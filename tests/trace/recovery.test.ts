@@ -1,3 +1,30 @@
+/**
+ * Recovery-state reconstruction suite — proves a `--recover` resume can be
+ * driven entirely from the event files, with no external counter/state file.
+ *
+ * Sequence continuation (gaplessness): for a trace ending at sequence N,
+ * reconstructRecoveryState / nextRecoverySequence return N+1, and a TraceEmitter
+ * started at that resume point continues with no gap and no collision — the
+ * combined on-disk sequence stays a contiguous run. An empty/never-started
+ * trace resumes at 0.
+ *
+ * Attempt-counter reconstruction: per-role attemptCount and highestAttemptNumber
+ * are derived purely from the agentAttempt events (no counter file), a trace
+ * with none yields an empty per-role map, and an emitter-produced trace
+ * round-trips to the same counts.
+ *
+ * Prototype-pollution guard (recovery reuses the scan's guard): an adversarial
+ * `__proto__` event file is dropped by the scan and must not pollute
+ * Object.prototype, the counter map, or admit a phantom role; the reconstructed
+ * counter map is itself a null-prototype object.
+ *
+ * Forward-compat: recovery resumes PAST an unknown-class event that holds the
+ * highest sequence (the resume point still advances to N+1 gaplessly) while
+ * attributing attempt counts only to the known agentAttempt events.
+ *
+ * writeRawEvent plants event files directly (bypassing the emitter) so tests
+ * can construct mixed-class, malformed, and unknown-class traces by hand.
+ */
 
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -104,6 +131,8 @@ describe('recovery sequence continuation', () => {
     expect(ev3.sequenceNumber).toBe(3);
     expect(ev4.sequenceNumber).toBe(4);
 
+    // The pre-existing 0..2 and the resumed 3..4 form one contiguous run —
+    // this is the gaplessness invariant a resume must preserve.
     const { events } = scanEvents(root);
     expect(events.map((e) => e.sequenceNumber)).toEqual([0, 1, 2, 3, 4]);
   });
@@ -120,6 +149,9 @@ describe('attempt-counter reconstruction (no external counter file)', () => {
   it('reconstructs per-role attempt count and highest attemptNumber from agentAttempt events', () => {
     const root = makeRoot();
 
+    // gan-generator attempts three times (seq 1,3,4) interleaved with one
+    // gan-evaluator attempt — so per-role counts must be attributed by role,
+    // not by total agentAttempt count.
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
     writeRawEvent(root, 2, agentAttempt(2, 'gan-evaluator', 1));
@@ -225,6 +257,8 @@ describe('forward-compat: recovery past an unknown event class', () => {
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
 
+    // The highest-sequence event is an unknown class; the resume point must
+    // still advance past it (to 3) even though recovery can't interpret it.
     writeRawEvent(root, 2, unknownClass(2));
 
     const state = reconstructRecoveryState(root);

@@ -1,3 +1,29 @@
+/**
+ * Evidence-bundle verifier suite — guards the four independent gates that make
+ * an evaluator's verdict bundle trustworthy. verifyEvidenceBundle runs all four
+ * and reports each failure tagged by `check`, so the tests assert on the
+ * specific check rather than just an overall pass/fail.
+ *
+ * The four checks:
+ * - schema: the bundle validates against evaluator-evidence-bundle. An ajv
+ *   error (e.g. an out-of-enum verdict, a missing top-level field) must surface
+ *   in `schemaErrors` and as a `schema` failure, never be swallowed.
+ * - joinKey: every criterion `name` must exist in the sprint contract; an
+ *   unknown name fails and the offending name is named in the detail (catches
+ *   a typo'd criterion claiming a verdict for nothing in the contract).
+ * - refIntegrity: every `traceEventRef` (`<eventType>:<sequence>`) must resolve
+ *   to a real event AND its eventType must match the event at that sequence —
+ *   so a dangling sequence and a type-mismatched ref both fail. An empty
+ *   refs array (a skipped criterion) resolves trivially.
+ * - failCompleteness: a `fail` verdict must carry BOTH a reproductionCommand
+ *   and a deltaFromContract; an empty reproductionCommand counts as missing.
+ *   checkFailCompleteness is unit-tested directly: it names every absent field,
+ *   only the absent field, and ignores non-fail verdicts entirely.
+ *
+ * Fixtures: trace() supplies two resolvable events at seq 42/43; CONTRACT names
+ * the two criteria validBundle() references, so the happy path passes all four
+ * checks and each negative test perturbs exactly one field.
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -143,6 +169,8 @@ describe('evidence_bundle_ref_integrity', () => {
   it('rejects a ref whose eventType does not match the event at that sequence', () => {
     const bundle = validBundle() as { criteria: { evidence: { traceEventRefs: string[] } }[] };
 
+    // Sequence 42 exists but is an llmCall, so claiming `toolCall:42` is a
+    // type mismatch — refIntegrity must reject it, not just check existence.
     bundle.criteria[0]!.evidence.traceEventRefs = ['toolCall:42'];
     const result = verifyEvidenceBundle(bundle, CONTRACT, trace());
     expect(result.ok).toBe(false);
@@ -220,6 +248,8 @@ describe('evidence_bundle_fail_carries_repro_and_delta', () => {
     ).toEqual(['reproductionCommand']);
   });
 
+  // An empty-string command is present-but-useless; the gate must treat it as
+  // missing so a fail can't be "documented" with a blank repro step.
   it('checkFailCompleteness treats an empty reproductionCommand as missing', () => {
     expect(
       checkFailCompleteness({

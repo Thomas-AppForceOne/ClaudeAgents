@@ -1,3 +1,26 @@
+/**
+ * Trace integration-body builders suite — these helpers shape the two event
+ * bodies the orchestrator wires in from outside the trace library (trust
+ * prompts and validation aborts), so the suite guards faithful mapping into a
+ * schema-valid envelope.
+ *
+ * trustEvent (buildTrustEventBody): each of the four userChoice outcomes maps
+ * to its OWN enum value — the critical case is that `approve` and
+ * `runWithoutProjectCommands` are NOT collapsed (they carry different trust
+ * semantics). Both promptVariant values round-trip, and the helper's output,
+ * wrapped in an envelope, validates against run-trace-v1; an out-of-enum
+ * userChoice is rejected by the schema.
+ *
+ * validationAbort (buildValidationAbortBody / ...FromCode): the F2 error
+ * payload is preserved VERBATIM (deep-equal), including optional file/field/
+ * line/remediation context, while the Error base-class runtime artefacts
+ * (name/stack) are dropped — a trace must record the structured error, not a
+ * stack trace. It also accepts a plain F2-shaped object, not only a real
+ * ConfigServerError, so callers needn't construct the class.
+ *
+ * envelope() supplies the shared header (sequence/eventType/timestamp/runId) so
+ * each test can validate the builder output as a complete event.
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -136,6 +159,8 @@ describe('validation_abort_builder_preserves_f2_payload_verbatim', () => {
     expect(body.errorPayload.remediation).toBe('Update the file to schemaVersion: 1.');
   });
 
+  // A trace records the structured F2 error, not a runtime stack trace — so
+  // the inherited Error.name/Error.stack must not leak into the payload.
   it('does not carry the Error base-class runtime artefacts (name/stack)', () => {
     const error = createError('PathEscape', { message: 'm' });
     const body = buildValidationAbortBody('overlay', error);

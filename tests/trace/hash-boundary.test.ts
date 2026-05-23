@@ -1,3 +1,23 @@
+/**
+ * promptRef hash-boundary suite — defines exactly which request fields are
+ * inside the identity hash and which are deliberately excluded, so the hash is
+ * a stable cache/dedup key for "the same prompt" across runs.
+ *
+ * Determinism: equal content hashes to a byte-identical ref, and the ref is a
+ * bare lowercase 64-hex string with NO `sha256:` prefix (the storage layer
+ * assumes that exact shape). Message history is order-SENSITIVE — reversing two
+ * turns changes the ref — because turn order is part of prompt identity.
+ *
+ * Boundary correctness — the load-bearing distinction:
+ * - IN-boundary (must change the ref): model, systemPrompt, userPrompt,
+ *   messageHistory, toolDefinitions. Each is varied alone and must differ.
+ * - OUT-of-boundary (must NOT change the ref): sampling/runtime knobs and
+ *   trace metadata — temperature, topP, topK, seed, maxTokens, runId,
+ *   timestamp. Each is varied alone, and then ALL at once, and the ref must
+ *   stay equal to the base. This keeps the hash keyed to *what was asked*, not
+ *   *how it was sampled or when it ran*, so two runs with the same prompt but
+ *   different seeds/timestamps still collide intentionally.
+ */
 
 import { describe, expect, it } from 'vitest';
 

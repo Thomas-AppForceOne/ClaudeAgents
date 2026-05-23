@@ -1,3 +1,17 @@
+/**
+ * Public-surface guard for the trace barrels — pins what the Sprint-3 work
+ * adds to the package's API and proves it didn't drop the Sprint-2 surface.
+ *
+ * Why this exists: helpers can be implemented yet never wired into a barrel,
+ * leaving them unreachable to consumers and to the rest of the framework. This
+ * suite asserts every new Sprint-3 helper is a callable export from BOTH the
+ * trace barrel (src/trace/index.js) and the top-level public barrel
+ * (src/index.js) — re-export, not just internal definition — and that the
+ * pre-existing Sprint-2 surface is still reachable, so a re-export refactor
+ * can't silently regress the API. A `typeof === 'function'` check is a
+ * deliberately coarse but stable contract: it survives signature changes while
+ * still catching a missing or renamed export.
+ */
 
 import { describe, expect, it } from 'vitest';
 

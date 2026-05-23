@@ -1,4 +1,29 @@
-
+/**
+ * buildEvaluatorPlan suite — proves the evaluator's deterministic core plan is
+ * assembled correctly from the active-stack snapshot, sprint plan, and worktree,
+ * and that polyglot stacks stay strictly isolated.
+ *
+ * Per-section guards:
+ * - empty/minimal: an empty active set yields empty arrays and an empty
+ *   buildTestLint; a minimal `generic` stack emits a single active stack with
+ *   no surfaces/commands but still contributes a secrets scan for its glob.
+ * - command + surface plumbing (web-node): auditCmd (with its absenceSignal),
+ *   build/test/lint commands, and a security surface are emitted only when a
+ *   touched file matches both the surface's scope AND a keyword; triggerEvidence
+ *   records the matched files and the hit keywords, and the template text is
+ *   carried verbatim.
+ * - polyglot: two active stacks each contribute their own surfaces and audits,
+ *   and mergedSplicePoints feed evaluatorAdditionalChecks through unchanged.
+ * - cross-contamination (the central invariant): a stack-A surface, secrets
+ *   scan, or audit never applies to a file that lives only in stack-B scope —
+ *   even when the file's CONTENT contains the other stack's keyword (the decoy
+ *   fixtures), because scope, not content, gates applicability.
+ * - determinism: identical input yields deep-equal and byte-identical-JSON
+ *   output, with active stacks, secrets scans, and surface keys all sorted.
+ *
+ * Note the decoy worktree contents embed the other stack's keyword inside the
+ * file body specifically to prove scope wins over a content match.
+ */
 
 import { describe, expect, it } from 'vitest';
 
@@ -148,6 +173,9 @@ describe('buildEvaluatorPlan', () => {
       lintCmd: 'run-lint',
     });
 
+    // handler.ts is in scope and contains both `app.get(` and `req.query`, so
+    // the surface instantiates; package.json is in scope but matches no keyword,
+    // so it contributes no surface row.
     expect(plan.securitySurfacesInstantiated.length).toBe(1);
     const surface = plan.securitySurfacesInstantiated[0];
     expect(surface.stack).toBe('web-node');
@@ -226,6 +254,10 @@ describe('buildEvaluatorPlan', () => {
 
     const plan = buildEvaluatorPlan(snapshot, sprintPlan, worktree);
 
+    // The surface may legitimately not instantiate at all (the decoy file is
+    // out of scope); the guard asserts only that IF it did, it never claimed
+    // the cross-stack file — so the test passes whether the surface is absent
+    // or present-but-correctly-scoped.
     const wn = plan.securitySurfacesInstantiated.find(
       (s) => s.stack === 'web-node' && s.id === 'route_input_validation',
     );

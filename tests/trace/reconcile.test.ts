@@ -1,3 +1,31 @@
+/**
+ * Index-reconciliation suite — proves the run index is a derived, fully
+ * regenerable view of the event files, and that reconciliation is hardened
+ * against malformed and adversarial event data.
+ *
+ * Events are authoritative: a lagging or disagreeing index is rebuilt to match
+ * what is actually on disk (extra on-disk events override a stale count), and
+ * deleting the index then regenerating yields an object equal to the original —
+ * so the index never holds state that the events can't reproduce. buildIndex
+ * derives every field (counts / disposition) purely from the event list.
+ *
+ * Unrecoverable classification (two predicates): a run is unrecoverable if any
+ * event has a malformed envelope, OR if more than one sequence is missing. A
+ * well-formed run with at most one gap, an empty/never-started run, and any
+ * emitter-produced run are all recoverable.
+ *
+ * Prototype-pollution guard: safeMergeParsedObject rejects __proto__ /
+ * constructor / prototype keys and returns a null-prototype copy, and a full
+ * reconcile over an adversarial `__proto__` event file must neither pollute
+ * Object.prototype nor admit the event (it counts as malformed -> unrecoverable).
+ *
+ * Forward-compat (T1 reader invariant): an unknown-but-well-formed event class
+ * (what a newer framework version might write) is tolerated — skipped from the
+ * typed `events` list, surfaced in `unknownClassEvents` with a warning, and
+ * still counted in the reconciled index — without marking the run malformed. A
+ * malformed envelope on an unknown class is still malformed, and a forbidden
+ * key as the `eventType` VALUE is rejected (pollution vector closed).
+ */
 
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
@@ -38,6 +66,9 @@ afterEach(() => {
   }
 });
 
+// Writes an event file directly, bypassing the emitter, so tests can plant
+// hand-crafted, malformed, or adversarial bodies the emitter would never
+// produce — the reconciler must cope with whatever is on disk.
 function writeRawEvent(root: string, seq: number, body: string): void {
   const dir = eventsDir(root);
   mkdirSync(dir, { recursive: true });
@@ -70,6 +101,8 @@ describe('index_reconciliation_events_authoritative', () => {
       disposition: 'completed',
     });
 
+    // Plant a deliberately stale index (totalEvents: 0) over two real events;
+    // reconcile must rebuild it to reflect the events, not trust the index.
     writeFileSync(
       indexPath(root),
       JSON.stringify({ runId: RUN_ID, totalEvents: 0, countByClass: {} }),
@@ -145,6 +178,8 @@ describe('unrecoverable_run_classification', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, JSON.stringify(validEvent(0)));
 
+    // Second event omits the required `eventType` — a malformed envelope, which
+    // alone makes the whole run unrecoverable (predicate a).
     writeRawEvent(
       root,
       1,
