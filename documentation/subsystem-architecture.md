@@ -6,13 +6,22 @@ High-level technical documentation showing how the GAN framework subsystems coop
 
 ## 1 — Component architecture
 
-```mermaid
-flowchart TB
-    CLI["gan CLI\nsrc/cli/"]
-    SKILL["/gan skill\nskills/gan/"]
+Left-to-right layout following the natural flow: entry points → agent layer → config server → storage.
+Related components are grouped: entry points together, trace below the agents that feed it,
+schemas and docker adjacent to the config server they serve.
 
-    subgraph AL["Agent layer  ·  agents/"]
-        direction LR
+```mermaid
+flowchart LR
+    subgraph ENTRY["Entry points"]
+        direction TB
+        SKILL["/gan skill\nskills/gan/"]
+        CLI["gan CLI\nsrc/cli/"]
+    end
+
+    HOOK["Confinement hook\nPreToolUse"]
+
+    subgraph AL["Agent layer · agents/"]
+        direction TB
         PL["planner"]
         CP["contract-proposer"]
         CR["contract-reviewer"]
@@ -20,9 +29,8 @@ flowchart TB
         EV["evaluator\n+ evaluator-core"]
     end
 
-    HOOK["Confinement hook\nPreToolUse  ·  H1"]
-
-    subgraph CS["Config Server  ·  src/config-server/  ·  MCP"]
+    subgraph CS["Config Server · src/config-server/ · MCP"]
+        direction TB
         MT["Tool surface\nreads · writes · validate"]
         TG["Trust gate"]
         RP["Resolution pipeline\ndetection → cascade → invariants"]
@@ -30,36 +38,35 @@ flowchart TB
         MT --> TG --> RP --> ST
     end
 
-    subgraph TR["Trace  ·  src/trace/"]
-        EM["Emitter"]
-        RC["Reconciler  ·  O2"]
-    end
-
+    SCH["schemas/"]
     DK["docker module\nsrc/modules/docker/"]
-    SCH["schemas/\nJSON Schemas  ·  F3"]
+
+    subgraph TR["Trace · src/trace/"]
+        direction LR
+        EM["Emitter"]
+        RC["Reconciler"]
+    end
 
     subgraph ZN["Storage zones"]
-        Z1[".claude/gan/\nzone 1 · config"]
-        Z2R["~/.gan-runs-data/\nzone 2 · runs + traces"]
-        Z2M["~/.gan-module-state/\nzone 2 · module state"]
-        Z3[".gan-state/\nzone 3 · cache"]
+        direction TB
+        Z1["zone 1 · config\n.claude/gan/"]
+        Z2R["zone 2 · runs\n~/.gan-runs-data/"]
+        Z2M["zone 2 · module state\n~/.gan-module-state/"]
+        Z3["zone 3 · cache\n.gan-state/"]
     end
 
-    CLI -->|"stdio MCP"| MT
-    SKILL -->|"orchestrates"| AL
-    AL -->|"MCP tool calls"| MT
-    HOOK -.->|"gates all agent tool calls"| AL
-
-    RP -->|"validates against"| SCH
-    ST --> Z1 & Z2R & Z2M & Z3
-
-    SKILL -->|"emit trace events"| EM
-    AL -->|"emit trace events"| EM
-    EM --> Z2R
-    RC -->|"reads for recovery"| Z2R
-
-    DK -->|"registered with"| MT
-    DK -->|"state"| Z2M
+    SKILL      -->|"orchestrates"| AL
+    CLI        -->|"stdio MCP"| MT
+    HOOK      -.->|"gates all tool calls"| AL
+    AL         -->|"MCP tool calls"| CS
+    DK         -->|"registered with"| MT
+    RP         -->|"validates against"| SCH
+    ST         --> Z1 & Z2R & Z2M & Z3
+    SKILL      -->|"emit events"| EM
+    AL         -->|"emit events"| EM
+    EM         --> Z2R
+    RC         -->|"reads"| Z2R
+    DK         --> Z2M
 ```
 
 ---
@@ -123,19 +130,19 @@ Called on every `getResolvedConfig` tool invocation.
 flowchart TD
     IN["MCP tool call\ngetResolvedConfig"]
 
-    subgraph TG["Trust gate  ·  trust/  ·  F4 R5"]
+    subgraph TG["Trust gate · trust/"]
         HC["Content-hash all overlay + stack files"]
-        TP["Compare against approved hashes\nPrompt user if new or changed  ·  F6"]
+        TP["Compare against approved hashes\nPrompt user if new or changed"]
         HC --> TP
     end
 
-    subgraph RP["Resolution pipeline  ·  resolution/"]
-        DT["Detection\nScan project for stack indicators  ·  C2"]
-        SL["Stack loader\nBuilt-in → tier-3 → tier-2 → tier-1  ·  C5"]
-        OL["Overlay loader\nUser → project tiers  ·  C3"]
-        CM["Cascade merge\nOverlays applied on top of stacks  ·  C4"]
-        SV["Schema validation\nstack-v1.json · overlay-v1.json  ·  F3"]
-        IV["Invariants\n8 cross-field constraint checks  ·  F5"]
+    subgraph RP["Resolution pipeline · resolution/"]
+        DT["Detection\nScan project for stack indicators"]
+        SL["Stack loader\nBuilt-in → tier-3 → tier-2 → tier-1"]
+        OL["Overlay loader\nUser → project tiers"]
+        CM["Cascade merge\nOverlays applied on top of stacks"]
+        SV["Schema validation\nstack-v1.json · overlay-v1.json"]
+        IV["Invariants\n8 cross-field constraint checks"]
         DT --> SL --> OL --> CM --> SV --> IV
     end
 
@@ -159,14 +166,14 @@ flowchart LR
         OVP[".claude/gan/project.md\nproject overlay"]
         OVU["~/.claude/gan/user.md\nuser overlay"]
         CST[".claude/gan/stacks/\nstack customizations"]
-        CMC[".claude/gan/modules/\nmodule configs  e.g. docker.yaml"]
+        CMC[".claude/gan/modules/\nmodule configs e.g. docker.yaml"]
     end
 
     subgraph Z2R["Zone 2a — runs\n~/.gan-runs-data/repo-key/"]
         direction TB
-        RT["run-trace-*.ndjson\nT1 structured event log"]
+        RT["run-trace-*.ndjson\nstructured event log"]
         RI["run-index.json"]
-        RA["recovery-anchor.json  ·  O2"]
+        RA["recovery-anchor.json"]
         RL["run-lock"]
     end
 
@@ -202,5 +209,5 @@ flowchart LR
 
 - **Config Server is the sole gateway to zone 1 and zone 2.** Agents and the skill never read config files or run-state directly — they call MCP tools.
 - **Zone 3 is the only shared scratch space agents write to directly.** It is ephemeral; nothing in zone 3 survives worktree removal.
-- **The trace emitter is the only writer to the zone-2 run log.** The reconciler (O2 recovery) is the only reader outside the normal flow.
+- **The trace emitter is the only writer to the zone-2 run log.** The reconciler is the only reader outside the normal flow.
 - **Trust gate runs before every resolution.** No resolved config is served from an unapproved file hash.
