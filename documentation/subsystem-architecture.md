@@ -14,6 +14,7 @@ schemas and docker adjacent to the config server they serve.
 ---
 title: Component architecture
 ---
+%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
     subgraph ENTRY["Entry points"]
         direction TB
@@ -76,6 +77,7 @@ flowchart LR
 ---
 title: /gan run sequence
 ---
+%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 sequenceDiagram
     participant U as User
     participant SK as /gan skill
@@ -132,6 +134,7 @@ Called on every `getResolvedConfig` tool invocation.
 ---
 title: Config server resolution pipeline
 ---
+%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart TD
     IN["MCP tool call\ngetResolvedConfig"]
 
@@ -168,6 +171,7 @@ What lives where, and what owns each zone.
 ---
 title: Storage topology
 ---
+%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
     subgraph Z1["Zone 1 — config"]
         direction TB
@@ -222,6 +226,7 @@ produces a byte-stable `EvaluatorPlan` for the same inputs regardless of call or
 ---
 title: Evaluator-core internals
 ---
+%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
     subgraph IN["Inputs — assembled by the evaluator agent"]
         direction TB
