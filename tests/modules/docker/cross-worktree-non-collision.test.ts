@@ -1,4 +1,15 @@
-
+// F8 regression: two git worktrees of the SAME repo must share ONE port registry so
+// they cannot collide on a host port. The original bug used a per-worktree state
+// layout, letting each worktree allocate ports in ignorance of its siblings. These
+// tests build a real repo with two `git worktree add` checkouts and assert: (1) both
+// worktrees resolve to the identical registry file path (the test that would fail
+// under the old per-worktree layout); (2) worktree B sees worktree A's allocation
+// and refuses the same port with PortInUse; (3) discovery hands each worktree its own
+// distinct port; and (4) entries stay keyed by canonical worktree path, yielding
+// distinct ports and container names per worktree.
+//
+// Staged fake install + temp module-state store keep the shared registry in a sandbox
+// keyed by the repo root rather than the developer's real state directory.
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,6 +36,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
+// Stage a throwaway install: real package.json (for package-root detection) plus a
+// docker manifest declaring the port-registry state key, so the registry resolves.
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'f8-xwt-modroot-'));
   writeFileSync(
@@ -60,7 +73,8 @@ describe('F8 cross-worktree non-collision regression', () => {
   let store: ModuleStateStoreScope;
 
   beforeEach(() => {
-
+    // Build a real repo with two linked worktrees on separate branches — the exact
+    // topology the F8 bug mishandled. worktreeA/B are sibling checkouts of mainRepo.
     parent = mkdtempSync(path.join(os.tmpdir(), 'f8-xwt-'));
     mainRepo = path.join(parent, 'main');
     worktreeA = path.join(parent, 'wt-a');
@@ -93,11 +107,14 @@ describe('F8 cross-worktree non-collision regression', () => {
   });
 
   it('both worktrees of one repo resolve to the SAME shared registry file (fails under per-worktree layout)', () => {
-
+    // The core anti-collision invariant: the state path is keyed by the shared repo,
+    // so resolving it from either worktree yields the identical file.
     const pathFromA = moduleStatePath(worktreeA, 'docker', 'port-registry');
     const pathFromB = moduleStatePath(worktreeB, 'docker', 'port-registry');
     expect(pathFromA).toBe(pathFromB);
 
+    // And it lives in the shared store, never inside either worktree's own tree (the
+    // negative startsWith checks are what catch a regression back to per-worktree paths).
     expect(pathFromA.startsWith(store.storeRoot + path.sep)).toBe(true);
     expect(pathFromA).not.toContain(path.join('.gan-state', 'modules'));
     expect(pathFromA.startsWith(worktreeA + path.sep)).toBe(false);
@@ -105,10 +122,11 @@ describe('F8 cross-worktree non-collision regression', () => {
   });
 
   it("worktree B's registry sees worktree A's allocation and refuses the same host port", () => {
-
+    // A registry rooted at worktreeA records an allocation...
     const regA = new PortRegistry(worktreeA);
     regA.register(worktreeA, 8080, nameForWorktree(worktreeA));
 
+    // ...and a registry rooted at worktreeB reads it back through the shared file.
     const regB = new PortRegistry(worktreeB);
     const seenFromB = regB.lookup(worktreeA);
     expect(seenFromB).toEqual({ port: 8080, containerName: nameForWorktree(worktreeA) });
@@ -130,6 +148,8 @@ describe('F8 cross-worktree non-collision regression', () => {
     const regB = new PortRegistry(worktreeB);
     regB.register(worktreeB, 8081, nameForWorktree(worktreeB));
 
+    // Discovery is driven through one registry (regB) but queried per worktree path;
+    // because both allocations share that registry, each path resolves to its own port.
     const portA = await discoverPort({ registry: regB, worktreePath: worktreeA });
     const portB = await discoverPort({ registry: regB, worktreePath: worktreeB });
     expect(portA).toBe(8080);
@@ -143,6 +163,8 @@ describe('F8 cross-worktree non-collision regression', () => {
     const regB = new PortRegistry(worktreeB);
     regB.register(worktreeB, 8081, nameForWorktree(worktreeB));
 
+    // A fresh instance over the shared file sees both worktrees' entries, each keyed
+    // by its canonical path (so symlink/relative variations cannot smear two into one).
     const all = new PortRegistry(worktreeA).getAll();
     expect(all).toHaveLength(2);
     const keys = all.map((e) => e.worktreePath).sort();

@@ -1,4 +1,14 @@
-
+// F8 prune-on-load: constructing a PortRegistry reclaims ports held by worktrees that
+// no longer exist on disk, so a deleted worktree cannot strand its port forever. The
+// suite verifies the prune is surgical and durable: only the absent-worktree entry is
+// dropped (the live one is untouched), the freed port can immediately be re-registered,
+// the prune is persisted back to disk (not just held in memory), and — critically —
+// when every worktree still exists there is NO mutation (the on-disk bytes must be
+// unchanged, guarding against a spurious rewrite on every load). One test injects a
+// `worktreeExists` probe for determinism; another exercises the real filesystem probe
+// by actually rm-ing a worktree directory.
+//
+// Staged fake install + temp module-state store keep the registry in a sandbox.
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +32,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
+// Stage a throwaway install: real package.json (for package-root detection) plus a
+// docker manifest declaring the port-registry state key, so the registry resolves.
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'f8-prune-modroot-'));
   writeFileSync(
@@ -88,6 +100,9 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     seed.register(liveWt, 8080, 'live-app');
     seed.register(goneWt, 8081, 'gone-app');
 
+    // Inject a probe that reports every path as existing EXCEPT goneWt's canonical key,
+    // so the prune is deterministic without having to delete a real directory. The probe
+    // is keyed by canonical path because that is how entries are stored.
     const goneKey = canonicalizePath(goneWt);
     const reg = new PortRegistry(scratch, {
       worktreeExists: (p) => p !== goneKey,
@@ -100,11 +115,14 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     expect(all).toHaveLength(1);
     expect(all[0].worktreePath).toBe(canonicalizePath(liveWt));
 
+    // Port 8081 was freed by the prune, so a brand-new worktree may now claim it
+    // without colliding — the whole point of reclaiming absent-worktree ports.
     const otherWt = path.join(scratch, 'other-worktree');
     mkdirSync(otherWt, { recursive: true });
     expect(() => reg.register(otherWt, 8081, 'other-app')).not.toThrow();
     expect(reg.lookup(otherWt)).toEqual({ port: 8081, containerName: 'other-app' });
 
+    // The live entry survived the prune and the subsequent re-registration unscathed.
     expect(reg.lookup(liveWt)).toEqual({ port: 8080, containerName: 'live-app' });
   });
 
@@ -118,6 +136,8 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     seed.register(liveWt, 9000, 'live-app');
     seed.register(goneWt, 9001, 'gone-app');
 
+    // No injected probe here: physically delete goneWt so the DEFAULT filesystem
+    // existence check is what drives the prune on the next construction.
     rmSync(goneWt, { recursive: true, force: true });
     expect(existsSync(goneWt)).toBe(false);
 
@@ -142,6 +162,8 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
 
     rmSync(goneWt, { recursive: true, force: true });
 
+    // Construct + getAll() to trigger the load-time prune, then discard the instance;
+    // the reclaim must be flushed to disk, so we re-read the file rather than the object.
     new PortRegistry(scratch).getAll();
 
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
@@ -167,6 +189,9 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
     const before = readFileSync(filePath, 'utf8');
 
+    // Both worktrees still exist, so a load must NOT rewrite the file — comparing the
+    // full text before/after catches a spurious re-serialisation that prune-on-load
+    // could otherwise introduce on every construction.
     new PortRegistry(scratch).getAll();
 
     expect(readFileSync(filePath, 'utf8')).toBe(before);

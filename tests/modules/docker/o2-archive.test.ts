@@ -1,4 +1,11 @@
-
+// O2 non-interference regression: config-server operations that have nothing to do
+// with the docker module must NEVER touch the docker module-state bytes. The suite
+// seeds a fixed, byte-known docker port-registry file, hashes it, then runs each of
+// validateAll, listModules, getModuleState/setModuleState (for an UNRELATED module),
+// and a registerModule probe — re-hashing after each to assert the docker file is
+// byte-identical. A final test runs the whole O2-style pipeline back-to-back to prove
+// the no-mutation guarantee holds in aggregate, not just per call. This guards against
+// a read or unrelated write accidentally rewriting/normalising a sibling module's state.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -20,6 +27,8 @@ import {
   type ModuleStateStoreScope,
 } from '../../helpers/module-state-store.js';
 
+// Hash the raw file bytes; any rewrite (even a semantically-equal re-serialisation
+// with different key order or whitespace) changes this digest and fails a test.
 function sha256OfFile(p: string): string {
   return createHash('sha256').update(readFileSync(p)).digest('hex');
 }
@@ -30,6 +39,8 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
   let preHash: string;
   let store: ModuleStateStoreScope;
 
+  // A fixed, canonical-looking registry document written verbatim to disk. Because the
+  // exact bytes are pinned here, any later normalisation by an unrelated op is detectable.
   const deterministicContent =
     '{\n  "entries": {\n    "/canonical/worktree-a": {\n      "containerName": "app-a",\n      "port": 8080\n    }\n  },\n  "version": 1\n}\n';
 
@@ -38,6 +49,8 @@ describe('O2 archive non-interference: docker module state bytes are inviolate',
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-o2-archive-'));
 
+    // Repo-keyed state path; seed the docker file with the known bytes and snapshot
+    // its hash as the baseline every test asserts against.
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     statePath = moduleStatePath(scratch, 'docker', 'port-registry');
