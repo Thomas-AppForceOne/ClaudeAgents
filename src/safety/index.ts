@@ -12,9 +12,14 @@
  * types, and the pure effective-safety-config resolver that folds the seed
  * defaults, the merged overlay's `safety.*` block, and the one-off runtime flags
  * (precedence flags > overlay > defaults) into the {@link EffectiveSafetyConfig}
- * the orchestrator threads into the attempt-start checks. This is the only
- * import surface other subsystems should depend on. Pure re-exports — no runtime
- * behaviour of its own.
+ * the orchestrator threads into the attempt-start checks, and the A1 recovery
+ * pieces — the recover-only `--reset-attempts` validation, the
+ * `failed-loop-detected` terminal-reason record builder, and the pure mapping
+ * from the trace-reconstructed attempt state plus the `--reset-attempts` flag to
+ * the effective starting counters a recovered sprint resumes with (preserved by
+ * default, zeroed under `--reset-attempts`). This is the only import surface
+ * other subsystems should depend on. Pure re-exports — no runtime behaviour of
+ * its own.
  */
 
 export {
@@ -74,3 +79,14 @@ export {
   type SafetyOverlayBlock,
   type ResolveEffectiveSafetyConfigInput,
 } from './config.js';
+
+export {
+  FAILED_LOOP_DETECTED_TERMINAL_REASON,
+  validateResetAttemptsUsage,
+  buildLoopHaltTerminalRecord,
+  effectiveStartingCounters,
+  type ResetAttemptsValidation,
+  type ResetAttemptsFlags,
+  type LoopHaltTerminalRecord,
+  type EffectiveStartingCountersInput,
+} from './recovery.js';
