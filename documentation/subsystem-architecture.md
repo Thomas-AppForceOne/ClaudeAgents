@@ -7,9 +7,6 @@ High-level technical documentation showing how the GAN framework subsystems coop
 ## 1 — Component architecture
 ```mermaid
 flowchart LR
-    TITLE["`# Component architecture`"]
-    style TITLE fill:none,stroke:none
-
     subgraph ENTRY["Entry points"]
         direction TB
         SKILL["/gan skill"]
@@ -49,7 +46,6 @@ flowchart LR
         Z3["zone 3 · cache"]
     end
 
-    TITLE      ~~~ ENTRY
     SKILL      -->|"orchestrates"| AL
     CLI        -->|"stdio MCP"| MT
     HOOK      -.->|"gates all tool calls"| AL
@@ -68,9 +64,6 @@ flowchart LR
 
 ## 2 — /gan run sequence
 ```mermaid
----
-title: /gan run sequence
----
 sequenceDiagram
     participant U as User
     participant SK as /gan skill
@@ -122,9 +115,6 @@ sequenceDiagram
 ## 3 — Config server resolution pipeline
 ```mermaid
 flowchart TD
-    TITLE["`# Config server resolution pipeline`"]
-    style TITLE fill:none,stroke:none
-
     IN["MCP tool call\ngetResolvedConfig"]
 
     subgraph TG["Trust gate"]
@@ -146,7 +136,6 @@ flowchart TD
     CA["Resolution cache\nWithin a single run"]
     OUT["Resolved config returned"]
 
-    TITLE ~~~ IN
     IN --> TG --> RP --> CA --> OUT
     CA -.->|"cache hit — skip pipeline"| OUT
 ```
@@ -156,9 +145,6 @@ flowchart TD
 ## 4 — Storage topology
 ```mermaid
 flowchart LR
-    TITLE["`# Storage topology`"]
-    style TITLE fill:none,stroke:none
-
     subgraph Z1["Zone 1 — config"]
         direction TB
         OVP["project overlay"]
@@ -193,7 +179,6 @@ flowchart LR
     DK["docker module"]
     AG["Agents"]
 
-    TITLE ~~~ CS
     CS -->|"reads / writes overlays + stacks"| Z1
     CS -->|"run lock · run progress"| Z2R
     TR -->|"appends NDJSON events"| Z2R
@@ -207,9 +192,6 @@ flowchart LR
 ## 5 — Evaluator-core internals
 ```mermaid
 flowchart LR
-    TITLE["`# Evaluator-core internals`"]
-    style TITLE fill:none,stroke:none
-
     subgraph IN["Inputs — assembled by the evaluator agent"]
         direction TB
         SNP["EvaluatorCoreSnapshot\nactiveStacks[]\n  · name · scope · secretsGlob\n  · auditCmd\n  · buildCmd · testCmd · lintCmd\n  · securitySurfaces[]\nmergedSplicePoints\n  · evaluator.additionalChecks"]
@@ -239,7 +221,6 @@ flowchart LR
         OAD["evaluatorAdditionalChecks[]\ncommand · on_failure · tier"]
     end
 
-    TITLE ~~~ IN
     SNP --> PB
     SPL --> PB
     WTS --> PB
