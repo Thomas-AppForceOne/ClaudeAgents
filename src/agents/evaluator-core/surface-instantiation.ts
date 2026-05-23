@@ -57,13 +57,24 @@ interface SurfaceLike {
 
 /**
  * One instantiated surface row. Shared by both the security and
- * documentation plan-output arrays (they carry the identical shape).
+ * documentation plan-output arrays (they carry the identical shape), so a
+ * consumer can treat the two families uniformly.
  */
 export interface InstantiatedSurfaceRow {
+  /** Declaring stack's name; the `<stack>` half of the qualified id. */
   stack: string;
+  /** The surface's bare id; the `<id>` half. Never globally unique on its
+   *  own — only `(stack, id)` together is. */
   id: string;
+  /** The surface `template` reproduced byte-for-byte (verbatim, per C1);
+   *  this is the criterion text the evaluator scores. */
   templateText: string;
+  /** Evidence (not criterion text): which in-scope files matched and which
+   *  keywords fired, recorded for audit/rationale only. Empty
+   *  `keywordsHit` means the surface fired on scope alone. */
   triggerEvidence: { scopeMatched: string[]; keywordsHit: string[] };
+  /** The files the criterion applies to (the matched in-scope set);
+   *  always a subset of the declaring stack's own scope. */
   appliesToFiles: string[];
 }
 
