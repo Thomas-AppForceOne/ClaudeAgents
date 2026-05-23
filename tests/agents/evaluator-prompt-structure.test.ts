@@ -119,3 +119,89 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
     }
   });
 });
+
+/**
+ * Q5 Sprint 3 — the evaluator prompt's `docLintCmd` snapshot input and the
+ * doc-lint plan-coverage line. These are the prompt-layer assertions for
+ * BEH-1 (absence-tolerance), BEH-3 (severity gates-or-warns + layer-(c)
+ * gating), and the FUNC-4 plan-coverage line. The behaviour itself runs in
+ * the evaluator agent (the layer that runs `auditCmd`/`lintCmd`); this test
+ * proves the prompt instructs that behaviour by reference, with no restated
+ * documentation standard and no ecosystem token.
+ *
+ * The slice helper scopes the field-content assertions to the `docLintCmd`
+ * bullet so a token elsewhere (e.g. in the `auditCmd` bullet) cannot make a
+ * doc-lint assertion pass spuriously.
+ */
+function docLintBullet(): string {
+  const marker = '`snapshot.activeStacks[*].docLintCmd`';
+  const start = prompt.indexOf(marker);
+  expect(start, 'docLintCmd snapshot-input bullet must exist').toBeGreaterThan(-1);
+  const rest = prompt.slice(start);
+  // The bullet plus its sub-bullets, up to the next top-level snapshot
+  // bullet (`- \`snapshot.activeStacks[*].testCmd\``) which begins the
+  // next field.
+  const nextField = rest.indexOf('- `snapshot.activeStacks[*].testCmd`');
+  return nextField === -1 ? rest : rest.slice(0, nextField);
+}
+
+describe('evaluator_prompt_documents_doc_lint_snapshot_input (BEH-1/BEH-3 prompt layer)', () => {
+  it('the snapshot-input list gains a docLintCmd bullet', () => {
+    expect(prompt).toContain('`snapshot.activeStacks[*].docLintCmd`');
+  });
+
+  it('BEH-1 — the bullet instructs absence-tolerance parallel to auditCmd (warn, do not fail for absence alone)', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('absenceSignal');
+    expect(bullet).toContain('absenceMessage');
+    // Surfaces the message as a warning.
+    expect(bullet.toLowerCase()).toContain('warning');
+    // Does NOT score the documentation criterion as failed for absence alone.
+    expect(bullet).toMatch(/do (\*\*)?not(\*\*)? score the documentation criterion as failed/i);
+    // Proceeds with the rest of the plan.
+    expect(bullet.toLowerCase()).toContain('remainder of the plan');
+  });
+
+  it('BEH-2 — the bullet documents the baseline delta-vs-absolute semantics', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('baseline');
+    expect(bullet).toContain('delta');
+    expect(bullet).toContain('absolute');
+    // delta = only the sprint's regression against the base ref.
+    expect(bullet.toLowerCase()).toContain('base ref');
+  });
+
+  it('BEH-3 — the bullet documents the severity gates-or-warns routing', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('severity');
+    // blocker fails; warning records-and-surfaces; advisory routes onward and never blocks.
+    expect(bullet).toMatch(/blocker.{0,40}fail/i);
+    expect(bullet).toMatch(/warning.{0,60}record/i);
+    expect(bullet).toMatch(/advisory.{0,80}never block/i);
+  });
+
+  it('BEH-3 — the bullet states layer-(c) documentation criteria gate through the existing per-criterion path', () => {
+    const bullet = docLintBullet();
+    expect(bullet.toLowerCase()).toContain('per-criterion');
+    expect(bullet).toMatch(/below its `?threshold`?/i);
+    expect(bullet).toMatch(/no special-casing/i);
+  });
+
+  it('FUNC-4 — the Deterministic core plan-coverage list gains a per-stack doc-lint line', () => {
+    expect(prompt).toMatch(/Per-stack doc-lint invocations/i);
+  });
+
+  it('HYG-1 — the docLintCmd bullet restates no documentation-standard prose and carries no ecosystem token', () => {
+    const bullet = docLintBullet();
+    // No restated standard: the bullet references the field, not the rule
+    // text (no "exported function"/"doc comment"/"parameter's meaning"
+    // prose that belongs in documentationSurfaces.template).
+    expect(bullet.toLowerCase()).not.toContain("parameter's meaning");
+    expect(bullet.toLowerCase()).not.toContain('doc comment');
+    // No ecosystem command string (e.g. the doc-lint command lives only in
+    // the owning stack file).
+    for (const token of ['npm', 'doc-lint', 'package.json', 'pnpm', 'yarn']) {
+      expect(bullet, `ecosystem token in docLintCmd bullet: ${token}`).not.toContain(token);
+    }
+  });
+});

@@ -25,6 +25,7 @@ The plan covers:
 
 - Per-stack secrets-scan globs.
 - Per-stack dependency-audit invocations (with the per-ecosystem absence-signal and absence-message handling).
+- Per-stack doc-lint invocations (each carrying its own `scope`, `severity`, `baseline`, and absence-signal handling).
 - Per-stack lint, test, and build commands.
 - Project-supplied additional checks from the overlay splice point.
 - Per-stack security surfaces, cross-referenced against the contract criteria the proposer instantiated.
@@ -37,6 +38,10 @@ You access these fields as **data**. The orchestrator already validated and reso
 
 - `snapshot.activeStacks[*].secretsGlob` — file globs to scan for committed secrets, scoped per stack.
 - `snapshot.activeStacks[*].auditCmd` — dependency-audit invocation, with `absenceSignal` and `absenceMessage` for ecosystems where the tool is missing on the host. When `absenceSignal` fires, surface the `absenceMessage` as a warning, do not score the criterion as failed for tool absence alone, and proceed with the remainder of the plan.
+- `snapshot.activeStacks[*].docLintCmd` — documentation-lint invocation, with `absenceSignal` and `absenceMessage` exactly like `auditCmd`: when `absenceSignal` fires, surface the `absenceMessage` as a warning, do **not** score the documentation criterion as failed for tool absence alone, and proceed with the remainder of the plan. The `docLintInvocations` plan entry carries the fields that drive the rest of the handling:
+  - `baseline` — `delta` means score only the regression introduced by this sprint's diff against the base ref; a pre-existing finding already in the base ref does not fail the run. `absolute` means score the finding regardless of whether it pre-existed.
+  - `severity` — routes the finding: `blocker` fails the attempt; `warning` records the finding in run state and surfaces it without failing; `advisory` routes to the next generator attempt or a follow-up task and never blocks. This is the deterministic layer's gates-or-warns knob; you act on the `severity` the plan entry carries, you do not assign it.
+  - The judgment documentation criteria the proposer instantiated are scored through the existing per-criterion path (below), exactly like any other contract criterion — a documentation criterion scored below its `threshold` fails the attempt with no special-casing.
 - `snapshot.activeStacks[*].testCmd` — per-stack test invocation.
 - `snapshot.activeStacks[*].lintCmd` — per-stack lint invocation.
 - `snapshot.activeStacks[*].buildCmd` — per-stack verification build invocation; falls back gracefully if a stack provides none.
