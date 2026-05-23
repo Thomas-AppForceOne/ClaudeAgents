@@ -45,6 +45,33 @@ securitySurfaces:
     triggers:
       scope:
         - "synthetic/**/*.txt"
+documentationSurfaces:
+  - id: synthetic_doc_keyword_surface
+    template: >
+      Synthetic-second exports must document the SYNTHETIC_FOO contract: each
+      parameter's meaning, the failure modes, and any invariant the caller must
+      uphold.
+    triggers:
+      keywords:
+        - "SYNTHETIC_FOO"
+        - "synthetic-export"
+      scope:
+        - "synthetic/**"
+  - id: synthetic_doc_scope_only_surface
+    template: >
+      Comments added to files inside the synthetic scope must explain a
+      constraint or a non-obvious decision and its rationale, not restate the
+      adjacent code.
+    triggers:
+      scope:
+        - "synthetic/**/*.txt"
+docLintCmd:
+  command: "echo synthetic-second doc-lint"
+  fallback: "echo synthetic-second doc-lint-fallback"
+  absenceSignal: warning
+  absenceMessage: "No documentation linter is configured for the synthetic-second stack."
+  severity: blocker
+  baseline: delta
 ---
 
 # synthetic-second conventions
@@ -54,4 +81,7 @@ roadmap's cross-cutting principle). Exercises every C1 schema field:
 composite detection (both `allOf` and `anyOf`), `scope`, `secretsGlob`,
 `cacheEnv`, `auditCmd` with `absenceSignal: warning`, the three command
 fields, and `securitySurfaces` with both keyword + scope triggers and a
-scope-only trigger.
+scope-only trigger. It also exercises Q5's two fields:
+`documentationSurfaces` with both a keyword + scope trigger and a
+scope-only trigger, and a `docLintCmd` with `severity: blocker`,
+`baseline: delta`, and `absenceSignal: warning`.
