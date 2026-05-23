@@ -1,3 +1,18 @@
+/**
+ * End-to-end tests for `gan trust approve`.
+ *
+ * Approving pins the project's current aggregate config hash into the on-disk
+ * trust cache. These tests verify the happy path prints the project root and a
+ * `sha256:` hash, the `--json` form returns a sorted-key trust record with
+ * `mutated: true`, and a `--note` is stored verbatim and resurfaces in
+ * `trust list` (the approve→list round-trip). A missing `--project-root` is a
+ * usage error (exit 64).
+ *
+ * Isolation invariant: every test points `HOME` at a throwaway temp dir
+ * (makeTmpHome), so the trust cache the CLI reads/writes lives there and never
+ * touches the developer's real ~/.claude trust cache — without this the tests
+ * would mutate shared global state and interfere with each other.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -7,11 +22,14 @@ import path from 'node:path';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
 
+// A fixture project with stable, hashable config files so the aggregate trust
+// hash is deterministic across runs.
 const PROJECT = stackFixturePath('trust-command-files');
 
 const tmpDirs: string[] = [];
 
 afterEach(() => {
+  // Tear down the throwaway HOME dirs; errors are swallowed so cleanup is inert.
   for (const d of tmpDirs.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
@@ -21,6 +39,8 @@ afterEach(() => {
   }
 });
 
+// Fresh temp dir used as the child's HOME so the trust cache is isolated per
+// test; registered for afterEach teardown.
 function makeTmpHome(): string {
   const d = mkdtempSync(path.join(tmpdir(), 'gan-cli-trust-approve-home-'));
   tmpDirs.push(d);
@@ -73,6 +93,9 @@ describe('gan trust approve', () => {
     expect(typeof parsed.record.approvedAt).toBe('string');
   });
 
+  // Round-trip across two commands sharing one isolated HOME: a note attached
+  // at approve time must persist in the cache and reappear when `trust list`
+  // reads that same cache back.
   it('--note is stored verbatim and surfaces in trust list', async () => {
     const home = makeTmpHome();
     const approve = await runGan(

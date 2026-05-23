@@ -1,3 +1,16 @@
+/**
+ * End-to-end tests for the `gan` help surface (acceptance criteria F-AC7/8/9).
+ *
+ * The contract under test is that help is reachable through every idiomatic
+ * spelling and that the spellings are byte-equivalent:
+ * - top-level help via `--help`, `-h`, `gan help`, and bare `gan` (no args) all
+ *   print the same text to stdout and exit 0;
+ * - subcommand help via `gan <sub> --help`, `-h`, and `gan help <sub>` likewise
+ *   agree and each carry Usage / Examples / Exit codes sections;
+ * - unknown subcommands and unknown flags exit 64 (usage error) on stderr with
+ *   a pointer back to `--help`, never a stack trace.
+ * Byte-equality is asserted (not just "contains") so the aliases cannot drift.
+ */
 
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
@@ -9,8 +22,11 @@ describe('gan help surface', () => {
     expect(r.stderr).toBe('');
     expect(r.stdout).toContain('gan');
 
+    // The CLI deliberately does not run sprints; this line steers users to the
+    // /gan skill instead, so its presence is part of the help contract.
     expect(r.stdout).toContain('Note: to run a sprint, use the /gan skill');
 
+    // Every shipped subcommand must be discoverable from the top-level help.
     for (const sub of ['version', 'validate', 'config', 'stacks', 'stack', 'modules', 'trust']) {
       expect(r.stdout).toContain(sub);
     }
@@ -20,6 +36,9 @@ describe('gan help surface', () => {
     expect(r.stdout).toContain('Exit codes');
   });
 
+  // The three alternate spellings of top-level help below each assert
+  // byte-identical stdout against `--help` — the alias guarantee, not just that
+  // help text appears.
   it('F-AC7: -h is byte-equivalent to --help', async () => {
     const long = await runGan(['--help']);
     const short = await runGan(['-h']);
@@ -45,6 +64,8 @@ describe('gan help surface', () => {
   });
 
   it('F-AC8: `gan <subcommand> --help` prints subcommand help, exits 0', async () => {
+    // Drives every subcommand's help in one loop; the per-iteration message on
+    // the exit-code assertion names which subcommand failed if the loop trips.
     for (const sub of ['version', 'validate', 'config', 'stacks', 'stack', 'modules', 'trust']) {
       const r = await runGan([sub, '--help']);
       expect(r.exitCode, `subcommand ${sub} should exit 0`).toBe(0);
@@ -70,6 +91,9 @@ describe('gan help surface', () => {
     expect(viaHelpSub.stdout).toBe(viaFlag.stdout);
   });
 
+  // Error paths: 64 is the conventional usage-error exit code; the offending
+  // token is echoed back and a `--help` pointer is offered, with stdout empty
+  // (errors belong on stderr).
   it('F-AC9: unknown subcommand exits 64 with --help pointer', async () => {
     const r = await runGan(['definitely-not-a-real-subcommand']);
     expect(r.exitCode).toBe(64);

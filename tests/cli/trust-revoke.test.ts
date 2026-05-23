@@ -1,3 +1,16 @@
+/**
+ * End-to-end tests for `gan trust revoke`.
+ *
+ * Revoking removes a project's approval from the trust cache. The key contract
+ * is the no-op-vs-real distinction: revoking when nothing was approved is a
+ * benign no-op ("No approvals to revoke" / `mutated: false`), while revoking an
+ * existing approval reports success / `mutated: true`. The end-to-end
+ * approve→revoke→info path confirms the approval is actually gone afterwards
+ * (`approved: false`). A missing `--project-root` is a usage error (exit 64).
+ *
+ * Isolation: each test runs against a throwaway HOME so its revoke only affects
+ * its own cache, never the developer's real ~/.claude.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -21,6 +34,7 @@ afterEach(() => {
   }
 });
 
+// Isolated HOME per test; registered for teardown.
 function makeTmpHome(): string {
   const d = mkdtempSync(path.join(tmpdir(), 'gan-cli-trust-revoke-home-'));
   tmpDirs.push(d);
@@ -79,6 +93,8 @@ describe('gan trust revoke', () => {
 
   it('--json emits {mutated: true|false}', async () => {
     const home = makeTmpHome();
+    // First revoke with nothing approved: mutated must be false (no-op), yet
+    // still exit 0 — revoking an unapproved project is not an error.
     const noopJson = await runGan(['trust', 'revoke', '--project-root', PROJECT, '--json'], {
       extraEnv: { HOME: home },
     });
@@ -86,6 +102,8 @@ describe('gan trust revoke', () => {
     const noopParsed = JSON.parse(noopJson.stdout) as { mutated: boolean };
     expect(noopParsed.mutated).toBe(false);
 
+    // Now approve, then revoke again against the same HOME: this time something
+    // is actually removed, so mutated flips to true.
     await runGan(['trust', 'approve', '--project-root', PROJECT], {
       extraEnv: { HOME: home },
     });

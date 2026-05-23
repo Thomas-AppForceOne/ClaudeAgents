@@ -1,3 +1,17 @@
+/**
+ * End-to-end tests for `gan trust info`.
+ *
+ * `trust info` reports whether the current project is approved and shows the
+ * current aggregate config hash. These tests verify a fresh project reports
+ * "Approved: no" / `approved: false` with a `sha256:` current hash, the
+ * `--json` form is sorted-key and surfaces the additional-checks summary, and
+ * the end-to-end approve→info path flips `approved` to true with
+ * `approvedHash === currentHash` (the hash pinned at approval matches what is
+ * observed now, since nothing changed in between).
+ *
+ * Isolation: each test runs against a throwaway HOME so the trust cache it
+ * inspects is empty/independent and never reads the developer's real cache.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -7,6 +21,7 @@ import path from 'node:path';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
 
+// Fixture with stable config so the aggregate hash is reproducible.
 const PROJECT = stackFixturePath('trust-command-files');
 
 const tmpDirs: string[] = [];
@@ -21,6 +36,7 @@ afterEach(() => {
   }
 });
 
+// Isolated HOME per test (empty trust cache); registered for teardown.
 function makeTmpHome(): string {
   const d = mkdtempSync(path.join(tmpdir(), 'gan-cli-trust-info-home-'));
   tmpDirs.push(d);
@@ -62,11 +78,15 @@ describe('gan trust info', () => {
     };
     expect(parsed.approved).toBe(false);
     expect(parsed.currentHash.startsWith('sha256:')).toBe(true);
+    // The fixture defines exactly one additional check, so the summary count is
+    // a fixed 1 — pins that the summary reflects the fixture's check set.
     expect(parsed.summary?.additionalChecksCount).toBe(1);
   });
 
   it('end-to-end: approve then info reports approved: true (JSON)', async () => {
     const home = makeTmpHome();
+    // Approve and then query info against the SAME isolated HOME, so info reads
+    // back the approval just written.
     const approve = await runGan(['trust', 'approve', '--project-root', PROJECT, '--json'], {
       extraEnv: { HOME: home },
     });
@@ -83,6 +103,9 @@ describe('gan trust info', () => {
       approvedAt?: string;
     };
     expect(parsed.approved).toBe(true);
+    // Nothing mutated the project between approve and info, so the pinned
+    // approved hash must equal the freshly recomputed current hash — this is the
+    // "no tampering detected" condition.
     expect(parsed.approvedHash).toBe(parsed.currentHash);
     expect(typeof parsed.approvedAt).toBe('string');
   });

@@ -1,3 +1,12 @@
+/**
+ * End-to-end tests for `gan version` (feature acceptance criterion F-AC1).
+ *
+ * Verifies the version surface in both human and `--json` modes: it reports
+ * apiVersion / serverVersion / schemas, the JSON form is canonical (sorted
+ * keys, two-space indent, trailing newline) and deterministic across runs, and
+ * apiVersion and serverVersion agree because both are read from the single
+ * `package.json` — guarding against the two drifting apart.
+ */
 
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
@@ -19,6 +28,8 @@ describe('gan version', () => {
 
     expect(r.stdout.endsWith('\n')).toBe(true);
 
+    // A two-space-indented top-level key is the cheap structural proof that the
+    // emitter pretty-prints with two spaces rather than tabs or compact JSON.
     expect(r.stdout).toContain('\n  "');
 
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
@@ -27,6 +38,8 @@ describe('gan version', () => {
     expect(parsed).toHaveProperty('schemas');
     expect(Array.isArray(parsed.schemas)).toBe(true);
 
+    // Key order is asserted exactly (alphabetical) — the determinism contract is
+    // sorted keys, so `schemas` must sit between the two version fields.
     const keys = Object.keys(parsed);
     expect(keys).toEqual(['apiVersion', 'schemas', 'serverVersion']);
   });
@@ -41,6 +54,7 @@ describe('gan version', () => {
       expect(typeof s.version).toBe('number');
     }
 
+    // The two schemas the framework actually versions must both be advertised.
     const names = parsed.schemas.map((s) => s.name);
     expect(names).toContain('stack');
     expect(names).toContain('overlay');
