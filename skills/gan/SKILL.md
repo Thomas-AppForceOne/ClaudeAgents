@@ -202,6 +202,8 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
+   **Before each attempt of a multi-attempt role** (`gan-contract-proposer`, `gan-generator`), the orchestrator runs the per-role ceiling check described in "Per-role attempt ceilings (A1)" below. If the check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. A check that does not halt proceeds to the spawn.
+
 8. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
 
 ## Snapshot freshness rule
@@ -209,6 +211,22 @@ The orchestrator follows this order on every regular `/gan` invocation:
 The captured snapshot is **frozen across user-side edits** for the entire run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are not picked up until the next `/gan` invocation. This is a deliberate consistency choice — a contract issued in sprint N must remain meaningful when evaluated in sprint N+1.
 
 When any agent's API call returns `{ mutated: true, ... }` (per F2's mutation indicator), the orchestrator records the per-sprint OR of every agent's `mutated` flag; if any agent in the prior sprint produced `mutated: true`, the orchestrator **always** re-snapshots via `getResolvedConfig()` before spawning the next agent. There is no "may" — re-snapshot-after-true-mutation is unconditional. A `mutated: false` result (e.g. duplicate-skip append) does **not** trigger a re-snapshot; durable state is unchanged so downstream-agent visibility remains the same.
+
+## Per-role attempt ceilings (A1)
+
+The framework caps how many times a multi-attempt role may attempt the same step within a sprint, so a role that never converges halts the sprint rather than retrying without bound. The roles with a per-role ceiling and their default ceilings come from the framework's safety layer (`gan-contract-proposer` and `gan-generator`, each defaulting to 3); single-attempt roles (clarifier, planner) and the once-per-output roles (reviewer, evaluator) carry no per-role ceiling and are never checked here.
+
+**Timing — checked at attempt-start boundaries.** The orchestrator evaluates the ceiling at the **start** of each attempt, immediately before it would spawn the next attempt of a multi-attempt role. An attempt already in flight always runs to completion; the ceiling is never used to cancel work mid-attempt. This is a deliberate choice of predictable boundaries over fine-grained cancellation: the check fires at one well-defined point in the loop, so the behaviour is easy to reason about, and the cost is at most one extra attempt in the worst case.
+
+**Mechanism — the trace is the only counter.** The orchestrator does not keep its own attempt tally and writes no counter file. It reconstructs the per-role attempt accounting from the run's `agentAttempt` events with the `reconstructRecoveryState` helper and feeds that into the pure `checkRoleCeiling` helper. Reconstructing from the trace is what lets `--recover` resume with the same counts the original run had — a separate counter file would be a second source of truth that recovery could not rebuild.
+
+**On a halt.** When `checkRoleCeiling` returns a halt, the orchestrator:
+
+1. Builds a `safetyHalt` trace event with `buildLoopDetectedBody` and emits it through the run's trace emitter.
+2. Surfaces the `LoopDetected` structured error built with `createLoopDetectedError` — its message is plain prose that names the role, its attempt count and ceiling, points the user at the run's trace directory under the central store, and tells them to adjust the prompt (or raise the ceiling) and re-run with `--recover`.
+3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code, which is distinct from the validation/contract exit codes so a caller can tell a halt apart from a contract failure.
+
+A halted sprint is recoverable: re-running with `--recover` resumes from the trace, and unless the user changes the prompt or raises the ceiling the next attempt halts again — by design, so a halt is not silently undone.
 
 ## Per-run state versus configuration
 
@@ -256,7 +274,7 @@ The orchestrator/skill runtime wires the following integration points. Each name
 
 - **`--recover` → trace-driven resumption.** Recovery reads the archived trace (O2's archive includes the entire trace directory) to reconstruct sprint state with the `reconstructRecoveryState` helper: it resumes sequence numbering **gaplessly** from one past the highest sequence the archive ended on, and reconstructs the per-role attempt-counter state purely from the `agentAttempt` events — **without** any external counter file. The resume sequence is fed to a fresh trace emitter so writing continues to the same trace directory without a gap or a collision.
 
-- **A1 loop-detection `safetyHalt` (reserved extension point).** The trace reserves a `safetyHalt` event class with a `safetyClass` discriminator; the framework's loop-detection phase emits a `safetyHalt` with `safetyClass = "loopDetected"` when it halts a run. The trace library provides the reserved class and emission seam; the loop-detection payload shape is owned by that phase, not by the trace surface.
+- **A1 loop-detection `safetyHalt`.** The trace reserves the `safetyHalt` event class (a reserved extension point with a `safetyClass` discriminator); the framework's loop-detection layer emits a `safetyHalt` with `safetyClass = "loopDetected"` when it halts a run. The orchestrator builds that event body with the `buildLoopDetectedBody` helper and emits it through the trace emitter at the moment of the halt. The per-role ceiling decision itself is the pure `checkRoleCeiling` helper, fed the per-role attempt accounting reconstructed from the trace by `reconstructRecoveryState` (the same counters recovery uses) — there is no separate counter file. When `checkRoleCeiling` returns a halt, the orchestrator surfaces the `LoopDetected` structured error (built with `createLoopDetectedError`, which renders the user-facing prose pointing at the run's trace directory and `--recover`) and exits with the `LoopDetected` exit code. See "Per-role attempt ceilings (A1)" below for the timing.
 
 ## Spawn discipline (summary)
 
