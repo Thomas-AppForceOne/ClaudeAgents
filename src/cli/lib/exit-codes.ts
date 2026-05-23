@@ -1,5 +1,19 @@
 
 
+/**
+ * The CLI's process-exit-code vocabulary and the mapping from internal error
+ * codes to it.
+ *
+ * Exit codes are part of the CLI's contract with scripts and CI, so the set is
+ * fixed and meaningful: callers branch on them without parsing output. This
+ * module owns the numeric constants and the single translation table from a
+ * `ConfigServerError.code` (a string) to the exit code it should produce, so
+ * every command surfaces the same failure as the same code.
+ *
+ * The values follow convention: 0 success, 1 generic, 2–5 specific failure
+ * classes, and 64 (`EX_USAGE` from sysexits) for bad CLI arguments.
+ */
+
 export const EXIT_OK = 0;
 export const EXIT_GENERIC = 1;
 export const EXIT_VALIDATION = 2;
@@ -8,6 +22,12 @@ export const EXIT_INVARIANT_VIOLATION = 4;
 export const EXIT_API_UNREACHABLE = 5;
 export const EXIT_BAD_ARGS = 64;
 
+// Maps each known internal error code to its exit code. Several distinct error
+// codes intentionally collapse onto one exit code (e.g. PathEscape and
+// CacheEnvConflict both surface as EXIT_INVARIANT_VIOLATION): the exit code
+// classifies the *kind* of failure for scripts, while the error code carries
+// the specific reason in the printed/JSON payload. Frozen so it cannot be
+// mutated at runtime, and module-private — exitCodeFor is the only reader.
 const TABLE: Readonly<Record<string, number>> = Object.freeze({
   ValidationFailed: EXIT_VALIDATION,
   SchemaMismatch: EXIT_SCHEMA_MISMATCH,
@@ -28,6 +48,18 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   MalformedInput: EXIT_BAD_ARGS,
 });
 
+/**
+ * Translate an internal error code into the process exit code to return.
+ *
+ * @param errorCode a `ConfigServerError.code` string, or `undefined` for the
+ *   no-error case.
+ * @returns `EXIT_OK` when `errorCode` is `undefined`; the mapped code when the
+ *   code is in {@link TABLE}; otherwise `EXIT_GENERIC` — an unrecognised code
+ *   is deliberately treated as a generic failure rather than thrown, so a new
+ *   or unmapped error never crashes the dispatcher. `hasOwnProperty` is used
+ *   (not `in`) so a code colliding with an inherited `Object` property name
+ *   cannot accidentally match.
+ */
 export function exitCodeFor(errorCode: string | undefined): number {
   if (errorCode === undefined) return EXIT_OK;
   if (Object.prototype.hasOwnProperty.call(TABLE, errorCode)) {
@@ -36,11 +68,30 @@ export function exitCodeFor(errorCode: string | undefined): number {
   return EXIT_GENERIC;
 }
 
+/**
+ * Minimal shape of a validation issue this module needs to classify it.
+ *
+ * @property code the issue's error code (e.g. `InvariantViolation`).
+ * @property severity `error` or `warning`; when omitted it is treated as
+ *   `error` (the conservative default — see {@link exitCodeForIssues}).
+ */
 export interface IssueLike {
   code: string;
   severity?: 'error' | 'warning';
 }
 
+/**
+ * Reduce a list of validation issues to a single exit code.
+ *
+ * Only `error`-severity issues affect the result; `warning`s never fail the
+ * process. An absent `severity` is treated as `error`.
+ *
+ * @param issues the issues produced by a validation run.
+ * @returns `EXIT_OK` when there are no error-severity issues; otherwise
+ *   `EXIT_INVARIANT_VIOLATION` if any error is an `InvariantViolation` (the
+ *   more severe class is reported when both are present), else
+ *   `EXIT_VALIDATION`.
+ */
 export function exitCodeForIssues(issues: readonly IssueLike[]): number {
   const errors = issues.filter((i) => (i.severity ?? 'error') === 'error');
   if (errors.length === 0) return EXIT_OK;

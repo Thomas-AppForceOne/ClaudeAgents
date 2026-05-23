@@ -1,11 +1,36 @@
 
 
+/**
+ * Help-text rendering for the `gan` CLI.
+ *
+ * This module is pure presentation: it owns the static copy (header, per-command
+ * summaries, usage, flag/exit-code blocks) and two renderers — one for the
+ * top-level help and one for per-subcommand help — that assemble that copy into
+ * a string. It performs no I/O and reads no config; callers write the returned
+ * string to stdout.
+ *
+ * The help text is the user-facing contract for the CLI's surface, so the
+ * tables here (subcommand names, summaries, per-command help) are the single
+ * source of that copy. Note these are independent of the actual dispatch table
+ * in `index.ts`; keeping a command runnable and keeping it documented are two
+ * separate edits.
+ */
+
 const HEADER = `gan — ClaudeAgents configuration tool`;
 
+// Printed near the top of the top-level help to steer users away from a common
+// misconception: this CLI only manages configuration; running a sprint is the
+// /gan skill's job, not this binary's.
 const SKILL_VS_CLI =
   `Note: to run a sprint, use the /gan skill in Claude Code; this CLI ` +
   `manages configuration only.`;
 
+/**
+ * The subcommand names listed (in display order) in the top-level help.
+ *
+ * This is a presentation list, not the dispatch table — its order controls how
+ * commands appear in `gan --help`. Frozen so the shared list cannot be mutated.
+ */
 export const SUBCOMMAND_NAMES: readonly string[] = Object.freeze([
   'version',
   'validate',
@@ -18,6 +43,9 @@ export const SUBCOMMAND_NAMES: readonly string[] = Object.freeze([
   'help',
 ]);
 
+// One-line summary per subcommand, shown beside the name in the top-level help
+// and as the tagline of each per-subcommand help page. Keyed by subcommand
+// name; frozen to keep the copy immutable at runtime.
 const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   version: 'Print API version, framework version, and on-disk schemas.',
   validate: 'Run validateAll() and print a structured report.',
@@ -30,12 +58,17 @@ const SUBCOMMAND_SUMMARY: Readonly<Record<string, string>> = Object.freeze({
   help: 'Show help for a subcommand.',
 });
 
+// Pre-formatted lines documenting the global flags, appended to both the
+// top-level and per-subcommand help. Pre-aligned by hand (the column padding is
+// part of the literal text), so they are emitted verbatim.
 const GLOBAL_FLAGS_BLOCK: readonly string[] = Object.freeze([
   '  -h, --help              Show this help and exit.',
   '      --json              Emit JSON on stdout (read subcommands only).',
   '      --project-root DIR  Project root for resolution (default: cwd).',
 ]);
 
+// Pre-formatted exit-code legend for the top-level help. The numbers mirror the
+// constants in exit-codes.ts; this is the human-facing copy of that contract.
 const EXIT_CODES_BLOCK: readonly string[] = Object.freeze([
   '  0   Success',
   '  1   Generic failure',
@@ -46,6 +79,16 @@ const EXIT_CODES_BLOCK: readonly string[] = Object.freeze([
   '  64  Bad CLI arguments',
 ]);
 
+/**
+ * Render the top-level `gan --help` / `gan help` text.
+ *
+ * Assembles the header, the skill-vs-CLI note, usage forms, the subcommand
+ * table (driven by {@link SUBCOMMAND_NAMES} + {@link SUBCOMMAND_SUMMARY}), the
+ * global-flags block, and the exit-code legend into one newline-joined string
+ * with a trailing newline.
+ *
+ * @returns the full help text to write to stdout. Pure; no I/O.
+ */
 export function renderTopLevelHelp(): string {
   const lines: string[] = [];
   lines.push(HEADER);
@@ -74,6 +117,17 @@ export function renderTopLevelHelp(): string {
   return lines.join('\n');
 }
 
+/**
+ * The per-subcommand help content {@link renderSubcommandHelp} formats.
+ *
+ * @property usage the one-line usage synopsis.
+ * @property description the body text (may contain embedded newlines for
+ *   multi-line descriptions).
+ * @property flags optional pre-formatted flag lines specific to this command;
+ *   omitted when the command has no flags beyond the global ones.
+ * @property examples pre-formatted example invocation lines.
+ * @property exitCodes pre-formatted exit-code lines relevant to this command.
+ */
 interface SubcommandHelp {
   usage: string;
   description: string;
@@ -83,6 +137,10 @@ interface SubcommandHelp {
   exitCodes: readonly string[];
 }
 
+// Per-command help content, keyed by command name. Some keys are multi-word
+// (e.g. `hooks status`, `trust approve`): these are the deeper help pages
+// reachable via `gan <group> <sub> --help`, distinct from the group-level entry
+// of the same prefix. Frozen to keep the copy immutable at runtime.
 const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze({
   version: {
     usage: 'gan version [--json]',
@@ -277,9 +335,24 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
   },
 });
 
+/**
+ * Render the help text for a single subcommand.
+ *
+ * Looks `name` up in {@link SUBCOMMAND_HELP} and formats its usage,
+ * description, command-specific flags (if any), the shared global-flags block,
+ * examples, and exit codes into a newline-joined string with a trailing
+ * newline.
+ *
+ * @param name the subcommand (or multi-word `group sub`) to document.
+ * @returns the rendered per-subcommand help, or — when `name` has no entry —
+ *   the top-level help as a graceful fallback (an unknown name shows the menu
+ *   rather than failing). Pure; no I/O.
+ */
 export function renderSubcommandHelp(name: string): string {
   const entry = SUBCOMMAND_HELP[name];
   if (!entry) {
+    // Unknown subcommand: fall back to the top-level help so the user still
+    // gets the command list rather than an empty or error response.
     return renderTopLevelHelp();
   }
 
@@ -308,6 +381,14 @@ export function renderSubcommandHelp(name: string): string {
   return lines.join('\n');
 }
 
+/**
+ * List every key for which {@link renderSubcommandHelp} has a dedicated page,
+ * including the multi-word group keys (e.g. `trust approve`).
+ *
+ * @returns a frozen snapshot of the help keys. A defensive copy (`.slice()`)
+ *   is frozen and returned so callers cannot mutate the internal table's key
+ *   set; primarily used by tests that assert help coverage.
+ */
 export function subcommandHelpNames(): readonly string[] {
   return Object.freeze(Object.keys(SUBCOMMAND_HELP).slice());
 }
