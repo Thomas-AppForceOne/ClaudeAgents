@@ -22,11 +22,7 @@ flowchart LR
 
     subgraph AL["Agent layer · agents/"]
         direction TB
-        PL["planner"]
-        CP["contract-proposer"]
-        CR["contract-reviewer"]
-        GN["generator"]
-        EV["evaluator\n+ evaluator-core"]
+        PL["planner"] --> CP["contract-proposer"] --> CR["contract-reviewer"] --> GN["generator"] --> EV["evaluator\n+ evaluator-core"]
     end
 
     subgraph CS["Config Server · src/config-server/ · MCP"]
