@@ -31,6 +31,29 @@
     "lintCmd": "echo synthetic-second lint",
     "testCmd": "echo synthetic-second test"
   },
+  "docLintInvocations": [
+    {
+      "absenceSignal": "warning",
+      "baseline": "delta",
+      "command": "echo synthetic-second doc-lint",
+      "scope": [
+        "synthetic/**"
+      ],
+      "severity": "blocker",
+      "stack": "synthetic-second"
+    },
+    {
+      "absenceSignal": "warning",
+      "baseline": "delta",
+      "command": "npm run doc-lint",
+      "scope": [
+        "**/*.ts",
+        "**/*.tsx"
+      ],
+      "severity": "blocker",
+      "stack": "web-node"
+    }
+  ],
   "documentationSurfacesInstantiated": [
     {
       "appliesToFiles": [

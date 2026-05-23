@@ -20,9 +20,14 @@ export {
   buildDocumentationSurfacesInstantiated,
   isKnownSurfaceId,
 } from './documentation-surfaces.js';
+// Exported individually (parallel to the surface-instantiation helpers) so
+// the Q5 doc-lint emission tests can assert `buildDocLintInvocations` in
+// isolation without rebuilding the whole plan.
+export { buildDocLintInvocations } from './doc-lint-invocations.js';
 
 export type {
   AuditCmd,
+  DocLintCmd,
   DocumentationSurface,
   EvaluatorCoreSnapshot,
   EvaluatorPlan,

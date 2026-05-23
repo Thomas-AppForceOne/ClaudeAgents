@@ -9,6 +9,7 @@
   ],
   "auditCommands": [],
   "buildTestLint": {},
+  "docLintInvocations": [],
   "documentationSurfacesInstantiated": [
     {
       "appliesToFiles": [

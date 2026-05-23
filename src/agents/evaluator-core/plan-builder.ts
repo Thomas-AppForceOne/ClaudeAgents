@@ -8,6 +8,7 @@
  *   - active stacks  → name + scope, sorted by name (E3 line 104)
  *   - secretsScans   → per-stack secretsGlob expansion against scope
  *   - auditCommands  → per-stack auditCmd (verbatim)
+ *   - docLintInvocations → per-stack docLintCmd (Q5; verbatim, scoped)
  *   - buildTestLint  → first-active-stack-wins per phase
  *   - securitySurfacesInstantiated → C1 template instantiation
  *   - documentationSurfacesInstantiated → Q5 template instantiation
@@ -22,6 +23,7 @@
  */
 
 import { buildAuditCommands } from './audit-commands.js';
+import { buildDocLintInvocations } from './doc-lint-invocations.js';
 import { buildBuildTestLint } from './build-test-lint.js';
 import { buildEvaluatorAdditionalChecks } from './additional-checks.js';
 import { buildDocumentationSurfacesInstantiated } from './documentation-surfaces.js';
@@ -43,6 +45,7 @@ export function buildEvaluatorPlan(
     activeStacks: buildActiveStacks(snapshot),
     secretsScans: buildSecretsScans(snapshot, worktreeState),
     auditCommands: buildAuditCommands(snapshot),
+    docLintInvocations: buildDocLintInvocations(snapshot),
     buildTestLint: buildBuildTestLint(snapshot),
     securitySurfacesInstantiated: buildSecuritySurfacesInstantiated(
       snapshot,

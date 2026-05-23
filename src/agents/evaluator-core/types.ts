@@ -24,6 +24,43 @@ export interface AuditCmd {
 }
 
 /**
+ * Documentation-lint command shape, mirroring Q5's `docLintCmd` block.
+ *
+ * Structurally `AuditCmd` plus two gating fields the documentation layer
+ * adds — `severity` (the gates-or-warns knob) and `baseline` (delta vs.
+ * absolute comparison). Like `AuditCmd` the carve-out treats every field
+ * as opaque data: it carries them onto the emitted plan entry verbatim and
+ * never acts on them. The *acting-on* — running the command, comparing
+ * against the base ref, routing by severity — lives downstream at the
+ * layer that runs `auditCmd`/`lintCmd` (the evaluator agent), because that
+ * is the only layer with the git base ref the comparison needs; the
+ * carve-out is pure over `(snapshot, sprintPlan, worktreeState)` and has
+ * no base-ref input.
+ *
+ * - `command` — the ecosystem-specific doc-lint invocation. The only
+ *   ecosystem token; it lives in the owning stack file, never the prompt.
+ * - `absenceSignal` — what to do when the tool is missing on the host,
+ *   identical semantics to `AuditCmd.absenceSignal`.
+ * - `absenceMessage` — the warning text surfaced when `absenceSignal`
+ *   fires; required by the stack schema whenever `absenceSignal` is not
+ *   `silent` (mirrors the `auditCmd` `oneOf` shape).
+ * - `severity` — the gating policy: `blocker` fails the attempt,
+ *   `warning` records-and-surfaces, `advisory` routes onward and never
+ *   blocks. Acted on downstream, carried verbatim here.
+ * - `baseline` — `delta` (default) compares only the sprint's diff
+ *   against the base ref; `absolute` flags pre-existing debt too. Optional
+ *   on the stack; the emission layer applies the `delta` default when it
+ *   is omitted (see `buildDocLintInvocations`).
+ */
+export interface DocLintCmd {
+  command: string;
+  absenceSignal: 'silent' | 'warning' | 'blockingConcern';
+  absenceMessage?: string;
+  severity: 'blocker' | 'warning' | 'advisory';
+  baseline?: 'delta' | 'absolute';
+}
+
+/**
  * Security surface, mirroring C1's `securitySurfaces[*]` entry.
  *
  * `triggers.scope` and `triggers.keywords` are both optional. A surface
@@ -81,6 +118,7 @@ export interface EvaluatorCoreSnapshot {
     scope: string[];
     secretsGlob?: string[];
     auditCmd?: AuditCmd;
+    docLintCmd?: DocLintCmd;
     buildCmd?: string;
     testCmd?: string;
     lintCmd?: string;
@@ -149,6 +187,29 @@ export interface EvaluatorPlan {
   auditCommands: Array<{
     stack: string;
     command: string;
+    absenceSignal: 'silent' | 'warning' | 'blockingConcern';
+  }>;
+  /**
+   * Q5 layer (b) — per-stack `docLintCmd` invocations the downstream
+   * execution layer runs. One row per active stack that declares
+   * `docLintCmd`; a stack without the field contributes none (the absence
+   * is itself the signal, parallel to `auditCommands`).
+   *
+   * Every field is *carried* from the stack's `docLintCmd` for the
+   * downstream layer to act on — the carve-out runs no command, performs
+   * no baseline comparison, and applies no gating. `scope` is the owning
+   * stack's own `scope` (never another stack's), which is what scopes the
+   * command to its ecosystem's files in a polyglot run. `baseline` is
+   * always present on the row even when the stack omits it: the emission
+   * layer fills the `delta` default so the downstream layer never has to
+   * re-derive it. Sorted by `stack` for byte-stable plan output.
+   */
+  docLintInvocations: Array<{
+    stack: string;
+    command: string;
+    scope: string[];
+    severity: 'blocker' | 'warning' | 'advisory';
+    baseline: 'delta' | 'absolute';
     absenceSignal: 'silent' | 'warning' | 'blockingConcern';
   }>;
   buildTestLint: { buildCmd?: string; testCmd?: string; lintCmd?: string };

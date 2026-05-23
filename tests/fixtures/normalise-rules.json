@@ -3,6 +3,7 @@
     { "path": "activeStacks", "by": "name" },
     { "path": "secretsScans", "by": ["stack", "extension"] },
     { "path": "auditCommands", "by": "stack" },
+    { "path": "docLintInvocations", "by": "stack" },
     { "path": "securitySurfacesInstantiated", "by": ["stack", "id"] },
     { "path": "documentationSurfacesInstantiated", "by": ["stack", "id"] },
     { "path": "evaluatorAdditionalChecks", "by": "command" }

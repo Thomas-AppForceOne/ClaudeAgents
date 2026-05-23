@@ -45,6 +45,7 @@ import picomatch from 'picomatch';
 
 import { buildEvaluatorPlan } from '../../src/agents/evaluator-core/index.js';
 import type {
+  DocLintCmd,
   EvaluatorCoreSnapshot,
   EvaluatorPlan,
   SecuritySurface,
@@ -331,6 +332,13 @@ async function assembleInputsForFixture(projectRoot: string): Promise<{
     if (secretsGlob.length > 0) entry.secretsGlob = secretsGlob;
     const auditCmd = readAuditCmd(body['auditCmd']);
     if (auditCmd) entry.auditCmd = auditCmd;
+    // Parse `docLintCmd` from the stack body, parallel to `auditCmd`.
+    // Without this the carve-out never sees a `docLintCmd` and every
+    // golden's `docLintInvocations` would be empty, so the polyglot
+    // scope-isolation row (FUNC-2) and the per-declaring-stack row
+    // (FUNC-1) could never appear in a regenerated golden.
+    const docLintCmd = readDocLintCmd(body['docLintCmd']);
+    if (docLintCmd) entry.docLintCmd = docLintCmd;
     if (typeof body['buildCmd'] === 'string') entry.buildCmd = body['buildCmd'];
     if (typeof body['testCmd'] === 'string') entry.testCmd = body['testCmd'];
     if (typeof body['lintCmd'] === 'string') entry.lintCmd = body['lintCmd'];
@@ -377,6 +385,55 @@ function readAuditCmd(v: unknown): EvaluatorCoreSnapshot['activeStacks'][number]
     absenceSignal,
   };
   if (typeof obj['absenceMessage'] === 'string') out.absenceMessage = obj['absenceMessage'];
+  return out;
+}
+
+/**
+ * Parse a stack-body `docLintCmd` block into the carve-out's `DocLintCmd`
+ * shape, parallel to `readAuditCmd`. A `docLintCmd` is structurally
+ * `auditCmd` plus the gating fields `severity` and `baseline`, so this
+ * reader is `readAuditCmd` extended with those two — kept separate (not
+ * folded into `readAuditCmd`) because the two stack fields are distinct
+ * and a shared parser would have to invent a discriminator.
+ *
+ * Returns `undefined` for a stack that declares no `docLintCmd` or a
+ * malformed one (missing `command`/`severity`); a stack with no doc-lint
+ * tool contributes no `docLintInvocations` row, exactly as the schema's
+ * "omitted = no deterministic doc-lint" default prescribes. The schema
+ * (`lint-stacks`) is the real validator — this reader is only the
+ * fixture-harness's structural surface, so it tolerates an absent field
+ * rather than throwing.
+ */
+function readDocLintCmd(v: unknown): DocLintCmd | undefined {
+  if (v === null || typeof v !== 'object') return undefined;
+  const obj = v as Record<string, unknown>;
+  if (typeof obj['command'] !== 'string') return undefined;
+  const signal = obj['absenceSignal'];
+  const validSignals = ['silent', 'warning', 'blockingConcern'] as const;
+  const absenceSignal = (validSignals as readonly string[]).includes(signal as string)
+    ? (signal as 'silent' | 'warning' | 'blockingConcern')
+    : 'silent';
+  const sev = obj['severity'];
+  const validSeverities = ['blocker', 'warning', 'advisory'] as const;
+  // Default to `blocker` for an unrecognised/absent severity: the schema
+  // requires `severity`, so this only fires on a malformed fixture; a
+  // blocker default surfaces such a fixture loudly rather than silently
+  // downgrading it to advisory.
+  const severity = (validSeverities as readonly string[]).includes(sev as string)
+    ? (sev as 'blocker' | 'warning' | 'advisory')
+    : 'blocker';
+  const out: DocLintCmd = {
+    command: obj['command'],
+    absenceSignal,
+    severity,
+  };
+  if (typeof obj['absenceMessage'] === 'string') out.absenceMessage = obj['absenceMessage'];
+  // Carry `baseline` only when the stack states it; the emission layer
+  // (`buildDocLintInvocations`) applies the `delta` default, so this
+  // reader must NOT pre-fill it — pre-filling here would hide whether the
+  // default ever fires in the goldens.
+  const base = obj['baseline'];
+  if (base === 'delta' || base === 'absolute') out.baseline = base;
   return out;
 }
 
