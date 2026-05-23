@@ -1,3 +1,26 @@
+/**
+ * Round-trip behaviour of the trust tools (R5 S4): trustApprove / trustRevoke
+ * (writes) paired with getTrustState / trustList (reads), plus the
+ * end-to-end interaction with validateAll's trust phase.
+ *
+ * The trust contract being guarded:
+ *   - approving pins the project's *current* aggregate hash, and a subsequent
+ *     getTrustState reports approved:true with that same hash and timestamp;
+ *   - approval is hash-bound, not blanket: any later edit to a config file
+ *     drifts the hash, which flips approved back to false (the central
+ *     tamper-detection invariant) — exercised by appending a comment to the
+ *     overlay after approving;
+ *   - revoke flips approved back to false, and is a safe no-op (mutated:false)
+ *     when nothing was approved;
+ *   - approvedCommit is captured opportunistically: present when the project is
+ *     a git tree, omitted (never null/empty) when it is not;
+ *   - end to end, an approval clears the UntrustedOverlay issue that strict
+ *     trust mode raises for a command-declaring fixture.
+ *
+ * Each test runs against a fresh temp project (a copy of the
+ * command-declaring `trust-command-files` fixture) and a fresh temp home, so
+ * the on-disk trust cache is fully isolated from the developer's real one.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -66,12 +89,17 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const approved1 = getTrustState({ projectRoot: proj }, { homeDir: home });
     expect(approved1.approved).toBe(true);
 
+    // Append-mode write tampers with a config file after approval. Even a mere
+    // comment changes the file's bytes, so the aggregate hash drifts and the
+    // pinned approval no longer matches.
     const overlay = path.join(proj, '.claude', 'gan', 'project.md');
     writeFileSync(overlay, '\n# drifted comment\n', { flag: 'a' });
 
     const after = getTrustState({ projectRoot: proj }, { homeDir: home });
     expect(after.approved).toBe(false);
 
+    // The drift is observable: the freshly-computed hash differs from the one
+    // the approval pinned, which is exactly why approved flipped to false.
     expect(after.currentHash).not.toBe(approved1.approvedHash);
   });
 
@@ -113,6 +141,8 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const proj = makeTmpProject();
     const home = makeTmpHome();
 
+    // Pin git identity via env so the commit succeeds on a CI box with no
+    // global git config; the .invalid TLD guarantees a non-routable address.
     const gitEnv = {
       ...process.env,
       GIT_AUTHOR_NAME: 'r5-s4',
@@ -152,6 +182,8 @@ describe('trust tools — round-trip (R5 S4)', () => {
     const proj = makeTmpProject();
     const home = makeTmpHome();
 
+    // Strict trust mode + an unapproved command-declaring fixture → exactly one
+    // UntrustedOverlay issue. Approving below should make it disappear.
     const beforeReport = validateAll(
       { projectRoot: proj },
       { env: { GAN_TRUST: 'strict' }, homeDir: home },

@@ -1,3 +1,16 @@
+/**
+ * Public-API surface guard for the package's library entrypoint
+ * (`src/index.ts`). The config-server is consumable two ways — as an MCP
+ * subprocess and as an imported library — and this suite locks the second
+ * contract: every read, write, and validate tool must be re-exported by name
+ * and be a callable function, and a representative call from each category must
+ * actually work end to end through the library barrel (not just be present).
+ *
+ * The three name lists mirror the tool taxonomy; if a tool is renamed, dropped,
+ * or a new one is added without wiring it into the barrel, the corresponding
+ * `typeof fn === 'function'` assertion fails — making accidental API breakage
+ * a test failure rather than a downstream consumer's runtime crash.
+ */
 
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';

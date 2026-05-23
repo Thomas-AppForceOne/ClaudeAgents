@@ -1,3 +1,21 @@
+/**
+ * Error-path integration for `validateAll`: malformed stacks/overlays must be
+ * reported as structured, provenance-rich {@link Issue}s — never thrown, and
+ * never as opaque library-internal noise.
+ *
+ * Each test drives a deliberately-broken fixture and asserts the *quality* of
+ * the diagnostic, which is the real contract here:
+ *   - SchemaMismatch carries a file `path` AND a non-empty `field` pointing at
+ *     the offending key, so a user can locate the problem;
+ *   - InvalidYAML names the file and gives a human message that does NOT leak
+ *     the underlying validator's internals (the `ajv` check guards against a
+ *     raw library error string surfacing to end users);
+ *   - MissingFile (a project overlay referencing an absent stack) reports the
+ *     overlay file plus the precise `/stack/override` field that named it.
+ *
+ * The invariant under guard: diagnostics stay actionable and stable as the
+ * validation internals evolve.
+ */
 
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -33,6 +51,8 @@ describe('integration: malformed overlays + stacks (error path)', () => {
     expect(invalid!.path).toContain('web-node.md');
     expect(invalid!.message.length).toBeGreaterThan(0);
 
+    // The message must be user-facing prose, not a leaked schema-library dump:
+    // 'ajv' appearing here would mean an internal error string escaped.
     expect(invalid!.message.toLowerCase()).not.toContain('ajv');
   });
 

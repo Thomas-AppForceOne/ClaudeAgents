@@ -1,4 +1,22 @@
-
+/**
+ * Shape contract for the `modules` collection as it appears in two parallel
+ * outputs: the validation snapshot (`ValidationSnapshot.modules`, an array) and
+ * the resolved config (`ResolvedConfig.modules`, an object keyed by name). Both
+ * must expose the *same* per-module rows carrying exactly the allowed fields —
+ * `name`, `manifestPath`, and an optional `pairsWith` — and nothing more.
+ *
+ * The fixture stages two manifests in a scratch modules-root: `mod-alpha` (with
+ * a `pairsWith`) and `mod-beta` (without), so the suite proves both the
+ * present-and-absent `pairsWith` cases. The tightest assertions enumerate the
+ * exact key set per row (`Object.keys(...).sort()`) and reject any key outside
+ * the allowlist — this is the guard against the snapshot leaking extra manifest
+ * fields (e.g. exports, description) into the public shape. A final test reads
+ * each row's `manifestPath` back off disk to confirm it points at the real
+ * manifest whose `name` matches the row.
+ *
+ * Uses the `_runPhase1ForTests` seam to inspect the snapshot directly without
+ * running the whole validation pipeline.
+ */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -69,12 +87,17 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
     expect(alpha).toBeDefined();
     expect(beta).toBeDefined();
 
+    // Exact key set per row: alpha carries the optional pairsWith, beta omits
+    // it entirely (not present-as-undefined). Enumerating keys this strictly is
+    // what catches the snapshot leaking other manifest fields into the shape.
     expect(Object.keys(alpha!).sort()).toEqual(['manifestPath', 'name', 'pairsWith']);
     expect(alpha!.pairsWith).toBe('alpha-stack');
     expect(typeof alpha!.manifestPath).toBe('string');
 
     expect(Object.keys(beta!).sort()).toEqual(['manifestPath', 'name']);
 
+    // Belt-and-braces allowlist sweep across every row, so an extra field on
+    // any future module is rejected even if it is not alpha/beta.
     for (const m of snapshot.modules) {
       const allowed = new Set(['name', 'manifestPath', 'pairsWith']);
       for (const k of Object.keys(m)) {
@@ -98,6 +121,8 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
       modulesRoot: modulesScratch,
     });
 
+    // Resolved config keys modules by name (an object), not as an array — the
+    // counterpart shape to the snapshot's array, carrying the same rows.
     expect(Array.isArray(r.modules)).toBe(false);
     expect(typeof r.modules).toBe('object');
     const names = Object.keys(r.modules).sort();

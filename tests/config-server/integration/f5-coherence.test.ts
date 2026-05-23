@@ -1,4 +1,24 @@
-
+/**
+ * F5 "coherence" suite — the cross-cutting invariants that keep the advertised
+ * tool surface, the cache, and the JSON tool schemas all telling the same
+ * story. It is organised into four slices, each guarding a distinct seam:
+ *
+ *   slice 1 — tools/list only advertises real, implemented F2 tools (no
+ *     NotImplemented stubs leak out) and each carries a well-formed schema;
+ *   slice 2 — every state-mutating write invalidates the resolver cache for
+ *     exactly the affected project, AND no-op / failed writes do NOT (a stale
+ *     or wrongly-evicted cache entry is the regression this catches);
+ *   slice 3 — mtime-driven invalidation: a cached resolved config is silently
+ *     dropped when any tracked backing file changes, appears, or disappears,
+ *     so a hand-edit to an overlay/stack shows up on the very next read;
+ *   slice 4 — the static schemas/api-tools-v1.json `required` set agrees field
+ *     for field with the runtime validators (drift here means a client could
+ *     send input the server rejects, or vice versa).
+ *
+ * `makeFixture` builds a minimal but complete project (project overlay + a
+ * web-node stack + package.json) in a fresh temp dir, paired with a temp user
+ * home, so the trust/overlay tools have somewhere hermetic to write.
+ */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -118,7 +138,9 @@ describe('F5 slice 2 — every state-mutating write invalidates the resolver cac
   });
 
   it('setOverlayField calls cache.invalidate with the canonical project root', async () => {
-
+    // The previous test proved the cache *empties*; this one pins down the
+    // exact key passed, so a future change cannot invalidate a different (or
+    // un-canonicalised) project root and accidentally pass the size() check.
     const { projectRoot, userHome } = makeFixture();
     const cache = getResolvedConfigCache();
     const spy = vi.spyOn(cache, 'invalidate');
@@ -169,6 +191,9 @@ describe('F5 slice 2 — every state-mutating write invalidates the resolver cac
   });
 
   it('trustRevoke does NOT invalidate on no-op (mutated:false)', async () => {
+    // No prior approval here, so revoke is a genuine no-op. The invariant: a
+    // write that changed nothing must leave the (still-valid) cache untouched,
+    // not blindly evict on every call regardless of outcome.
     const { projectRoot, userHome } = makeFixture();
     await composeResolvedConfig(projectRoot, { userHome });
     const cache = getResolvedConfigCache();
@@ -181,6 +206,9 @@ describe('F5 slice 2 — every state-mutating write invalidates the resolver cac
   });
 
   it('module writes fail-fast on unknown module without invalidating (mutated:false)', async () => {
+    // The allowlist/registry gate runs before any I/O or cache touch, so an
+    // unknown module throws *before* it could evict the cache — proven here by
+    // a populated cache surviving three different failing module writes.
 
     const { projectRoot, userHome } = makeFixture();
     await composeResolvedConfig(projectRoot, { userHome });
@@ -248,6 +276,9 @@ describe('F5 slice 3 — mtime-driven invalidation on reads', () => {
     cache.set('/proj', { v: 1 }, states);
     expect(cache.get('/proj')).toEqual({ v: 1 });
 
+    // Force the mtime a minute into the future rather than rewriting the file:
+    // a same-millisecond rewrite could collide with the recorded mtime and flake
+    // on coarse filesystems, so we move the clock unambiguously forward.
     const futureSec = Date.now() / 1000 + 60;
     utimesSync(filePath, futureSec, futureSec);
 
@@ -285,6 +316,8 @@ describe('F5 slice 3 — mtime-driven invalidation on reads', () => {
   });
 
   it('cache.get with empty backing states never invalidates on mtime', () => {
+    // An entry set with no tracked files has nothing to compare against, so it
+    // can only be dropped by an explicit invalidate — never by mtime drift.
     const cache = new ResolvedConfigCache<{ v: number }>();
     cache.set('/proj', { v: 1 });
     expect(cache.get('/proj')).toEqual({ v: 1 });
@@ -324,7 +357,10 @@ describe('F5 slice 3 — mtime-driven invalidation on reads', () => {
   });
 
   it('composeResolvedConfig picks up a brand-new higher-tier stack shadow', async () => {
-
+    // The fixture's web-node starts as a builtin-tier stack; writing a
+    // project-tier copy under .claude/gan/stacks should "shadow" it. This
+    // proves invalidation fires for a file that did not previously exist
+    // (tracked-absent → present), promoting the resolved tier builtin→project.
     const { projectRoot, userHome } = makeFixture();
     const stacksDir = path.join(projectRoot, '.claude', 'gan', 'stacks');
     const shadowPath = path.join(stacksDir, 'web-node.md');
@@ -355,7 +391,9 @@ describe('F5 slice 3 — mtime-driven invalidation on reads', () => {
 });
 
 describe('F5 slice 4 — schemas/api-tools-v1.json agrees with runtime validators', () => {
-
+  // Data-driven: one pair of assertions per advertised tool, so a newly-added
+  // tool is automatically covered and a schema/runtime mismatch names the
+  // offending tool in the failure rather than failing one opaque aggregate.
   for (const tool of buildToolList()) {
     it(`${tool.name}: schema.required matches runtime required-fields`, () => {
       const schemaRequired = ((tool.inputSchema['required'] as string[]) ?? [])

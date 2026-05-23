@@ -1,3 +1,22 @@
+/**
+ * Multi-stack guard rail: a project where two stacks (`web-node` and a
+ * synthetic second stack) are simultaneously active. The core invariant is
+ * isolation — when several stacks resolve at once, each stack's fields stay
+ * with that stack and never cross-contaminate the other.
+ *
+ * Coverage:
+ *   - a clean polyglot fixture validates with zero issues;
+ *   - the active set is the deterministic union (sorted) of both stack names,
+ *     each reported with `builtin` tier provenance;
+ *   - per-stack reads (scope, securitySurfaces, cacheEnv) are mutually
+ *     exclusive — the explicit cross-checks assert no surface id from one stack
+ *     appears in the other;
+ *   - the synthetic stack is intentionally maximal: it exercises *every* C1
+ *     schema field (anyOf/allOf detection, scope, secretsGlob, cacheEnv,
+ *     auditCmd absence signalling, build/test/lint commands, and both
+ *     keyword+scope and scope-only security-surface triggers), so a field the
+ *     resolver silently drops shows up as a failure here.
+ */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -68,6 +87,8 @@ describe('integration: polyglot multi-stack guard rail', () => {
     const synSurfaces = (synData.securitySurfaces as Array<{ id: string }>).map((s) => s.id);
     expect(webSurfaces).toEqual(['prototype_pollution']);
     expect(synSurfaces).toEqual(['synthetic_keyword_surface', 'synthetic_scope_only_surface']);
+    // No-cross-contamination: neither stack's surface ids may bleed into the
+    // other's resolved data when both are active at once.
     for (const s of synSurfaces) expect(webSurfaces).not.toContain(s);
     for (const s of webSurfaces) expect(synSurfaces).not.toContain(s);
 
@@ -84,6 +105,8 @@ describe('integration: polyglot multi-stack guard rail', () => {
     expect(data.name).toBe('synthetic-second');
     expect(data.schemaVersion).toBe(1);
 
+    // The synthetic stack's detection rules deliberately include both an
+    // `anyOf` and an `allOf` clause so both detection combinators are covered.
     const detection = data.detection as unknown[];
     expect(Array.isArray(detection)).toBe(true);
     const hasAnyOf = detection.some(
@@ -111,6 +134,9 @@ describe('integration: polyglot multi-stack guard rail', () => {
       id: string;
       triggers?: { keywords?: string[]; scope?: string[] };
     }>;
+    // Both trigger shapes must be present: one surface gated on keywords AND
+    // scope, and one gated on scope alone (no keywords) — so the resolver is
+    // proven to preserve each variant rather than normalising them together.
     const keywordAndScope = surfaces.find(
       (s) =>
         Array.isArray(s.triggers?.keywords) &&

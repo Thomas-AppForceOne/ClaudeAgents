@@ -1,3 +1,26 @@
+/**
+ * Full MCP-transport integration: spawns the built server as a real
+ * subprocess and drives it over stdio with hand-rolled JSON-RPC, exercising
+ * the entire lifecycle a real client would — `initialize` → `tools/list` →
+ * a sequence of `tools/call`s → clean shutdown on stdin close.
+ *
+ * This is the end-to-end contract for the wire protocol, and it guards several
+ * things a pure in-process test cannot:
+ *   - the advertised tool list over the wire matches F2 (no stub leakage);
+ *   - read/write/state tools round-trip correctly through JSON serialisation;
+ *   - module state is written to the external repo-keyed store, NOT inside the
+ *     project's `.gan-state/modules` tree (the path assertions pin this down);
+ *   - both soft (MalformedInput) and gated (UnknownStateKey) failures come back
+ *     as `isError` tool results with a structured code, not as crashes;
+ *   - the run log captures tool *names* but redacts every secret/value
+ *     (overlay values, module state, trust hashes, even the rejected key) — a
+ *     log-hygiene regression here would leak user data;
+ *   - the process exits promptly once stdin closes (no hung subprocess).
+ *
+ * Requires a prior `npm run build`; the test throws a clear message if the
+ * dist artefact is missing. Everything runs against temp project/package/state
+ * roots with env restored in afterEach, so it leaves no trace on the machine.
+ */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -56,6 +79,11 @@ interface PendingDispatcher {
   awaitId(id: number, timeoutMs?: number): Promise<JsonRpcResponse>;
 }
 
+// Minimal newline-delimited JSON-RPC dispatcher over the child's stdio. It
+// reassembles line-framed responses from arbitrary chunk boundaries, then
+// either hands each response to a waiter registered by id or parks it in
+// `buffered` for a waiter that has not yet asked — so a response that arrives
+// before its awaitId call is never dropped.
 function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher {
   const waiters = new Map<number, (r: JsonRpcResponse) => void>();
   const buffered: JsonRpcResponse[] = [];
@@ -87,7 +115,9 @@ function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher
       child.stdin.write(JSON.stringify(payload) + '\n');
     },
     awaitId(id, timeoutMs = 10_000) {
-
+      // Resolve immediately if the response already arrived and was parked;
+      // otherwise register a waiter guarded by a timeout so a never-arriving id
+      // rejects instead of hanging the test forever.
       const buffered_match = buffered.findIndex((r) => r.id === id);
       if (buffered_match >= 0) {
         const r = buffered.splice(buffered_match, 1)[0];
@@ -122,6 +152,9 @@ describe('integration: MCP handshake (subprocess)', () => {
     tmpDirs.push(moduleStore.storeRoot);
     envRestores.push(moduleStore.restore);
 
+    // Stage a fake package root carrying a docker manifest, then point the
+    // subprocess at it via GAN_PACKAGE_ROOT_OVERRIDE, so 'docker' is a known
+    // module with a 'port-registry' state key without touching the real install.
     const stagedPkgRoot = mkdtempSync(path.join(tmpdir(), 'cas-mcp-pkgroot-'));
     tmpDirs.push(stagedPkgRoot);
     writeFileSync(
@@ -269,6 +302,9 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(setStatePayload.mutated).toBe(true);
     expect(typeof setStatePayload.path).toBe('string');
 
+    // State must land in the external repo-keyed store at <name>/<key>.json,
+    // and explicitly NOT inside the project's own .gan-state/modules tree —
+    // that placement is the layout invariant module state must never violate.
     expect(setStatePayload.path as string).toBe(
       moduleStore.statePath(projectRoot, 'docker', 'port-registry'),
     );
@@ -305,6 +341,8 @@ describe('integration: MCP handshake (subprocess)', () => {
       'mcp-handshake-module-state',
     );
 
+    // Missing the required `name`/`key` args: a soft input error that must come
+    // back as an isError result with code MalformedInput, not a process crash.
     rpc.send({
       jsonrpc: '2.0',
       id: 7,
@@ -325,6 +363,9 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(errorPayload.code).toBe('MalformedInput');
     expect(typeof errorPayload.message).toBe('string');
 
+    // A real module but an undeclared state key: the allowlist gate must reject
+    // it with UnknownStateKey, and the message must name both the module and the
+    // bad key so the caller can fix their manifest.
     rpc.send({
       jsonrpc: '2.0',
       id: 8,
@@ -365,9 +406,13 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(existsSync(expectedLogPath)).toBe(true);
     const logText = readFileSync(expectedLogPath, 'utf8');
 
+    // The log records that a tool ran (by name) for auditability...
     expect(logText).toContain('"tool": "getResolvedConfig"');
     expect(logText).toContain('"tool": "setOverlayField"');
 
+    // ...but must NEVER record the payloads: the overlay value, any "value"
+    // field, trust hashes, the module-state label, or even the rejected key.
+    // Each string below was passed in above; its absence proves redaction.
     expect(logText).not.toContain('docs/notes.md');
     expect(logText).not.toContain('"value"');
     expect(logText).not.toContain('"trustHash"');
@@ -375,6 +420,9 @@ describe('integration: MCP handshake (subprocess)', () => {
 
     expect(logText).not.toContain('made-up-key');
 
+    // Closing stdin should make the server exit on its own. Race the real exit
+    // against a 5s sentinel so a hung subprocess fails loudly (with captured
+    // stderr) instead of stalling the whole run.
     child.stdin.end();
     const exitInfo = await Promise.race([
       exitPromise,

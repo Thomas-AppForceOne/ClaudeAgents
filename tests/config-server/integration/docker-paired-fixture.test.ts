@@ -1,4 +1,25 @@
-
+/**
+ * Integration coverage for a stack paired with a module (the `docker` module
+ * + `docker` stack via `pairsWith`). This is the "module config and module
+ * state coexist" path: a module declares config in the project's stack YAML
+ * AND persists durable per-key state, and the two must remain wholly
+ * independent — config flows through the resolved-config composition, state
+ * through the repo-keyed module-state store.
+ *
+ * What this guards:
+ *   - the docker stack file lives only under the fixture's `.claude/gan`, never
+ *     leaking into the repo's top-level `stacks/` (a layout regression);
+ *   - `getStack`/`composeResolvedConfig` surface the module's declared YAML
+ *     (containerPattern, fallbackPort, healthCheck) verbatim;
+ *   - pairs-with + schema validation stay clean for a correctly-paired fixture;
+ *   - the final test proves config and state are orthogonal: writing module
+ *     state does not disturb the resolved config, and both round-trip together.
+ *
+ * Hermetic seams: a scratch modules-root and a scratch package-root (each with
+ * a hand-written docker manifest) are staged per test, and the package-root
+ * override env var is saved/restored, so the suite never reads the real
+ * installed package or the developer's home directory.
+ */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -66,6 +87,10 @@ describe('docker-paired fixture integration', () => {
       JSON.stringify(dockerManifest, null, 2),
     );
 
+    // Stage a fake installed-package root: copy the real package.json (so
+    // package-root detection recognises it) and drop a docker manifest under
+    // src/modules/docker, then point the override env var at it. This is what
+    // makes `pairsWith: docker` resolvable without touching the real install.
     scratchPkgRoot = mkdtempSync(path.join(os.tmpdir(), 'm2-docker-paired-pkgroot-'));
     const realPkg = path.join(
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'),
@@ -105,6 +130,8 @@ describe('docker-paired fixture integration', () => {
     const stackPath = path.join(fixtureRoot, '.claude', 'gan', 'stacks', 'docker.md');
     expect(existsSync(stackPath)).toBe(true);
 
+    // Layout guard: the docker stack must live only in the fixture's overlay
+    // directory, never bleed into the repo's top-level stacks/ as a stray copy.
     expect(existsSync(path.join(repoRoot, 'stacks', 'docker.md'))).toBe(false);
   });
 
@@ -146,11 +173,14 @@ describe('docker-paired fixture integration', () => {
   });
 
   it('getResolvedConfig.modules.docker reflects fixture YAML config AND getModuleState returns persisted state when both exist', async () => {
-
+    // Work in a writable copy of the fixture (the fixture itself is read-only
+    // committed data) so we can persist module state alongside its config.
     const scratchProj = mkdtempSync(path.join(os.tmpdir(), 'gan-test-'));
     scratchProjects.push(scratchProj);
     cpSync(fixtureRoot, scratchProj, { recursive: true });
 
+    // The repo-keyed state store keys off git identity, so the copy must be a
+    // real git tree before module state can be written/read deterministically.
     initGitRepo(scratchProj);
 
     const blob = {
@@ -165,6 +195,8 @@ describe('docker-paired fixture integration', () => {
     });
     expect(writeResult.mutated).toBe(true);
 
+    // The two surfaces land in two different places: config stays in the
+    // project tree's overlay YAML, state goes to the external repo-keyed store.
     expect(existsSync(path.join(scratchProj, '.claude', 'gan', 'modules', 'docker.yaml'))).toBe(
       true,
     );

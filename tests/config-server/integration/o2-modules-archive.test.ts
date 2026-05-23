@@ -1,4 +1,22 @@
-
+/**
+ * O2 non-interference guard: repo-keyed module-state bytes on disk are
+ * inviolate. The invariant is blunt — reading config, listing modules, reading
+ * unrelated state, attempting an unrelated write, or probing registration must
+ * NEVER touch the bytes of an existing, unrelated module-state file.
+ *
+ * Mechanism: a 4 KiB random "probe" file is written into the module-state tree
+ * and its sha256 captured. Each test exercises one config-server surface
+ * against an *unrelated* module/key, then re-hashes the probe and asserts it is
+ * byte-identical. The final test runs the whole sequence back to back to catch
+ * any cumulative or ordering-dependent corruption.
+ *
+ * Why the random bytes and the hash (not an equality on contents): a fixed
+ * payload could coincidentally match a buggy rewrite; random bytes + digest
+ * make any mutation — even a same-length one — overwhelmingly detectable.
+ * `setModuleState` for an unregistered module is expected to throw under M3, so
+ * its call is wrapped in try/catch — the point is that the throw leaves disk
+ * untouched, not that it succeeds.
+ */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';

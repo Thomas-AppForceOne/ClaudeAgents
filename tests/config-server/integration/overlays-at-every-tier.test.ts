@@ -1,3 +1,26 @@
+/**
+ * The C4 cascade worked example: overlays present at all three tiers
+ * (default, user, project) and merged into one resolved overlay. This suite is
+ * the canonical proof of the two distinct merge semantics, exercised in a
+ * single resolve so their interaction is also covered:
+ *
+ *   - list fields (proposer.additionalCriteria) APPEND across tiers in
+ *     default→user→project order, with same-named entries overridden by the
+ *     higher tier in place (not duplicated, not reordered);
+ *   - scalar fields (runner.thresholdOverride) are last-writer-wins, where
+ *     "last" is the highest precedence tier.
+ *
+ * The fixture is deliberately constructed so the answer is unambiguous: the
+ * criteria list resolves to [A, B, C, X, Y] (defaults A/B/C first, project's
+ * new X/Y appended, B's description taken from the project tier), and the
+ * scalar resolves to 90 (project) despite default=50 and user=75. `discarded`
+ * must stay empty — a non-empty discarded list would mean an entry was dropped
+ * rather than merged, which is the regression this guards.
+ *
+ * The default and project overlays are written into the project tree; the user
+ * overlay is written into a separate temp home so the `user` tier is resolved
+ * from a real, isolated home directory.
+ */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -113,13 +136,21 @@ runner:
       description: string;
       threshold: number;
     }>;
+    // List merge: defaults A,B,C come first (in order), then project adds the
+    // new X,Y appended at the tail. B is not duplicated — it is overridden in
+    // place — so the final order is A,B,C,X,Y.
     expect(criteria.map((c) => c.name)).toEqual(['A', 'B', 'C', 'X', 'Y']);
 
+    // ...and the overridden B carries the higher (project) tier's description,
+    // proving the override replaced the default entry rather than co-existing.
     const b = criteria.find((c) => c.name === 'B');
     expect(b?.description).toBe('from-project-overrides-default');
 
+    // Scalar merge: last-writer-wins by precedence — project's 90 beats user's
+    // 75 and default's 50.
     expect(merged.runner.thresholdOverride).toBe(90);
 
+    // Nothing was dropped: a non-empty discarded list would signal a merge bug.
     expect(r.discarded).toEqual([]);
   });
 });

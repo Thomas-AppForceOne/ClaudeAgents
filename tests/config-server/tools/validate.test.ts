@@ -1,3 +1,35 @@
+/**
+ * The core validation suite — the three public validators (validateAll,
+ * validateStack, validateOverlay), the phase-1 discovery seam, and the same
+ * validateAll over the MCP stdio transport. It is the broadest behavioural
+ * contract for what counts as valid config and how problems are reported.
+ *
+ * Major guarantees exercised here:
+ *   - clean fixtures produce zero issues (no false positives);
+ *   - each malformed fixture yields its specific issue code with file-path and
+ *     field provenance (SchemaMismatch, InvalidYAML, MissingFile), and the
+ *     schemaVersion=999 fixture surfaces the version mismatch with the number
+ *     in the message;
+ *   - validation is collecting, not fail-fast: one bad file does not throw or
+ *     halt the run, and a file with several violations yields several issues;
+ *   - multi-invariant runs surface every invariant at once (cacheEnv +
+ *     PathEscape together);
+ *   - user-tier forbidden fields (C3): planner/proposer additionalContext and
+ *     stack.override/cacheEnvOverride are each rejected at the user tier with
+ *     MalformedInput, and when all four are declared they come back as exactly
+ *     four issues in a deterministic field order;
+ *   - validateStack/validateOverlay scope down to a single artefact (note that
+ *     the overlay validator does NOT do the cross-reference MissingFile check —
+ *     that lives only in validateAll, asserted explicitly here);
+ *   - phase-1 discovery finds built-in stacks from BOTH packageRoot/stacks and
+ *     projectRoot/stacks (dual fallback);
+ *   - the same validateAll answer comes back over the JSON-RPC stdio transport
+ *     (subprocess), which is skipped gracefully when the dist build is absent.
+ *
+ * User-tier overlays are written into throwaway temp homes (makeUserHomeWithOverlay)
+ * so the forbidden-field checks never read the developer's real home.
+ */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -113,7 +145,8 @@ describe('validateAll', () => {
   });
 
   it('does not halt the pipeline on a single bad file (collects across the project)', () => {
-
+    // A schema-violating file must be reported, never thrown — validation
+    // collects issues across the whole project rather than aborting on the first.
     expect(() => validateAll({ projectRoot: invalidSchemaMismatch })).not.toThrow();
   });
 
@@ -228,6 +261,8 @@ stack:
     );
     const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
     const forbidden = result.issues.filter((i) => i.code === 'MalformedInput');
+    // All four forbidden fields declared at once → exactly four issues, in a
+    // fixed (not input-dependent) field order, so the report is deterministic.
     expect(forbidden.length).toBe(4);
     expect(forbidden.map((i) => i.field)).toEqual([
       'planner.additionalContext',
@@ -276,7 +311,10 @@ describe('validateOverlay', () => {
   });
 
   it('flags MissingFile on the invalid-missing-file project overlay (cross-ref check is in validateAll)', () => {
-
+    // Scoping boundary: validateOverlay validates the overlay *in isolation*, so
+    // the dangling stack reference is NOT its concern — it returns zero issues.
+    // The cross-reference MissingFile check belongs to validateAll (asserted in
+    // the validateAll block above).
     const result = validateOverlay({ projectRoot: invalidMissingFile, tier: 'project' });
     expect(result.issues).toEqual([]);
   });
@@ -299,7 +337,10 @@ describe('phase 1 discovery (smoke)', () => {
   });
 
   it('enumerates built-in stacks from BOTH packageRoot/stacks and projectRoot/stacks (dual fallback)', () => {
-
+    // Place a same-named web-node stack in both the package root and the project
+    // root; discovery must surface a builtin row from each location (the dual
+    // fallback), so the two paths are distinct. realpathSync resolves macOS
+    // /var → /private/var symlinks so the startsWith path checks below hold.
     const pkgRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-pkg-')));
     const projRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-proj-')));
     try {
@@ -341,7 +382,9 @@ describe('MCP transport — validateAll over stdio (subprocess)', () => {
   it('responds to validateAll via tools/call with an issue list', async () => {
     const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
     if (!existsSync(distEntry)) {
-
+      // No build artefact (e.g. running unit tests before `npm run build`):
+      // skip rather than fail — the in-process tests above already cover the
+      // behaviour; this case only adds the transport assertion.
       return;
     }
     const child = spawn(process.execPath, [distEntry], {
