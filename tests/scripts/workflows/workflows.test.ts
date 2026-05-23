@@ -1,3 +1,21 @@
+/**
+ * Structural tests for the CI workflow files under `.github/workflows`.
+ *
+ * The CI surface is a single reusable `shared-setup.yml` plus six per-category
+ * workflows that all call it. This suite pins that layout and the conventions
+ * that keep it consistent: exactly the seven expected `.yml` files exist (no
+ * stray `.yaml`), the shared workflow is `workflow_call`-triggered and pins a
+ * Node version in the supported range while running `npm ci` + `npm run
+ * build`, every category workflow triggers on push and pull_request, reuses
+ * shared-setup, and never re-declares its own Node setup. Each `npm run <name>`
+ * a workflow invokes must map to a real `package.json` script, the right
+ * per-file command appears in the right workflow, and no workflow hardcodes an
+ * absolute filesystem path.
+ *
+ * Regression guarded: CI drift — a renamed/dropped script, a category workflow
+ * that stops reusing shared-setup or re-pins Node itself, a duplicated
+ * Node-version definition, or a leaked machine-specific absolute path.
+ */
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -10,6 +28,7 @@ const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), '..', '..', '..');
 const WORKFLOWS_DIR = path.join(REPO_ROOT, '.github', 'workflows');
 
+// The one reusable workflow every category workflow calls into.
 const SHARED = 'shared-setup.yml';
 const CATEGORY_WORKFLOWS = [
   'test-modules.yml',
@@ -21,16 +40,25 @@ const CATEGORY_WORKFLOWS = [
 ] as const;
 const EXPECTED_FILES = [SHARED, ...CATEGORY_WORKFLOWS].sort();
 
+// Read a workflow file's raw text. Tests assert on both the parsed YAML and
+// the raw string (some checks are substring/structural rather than semantic).
 function readWorkflow(filename: string): string {
   return readFileSync(path.join(WORKFLOWS_DIR, filename), 'utf8');
 }
 
+// The repo's package.json scripts, used to confirm every workflow-invoked
+// `npm run <name>` resolves to a real script.
 function loadPackageScripts(): Record<string, string> {
   const pkgRaw = readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8');
   const pkg = JSON.parse(pkgRaw) as { scripts?: Record<string, string> };
   return pkg.scripts ?? {};
 }
 
+// Normalise a parsed workflow's trigger declaration into a set of trigger
+// names, tolerating the three YAML shapes (a single string, a list, or a
+// mapping). The bare-word key `on` is parsed by the YAML lib as the boolean
+// true, so when `on` is absent we fall back to the `true` property — both name
+// the same trigger block.
 function triggerNames(parsed: unknown): Set<string> {
   if (parsed === null || typeof parsed !== 'object') {
     return new Set();
@@ -52,6 +80,10 @@ function triggerNames(parsed: unknown): Set<string> {
   return new Set();
 }
 
+// Accept a Node version string if it falls in the supported half-open range
+// 20.10.0 (inclusive) up to 23.0.0 (exclusive). A leading v is stripped, and a
+// wildcard minor/patch (x) is treated as a permissive in-range value so a pin
+// like 20.x still passes the lower bound.
 function nodeVersionInRange(version: string): boolean {
   const parts = version
     .trim()
@@ -69,9 +101,11 @@ function nodeVersionInRange(version: string): boolean {
   const patch = patS === 'x' ? 0 : Number(patS);
   if (!Number.isFinite(minor) || !Number.isFinite(patch)) return false;
 
+  // Lower bound: >= 20.10.0, expanded to avoid relying on a tuple comparison.
   const geLower =
     major > 20 || (major === 20 && minor > 10) || (major === 20 && minor === 10 && patch >= 0);
 
+  // Upper bound: strictly below the next major (23).
   const ltUpper = major < 23;
 
   return geLower && ltUpper;
@@ -165,6 +199,8 @@ describe('workflows: category workflows', () => {
       });
 
       it('every `npm run <name>` references a real script', () => {
+        // Scrape every `npm run <name>` invocation from the raw workflow and
+        // require each name to exist in package.json scripts.
         const re = /npm run ([A-Za-z0-9:_\-]+)/g;
         const referenced = new Set<string>();
         let m: RegExpExecArray | null;
@@ -217,7 +253,9 @@ describe('workflows: per-file command substrings', () => {
 
 describe('workflows: hygiene', () => {
   it('no workflow contains an absolute filesystem path', () => {
-
+    // Scan every `key: value` line for a value that looks like an absolute
+    // filesystem path. A leading-slash value is flagged, except a protocol-less
+    // URL (leading double-slash) which is not a local path.
     for (const filename of EXPECTED_FILES) {
       const raw = readWorkflow(filename);
 

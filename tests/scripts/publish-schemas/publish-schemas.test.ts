@@ -1,3 +1,25 @@
+/**
+ * Black-box tests for the `publish-schemas` bin, which keeps the published
+ * JSON schemas byte-canonical. In --dry-run it checks each schema matches its
+ * canonical serialisation; in write mode it rewrites any drifted file back to
+ * canonical form.
+ *
+ * The suite drives the compiled bin against a hermetic temp copy of the three
+ * schemas so destructive cases (reformat, delete, break JSON) never touch the
+ * checked-in originals. It covers the full failure taxonomy: clean dry-run,
+ * drifted schema (SchemaDrift), write-mode repair restoring exact canonical
+ * bytes, a deleted schema (SchemaMissing), invalid JSON (SchemaParseError),
+ * the --json shape, and unknown-flag (exit 64) / --help paths.
+ *
+ * Regression guarded: the bin must keep detecting any deviation from the
+ * canonical bytes — drift introduced by reformatting (here, re-indenting valid
+ * JSON to 4 spaces) is a real failure, and write mode must reproduce the
+ * canonical file exactly.
+ *
+ * NOTE: the writeFileSync payloads below (re-indented JSON, the broken
+ * '{not valid' fragment) are deliberate corruption fixtures the bin reads; do
+ * not edit inside those string literals.
+ */
 
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -6,10 +28,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { runScript, repoRootDir } from '../helpers/spawn.js';
 
+// The three schemas the bin governs; the clean run expects exactly these.
 const SCHEMA_FILES = ['api-tools-v1.json', 'overlay-v1.json', 'stack-v1.json'] as const;
 
 const CANONICAL_SCHEMA_ROOT = path.join(repoRootDir(), 'schemas');
 
+// Copy the canonical schemas into a throwaway temp root so corruption tests
+// operate on a private copy.
 function makeHermeticSchemaRoot(): string {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'publish-schemas-'));
   mkdirSync(tmp, { recursive: true });
@@ -19,6 +44,7 @@ function makeHermeticSchemaRoot(): string {
   return tmp;
 }
 
+// Temp roots created during the run, swept in afterAll.
 const tmpRoots: string[] = [];
 
 function newTmpRoot(): string {
@@ -49,6 +75,9 @@ describe('publish-schemas bin', () => {
     const root = newTmpRoot();
     const corrupted = path.join(root, 'stack-v1.json');
 
+    // Same semantic JSON, re-serialised with a 4-space indent: byte-different
+    // from the canonical (2-space) form, so it must register as drift even
+    // though the data is unchanged.
     const parsed: unknown = JSON.parse(readFileSync(corrupted, 'utf8'));
 
     writeFileSync(corrupted, JSON.stringify(parsed, null, 4) + '\n', 'utf8');
@@ -62,6 +91,8 @@ describe('publish-schemas bin', () => {
   it('(T1c) write mode repairs corrupted schema; follow-up --dry-run exits 0', async () => {
     const root = newTmpRoot();
     const corrupted = path.join(root, 'overlay-v1.json');
+    // Re-indent to drift the file (as in T1b), then capture the canonical bytes
+    // to assert write mode reproduces them exactly.
     const parsed: unknown = JSON.parse(readFileSync(corrupted, 'utf8'));
     writeFileSync(corrupted, JSON.stringify(parsed, null, 4) + '\n', 'utf8');
 
@@ -74,6 +105,7 @@ describe('publish-schemas bin', () => {
     expect(repair.exitCode).toBe(0);
     expect(repair.stdout).toBe('3 schemas checked, 0 failed\n');
 
+    // Byte-for-byte equality with the canonical source proves the rewrite.
     const after = readFileSync(corrupted, 'utf8');
     expect(after).toBe(canonicalBytes);
 

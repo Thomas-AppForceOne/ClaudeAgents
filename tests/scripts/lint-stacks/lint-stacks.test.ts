@@ -1,3 +1,19 @@
+/**
+ * Black-box tests for the `lint-stacks` bin, which validates a project's stack
+ * `.md` files against the stack schema and a set of authoring rules. Each test
+ * points the bin at a checked-in fixture root and asserts on its exit code,
+ * summary line, and the failure code/path it reports.
+ *
+ * Coverage spans the bin's failure taxonomy: an empty stacks dir (0 checked),
+ * a clean stack (pass), a leftover scaffold DRAFT banner
+ * (ScaffoldBannerPresent), a schema-shape violation and a malformed
+ * docLintCmd (both SchemaMismatch), plus the --json output shape and the
+ * unknown-flag (exit 64) / --help paths.
+ *
+ * Regression guarded: the bin must keep reporting the right failure CODE and
+ * the offending stack file's PATH for each defect class, since CI and authors
+ * key off both.
+ */
 
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -5,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { runScript, repoRootDir } from '../helpers/spawn.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 
+// One fixture root per defect class the bin must distinguish.
 const FIXTURES = path.join(repoRootDir(), 'tests', 'fixtures', 'scripts', 'lint-stacks');
 const EMPTY_ROOT = path.join(FIXTURES, 'empty');
 const CLEAN_ROOT = path.join(FIXTURES, 'clean');
@@ -13,7 +30,8 @@ const SCHEMA_ROOT = path.join(FIXTURES, 'schema-violation');
 const DOCLINT_ROOT = path.join(FIXTURES, 'malformed-doclintcmd');
 
 beforeAll(() => {
-
+  // Fail fast with a clear message if a fixture is missing, rather than letting
+  // the bin produce a confusing "0 checked" pass later.
   for (const p of [EMPTY_ROOT, CLEAN_ROOT, DRAFT_ROOT, SCHEMA_ROOT, DOCLINT_ROOT]) {
     if (!existsSync(p)) {
       throw new Error(`fixture missing: ${p}`);
@@ -42,6 +60,8 @@ describe('lint-stacks bin', () => {
     expect(r.stdout).toBe('1 stacks checked, 1 failed\n');
     expect(r.stderr).toContain('ScaffoldBannerPresent');
 
+    // The bin reports the CANONICAL path, so build the expected path the same
+    // way to compare apples to apples.
     const canonical = canonicalizePath(DRAFT_ROOT);
     const stackPath = path.join(canonical, 'stacks', 'web-node.md');
     expect(r.stderr).toContain(stackPath);

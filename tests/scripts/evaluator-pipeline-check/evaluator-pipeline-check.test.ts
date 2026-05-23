@@ -1,3 +1,20 @@
+/**
+ * Black-box tests for the `evaluator-pipeline-check` bin — the guard-rail that
+ * pins each stack fixture's evaluator plan against a checked-in golden
+ * (`expected-evaluator-plan.json`) and refuses to let a guard-rail fixture
+ * silently disappear.
+ *
+ * The suite drives the compiled bin as a real process and asserts on its
+ * exit code, stdout summary, and stderr error codes across the full surface:
+ * clean run, a missing golden (EvaluatorPlanMissing), a drifted golden
+ * (EvaluatorPlanDrift), golden repair via --update-goldens, --json output,
+ * unknown-flag handling, --help, and the removal guard
+ * (GuardrailFixtureRemoved / GuardrailRemovalRefusedUnderCI).
+ *
+ * Regression guarded: the bin must keep failing CLOSED — a vanished fixture or
+ * a drifted plan has to surface as a non-zero exit, and CI must never be
+ * allowed to wave away a removed guard-rail even with --allow-guardrail-removal.
+ */
 
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -6,8 +23,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runScript, repoRootDir } from '../helpers/spawn.js';
 
+// Force the package-root override empty so the bin resolves against this repo,
+// not whatever GAN_PACKAGE_ROOT_OVERRIDE the ambient environment might carry.
 const HARNESS_ENV: Record<string, string> = { GAN_PACKAGE_ROOT_OVERRIDE: '' };
 
+// The five canonical guard-rail fixtures; the clean run expects exactly these.
 const BOOTSTRAP_FIXTURES = [
   'generic-fallback',
   'js-ts-minimal',
@@ -18,6 +38,9 @@ const BOOTSTRAP_FIXTURES = [
 
 const CANONICAL_FIXTURE_ROOT = path.join(repoRootDir(), 'tests', 'fixtures', 'stacks');
 
+// Copy the canonical fixtures into a fresh temp root so destructive tests
+// (delete/corrupt a golden, remove a fixture) never touch the checked-in
+// originals.
 function makeHermeticFixtureRoot(): string {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'eval-pipe-check-'));
   for (const fixture of BOOTSTRAP_FIXTURES) {
@@ -28,6 +51,7 @@ function makeHermeticFixtureRoot(): string {
   return tmp;
 }
 
+// Temp roots created during the run, swept in afterAll.
 const tmpRoots: string[] = [];
 
 function newTmpRoot(): string {
@@ -37,7 +61,8 @@ function newTmpRoot(): string {
 }
 
 beforeAll(() => {
-
+  // Fail fast (with a readFileSync throw) if any canonical golden is missing,
+  // so a setup problem surfaces here rather than as a confusing bin failure.
   for (const fixture of BOOTSTRAP_FIXTURES) {
     const goldenPath = path.join(CANONICAL_FIXTURE_ROOT, fixture, 'expected-evaluator-plan.json');
 
@@ -79,6 +104,8 @@ describe('evaluator-pipeline-check bin', () => {
   it('(c) corrupted golden in temp root → exit 1; stderr names EvaluatorPlanDrift', async () => {
     const root = newTmpRoot();
 
+    // Overwrite the golden with a plausible-but-wrong plan so the recomputed
+    // plan no longer matches — drift, not a missing/parse error.
     writeFileSync(
       path.join(root, 'synthetic-second', 'expected-evaluator-plan.json'),
       '{"issues":[{"code":"FabricatedDrift"}]}\n',
@@ -95,6 +122,8 @@ describe('evaluator-pipeline-check bin', () => {
   it('(d) --update-goldens repairs corrupted goldens; subsequent default run exits 0', async () => {
     const root = newTmpRoot();
 
+    // Corrupt a golden, then prove --update-goldens rewrites it back to the
+    // recomputed plan: the repair run AND a plain follow-up run both pass.
     writeFileSync(
       path.join(root, 'polyglot-webnode-synthetic', 'expected-evaluator-plan.json'),
       '{"issues":[{"code":"FabricatedDrift"}]}\n',
@@ -171,6 +200,8 @@ describe('evaluator-pipeline-check bin', () => {
     const root = newTmpRoot();
     rmSync(path.join(root, 'synthetic-second'), { recursive: true, force: true });
 
+    // The escape hatch is honoured locally but refused under CI: a removed
+    // guard-rail must never be waved through in automation.
     const r = await runScript(
       'evaluator-pipeline-check',
       ['--fixture-root', root, '--allow-guardrail-removal'],
@@ -181,7 +212,8 @@ describe('evaluator-pipeline-check bin', () => {
   });
 
   it('CI=1 with --allow-guardrail-removal and ALL fixtures present still exits non-zero', async () => {
-
+    // Even with nothing actually removed, passing --allow-guardrail-removal
+    // under CI is itself refused — the flag's mere presence in CI is the smell.
     const root = newTmpRoot();
 
     const r = await runScript(

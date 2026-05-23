@@ -1,9 +1,28 @@
+/**
+ * Unit tests for `parseArgs`, the shared argv parser every CLI bin in this
+ * repo uses. The parser splits argv into three buckets — recognised flags,
+ * positionals, and an `unknown` list — and derives a canonicalised
+ * `projectRoot` from either `--project-root` or the cwd.
+ *
+ * These tests pin the parser's contract: boolean flags default to false,
+ * string flags accept both the two-token and `--flag=value` forms, anything
+ * not in the spec (including a string flag missing its value) lands in
+ * `unknown` rather than throwing or being treated as a flag, and positionals
+ * stay separate. The bins rely on this so an unknown flag can be turned into a
+ * usage error (exit 64) rather than silently ignored.
+ *
+ * Regression guarded: a parser change that misclassified an unknown flag as
+ * recognised, or that stopped canonicalising the project root, would break
+ * every bin's flag handling at once.
+ */
 
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseArgs } from '../../../scripts/lib/index.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 
+// A representative spec: three boolean flags and one string flag, mirroring the
+// shape the real bins declare.
 const SPEC = {
   boolean: ['json', 'quiet', 'help'] as const,
   string: ['project-root'] as const,
@@ -67,6 +86,8 @@ describe('parseArgs (scripts)', () => {
   });
 
   it('--project-root with no following value: collected as unknown (missing value)', () => {
+    // A declared string flag with nothing after it is malformed input, so it
+    // is bucketed as unknown rather than consuming the (absent) next token.
     const r = parseArgs(['--project-root'], SPEC);
 
     expect(r.unknown).toEqual(['--project-root']);
@@ -78,7 +99,8 @@ describe('parseArgs (scripts)', () => {
   });
 
   it('explicit --project-root canonicalises the supplied path', () => {
-
+    // Use the already-resolved cwd as the input so the only transformation
+    // under test is canonicalisation, not also relative-path resolution.
     const target = path.resolve(process.cwd());
     const r = parseArgs(['--project-root', target], SPEC);
     expect(r.projectRoot).toBe(canonicalizePath(target));
