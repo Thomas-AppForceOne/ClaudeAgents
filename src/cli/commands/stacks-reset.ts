@@ -1,4 +1,12 @@
-
+/**
+ * `gan stacks reset <name>` — drop a stack customization, restoring the
+ * framework's built-in default for that stack.
+ *
+ * It deletes the tier-specific customization file (`project` by default,
+ * `user` with `--tier`). Resetting a stack that has no customization is a
+ * benign no-op: it exits OK with a `stderr` warning and `deleted: false`,
+ * never an error — so this command is safe to run idempotently.
+ */
 
 import { existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -17,10 +25,19 @@ import {
 import { EXIT_BAD_ARGS, EXIT_OK } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+// The tiers a customization may live in (and thus be reset from).
 type ResetTier = 'project' | 'user';
 
 const ALLOWED_TIERS: ReadonlySet<ResetTier> = new Set<ResetTier>(['project', 'user']);
 
+/**
+ * Resolve the target tier from the `--tier` flag.
+ *
+ * @param parsed parsed argv.
+ * @returns the chosen {@link ResetTier} (default `project`), or a
+ *   `MalformedInput` {@link ConfigServerError} — returned, not thrown — when
+ *   `--tier` is present without a value or names an unsupported tier.
+ */
 function readTier(parsed: ParsedArgs): ResetTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
@@ -45,6 +62,17 @@ function readTier(parsed: ParsedArgs): ResetTier | ConfigServerError {
   return raw as ResetTier;
 }
 
+/**
+ * Compute the absolute path of the customization file to delete.
+ *
+ * @param tier which tier's customization to target.
+ * @param name the stack name.
+ * @param projectRoot the resolved project root (used for the `project` tier).
+ * @param userHome the resolved user home, or `null` if none (only consulted
+ *   for the `user` tier).
+ * @returns the `<root>/.claude/gan/stacks/<name>.md` path, or a
+ *   `MalformedInput` {@link ConfigServerError} for `--tier=user` with no home.
+ */
 function targetPathFor(
   tier: ResetTier,
   name: string,
@@ -63,6 +91,10 @@ function targetPathFor(
   return path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`);
 }
 
+/**
+ * Render the success notice for human (non-JSON) output, confirming the
+ * built-in default is back in effect.
+ */
 function renderHumanSuccess(name: string, tier: ResetTier, target: string): string {
   return [
     `Reset stack '${name}' at ${target} (tier: ${tier}).`,
@@ -71,6 +103,20 @@ function renderHumanSuccess(name: string, tier: ResetTier, target: string): stri
   ].join('\n');
 }
 
+/**
+ * CLI entrypoint for `gan stacks reset`.
+ *
+ * @param parsed parsed argv; the first positional is the required stack name,
+ *   with `--tier`, `--json`, and `--project-root` honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data:
+ *   - missing name or bad `--tier` → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - `--tier=user` with no home → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - project-root resolution failure → mapped via {@link errorResult};
+ *   - an unlink failure → {@link unreachableResult}.
+ *   When no customization exists the result is a *successful* no-op
+ *   (exit {@link EXIT_OK}, `deleted: false`, warning on `stderr`). Side effect
+ *   on a real reset: deletes the customization file.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
@@ -107,11 +153,15 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
   const target = targetOrErr;
 
+  // Present the target under the project root's display form when the canonical
+  // and display roots differ, so the path matches what the user typed.
   const targetDisplay =
     projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
       ? projectRootDisplay + target.slice(projectRoot.length)
       : target;
 
+  // No customization to remove: a benign, idempotent no-op — exit OK with a
+  // warning, not an error.
   if (!existsSync(target)) {
     const warning = `warning: no customization at ${targetDisplay} for stack '${name}' (tier: ${tier})\n`;
     if (wantJson) {
