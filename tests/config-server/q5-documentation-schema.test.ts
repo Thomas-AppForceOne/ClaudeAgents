@@ -1,4 +1,23 @@
-
+// Schema-conformance tests for the Q5 documentation fields added to the
+// stack-v1 schema: `documentationSurfaces` (the doc-quality triggers a stack
+// declares) and `docLintCmd` (how to invoke a documentation linter). The
+// FUNC-N labels track the Q5 spec's functional requirements.
+//
+// The contracts under test:
+//  - FUNC-1: both fields are ADDITIVE and OPTIONAL — an existing stack omitting
+//    them still validates, and either may appear without the other. This is the
+//    backward-compatibility guarantee for stacks written before Q5.
+//  - FUNC-2: a documentationSurfaces entry requires both `id` and `template`,
+//    supports the two trigger forms (scope-only, and scope+keywords), and is a
+//    closed object (an unknown item property is rejected).
+//  - FUNC-3/FUNC-4: docLintCmd has a conditional shape keyed on `absenceSignal`.
+//    The "silent" branch may omit `absenceMessage`; the "warning" and
+//    "blockingConcern" branches REQUIRE it. `severity` and `baseline` are
+//    enum-constrained, and `command` has minLength 1.
+//
+// `schemaMismatches` filters to only SchemaMismatch issues so a test asserts on
+// the schema verdict alone, ignoring any unrelated issue codes. STACK_PATH is a
+// throwaway label for the issues.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,6 +27,8 @@ import {
 
 const STACK_PATH = '/tmp/q5-stack.md';
 
+// Validate a stack body (with a valid schemaVersion supplied) and keep only the
+// schema-conformance issues, so each test reasons about SchemaMismatch alone.
 function schemaMismatches(body: Record<string, unknown>): Issue[] {
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(STACK_PATH, { schemaVersion: 1, ...body }, issues);
@@ -17,6 +38,8 @@ function schemaMismatches(body: Record<string, unknown>): Issue[] {
 describe('Q5 stack schema — additive optional fields', () => {
   it('FUNC-1: a body omitting both Q5 fields still validates', () => {
 
+    // A pre-Q5-shaped stack (scope/buildCmd/securitySurfaces, no doc fields)
+    // must still pass — the additive fields cannot regress older stacks.
     const body = {
       scope: ['**/*.ts'],
       buildCmd: 'npm run build',
@@ -118,6 +141,9 @@ describe('Q5 stack schema — docLintCmd shape (FUNC-3)', () => {
   });
 
   it('accepts the silent branch without an absenceMessage', () => {
+    // Only the `silent` branch may omit absenceMessage; the warning /
+    // blockingConcern branches require it (asserted in FUNC-4 below). This is
+    // the positive half of that conditional-shape rule.
     const body = {
       docLintCmd: {
         command: 'doc-lint',
@@ -155,6 +181,8 @@ describe('Q5 stack schema — malformed docLintCmd rejected (FUNC-4)', () => {
   });
 
   it('(b) rejects a missing absenceMessage when absenceSignal is `warning`', () => {
+    // The negative half of the conditional-shape rule: a non-silent signal
+    // without an absenceMessage is invalid (there would be nothing to surface).
     const body = {
       docLintCmd: {
         command: 'doc-lint',

@@ -1,3 +1,25 @@
+// Guards the `pairsWith.consistency` invariant from spec C5: a `pairsWith`
+// declaration links a stack to a module (or vice versa), and the two sides
+// must not contradict each other. The invariant covers four distinct shapes:
+//   - soft-OK   : a module declares pairsWith but the stack stays silent — fine;
+//   - disagree  : both sides declare pairsWith and name different partners — error;
+//   - shadowed-default: a project-tier stack shadows a paired built-in but drops
+//                 the pairsWith — error, with the C5 verbatim remediation;
+//   - missing-module: a stack pairsWith a module that does not exist — error.
+//
+// Two facts make this suite worth its complexity:
+//  1. The shadowed-stack error string is QUOTED VERBATIM in the C5 spec, so one
+//     test re-reads C5.md and asserts byte-equality with the generated message
+//     (`buildShadowedPairsWithMessage`). If the wording drifts from the spec,
+//     that test fails — the message is a contract, not free text. Do not edit
+//     the quoted spec line; the test reads it as data.
+//  2. The shadowed-default fixture deliberately uses a *fixture-internal*
+//     built-in under its own `stacks/`, never the real repo-root `stacks/`. A
+//     dedicated test asserts no `paired-shadowed.md` leaked into the actual
+//     repo, guarding against a fixture that pollutes the working tree.
+//
+// `hydrateSnapshot` is async because it dynamically imports the YAML parser and
+// fills each stack row's parsed body, which the invariant inspects.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -66,12 +88,18 @@ describe('pairsWith.consistency invariant', () => {
     expect(issue.field).toBe('/pairsWith');
     expect(issue.path).toContain('.claude/gan/stacks/docker.md');
 
+    // Exact-match (not `toContain`): the wording is a contract quoted in C5, so
+    // any drift must fail. The next test pins it against the spec source itself.
     const expected = buildShadowedPairsWithMessage('docker');
     expect(issue.message).toBe(expected);
   });
 
   it("matches the verbatim string quoted in C5's spec text", () => {
 
+    // Read C5.md as DATA and recover the one blockquote line that quotes this
+    // invariant's message, then strip the `> ` prefix and surrounding backticks
+    // so it can be compared byte-for-byte against the generated string. This is
+    // the test that makes the message a spec-pinned contract.
     const c5Text = readFileSync(c5SpecPath, 'utf8');
     const generated = buildShadowedPairsWithMessage('docker');
     const lines = c5Text.split(/\r?\n/);
@@ -99,6 +127,9 @@ describe('pairsWith.consistency invariant', () => {
 
     const snapshot = await hydrateSnapshot(softOkFixture);
 
+    // The module side is injected directly into the snapshot rather than loaded
+    // from a real manifest (the manifestPath is a /virtual sentinel) so the test
+    // controls exactly one pairing without standing up an on-disk module tree.
     snapshot.modules.push({
       name: 'paired-soft-ok-module',
       manifestPath: '/virtual/paired-soft-ok-module/manifest.json',
@@ -106,11 +137,16 @@ describe('pairsWith.consistency invariant', () => {
     });
     const issues = checkPairsWithConsistency(snapshot);
     expect(issues).toEqual([]);
+    // `moduleScratch` is computed for parity with the other cases but unused
+    // here; voided so it does not trip no-unused-vars.
     void moduleScratch;
   });
 
   it('case 2 (disagree): both sides declare pairsWith and they differ — hard error', async () => {
     const snapshot = await hydrateSnapshot(disagreeFixture);
+    // Inject a module whose pairsWith ('paired-disagree') contradicts the value
+    // the fixture's stack declares ('some-other-module'); the invariant must
+    // flag the mismatch and name the other partner in the message.
     snapshot.modules.push({
       name: 'paired-disagree',
       manifestPath: '/virtual/paired-disagree/manifest.json',
@@ -134,6 +170,9 @@ describe('pairsWith.consistency invariant', () => {
 
   it('case 3 (shadowed-default): test imports the SHADOWED_DEFAULT_REMEDIATION constant', () => {
 
+    // Pins the relationship between the exported template and the builder: the
+    // message is exactly the template with `<stackName>` substituted. Proving it
+    // by substitution (rather than re-typing the string) keeps the two in sync.
     expect(typeof SHADOWED_DEFAULT_REMEDIATION).toBe('string');
     expect(SHADOWED_DEFAULT_REMEDIATION).toContain('<stackName>');
     const substituted = SHADOWED_DEFAULT_REMEDIATION.split('<stackName>').join('xyz');
@@ -151,6 +190,10 @@ describe('pairsWith.consistency invariant', () => {
 
   it('case 3 (shadowed-default): the fixture creates NO new files at the actual repo-root stacks/', () => {
 
+    // Hygiene guard: the "built-in" this case shadows lives INSIDE the fixture
+    // (its body is self-labelled fixture-internal), and the real repo-root
+    // stacks/ must stay untouched. A missing repo-root copy is the pass
+    // condition, so the read is wrapped in try/catch — ENOENT means clean.
     const expected = path.join(
       shadowedDefaultFixture,
       'stacks',

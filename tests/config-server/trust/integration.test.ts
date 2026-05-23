@@ -1,3 +1,26 @@
+// Verifies runTrustCheck — the gate that decides whether a run is allowed to
+// proceed against a project's config — across the full decision matrix it must
+// implement. The cases are lettered (a)–(h) to mirror the spec's enumeration,
+// and together they pin the trust state machine:
+//
+//   (a) skipped   — overlay declares no commands ⇒ nothing dangerous to trust;
+//                   the hash is not even computed.
+//   (b) bypassed  — GAN_TRUST=unsafe-trust-all ⇒ explicit opt-out, no hash.
+//   (c) approved  — strict mode + a cache entry matching the current hash.
+//   (d) unapproved— strict mode + no matching entry ⇒ one UntrustedOverlay error.
+//   (e) the error message must be actionable: it carries the current hash plus
+//                   a copy-pasteable `gan trust approve --project-root=` command.
+//   (f) GAN_TRUST="" is treated as unset, NOT as bypass — empty must still
+//                   enforce, or an unset-but-empty env var would silently disarm
+//                   the gate.
+//   (g) an unknown GAN_TRUST value falls back to strict (fail-closed), never to
+//                   bypass — the safe default for an unrecognised mode.
+//   (h) a corrupt trust cache is converted into a single Issue and downgrades to
+//                   unapproved rather than throwing, so a broken cache fails
+//                   closed instead of crashing the run.
+//
+// `jsTsMinimal` (no commands) drives (a); `trustCommandFiles` (declares
+// commands) drives the rest. Each test uses a fresh temp home for the cache.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,6 +71,8 @@ describe('trust/integration — runTrustCheck', () => {
     });
     expect(result.status).toBe('skipped');
     expect(result.issues).toEqual([]);
+    // No hash is computed when there is nothing to trust — undefined, not a
+    // throwaway value.
     expect(result.currentHash).toBeUndefined();
     expect(result.trustMode).toBe('unset');
   });
@@ -62,12 +87,16 @@ describe('trust/integration — runTrustCheck', () => {
     });
     expect(result.status).toBe('bypassed');
     expect(result.issues).toEqual([]);
+    // currentHash stays undefined: bypass short-circuits BEFORE the (non-trivial)
+    // hash computation, so the explicit opt-out also skips the work.
     expect(result.currentHash).toBeUndefined();
     expect(result.trustMode).toBe('unsafe-trust-all');
   });
 
   it('(c) returns "approved" with currentHash when cache contains a matching entry', () => {
     const snapshot = snapshotFor(trustCommandFiles);
+    // Seed the cache with an approval pinned to the project's CURRENT hash, so
+    // the strict-mode check finds an exact match and returns approved.
     const { aggregateHash } = computeTrustHash(trustCommandFiles);
 
     let cache: TrustCache = { schemaVersion: 1, approvals: [] };
@@ -114,6 +143,9 @@ describe('trust/integration — runTrustCheck', () => {
       env: { GAN_TRUST: 'strict' },
       homeDir: tmpHome,
     });
+    // The error must be self-service: it quotes the hash being rejected and the
+    // exact `gan trust approve --project-root=` command that would approve it,
+    // so the user is never left guessing how to unblock the run.
     expect(result.issues[0].message).toContain(aggregateHash);
     expect(result.issues[0].message).toContain('gan trust approve');
     expect(result.issues[0].message).toContain('--project-root=');
@@ -146,6 +178,10 @@ describe('trust/integration — runTrustCheck', () => {
   it('(h) converts TrustCacheCorrupt into a single Issue (does not propagate)', () => {
     const snapshot = snapshotFor(trustCommandFiles);
 
+    // Plant a corrupt cache (malformed JSON, but at the secure 0600 mode so the
+    // failure is content-only). runTrustCheck must catch the resulting
+    // TrustCacheCorrupt and fail CLOSED — surface it as one Issue + unapproved —
+    // rather than letting the exception escape and crash the run.
     const cacheDir = path.join(tmpHome, '.claude', 'gan');
     mkdirSync(cacheDir, { recursive: true });
     const cachePath = path.join(cacheDir, 'trust-cache.json');

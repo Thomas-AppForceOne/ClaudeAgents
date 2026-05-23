@@ -1,3 +1,15 @@
+// Guards the `stack.no_draft_banner` invariant: when the scaffolder generates
+// a new stack file it stamps a DRAFT banner into the prose to mark it as
+// not-yet-reviewed. Shipping a stack that still carries that banner means the
+// author never finished it, so the invariant fails with an `error` until the
+// banner is removed. The check inspects `/prose` (the body below the YAML
+// front-matter), not the structured data.
+//
+// The expected banner text is imported as the real `DRAFT_BANNER` constant
+// rather than hard-coded, so the test stays correct if the banner wording is
+// ever changed at its single source. `hydrateSnapshot` parses each stack file
+// so `row.prose` is populated for the check. Verified at the unit entrypoint
+// and end-to-end via `validateAll`.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -15,6 +27,8 @@ const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks');
 const cleanFixture = path.join(fixturesRoot, 'js-ts-minimal');
 const draftFixture = path.join(fixturesRoot, 'invariant-stack-draft-banner');
 
+// The banner lives in the stack body/prose, which phase-1 leaves unparsed;
+// populate each row's `data`/`prose` from disk so the check can inspect prose.
 function hydrateSnapshot(projectRoot: string) {
   const snapshot = _runPhase1ForTests(projectRoot);
   for (const row of snapshot.stackFiles.values()) {
@@ -43,6 +57,9 @@ describe('stack.no_draft_banner invariant', () => {
     const issue = issues[0];
     expect(issue.code).toBe('InvariantViolation');
     expect(issue.severity).toBe('error');
+    // The violation is located at `/prose`, not a structured field. Asserting
+    // against the imported DRAFT_BANNER (not a literal) keeps this test in lock-
+    // step with the scaffolder if the banner text ever changes.
     expect(issue.field).toBe('/prose');
     expect(issue.path).toContain('web-node.md');
     expect(issue.message).toContain('DRAFT');

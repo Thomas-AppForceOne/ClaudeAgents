@@ -1,3 +1,19 @@
+// Verifies computeTrustHash, the function that fingerprints a project's GAN
+// config so the trust cache can later detect tampering. The hash IS the trust
+// boundary, so these tests pin three properties it must never lose:
+//  - Determinism: the same file tree hashes identically across repeated calls
+//    (and across 100 calls), so a re-check never spuriously flips to untrusted.
+//  - Sensitivity: a one-byte change (here a trailing space) yields a different
+//    hash — otherwise an attacker could mutate config without invalidating an
+//    existing approval.
+//  - A fixed, well-defined input set: only `.claude/gan/project.md`, the direct
+//    `.md` children of `stacks/` (never nested), and the `.yaml` (never `.yml`)
+//    manifests under `modules/`. The file list is canonicalised, absolute, and
+//    locale-sorted so the aggregate is order-independent.
+//
+// The empty project hashes to the SHA-256 of empty input (EMPTY_SHA256); tests
+// assert real fixtures differ from it to prove content actually flowed into the
+// digest. Each test runs against a fresh temp project root.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +22,7 @@ import path from 'node:path';
 import { computeTrustHash } from '../../../src/config-server/trust/hash.js';
 import { canonicalizePath, localeSort } from '../../../src/config-server/determinism/index.js';
 
+// The well-known SHA-256 of zero bytes: what an empty/absent config hashes to.
 const EMPTY_SHA256 = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const HEX_HASH_RE = /^sha256:[0-9a-f]{64}$/;
@@ -28,6 +45,8 @@ describe('computeTrustHash', () => {
   }
 
   it('returns empty-set hash for a project without .claude/gan/', () => {
+    // No config dir at all: empty file list and the empty-input digest. Defines
+    // the baseline the content-bearing tests below must diverge from.
     const result = computeTrustHash(root);
     expect(result).toEqual({
       aggregateHash: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
@@ -83,6 +102,10 @@ describe('computeTrustHash', () => {
       expect(path.isAbsolute(f)).toBe(true);
     }
 
+    // Build the expected list in creation order, then canonicalise + locale-sort
+    // it ourselves and assert equality: this proves the output is sorted (not
+    // in filesystem-readdir order) and canonicalised, both required for an
+    // order-independent aggregate.
     const expectedRaw = [
       path.join(ganDir, 'project.md'),
       path.join(stacksDir, 'web-node.md'),
@@ -92,11 +115,18 @@ describe('computeTrustHash', () => {
     const expectedSorted = localeSort(expectedRaw.map((p) => canonicalizePath(p)));
     expect(result.files).toEqual(expectedSorted);
 
+    // Sorting the result again is a no-op (idempotence) — a second guard that
+    // the list was already in localeSort order.
     const reSorted = localeSort(result.files);
     expect(result.files).toEqual(reSorted);
   });
 
   it('produces different hashes for fixtures differing only in a trailing space', () => {
+    // The two bodies differ by exactly one byte: 'hello\n' vs 'hello \n'. The
+    // hash must be byte-exact (no whitespace normalisation), so a content tweak
+    // an attacker might think invisible still breaks an existing approval. The
+    // root is torn down and recreated between the two so file paths match and
+    // only the content differs.
     const ganDirA = makeGanDir();
     writeFileSync(path.join(ganDirA, 'project.md'), 'hello\n', 'utf8');
     const hashA = computeTrustHash(root).aggregateHash;
@@ -132,6 +162,9 @@ describe('computeTrustHash', () => {
   });
 
   it('includes only .yaml manifests under modules/, never .yml', () => {
+    // The .yml file is a deliberate decoy: only `.yaml` is the recognised
+    // manifest extension, so the alternate spelling must be excluded from the
+    // hashed set rather than silently folded in.
     const ganDir = makeGanDir();
     const modulesDir = path.join(ganDir, 'modules');
     mkdirSync(modulesDir);
@@ -148,6 +181,8 @@ describe('computeTrustHash', () => {
   });
 
   it('includes only direct .md children of stacks/, never nested files', () => {
+    // The nested stacks/sub/inner.md is a decoy: hashing is shallow (direct
+    // children only), so a file one level deeper must not enter the digest.
     const ganDir = makeGanDir();
     const stacksDir = path.join(ganDir, 'stacks');
     const subDir = path.join(stacksDir, 'sub');

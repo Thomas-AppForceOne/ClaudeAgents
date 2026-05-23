@@ -1,3 +1,13 @@
+// Guards the `stack.tier_apiVersion` invariant: the stack-file counterpart of
+// the overlay version check. A stack file must declare a `schemaVersion` this
+// build understands (currently only `1`); a future-dated version (fixture uses
+// 999) is rejected as a fatal `error` rather than mis-read against the wrong
+// schema. Distinct from the overlay version invariant because stack files are
+// a separate document family with their own resolution and error `path`.
+//
+// `hydrateSnapshot` parses each stack file so the check sees `schemaVersion` in
+// the front-matter. Verified at the unit entrypoint and end-to-end via
+// `validateAll`.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -14,6 +24,8 @@ const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'stacks');
 const cleanFixture = path.join(fixturesRoot, 'js-ts-minimal');
 const badVersionFixture = path.join(fixturesRoot, 'invariant-stack-tier-api-version');
 
+// schemaVersion lives in the stack front-matter, which phase-1 leaves unparsed;
+// fill each row's `data`/`prose` from disk so the check can read the version.
 function hydrateSnapshot(projectRoot: string) {
   const snapshot = _runPhase1ForTests(projectRoot);
   for (const row of snapshot.stackFiles.values()) {
@@ -43,6 +55,8 @@ describe('stack.tier_apiVersion invariant', () => {
     expect(issue.code).toBe('InvariantViolation');
     expect(issue.severity).toBe('error');
     expect(issue.field).toBe('/schemaVersion');
+    // `path` names the offending stack file (distinguishing this from the
+    // overlay variant); the message echoes the rejected and supported versions.
     expect(issue.path).toContain('web-node.md');
     expect(issue.message).toContain('999');
     expect(issue.message).toContain('schemaVersion=1');

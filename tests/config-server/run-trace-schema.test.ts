@@ -1,4 +1,24 @@
-
+// Conformance tests for the three F1 trace schemas: run-trace-v1 (the per-event
+// log), run-trace-index-v1 (the per-run summary), and
+// evaluator-evidence-bundle-v1 (a sprint's pass/fail evidence). These schemas
+// are the on-disk contract a trace reader depends on, so the suite pins both
+// what must be accepted and what must be rejected.
+//
+// run-trace-v1 is a oneOf discriminated union over exactly seven event classes
+// (asserted by name), each sharing a common ENVELOPE (sequenceNumber +
+// UTC-millisecond timestamp + runId). The field-encoding tests are the
+// load-bearing core: hashes are BARE lowercase 64-hex (no `sha256:` prefix —
+// note this differs deliberately from the trust layer's prefixed hashes),
+// timestamps are UTC with millisecond precision, role IDs are kebab-case, and
+// reference paths are relative POSIX (no leading separator, no `..`). Each
+// negative test mutates one field of an otherwise-valid event so the rejection
+// is attributable to that field alone.
+//
+// Forward-compatibility (F1.2) is a distinct guarantee with its own reader,
+// `readV1Trace`: an unknown *discriminator value* inside a known class still
+// validates (additive), whereas an unknown *event class* is skipped with a
+// structured warning rather than throwing — a v1 reader must survive a trace
+// written by a future producer.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,12 +28,16 @@ import {
 } from '../../src/config-server/validation/schema-check.js';
 import { runTraceV1 } from '../../src/config-server/schemas-bundled.js';
 
+// Shared envelope fields every event class requires; spread into each fixture
+// so the per-class tests vary only the class-specific fields.
 const ENVELOPE = {
   sequenceNumber: 0,
   timestamp: '2026-05-21T19:47:20.123Z',
   runId: '20260521T194720-6752',
 } as const;
 
+// One representative valid event per class, keyed by eventType. Drives both the
+// positive per-class tests and serves as the base each negative test mutates.
 const VALID_EVENTS: Record<string, Record<string, unknown>> = {
   orchestratorMilestone: {
     ...ENVELOPE,
@@ -94,6 +118,10 @@ describe('run-trace-v1 schema: the seven event classes', () => {
 
   it('uses a oneOf discriminated union over exactly the seven known classes', () => {
 
+    // Reach into the raw schema: find the allOf member that carries the oneOf,
+    // then reduce its $refs to bare definition names. Sorting both sides makes
+    // the comparison order-independent — the assertion is about the SET of seven
+    // classes, not their declaration order.
     const allOf = runTraceV1.allOf as Array<Record<string, unknown>>;
     const unionEntry = allOf.find((e) => Array.isArray(e.oneOf));
     expect(unionEntry).toBeTruthy();
@@ -168,6 +196,8 @@ describe('run-trace-v1 schema: field-encoding constraints', () => {
   });
 
   it('rejects a sha256:-prefixed hash (trace fields are BARE hex, no prefix)', () => {
+    // Deliberate divergence from the trust layer, whose hashes ARE `sha256:`-
+    // prefixed. Trace reference fields are bare hex; a prefixed value is invalid.
     expect(validate({ ...VALID_EVENTS.llmCall, promptRef: `sha256:${'a'.repeat(64)}` })).toBe(
       false,
     );
@@ -216,6 +246,11 @@ interface ReaderResult {
   warnings: Array<{ reason: string; eventType: unknown; sequenceNumber: unknown }>;
 }
 
+// Stand-in for a real v1 trace reader: an event whose class this version does
+// not know is recorded as a structured warning and SKIPPED (never thrown),
+// while known classes are accepted. This models the forward-compat policy the
+// tests below assert — a v1 reader keeps going past events a future producer
+// added.
 function readV1Trace(events: Array<Record<string, unknown>>): ReaderResult {
   const validate = getRunTraceValidator();
   const result: ReaderResult = { accepted: [], warnings: [] };
@@ -239,6 +274,9 @@ function readV1Trace(events: Array<Record<string, unknown>>): ReaderResult {
 describe('run-trace-v1 forward-compatibility (F1.2)', () => {
   it('tolerates an unknown-but-additive discriminator value within a known class', () => {
 
+    // safetyClass 'budgetExceeded' is a value v1 may not enumerate, but the
+    // CLASS (safetyHalt) is known — so it both validates and is accepted with no
+    // warning. This is the additive-within-known-class half of forward-compat.
     const validate = getRunTraceValidator();
     const additive = {
       ...ENVELOPE,
@@ -256,6 +294,9 @@ describe('run-trace-v1 forward-compatibility (F1.2)', () => {
   });
 
   it('skips an unknown event-class type with a structured warning rather than throwing', () => {
+    // The other half: an entirely unknown CLASS is sandwiched between two known
+    // events. The reader must accept the two known ones, warn about the unknown,
+    // and never throw — so one future event cannot abort reading the whole trace.
     const unknown = {
       ...ENVELOPE,
       sequenceNumber: 8,
@@ -319,6 +360,11 @@ describe('run-trace-index-v1 schema (F1.3)', () => {
 describe('evaluator-evidence-bundle-v1 schema (F1.4)', () => {
   const validate = getEvaluatorEvidenceBundleValidator();
 
+  // Each verdict carries a different evidence obligation: pass and fail both
+  // REQUIRE a reproductionCommand, and fail additionally REQUIRES
+  // deltaFromContract; blocked and skipped need only traceEventRefs (which may
+  // be empty). The four sample criteria below exercise one of each verdict, and
+  // the rejection tests strip a required field from a pass/fail criterion.
   const passCriterion = {
     name: 'tls_required_for_sensitive_traffic',
     verdict: 'pass',

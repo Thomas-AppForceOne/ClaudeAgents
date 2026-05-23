@@ -1,3 +1,12 @@
+// Guards the `overlay.tier_apiVersion` invariant: an overlay document
+// (project/default/user `.md`) must declare a `schemaVersion` this build
+// understands — currently only `1`. A future-dated version (the fixture uses
+// 999) means the file was authored for a newer config-server and would be
+// silently mis-read, so the invariant rejects it as a fatal `error` rather
+// than guess. Note: phase-1 already parses overlay front-matter, so unlike the
+// stack invariants no manual hydration step is needed here.
+//
+// Checked at the unit entrypoint and end-to-end via `validateAll`.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +36,8 @@ describe('overlay.tier_apiVersion invariant', () => {
     expect(issue.severity).toBe('error');
     expect(issue.field).toBe('/schemaVersion');
     expect(issue.path).toContain('project.md');
+    // Message must echo the rejected version (999) and state the supported one
+    // (1), so the author knows their file is too new rather than malformed.
     expect(issue.message).toContain('999');
     expect(issue.message).toContain('schemaVersion=1');
   });
