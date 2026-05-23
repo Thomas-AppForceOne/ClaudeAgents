@@ -201,6 +201,59 @@ flowchart LR
 
 ---
 
+## 5 — Evaluator-core internals
+
+`src/agents/evaluator-core/` is a pure TypeScript library loaded by the evaluator agent.
+`buildEvaluatorPlan` is its single entry point — a deterministic, no-I/O function that
+produces a byte-stable `EvaluatorPlan` for the same inputs regardless of call order or process.
+
+```mermaid
+flowchart LR
+    subgraph IN["Inputs — assembled by the evaluator agent"]
+        direction TB
+        SNP["EvaluatorCoreSnapshot\nactiveStacks[]\n  · name · scope · secretsGlob\n  · auditCmd\n  · buildCmd · testCmd · lintCmd\n  · securitySurfaces[]\nmergedSplicePoints\n  · evaluator.additionalChecks"]
+        SPL["SprintPlan\naffectedFiles[]\ncriteria[]"]
+        WTS["WorktreeState\nfiles[]\nfileContents?"]
+    end
+
+    PB["buildEvaluatorPlan\nplan-builder.ts\nPure function · no I/O · deterministic\nOrchestrates all five builders"]
+
+    subgraph BL["Builders · one per EvaluatorPlan section"]
+        direction TB
+        BAS["buildActiveStacks\nSort active stacks by name"]
+        BSS["buildSecretsScans\nuses: activeStacks · worktree.files\n1 · Filter worktree files to stack scope\n2 · Per extension: match **/*.ext\n3 · Sort by (stack · extension)"]
+        BAC["buildAuditCommands\nuses: activeStacks\nPer stack with auditCmd:\n  emit command + absenceSignal\nSort by stack name"]
+        BBT["buildBuildTestLint\nuses: activeStacks\nSort stacks by name\nFirst-stack-wins per phase\n  buildCmd · testCmd · lintCmd"]
+        BSI["buildSecuritySurfacesInstantiated\nuses: activeStacks · affectedFiles · fileContents\n1 · affectedFiles ∩ stack.scope\n2 · If trigger.scope → ∩ trigger.scope\n3 · If trigger.keywords → scan fileContents\n4 · No triggers → instantiate if touched non-empty\n5 · Record scopeMatched + keywordsHit\nSort by (stack · id)"]
+        BAD["buildEvaluatorAdditionalChecks\nuses: mergedSplicePoints\nPass-through evaluator.additionalChecks verbatim"]
+    end
+
+    subgraph OUT["EvaluatorPlan"]
+        direction TB
+        OAS["activeStacks[]\nname · scope"]
+        OSS["secretsScans[]\nstack · extension · files[]"]
+        OAC["auditCommands[]\nstack · command · absenceSignal"]
+        OBT["buildTestLint\nbuildCmd? · testCmd? · lintCmd?"]
+        OSI["securitySurfacesInstantiated[]\nstack · id · templateText\ntriggerEvidence { scopeMatched · keywordsHit }\nappliesToFiles[]"]
+        OAD["evaluatorAdditionalChecks[]\ncommand · on_failure · tier"]
+    end
+
+    SNP --> PB
+    SPL --> PB
+    WTS --> PB
+
+    PB --> BAS & BSS & BAC & BBT & BSI & BAD
+
+    BAS --> OAS
+    BSS --> OSS
+    BAC --> OAC
+    BBT --> OBT
+    BSI --> OSI
+    BAD --> OAD
+```
+
+---
+
 ## Key structural principles
 
 - **Config Server is the sole gateway to zone 1 and zone 2.** Agents and the skill never read config files or run-state directly — they call MCP tools.
