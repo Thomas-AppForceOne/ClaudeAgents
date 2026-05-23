@@ -4,8 +4,9 @@
  *
  * Re-exports the pure per-role attempt-ceiling check, the sprint-wide
  * attempt-budget check, their shared `LoopDetected` error fields/factories and
- * evidence types/validators, the default seed ceiling table and seed budget, and
- * the user-facing halt-message renderers. This is the only import surface other
+ * evidence types/validators, the default seed ceiling table and seed budget, the
+ * user-facing halt-message renderers, and the edit-set fingerprint function with
+ * its normalization-parameter types. This is the only import surface other
  * subsystems should depend on. Pure re-exports — no runtime behaviour of its own.
  */
 
@@ -35,3 +36,12 @@ export {
   type SprintBudgetEvidence,
   type CheckSprintBudgetInput,
 } from './sprint-budget.js';
+
+export {
+  fingerprintEditSet,
+  type CommentSyntax,
+  type SortableList,
+  type FingerprintOptions,
+  type EditFile,
+  type EditSet,
+} from './fingerprint.js';

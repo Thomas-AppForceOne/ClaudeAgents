@@ -145,6 +145,31 @@
       },
       "type": "array"
     },
+    "commentSyntax": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "additionalProperties": false,
+          "properties": {
+            "close": {
+              "type": "string"
+            },
+            "open": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "open",
+            "close"
+          ],
+          "type": "object"
+        },
+        "line": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "detection": {
       "items": {
         "$ref": "#/definitions/detectionEntry"
@@ -329,6 +354,25 @@
         "required": [
           "id",
           "template"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "sortableLists": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "lineRangePattern": {
+            "type": "string"
+          },
+          "pathGlob": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pathGlob",
+          "lineRangePattern"
         ],
         "type": "object"
       },
