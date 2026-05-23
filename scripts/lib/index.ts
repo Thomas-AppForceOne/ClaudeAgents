@@ -1,4 +1,13 @@
-
+/**
+ * Public barrel for the shared `scripts/lib` helpers.
+ *
+ * Every CLI entrypoint under `scripts/` imports from here rather than reaching
+ * into the individual modules, so this file is the single import surface the
+ * scripts depend on. It re-exports the report formatters, the argument parser,
+ * the exit-code contract, and deterministic JSON — bundling the four concerns
+ * a script needs to parse its argv, do its work, and emit a report. Re-exports
+ * only; no logic lives here.
+ */
 export { formatReport, formatReportJson } from './report.js';
 export type {
   EvaluatorPipelineCheckReport,

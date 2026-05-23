@@ -1,5 +1,20 @@
 #!/usr/bin/env node
-
+/**
+ * `pair-names` CLI — enforces the `pairsWith.consistency` stack invariant.
+ *
+ * A project-tier stack file may shadow a built-in of the same name; when the
+ * built-in declares a `pairsWith` relationship, the shadowing file must
+ * re-declare it or the pairing is silently lost. This script enumerates every
+ * stack file the runtime would see at `<project-root>` (built-in + user +
+ * project tiers), then runs {@link checkPairsWithConsistency} over that
+ * snapshot and reports each `InvariantViolation`.
+ *
+ * It reuses the runtime's own phase-1 enumeration (`_runPhase1ForTests`) so
+ * the file set is exactly what resolution would see; the snapshot is then
+ * hydrated with parsed YAML before the check. Output/exit follow the shared
+ * `scripts/lib` contract (`0`/`1`/`64`); `run` is exported and pure w.r.t.
+ * process state, `main` owns argv and process I/O.
+ */
 import { readFileSync } from 'node:fs';
 
 import { _runPhase1ForTests } from '../../src/config-server/tools/validate.js';
@@ -14,6 +29,7 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
+/** Build the `--help` text. Pure; returns the usage block as a single string. */
 function renderHelp(): string {
   return [
     'Usage: pair-names [--project-root <path>] [--json] [--quiet] [--help]',
@@ -37,14 +53,21 @@ function renderHelp(): string {
   ].join('\n');
 }
 
+/** What {@link run} returns: the text for each stream plus the process exit code. */
 interface RunResult {
   stdout: string;
   stderr: string;
   code: number;
 }
 
+/**
+ * Resolved options for {@link run}, produced by {@link main} from parsed argv.
+ *
+ * @property projectRoot canonical root whose stack files are enumerated.
+ * @property json emit the report as JSON instead of the human summary.
+ * @property quiet suppress the stdout summary on a clean run.
+ */
 interface RunOptions {
-
   projectRoot: string;
 
   json: boolean;
@@ -52,13 +75,25 @@ interface RunOptions {
   quiet: boolean;
 }
 
+/**
+ * Fill in each enumerated stack row's parsed `data`/`prose` in place.
+ *
+ * Phase-1 enumeration yields the file set with paths but without parsed
+ * bodies; the consistency check needs the parsed YAML, so this reads and
+ * parses each file and writes the result back onto the row. Mutates the rows
+ * inside `snapshot.stackFiles` (its side effect) and returns nothing.
+ *
+ * A file that cannot be read or parsed is left unhydrated and skipped rather
+ * than aborting the run: a malformed file is not this check's concern (it is
+ * `lint-stacks`'s), so the invariant check simply proceeds without its body.
+ */
 function hydrateSnapshot(snapshot: ReturnType<typeof _runPhase1ForTests>): void {
   for (const row of snapshot.stackFiles.values()) {
     let text: string;
     try {
       text = readFileSync(row.path, 'utf8');
     } catch {
-
+      // Unreadable file: leave the row unhydrated; the check tolerates it.
       continue;
     }
     try {
@@ -66,12 +101,23 @@ function hydrateSnapshot(snapshot: ReturnType<typeof _runPhase1ForTests>): void 
       row.data = parsed.data;
       row.prose = parsed.prose;
     } catch {
-
+      // Unparseable YAML: same as above — not this script's job to report it.
       continue;
     }
   }
 }
 
+/**
+ * Enumerate stack files, hydrate them, run the pairs-with consistency check,
+ * and render the result.
+ *
+ * Each {@link checkPairsWithConsistency} issue becomes a {@link ReportFailure},
+ * carrying the issue's `field` only when present. The exit code in the
+ * returned {@link RunResult} is `SUCCESS` with no violations, else `FAILURE`.
+ * Reads the filesystem (via the phase-1 walk and hydration) but does not write.
+ *
+ * @param opts resolved {@link RunOptions}.
+ */
 export function run(opts: RunOptions): RunResult {
   const snapshot = _runPhase1ForTests(opts.projectRoot);
   hydrateSnapshot(snapshot);
@@ -112,6 +158,16 @@ export function run(opts: RunOptions): RunResult {
   };
 }
 
+/**
+ * CLI entrypoint: parse argv, dispatch to {@link run}, and write its output.
+ *
+ * Returns the exit code rather than calling `process.exit`, so it is testable
+ * in-process. `--help` short-circuits with `SUCCESS`; an unknown flag or
+ * unexpected positional returns `BAD_ARGS` without running the check.
+ * Side effects are limited to writing stdout/stderr.
+ *
+ * @param argv argument tokens, typically `process.argv.slice(2)`.
+ */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['json', 'quiet', 'help'],
@@ -149,6 +205,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   return result.code;
 }
 
+// Module-level invocation: run as a script and translate the resolved exit
+// code into the actual process exit. The rejection arm is the last-resort net
+// for an *unexpected* throw (anticipated failures are already returned as a
+// report); it prints a `fatal:` line and exits FAILURE so an uncaught error
+// can never masquerade as success.
 main(process.argv.slice(2)).then(
   (code) => {
     process.exit(code);
