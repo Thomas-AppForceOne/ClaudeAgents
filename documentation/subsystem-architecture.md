@@ -11,11 +11,10 @@ Related components are grouped: entry points together, trace below the agents th
 schemas and docker adjacent to the config server they serve.
 
 ```mermaid
----
-title: Component architecture
----
-%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
+    TITLE["Component architecture"]:::diagramTitle
+    classDef diagramTitle font-size:20px,font-weight:bold,fill:none,stroke:none
+
     subgraph ENTRY["Entry points"]
         direction TB
         SKILL["/gan skill"]
@@ -55,6 +54,7 @@ flowchart LR
         Z3["zone 3 · cache"]
     end
 
+    TITLE      ~~~ ENTRY
     SKILL      -->|"orchestrates"| AL
     CLI        -->|"stdio MCP"| MT
     HOOK      -.->|"gates all tool calls"| AL
@@ -77,7 +77,6 @@ flowchart LR
 ---
 title: /gan run sequence
 ---
-%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 sequenceDiagram
     participant U as User
     participant SK as /gan skill
@@ -131,11 +130,10 @@ sequenceDiagram
 Called on every `getResolvedConfig` tool invocation.
 
 ```mermaid
----
-title: Config server resolution pipeline
----
-%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart TD
+    TITLE["Config server resolution pipeline"]:::diagramTitle
+    classDef diagramTitle font-size:20px,font-weight:bold,fill:none,stroke:none
+
     IN["MCP tool call\ngetResolvedConfig"]
 
     subgraph TG["Trust gate"]
@@ -157,6 +155,7 @@ flowchart TD
     CA["Resolution cache\nWithin a single run"]
     OUT["Resolved config returned"]
 
+    TITLE ~~~ IN
     IN --> TG --> RP --> CA --> OUT
     CA -.->|"cache hit — skip pipeline"| OUT
 ```
@@ -168,11 +167,10 @@ flowchart TD
 What lives where, and what owns each zone.
 
 ```mermaid
----
-title: Storage topology
----
-%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
+    TITLE["Storage topology"]:::diagramTitle
+    classDef diagramTitle font-size:20px,font-weight:bold,fill:none,stroke:none
+
     subgraph Z1["Zone 1 — config"]
         direction TB
         OVP["project overlay"]
@@ -207,6 +205,7 @@ flowchart LR
     DK["docker module"]
     AG["Agents"]
 
+    TITLE ~~~ CS
     CS -->|"reads / writes overlays + stacks"| Z1
     CS -->|"run lock · run progress"| Z2R
     TR -->|"appends NDJSON events"| Z2R
@@ -223,11 +222,10 @@ flowchart LR
 produces a byte-stable `EvaluatorPlan` for the same inputs regardless of call order or process.
 
 ```mermaid
----
-title: Evaluator-core internals
----
-%%{init: {'themeVariables': {'titleFontSize': '24px'}}}%%
 flowchart LR
+    TITLE["Evaluator-core internals"]:::diagramTitle
+    classDef diagramTitle font-size:20px,font-weight:bold,fill:none,stroke:none
+
     subgraph IN["Inputs — assembled by the evaluator agent"]
         direction TB
         SNP["EvaluatorCoreSnapshot\nactiveStacks[]\n  · name · scope · secretsGlob\n  · auditCmd\n  · buildCmd · testCmd · lintCmd\n  · securitySurfaces[]\nmergedSplicePoints\n  · evaluator.additionalChecks"]
@@ -257,6 +255,7 @@ flowchart LR
         OAD["evaluatorAdditionalChecks[]\ncommand · on_failure · tier"]
     end
 
+    TITLE ~~~ IN
     SNP --> PB
     SPL --> PB
     WTS --> PB
