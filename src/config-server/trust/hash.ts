@@ -1,29 +1,17 @@
 /**
- * Deterministic SHA-256 aggregate hash over a project's trust-relevant
- * configuration files.
+ * Aggregate trust-hash computation for a project's `.claude/gan` config.
  *
- * Per F4/R5, trust is anchored to the content of the project's overlay and
- * adjacent declarative files. The trust cache compares a stored hash against
- * a recomputed hash to detect untrusted edits. This module owns the
- * recomputation: it enumerates a fixed, documented set of files under
- * `<projectRoot>/.claude/gan/`, canonicalises each path through F3's
- * `canonicalizePath`, sorts via F3's `localeSort`, and folds their bytes into
- * a single SHA-256 digest.
+ * The trust subsystem pins a single SHA-256 digest over every config file that
+ * can influence command execution, so the framework can later detect whether
+ * the approved-against contents have changed. This module computes that digest.
  *
- * Inputs (the only files considered):
- *  - `<projectRoot>/.claude/gan/project.md` — the project overlay (single file
- *    when present).
- *  - `<projectRoot>/.claude/gan/stacks/*.md` — direct children only; nested
- *    subdirectories are ignored.
- *  - `<projectRoot>/.claude/gan/modules/*.yaml` — direct children only; the
- *    `.yml` extension is intentionally excluded (manifests are `.yaml`).
- *
- * Missing files or directories simply contribute nothing — they are not an
- * error. An empty input set yields the SHA-256 of zero bytes:
- * `sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
- *
- * Synchronous by design: the trust check runs early in the request path and
- * must be order-deterministic with no event-loop interleaving.
+ * The hash covers exactly: the project overlay (`project.md`), every `*.md`
+ * stack file under `stacks/`, and every `*.yaml` module manifest under
+ * `modules/`. Two properties make the digest reproducible and meaningful:
+ * - **Determinism** — paths are canonicalised and locale-sorted before hashing,
+ *   so directory-listing order and symlink spelling do not affect the result.
+ * - **Content-only** — file *bytes* are hashed, not names or mtimes, so a
+ *   rename that preserves contents and set membership yields the same digest.
  */
 
 import { createHash } from 'node:crypto';
@@ -32,21 +20,37 @@ import path from 'node:path';
 
 import { canonicalizePath, localeSort } from '../determinism/index.js';
 
+/**
+ * Result of {@link computeTrustHash}.
+ *
+ * @property aggregateHash the digest, prefixed with its algorithm
+ *   (`sha256:<hex>`); the prefix lets a future algorithm change be told apart
+ *   from a content change.
+ * @property files the canonical, sorted list of files that fed the hash, in the
+ *   exact order they were hashed — useful for diagnostics and for showing the
+ *   user what an approval covers.
+ */
 export interface TrustHashResult {
-  /** `sha256:<64-hex>` digest of the concatenated bytes of `files`, in order. */
+
   aggregateHash: string;
-  /** Canonical, locale-sorted absolute paths of every file that contributed. */
+
   files: string[];
 }
 
 /**
- * Compute the deterministic trust hash for `projectRoot`.
+ * Compute the aggregate trust hash over a project's `.claude/gan` config files.
  *
- * The function never throws for missing files: any path that is absent or not
- * the expected file type is silently skipped, falling through to the empty
- * case if no inputs match. Read errors propagate (e.g. permission denied on a
- * file that exists), since those indicate a real environmental problem the
- * caller must surface.
+ * Reads files from disk (no writes). A missing `.claude/gan` directory, or any
+ * absent subdirectory, simply contributes nothing — the result is then the hash
+ * of an empty input, not an error. The directory scans are fault-tolerant
+ * (unreadable dirs are skipped), but the final `readFileSync` over a path that
+ * passed the `isRegularFile` check is *not* guarded: if a file vanishes between
+ * the stat and the read (a TOCTOU race) the underlying I/O error propagates.
+ *
+ * @param projectRoot the project directory whose `.claude/gan` tree is hashed;
+ *   used to locate files only — it is not itself canonicalised here (each
+ *   collected file path is canonicalised individually).
+ * @returns the {@link TrustHashResult} (digest plus the ordered file list).
  */
 export function computeTrustHash(projectRoot: string): TrustHashResult {
   const ganRoot = path.join(projectRoot, '.claude', 'gan');
@@ -80,6 +84,9 @@ export function computeTrustHash(projectRoot: string): TrustHashResult {
     }
   }
 
+  // Canonicalise then sort so the hash is independent of how the paths were
+  // spelled and of the OS-dependent readdir order — this is what makes the
+  // digest reproducible across machines.
   const canonicalised = pendingPaths.map((p) => canonicalizePath(p));
   const sorted = localeSort(canonicalised);
 
@@ -87,11 +94,14 @@ export function computeTrustHash(projectRoot: string): TrustHashResult {
   for (const p of sorted) {
     hash.update(readFileSync(p));
   }
+  // The `sha256:` prefix is part of the stored hash so a future algorithm
+  // change is distinguishable from a content change.
   const aggregateHash = 'sha256:' + hash.digest('hex');
 
   return { aggregateHash, files: sorted };
 }
 
+/** True when `p` is an existing regular file; any stat error yields `false`. */
 function isRegularFile(p: string): boolean {
   try {
     return statSync(p).isFile();
@@ -100,6 +110,7 @@ function isRegularFile(p: string): boolean {
   }
 }
 
+/** True when `p` is an existing directory; any stat error yields `false`. */
 function isDirectory(p: string): boolean {
   try {
     return statSync(p).isDirectory();
@@ -108,6 +119,13 @@ function isDirectory(p: string): boolean {
   }
 }
 
+/**
+ * List a directory's entries, returning `[]` instead of throwing when it cannot
+ * be read. The caller has already confirmed the directory exists via
+ * {@link isDirectory}, so an error here is an unusual condition (e.g. a
+ * permission change between calls) that should degrade to "no files" rather
+ * than abort the whole hash.
+ */
 function safeReaddir(dir: string): string[] {
   try {
     return readdirSync(dir);

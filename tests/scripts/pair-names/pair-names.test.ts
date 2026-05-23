@@ -1,23 +1,21 @@
 /**
- * Integration tests for `scripts/pair-names/`.
+ * Black-box tests for the `pair-names` bin, which enforces the C5
+ * "pairs-with consistency" invariant across a project's stack files: if one
+ * stack declares `pairsWith` another, that pairing must be mutually
+ * consistent and not reference a shadowed stack.
  *
- * Spawns the built bin (`dist/scripts/pair-names/index.js`) under
- * controlled fixtures and asserts:
+ * The suite drives the compiled bin against two checked-in fixtures: a clean
+ * project that passes, and an `invariant-pairs-with-shadowed` project where a
+ * stack pairs with a shadowed `docker` stack — which must fail with
+ * InvariantViolation, naming the C5 message tokens (`pairs-with.consistency`,
+ * `pairsWith: docker`), the offending stack's canonical path, and the
+ * `/pairsWith` field in the --json failure. Unknown-flag (exit 64) and --help
+ * paths are also covered.
  *
- *   - clean fixture (`js-ts-minimal`) → exit 0, summary
- *     `1 stacks checked, 0 failed`.
- *   - shadowed fixture (`invariant-pairs-with-shadowed`) → exit 1,
- *     summary `2 stacks checked, 1 failed`; stderr names the
- *     `InvariantViolation` code, the `pairs-with.consistency` prose,
- *     `pairsWith: docker`, and the canonicalised absolute path of the
- *     project-tier `.claude/gan/stacks/docker.md` file.
- *   - `--json` against the shadowed fixture → stdout parses as JSON
- *     with the documented `{checked, failed, failures: [...]}` shape
- *     and a trailing newline; stderr is empty.
- *   - `--help` → exit 0, stdout names `Usage: pair-names`, stderr empty.
- *   - unknown flag → exit 64, stderr names the offending token and
- *     `--help`.
+ * Regression guarded: the C5 invariant check going quiet on a shadowed
+ * pairing, or dropping the field/path/message detail downstream tools rely on.
  */
+
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -25,13 +23,13 @@ import { runScript, repoRootDir } from '../helpers/spawn.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 
 const FIXTURES = path.join(repoRootDir(), 'tests', 'fixtures', 'stacks');
+// A project that satisfies C5, and one that violates it via a shadowed pairing.
 const CLEAN_ROOT = path.join(FIXTURES, 'js-ts-minimal');
 const SHADOWED_ROOT = path.join(FIXTURES, 'invariant-pairs-with-shadowed');
 
 beforeAll(() => {
-  // Sanity: every fixture path exists. If a future refactor moves them
-  // we want the test to fail fast with a clear message rather than
-  // exit-1 on every assertion.
+  // Fail fast if a fixture is missing rather than misattributing the cause
+  // later inside a bin assertion.
   for (const p of [CLEAN_ROOT, SHADOWED_ROOT]) {
     if (!existsSync(p)) {
       throw new Error(`fixture missing: ${p}`);
@@ -54,8 +52,7 @@ describe('pair-names bin', () => {
     expect(r.stderr).toContain('InvariantViolation');
     expect(r.stderr).toContain('pairs-with.consistency');
     expect(r.stderr).toContain('pairsWith: docker');
-    // The reported path is the canonicalised absolute path of the
-    // project-tier shadow file.
+
     const canonical = canonicalizePath(SHADOWED_ROOT);
     const stackPath = path.join(canonical, '.claude', 'gan', 'stacks', 'docker.md');
     expect(r.stderr).toContain(stackPath);

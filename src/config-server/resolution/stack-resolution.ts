@@ -1,31 +1,11 @@
 /**
- * C5 stack file resolver.
+ * Resolves a stack name to the concrete `.md` file that backs it, applying the
+ * framework's tier precedence.
  *
- * Four-tier lookup, highest-priority wins (wholesale replacement, never
- * merge — see C5 invariants in PROJECT_CONTEXT.md):
- *
- *   1. project tier     — `<projectRoot>/.claude/gan/stacks/<name>.md`
- *   2. user tier        — `<userHome>/.claude/gan/stacks/<name>.md`
- *   3. built-in tier    — `<packageRoot>/stacks/<name>.md`         (PRIMARY)
- *   4. built-in tier    — `<projectRoot>/stacks/<name>.md`         (FALLBACK)
- *
- * Tiers 3 and 4 both report `tier: 'builtin'`. Tier 4 is a low-priority
- * compatibility fallback for the framework's existing test fixture pattern,
- * where each fixture under `tests/fixtures/stacks/<name>/` ships its own
- * `stacks/` subdirectory; the caller cannot distinguish primary from fallback.
- *
- * The user tier is keyed by the caller-supplied `userHome` so tests can
- * substitute a temp directory rather than touching the real `~/.claude`. In
- * production callers leave it unset; the resolver falls back to
- * `process.env.HOME` (or `process.env.USERPROFILE` on Win32). For the
- * narrower CI use-case we additionally honour `GAN_USER_HOME` as an explicit
- * override env var so tests outside this package can target a fixture
- * without reaching into the resolver's API.
- *
- * The built-in package tier is keyed by the caller-supplied `packageRoot`
- * so tests can inject a tmp directory; production callers leave it unset
- * and the resolver calls `packageRoot()` from `../package-root.js` to walk
- * up from `import.meta.url`.
+ * The same stack name may be defined at several tiers; this module encodes the
+ * single rule for which wins: project overrides user overrides built-in. That
+ * ordering is the whole contract — it lets a project pin a customised stack
+ * while still falling back to the packaged default.
  */
 
 import { existsSync } from 'node:fs';
@@ -34,36 +14,59 @@ import path from 'node:path';
 import { createError } from '../errors.js';
 import { packageRoot as resolvePackageRoot } from '../package-root.js';
 
+/**
+ * Which tier a resolved stack file came from, in precedence order:
+ * `project` (in-repo override) > `user` (home-dir override) > `builtin`
+ * (packaged default).
+ */
 export type StackTier = 'project' | 'user' | 'builtin';
 
+/**
+ * The outcome of resolving a stack name.
+ *
+ * @property path absolute path of the winning stack file.
+ * @property tier which tier {@link path} was found in (records *why* this file
+ *   won, which callers surface to the user).
+ */
 export interface StackResolution {
-  /** Absolute path to the stack file that won resolution. */
+
   path: string;
-  /** Which tier the resolved file came from. */
+
   tier: StackTier;
 }
 
+/**
+ * Overrides for stack resolution; the production default `{}` derives both from
+ * env/package layout.
+ *
+ * @property userHome home directory for the user tier; defaults to
+ *   `GAN_USER_HOME`/`HOME`/`USERPROFILE` (see {@link resolveUserHome}).
+ * @property packageRoot installed-package root for the built-in tier; defaults
+ *   to {@link resolvePackageRoot}. Tests point this at a fixture install.
+ */
 export interface ResolveStackOptions {
-  /**
-   * Override for the user-tier home directory. When set, the resolver looks
-   * for the user-tier stack file under `<userHome>/.claude/gan/stacks/`. When
-   * unset, falls back to `process.env.GAN_USER_HOME`, then `process.env.HOME`
-   * / `process.env.USERPROFILE`.
-   */
+
   userHome?: string;
-  /**
-   * Override for the package root used by the primary built-in tier
-   * (`<packageRoot>/stacks/<name>.md`). When unset, the resolver calls
-   * `packageRoot()` to walk up from `import.meta.url` and locate
-   * `@claudeagents/config-server`'s `package.json`.
-   */
+
   packageRoot?: string;
 }
 
 /**
- * Resolve a stack file by name across the four C5 tiers.
+ * Resolve `name` to the highest-precedence stack file that exists.
  *
- * @throws ConfigServerError(MissingFile) when no tier carries the stack.
+ * Search order (first hit wins): project (`<projectRoot>/.claude/gan/stacks`)
+ * → user (`<userHome>/.claude/gan/stacks`, only if a home is resolvable) →
+ * built-in package (`<packageRoot>/stacks`) → built-in fixture
+ * (`<projectRoot>/stacks`). The fixture location is a test/source-tree
+ * fallback for when the package is run from source rather than installed.
+ *
+ * @param name the stack name (the `.md` basename, without extension).
+ * @param projectRoot the project directory anchoring the project and fixture
+ *   tiers.
+ * @param opts see {@link ResolveStackOptions}.
+ * @returns the {@link StackResolution} for the winning tier.
+ * @throws a `MissingFile` {@link ConfigServerError} when no tier has the file;
+ *   its message lists every path probed so the user can see where to create it.
  */
 export function resolveStackFile(
   name: string,
@@ -75,6 +78,8 @@ export function resolveStackFile(
     return { path: projectPath, tier: 'project' };
   }
 
+  // User tier is only consulted when a home directory is resolvable; an
+  // unresolvable home simply skips this tier rather than erroring.
   const userHome = resolveUserHome(opts.userHome);
   const userPath = userHome ? path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`) : null;
   if (userPath && existsSync(userPath)) {
@@ -87,6 +92,8 @@ export function resolveStackFile(
     return { path: packageBuiltinPath, tier: 'builtin' };
   }
 
+  // Fixture fallback: when running from a source/test tree the built-in stacks
+  // live under the project root itself, not under an installed package root.
   const fixtureBuiltinPath = path.join(projectRoot, 'stacks', `${name}.md`);
   if (existsSync(fixtureBuiltinPath)) {
     return { path: fixtureBuiltinPath, tier: 'builtin' };
@@ -100,6 +107,10 @@ export function resolveStackFile(
   });
 }
 
+// Resolve the user-tier home directory, preferring an explicit override, then
+// the GAN-specific GAN_USER_HOME (lets a /gan run pin a hermetic home), then
+// the OS HOME/USERPROFILE. Returns null when none yield a non-empty string, so
+// the caller can skip the user tier entirely rather than build a bogus path.
 function resolveUserHome(explicit?: string): string | null {
   if (typeof explicit === 'string' && explicit.length > 0) return explicit;
   const fromEnv = process.env.GAN_USER_HOME;

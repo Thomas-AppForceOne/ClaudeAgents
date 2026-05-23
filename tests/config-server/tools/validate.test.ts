@@ -1,3 +1,35 @@
+/**
+ * The core validation suite — the three public validators (validateAll,
+ * validateStack, validateOverlay), the phase-1 discovery seam, and the same
+ * validateAll over the MCP stdio transport. It is the broadest behavioural
+ * contract for what counts as valid config and how problems are reported.
+ *
+ * Major guarantees exercised here:
+ *   - clean fixtures produce zero issues (no false positives);
+ *   - each malformed fixture yields its specific issue code with file-path and
+ *     field provenance (SchemaMismatch, InvalidYAML, MissingFile), and the
+ *     schemaVersion=999 fixture surfaces the version mismatch with the number
+ *     in the message;
+ *   - validation is collecting, not fail-fast: one bad file does not throw or
+ *     halt the run, and a file with several violations yields several issues;
+ *   - multi-invariant runs surface every invariant at once (cacheEnv +
+ *     PathEscape together);
+ *   - user-tier forbidden fields (C3): planner/proposer additionalContext and
+ *     stack.override/cacheEnvOverride are each rejected at the user tier with
+ *     MalformedInput, and when all four are declared they come back as exactly
+ *     four issues in a deterministic field order;
+ *   - validateStack/validateOverlay scope down to a single artefact (note that
+ *     the overlay validator does NOT do the cross-reference MissingFile check —
+ *     that lives only in validateAll, asserted explicitly here);
+ *   - phase-1 discovery finds built-in stacks from BOTH packageRoot/stacks and
+ *     projectRoot/stacks (dual fallback);
+ *   - the same validateAll answer comes back over the JSON-RPC stdio transport
+ *     (subprocess), which is skipped gracefully when the dist build is absent.
+ *
+ * User-tier overlays are written into throwaway temp homes (makeUserHomeWithOverlay)
+ * so the forbidden-field checks never read the developer's real home.
+ */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,9 +91,7 @@ describe('validateAll', () => {
     const result = validateAll({ projectRoot: invalidSchemaMismatch });
     const schemaMismatches = result.issues.filter((i) => i.code === 'SchemaMismatch');
     expect(schemaMismatches.length).toBeGreaterThan(0);
-    // Every schema-mismatch issue from this fixture should carry a non-empty
-    // field (JSON-pointer-style) tying the message to a specific path in the
-    // YAML body.
+
     for (const issue of schemaMismatches) {
       expect(typeof issue.field).toBe('string');
       expect((issue.field ?? '').length).toBeGreaterThan(0);
@@ -70,14 +100,13 @@ describe('validateAll', () => {
   });
 
   it('returns multiple issues for a file with multiple schema violations', () => {
-    // The fixture has TWO violations: securitySurfaces[0] missing 'template',
-    // and secretsGlob[0] violating pattern "^[^.]". Both must be reported.
+
     const result = validateAll({ projectRoot: invalidSchemaMismatch });
     const issuesForFile = result.issues.filter(
       (i) => i.code === 'SchemaMismatch' && (i.path ?? '').endsWith('web-node.md'),
     );
     expect(issuesForFile.length).toBeGreaterThanOrEqual(2);
-    // One of them mentions securitySurfaces (missing template), one mentions secretsGlob.
+
     const mentionsTemplate = issuesForFile.some(
       (i) => i.message.includes('template') || (i.field ?? '').includes('securitySurfaces'),
     );
@@ -101,7 +130,7 @@ describe('validateAll', () => {
     const missing = findIssue(result.issues, (i) => i.code === 'MissingFile');
     expect(missing).toBeTruthy();
     expect(missing!.message).toContain('never-defined-stack');
-    // The issue is raised against the offending overlay file.
+
     expect(missing!.path).toContain('project.md');
   });
 
@@ -116,17 +145,13 @@ describe('validateAll', () => {
   });
 
   it('does not halt the pipeline on a single bad file (collects across the project)', () => {
-    // The invalid-schema-mismatch fixture has only one stack file; no overlay.
-    // Sanity check that the pipeline returns issues without throwing.
+    // A schema-violating file must be reported, never thrown — validation
+    // collects issues across the whole project rather than aborting on the first.
     expect(() => validateAll({ projectRoot: invalidSchemaMismatch })).not.toThrow();
   });
 
   it('surfaces both invariants in one run for the invariant-multi-violation fixture', () => {
-    // The fixture combines two invariants:
-    //  - cacheEnv.no_conflict (NODE_VERSION 20 vs 22 across two built-in stacks)
-    //  - path.escape (proposer.additionalContext: ../../etc/passwd)
-    // Both must surface in a single validateAll() pass — phase 3 runs every
-    // invariant without short-circuit.
+
     const result = validateAll({ projectRoot: invariantMultiViolation });
     const cacheEnvFired = result.issues.find(
       (i) =>
@@ -236,6 +261,8 @@ stack:
     );
     const result = validateAll({ projectRoot: jsTsMinimal }, { userHome });
     const forbidden = result.issues.filter((i) => i.code === 'MalformedInput');
+    // All four forbidden fields declared at once → exactly four issues, in a
+    // fixed (not input-dependent) field order, so the report is deterministic.
     expect(forbidden.length).toBe(4);
     expect(forbidden.map((i) => i.field)).toEqual([
       'planner.additionalContext',
@@ -284,9 +311,10 @@ describe('validateOverlay', () => {
   });
 
   it('flags MissingFile on the invalid-missing-file project overlay (cross-ref check is in validateAll)', () => {
-    // validateOverlay runs body schema validation only; cross-overlay
-    // reference checks live in validateAll's phase 1. The overlay itself
-    // is structurally valid.
+    // Scoping boundary: validateOverlay validates the overlay *in isolation*, so
+    // the dangling stack reference is NOT its concern — it returns zero issues.
+    // The cross-reference MissingFile check belongs to validateAll (asserted in
+    // the validateAll block above).
     const result = validateOverlay({ projectRoot: invalidMissingFile, tier: 'project' });
     expect(result.issues).toEqual([]);
   });
@@ -309,10 +337,10 @@ describe('phase 1 discovery (smoke)', () => {
   });
 
   it('enumerates built-in stacks from BOTH packageRoot/stacks and projectRoot/stacks (dual fallback)', () => {
-    // Set up a tmp packageRoot with `stacks/web-node.md`, distinct from the
-    // js-ts-minimal fixture's own `stacks/web-node.md`. Phase 1 must enumerate
-    // both, keyed by absolute path — same stack name in both directories
-    // surfaces two `builtin:` rows.
+    // Place a same-named web-node stack in both the package root and the project
+    // root; discovery must surface a builtin row from each location (the dual
+    // fallback), so the two paths are distinct. realpathSync resolves macOS
+    // /var → /private/var symlinks so the startsWith path checks below hold.
     const pkgRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-pkg-')));
     const projRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'cas-validate-proj-')));
     try {
@@ -333,13 +361,9 @@ describe('phase 1 discovery (smoke)', () => {
       const builtinRows = Array.from(snapshot.stackFiles.entries()).filter(([k]) =>
         k.startsWith('builtin:'),
       );
-      // Both web-node files surface as separate `builtin:` rows (different
-      // absolute paths → different keys).
+
       expect(builtinRows.length).toBeGreaterThanOrEqual(2);
 
-      // The snapshot's project-tier rows go through `canonicalizePath`, which
-      // lowercases on Darwin / Win32. Compare via case-insensitive prefix
-      // checks so the assertion is portable.
       const lc = (s: string) => s.toLowerCase();
       const paths = builtinRows.map(([, row]) => row.path);
       const underPkg = paths.find((p) => lc(p).startsWith(lc(pkgRoot)));
@@ -358,7 +382,9 @@ describe('MCP transport — validateAll over stdio (subprocess)', () => {
   it('responds to validateAll via tools/call with an issue list', async () => {
     const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
     if (!existsSync(distEntry)) {
-      // The build is the discriminator's job; skip if it has not yet run.
+      // No build artefact (e.g. running unit tests before `npm run build`):
+      // skip rather than fail — the in-process tests above already cover the
+      // behaviour; this case only adds the transport assertion.
       return;
     }
     const child = spawn(process.execPath, [distEntry], {
@@ -438,7 +464,7 @@ describe('MCP transport — validateAll over stdio (subprocess)', () => {
     const text = callResp!.result.content[0].text;
     const payload = JSON.parse(text) as { issues: Issue[] };
     expect(Array.isArray(payload.issues)).toBe(true);
-    // The fixture has at least 2 schema-mismatch issues.
+
     expect(payload.issues.length).toBeGreaterThan(0);
     expect(payload.issues.some((i) => i.code === 'SchemaMismatch')).toBe(true);
   });

@@ -1,18 +1,16 @@
 /**
- * R3 sprint 2 — F3 determinism end-to-end.
+ * Determinism stress test for every `--json` surface (feature backstop F3).
  *
- * Every `--json` output goes through `emitJson` (sorted keys, two-space
- * indent, trailing newline). This test runs each S2 read subcommand 100
- * times and verifies the byte-identical round-trip property:
- *
- *   stdout_n === stdout_0  for n in [1..99]
- *   JSON.parse(stdout) re-encoded via emitJson === stdout
- *
- * 100 invocations per subcommand catches any hidden non-determinism
- * (timestamps, Set iteration order, Object.keys race, etc.) that a
- * single comparison might miss. We use `Promise.all` with a chunked
- * concurrency cap so the test stays fast on dev laptops.
+ * F3's contract is that JSON output is byte-stable: the same command run any
+ * number of times yields identical stdout. A single comparison can pass by
+ * luck (object-key order, timestamps, and float formatting only sometimes
+ * vary), so this suite runs each read command 100 times and requires every
+ * invocation to match a baseline byte-for-byte. It also checks the inverse
+ * direction once per case: re-emitting the parsed baseline through the CLI's
+ * own `emitJson` must reproduce the exact bytes, proving the emitter — not just
+ * the underlying data — is the canonical, idempotent serializer.
  */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
@@ -21,6 +19,9 @@ import { emitJson } from '../../src/cli/lib/json-output.js';
 const FIXTURE_MIN = stackFixturePath('js-ts-minimal');
 const FIXTURE_POLYGLOT = stackFixturePath('polyglot-webnode-synthetic');
 
+// One entry per JSON-emitting read command. `runs` is the repetition count the
+// determinism check enforces; the polyglot vs minimal fixtures exercise both a
+// populated and an empty active-stack set.
 const CASES: Array<{ name: string; argv: string[]; runs: number }> = [
   {
     name: 'config print',
@@ -49,6 +50,11 @@ const CASES: Array<{ name: string; argv: string[]; runs: number }> = [
   },
 ];
 
+// Bounded-concurrency runner: drains `items` through at most `cap` parallel
+// workers. The 100-run determinism checks would overwhelm the machine if every
+// spawn fired at once, so this caps in-flight child processes while still
+// parallelising for speed. Each worker pulls the next item off a shared queue
+// until it is empty.
 async function runChunked<T>(
   items: T[],
   cap: number,
@@ -73,25 +79,27 @@ async function runChunked<T>(
 describe('F3 determinism: every --json output is byte-identical across runs', () => {
   for (const c of CASES) {
     it(`${c.name}: 100 invocations produce identical stdout`, async () => {
-      // Capture the first run as the reference.
+
+      // First run establishes the byte baseline every later run must match.
       const baseline = await runGan(c.argv);
       expect(baseline.exitCode).toBe(0);
       expect(baseline.stdout.endsWith('\n')).toBe(true);
 
-      // Round-trip property: parse the baseline JSON, re-emit it through
-      // `emitJson`, and verify byte equality.
+      // Idempotency of the emitter itself: parse the baseline and re-serialize
+      // through emitJson — it must reproduce the exact bytes, so emitJson is the
+      // canonical fixed point, not merely consistent with whatever produced it.
       const reparsed = emitJson(JSON.parse(baseline.stdout));
       expect(reparsed).toBe(baseline.stdout);
 
-      // Run 99 more times and assert byte-equal stdout. A small
-      // concurrency cap keeps wall time reasonable on dev laptops; the
-      // R3 spec doesn't pin a number.
+      // Remaining runs-1 invocations, capped at 8 concurrent spawns; every one
+      // must equal the baseline byte-for-byte.
       const indices = Array.from({ length: c.runs - 1 }, (_, i) => i + 1);
       await runChunked(indices, 8, async () => {
         const r = await runGan(c.argv);
         expect(r.exitCode).toBe(0);
         expect(r.stdout).toBe(baseline.stdout);
       });
+      // 60s budget: 100 cold CLI spawns per case can be slow under load.
     }, 60_000);
   }
 });

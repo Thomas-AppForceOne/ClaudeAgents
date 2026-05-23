@@ -1,36 +1,17 @@
 /**
- * R1 sprint 5 — C2 stack detection and dispatch.
+ * Decide which stacks are *active* for a project.
  *
- * Resolves the active set of stacks for a project, given:
- *   1. The discovery snapshot (`stackFiles`) from validateAll's phase 1;
- *   2. The cascaded overlay's `stack.override` (post-C4 cascade);
- *   3. The project root (used to materialise file paths for glob matching).
+ * Two mutually-exclusive modes:
+ * 1. Explicit override — when the cascaded overlay supplies a non-empty
+ *    `stack.override`, that list is authoritative: auto-detection is skipped
+ *    entirely, and each named stack must exist (a missing one is an issue).
+ * 2. Auto-detection — otherwise each built-in stack's `detection` block is
+ *    evaluated against the project's files; a stack whose detection matches
+ *    becomes active.
  *
- * Algorithm (per C2 + project-context "dispatch invariants"):
- *   - If `stack.override` is non-empty after cascade → use exactly that
- *     list. Auto-detection is **skipped**. Each named stack must exist
- *     somewhere in the snapshot's stackFiles or `MissingFile` issues.
- *   - If `stack.override` is empty after cascade → run auto-detection on
- *     every built-in (tier-3) stack file's `detection` block. Active set
- *     is the **union** of every stack whose detection rules match.
- *   - If auto-detection matches zero stacks → activate the `generic`
- *     stack as a conservative fallback (per C2, only if a stack named
- *     `generic` is present in the snapshot — fixtures that don't ship one
- *     produce an empty active set, surfaced as a structured note in the
- *     resolved config rather than an error).
- *
- * Determinism:
- *   - Glob match via `determinism.glob` (picomatch v4 pinned).
- *   - Active set is sorted via `localeSort` before return.
- *   - Project files are enumerated lazily; the enumeration is sorted.
- *
- * Failure modes (per C2 "Error model" section):
- *   - Malformed glob in a `detection` block → `MalformedInput` issue.
- *     Dispatch fails closed: the offending stack is not activated.
- *   - Overlay's `stack.override` references a stack with no matching file
- *     → `MissingFile` issue (the same shape S4's discovery layer
- *     produces; we keep that layer as the canonical source for
- *     stack-resolution issues).
+ * A guaranteed fallback: if auto-detection matches nothing and a `generic`
+ * stack exists, `generic` is activated so a project is never left with zero
+ * stacks. Results are always {@link localeSort}ed for deterministic output.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -40,31 +21,48 @@ import { glob, localeSort } from '../determinism/index.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
 
-/** Subset of cascaded overlay relevant to detection dispatch. */
+/**
+ * Detection inputs drawn from the cascaded overlay.
+ *
+ * @property stackOverride the merged `stack.override` list. When present and
+ *   non-empty it forces explicit mode (auto-detection is bypassed). Empty or
+ *   absent ⇒ auto-detection.
+ */
 export interface DetectionInputOverlay {
-  /**
-   * Resolved value of `stack.override` after the C4 cascade. Empty array
-   * (or `undefined`) means "run auto-detection".
-   */
+
   stackOverride?: string[];
 }
 
-/** Return shape of `detectActiveStacks`. */
+/**
+ * Detection outcome.
+ *
+ * @property active the active stack names, locale-sorted and de-duplicated.
+ * @property issues problems found while detecting — an overridden stack that
+ *   does not exist (`MissingFile`), or a stack declaring an uninterpretable
+ *   glob (`MalformedInput`).
+ */
 export interface DetectionResult {
-  /** Sorted list of active stack names (deterministic). */
+
   active: string[];
-  /** Issues collected during detection (malformed globs, missing stacks). */
+
   issues: Issue[];
 }
 
 /**
- * Resolve the active stack set for a project.
+ * Compute the active stacks for the project described by `snapshot`.
  *
- * The snapshot is the post-discovery view: `stackFiles` carries every
- * known stack file at every tier; `projectRoot` is canonicalised. The
- * caller (typically `composeResolvedConfig`) supplies the cascaded
- * overlay's `stack.override` so dispatch operates on the *resolved*
- * value, not on any single tier's raw value.
+ * @param snapshot the phase-1 validation snapshot, providing the stack files
+ *   (with parsed data) and the project root.
+ * @param overlay cascaded overlay inputs; see {@link DetectionInputOverlay}.
+ * @returns a {@link DetectionResult}. Never throws — filesystem and glob
+ *   failures degrade to "no match" or are reported as issues.
+ *
+ * In override mode, blank/duplicate names are skipped and each remaining name
+ * is checked for existence. In auto-detection mode, only `builtin`-tier stacks
+ * are considered (a project/user override of an existing built-in is still
+ * keyed by the built-in's name); the first matching detection entry activates
+ * a stack, but a *malformed* glob in any entry disqualifies that whole stack
+ * and raises an issue.
  */
 export function detectActiveStacks(
   snapshot: ValidationSnapshot,
@@ -75,19 +73,18 @@ export function detectActiveStacks(
 
   const override = overlay.stackOverride ?? [];
 
+  // Mode 1: an explicit, non-empty override fully replaces auto-detection.
   if (override.length > 0) {
-    // All-or-nothing: skip auto-detection, use exactly the named list.
+
     const active: string[] = [];
     const seen = new Set<string>();
     for (const name of override) {
+      // Skip blanks and duplicates so the override list is tolerant of user
+      // formatting without producing repeated active entries.
       if (typeof name !== 'string' || name.length === 0) continue;
       if (seen.has(name)) continue;
       seen.add(name);
-      // The S4 discovery layer already raises `MissingFile` for unknown
-      // override names against the project overlay; we double-check here
-      // because the cascaded view may differ from any single tier. We
-      // only emit a fresh issue if the discovery layer didn't already
-      // catch it — checking `stackExists` against the snapshot is enough.
+
       if (!stackExists(snapshot, name)) {
         issues.push({
           code: 'MissingFile',
@@ -105,7 +102,8 @@ export function detectActiveStacks(
     return { active: localeSort(active), issues };
   }
 
-  // No override after cascade → run auto-detection.
+  // Mode 2: auto-detection. Enumerate the project's files once, then test each
+  // built-in stack's detection block against that one candidate set.
   const candidateFiles = enumerateProjectFiles(snapshot.projectRoot);
   const matched = new Set<string>();
 
@@ -113,7 +111,10 @@ export function detectActiveStacks(
     if (!row.data) continue;
     const detection = readDetectionBlock(row.data);
     if (detection === null) continue;
-    if (detection.length === 0) continue; // generic-style stack, only via fallback
+    if (detection.length === 0) continue;
+    // A stack's detection entries are OR-ed: the first matching entry activates
+    // it. A malformed glob anywhere, however, disqualifies the whole stack and
+    // is reported — a broken pattern must not silently half-match.
     let stackMatches = false;
     for (const entry of detection) {
       const result = evaluateDetectionEntry(entry, candidateFiles, snapshot.projectRoot);
@@ -128,23 +129,21 @@ export function detectActiveStacks(
             `Edit the stack file's detection block so every pattern is a valid glob.`,
           severity: 'error',
         });
-        // Failed-closed: skip the rest of this stack's detection rules.
+        // Force non-activation regardless of any earlier matching entry.
         stackMatches = false;
         break;
       }
       if (result.matched) {
         stackMatches = true;
-        // Continue evaluating siblings? No — `detection` is a top-level
-        // OR (per C1: each entry is independent; matching any one
-        // activates the stack). Short-circuit on first match.
+        // Short-circuit: one match is enough to activate (OR semantics).
         break;
       }
     }
     if (stackMatches) matched.add(name);
   }
 
-  // Generic fallback: when auto-detection matches nothing, activate the
-  // `generic` stack if it exists in the snapshot.
+  // Safety net: never leave a project with no active stack. `generic` is the
+  // catch-all when nothing else detected.
   if (matched.size === 0 && stackExists(snapshot, 'generic')) {
     matched.add('generic');
   }
@@ -152,13 +151,10 @@ export function detectActiveStacks(
   return { active: localeSort(Array.from(matched)), issues };
 }
 
-/**
- * Build a name → row map limited to **built-in** (tier-3) stack rows,
- * which are the only tier where `detection` may live (per C5 / the
- * detection.tier3_only invariant). Project- and user-tier rows still
- * shadow the built-in for *content*, but detection always reads from
- * tier 3. We index by name so callers see the single canonical source.
- */
+// Build a name → row map of the BUILTIN-tier stack files only, in locale order
+// so the "first wins per name" choice is deterministic. Auto-detection keys off
+// built-in stacks (project/user overrides are resolved later by name), so
+// non-builtin rows are skipped here.
 function indexBuiltinStacksByName(snapshot: ValidationSnapshot): Map<string, SnapshotStackRow> {
   const out = new Map<string, SnapshotStackRow>();
   const keys = localeSort(Array.from(snapshot.stackFiles.keys()));
@@ -173,6 +169,8 @@ function indexBuiltinStacksByName(snapshot: ValidationSnapshot): Map<string, Sna
   return out;
 }
 
+// True when any stack file (any tier) resolves to the given name. Used both to
+// validate override entries and to check for the `generic` fallback.
 function stackExists(snapshot: ValidationSnapshot, name: string): boolean {
   for (const row of snapshot.stackFiles.values()) {
     if (stackNameFromPath(row.path) === name) return true;
@@ -180,30 +178,35 @@ function stackExists(snapshot: ValidationSnapshot, name: string): boolean {
   return false;
 }
 
+// Derive a stack's name from its file path (basename minus the `.md`
+// extension). Returns null for a non-`.md` path so callers can skip it.
 function stackNameFromPath(p: string): string | null {
   const base = path.basename(p);
   if (!base.endsWith('.md')) return null;
   return base.slice(0, -'.md'.length);
 }
 
+// Outcome of evaluating one detection entry. `malformed` takes priority over
+// `matched` in the caller: a malformed entry disqualifies the stack regardless
+// of other matches, and `malformedPattern` carries the offending glob for the
+// error message.
 interface DetectionEvalResult {
   matched: boolean;
   malformed: boolean;
   malformedPattern?: string;
 }
 
-/**
- * Evaluate a single detection entry per C1's grammar:
- *
- *   - bare string  → glob, matched against project files
- *   - `{path, contains: [...]}` → file at `path` exists and its contents
- *     contain at least one of the `contains` substrings
- *   - `{allOf: [...]}` → every nested entry matches
- *   - `{anyOf: [...]}` → at least one nested entry matches
- *
- * Returns `{matched, malformed}`. A malformed glob short-circuits the
- * walk and propagates upward.
- */
+// Evaluate a single detection entry against the project's files. Entries take
+// four shapes, evaluated recursively:
+//   - a bare glob string → matches if any candidate file matches it;
+//   - `{ allOf: [...] }`  → matches only if every child matches (AND);
+//   - `{ anyOf: [...] }`  → matches if any child matches (OR);
+//   - `{ path, contains }` → reads the file at `path` and matches if its text
+//     contains any listed needle (content probe, not a glob).
+// Any unrecognised shape is a non-match. A glob that picomatch cannot compile
+// surfaces as `malformed`; all filesystem errors (missing file, unreadable,
+// not-a-file) degrade to a quiet non-match — only an uninterpretable *pattern*
+// is treated as user error.
 function evaluateDetectionEntry(
   entry: unknown,
   candidateFiles: string[],
@@ -225,6 +228,8 @@ function evaluateDetectionEntry(
         if (r.malformed) return r;
         if (!r.matched) return { matched: false, malformed: false };
       }
+      // An empty allOf is treated as a non-match (vacuous truth would
+      // activate every stack carrying one, which is never intended).
       return { matched: entry.allOf.length > 0, malformed: false };
     }
     if ('anyOf' in entry && Array.isArray(entry.anyOf)) {
@@ -236,9 +241,8 @@ function evaluateDetectionEntry(
       return { matched: false, malformed: false };
     }
     if (typeof entry.path === 'string' && Array.isArray(entry.contains)) {
-      // `contains` is a content check rather than a glob. Look up the
-      // single named file relative to the project root and grep for any
-      // of the substrings.
+      // Content probe: resolve `path` (relative to project root unless already
+      // absolute) and match if the file's text contains any needle.
       const target = path.isAbsolute(entry.path) ? entry.path : path.join(projectRoot, entry.path);
       if (!existsSync(target)) return { matched: false, malformed: false };
       let stats;
@@ -265,6 +269,9 @@ function evaluateDetectionEntry(
   return { matched: false, malformed: false };
 }
 
+// Extract a stack's `detection` array, or null when the data is not an object
+// or has no array-valued `detection` key (the stack then opts out of
+// auto-detection).
 function readDetectionBlock(data: unknown): unknown[] | null {
   if (!isObject(data)) return null;
   const det = data['detection'];
@@ -272,15 +279,13 @@ function readDetectionBlock(data: unknown): unknown[] | null {
   return det;
 }
 
-/**
- * Enumerate every file underneath `projectRoot`, returning project-relative
- * paths suitable for glob matching. Excludes well-known noisy directories
- * (`.git`, `node_modules`, `dist`, `.gan-state`, `.gan-cache`) so detection
- * runs in linear time on real-world repos.
- *
- * Output is sorted via `localeSort`; the per-file order shouldn't matter
- * for `glob` semantics but we keep the deterministic output anyway.
- */
+// Recursively list the project's files as project-relative, `/`-separated
+// paths suitable for globbing. Implemented as an explicit stack (not
+// recursion) to avoid call-stack limits on deep trees. Heavy/irrelevant
+// directories (.git, node_modules, build outputs, gan state/cache) are pruned
+// so detection is fast and not skewed by generated files. Per-entry I/O errors
+// are skipped so an unreadable subtree does not abort enumeration. Output is
+// locale-sorted for deterministic glob results.
 function enumerateProjectFiles(projectRoot: string): string[] {
   const out: string[] = [];
   const stack: string[] = [projectRoot];
@@ -306,9 +311,7 @@ function enumerateProjectFiles(projectRoot: string): string[] {
         stack.push(full);
       } else if (s.isFile()) {
         const rel = path.relative(projectRoot, full);
-        // Normalise to forward slashes so picomatch globs (which are POSIX)
-        // match consistently on Windows. picomatch tolerates either, but
-        // we want deterministic output.
+        // Normalise to forward slashes so globs are platform-independent.
         out.push(rel.split(path.sep).join('/'));
       }
     }
@@ -316,6 +319,7 @@ function enumerateProjectFiles(projectRoot: string): string[] {
   return localeSort(out);
 }
 
+// Local plain-object guard: true only for a non-null, non-array object.
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

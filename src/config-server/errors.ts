@@ -1,15 +1,25 @@
 /**
- * Error factory for the @claudeagents/config-server.
+ * The config-server's single error vocabulary.
  *
- * R1-locked rule: every error code from F2's enum is constructed via this
- * module. No inline `throw new Error(...)` anywhere else in the codebase.
+ * Every fault the server raises — whether thrown or folded into a returned
+ * `Issue` — is a {@link ConfigServerError} carrying a stable {@link ErrorCode}.
+ * Callers branch on `code` (never on message text, which is human-facing and
+ * may change); the codes are the machine contract. Build errors with the
+ * {@link createError} factory rather than `new ConfigServerError` directly so
+ * the default message and `NotImplemented` special-casing are applied
+ * consistently.
  *
- * The shape mirrors F2's "Error model" section: `{ code, message, file?,
- * field?, line?, column?, remediation? }`. The factory returns plain objects
- * that can be `throw`n directly (they are real `Error` instances) and also
- * serialised to JSON for MCP responses without further massaging.
+ * Shared guarantee: a `ConfigServerError` is always JSON-serialisable via
+ * {@link ConfigServerError.toJSON}, which is what crosses the MCP boundary —
+ * the live `name`/`stack` are dropped and every other own field is preserved.
  */
 
+/**
+ * Closed set of machine-readable error codes. This union is the stable
+ * contract callers switch on; messages are advisory. Adding a code is a
+ * breaking change to that contract (and requires a matching default message in
+ * {@link DEFAULT_MESSAGES}, which is keyed exhaustively by this type).
+ */
 export type ErrorCode =
   | 'SchemaMismatch'
   | 'InvalidYAML'
@@ -34,6 +44,21 @@ export type ErrorCode =
   | 'PortNotDiscovered'
   | 'UnknownStateKey';
 
+/**
+ * The fully-specified shape of an error: a `code` and `message` plus optional
+ * location/remediation context. Extra arbitrary fields are permitted (the
+ * index signature) so a call site can attach domain context without growing
+ * this interface.
+ *
+ * @property code the machine-readable {@link ErrorCode}.
+ * @property message human-facing description (advisory, not a contract).
+ * @property file absolute path of the offending config file, when applicable.
+ * @property path JSON/structural path within a document, when applicable.
+ * @property field the specific field at fault (often a JSON-pointer fragment).
+ * @property line 1-based source line, when a parser pinpointed the fault.
+ * @property column 1-based source column, paired with `line`.
+ * @property remediation a concrete fix instruction shown to the user.
+ */
 export interface ConfigServerErrorShape {
   code: ErrorCode;
   message: string;
@@ -43,11 +68,19 @@ export interface ConfigServerErrorShape {
   line?: number;
   column?: number;
   remediation?: string;
-  // Free-form additional context (tool name, etc.) for code-specific details.
-  // Kept narrow on purpose: callers should prefer named fields above.
+
   [extra: string]: unknown;
 }
 
+/**
+ * Caller-supplied details for {@link createError}. Same fields as
+ * {@link ConfigServerErrorShape} minus the mandatory `code` (passed
+ * separately) and `message` (optional here — a default is filled in from
+ * {@link DEFAULT_MESSAGES} when omitted).
+ *
+ * @property tool the tool name; used only to synthesise the default
+ *   `NotImplemented` message, and otherwise carried through as extra context.
+ */
 export interface ErrorDetails {
   message?: string;
   file?: string;
@@ -60,6 +93,15 @@ export interface ErrorDetails {
   [extra: string]: unknown;
 }
 
+/**
+ * The error type thrown (and serialised) throughout the config-server. It is a
+ * real `Error` subclass — so it interoperates with `instanceof`, `throw`, and
+ * stack traces — that additionally carries the {@link ConfigServerErrorShape}
+ * fields as own properties.
+ *
+ * Construct via {@link createError} rather than directly: the factory supplies
+ * default messages and the `NotImplemented` message synthesis.
+ */
 export class ConfigServerError extends Error implements ConfigServerErrorShape {
   public readonly code: ErrorCode;
   public readonly file?: string;
@@ -68,9 +110,15 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
   public readonly line?: number;
   public readonly column?: number;
   public readonly remediation?: string;
-  // Index signature so `[extra: string]: unknown` from the interface holds.
+
   [extra: string]: unknown;
 
+  /**
+   * @param shape the complete error shape; `shape.message` becomes the
+   *   `Error` message. Known optional fields are copied only when present (so
+   *   they read as absent, not `undefined`), and any remaining keys are copied
+   *   verbatim onto the instance via the index signature.
+   */
   constructor(shape: ConfigServerErrorShape) {
     super(shape.message);
     this.name = 'ConfigServerError';
@@ -81,6 +129,8 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
     if (shape.line !== undefined) this.line = shape.line;
     if (shape.column !== undefined) this.column = shape.column;
     if (shape.remediation !== undefined) this.remediation = shape.remediation;
+    // Copy through any caller-supplied extra context, skipping the keys
+    // already assigned above so they are not duplicated.
     for (const k of Object.keys(shape)) {
       if (
         k !== 'code' &&
@@ -98,9 +148,13 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
   }
 
   /**
-   * Returns a plain object suitable for JSON serialisation in MCP responses.
-   * The class itself serialises identically because every public field is an
-   * own enumerable property, but `toJSON()` makes the contract explicit.
+   * Serialise to a plain {@link ConfigServerErrorShape} for transport across
+   * the MCP boundary.
+   *
+   * `code` and `message` are emitted unconditionally (the `Error.message`
+   * lives on the prototype, not as an own key, so it must be set explicitly).
+   * The runtime-only `name` and `stack` are deliberately omitted, and any
+   * own field whose value is `undefined` is dropped so the JSON stays minimal.
    */
   toJSON(): ConfigServerErrorShape {
     const out: ConfigServerErrorShape = {
@@ -116,6 +170,9 @@ export class ConfigServerError extends Error implements ConfigServerErrorShape {
   }
 }
 
+// Fallback human-facing message per code, used when a call site does not
+// supply one. Keyed by the full ErrorCode union, so adding a code is a
+// compile error here until a default is written — keeping the two in lockstep.
 const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   SchemaMismatch: 'Schema version mismatch.',
   InvalidYAML: 'Invalid YAML in configuration file.',
@@ -143,11 +200,20 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
 };
 
 /**
- * Build a structured config-server error.
+ * Canonical factory for a {@link ConfigServerError}. Prefer this over the
+ * constructor everywhere.
  *
- * @param code one of F2's enumerated error codes
- * @param details optional override fields; if `message` is omitted, a
- *   sensible default is used so every error has a non-empty message
+ * @param code the {@link ErrorCode} to raise.
+ * @param details optional context. `details.message`, when present, overrides
+ *   the default; all other keys (`file`/`path`/`field`/`tool`/extras) are
+ *   carried onto the error verbatim.
+ * @returns a constructed (not thrown) `ConfigServerError`; the caller decides
+ *   whether to `throw` it or fold it into an `Issue`.
+ *
+ * Message resolution: an explicit `details.message` wins; otherwise the
+ * per-code {@link DEFAULT_MESSAGES} entry is used. As a special case, a
+ * `NotImplemented` error with a `tool` and no explicit message gets a
+ * tool-named message so the user sees which tool is unimplemented.
  */
 export function createError(code: ErrorCode, details: ErrorDetails = {}): ConfigServerError {
   const { message: providedMessage, ...rest } = details;

@@ -1,20 +1,17 @@
 /**
- * Docker module barrel.
+ * Docker module — public entry point and prerequisite gate.
  *
- * On evaluation:
+ * This barrel exposes the docker module's capabilities (container naming, port
+ * validation/discovery, health-checking, the port registry) as namespaced
+ * objects plus their free-function forms, and re-exports their types.
  *
- *   1. Runs the manifest's prerequisite check (`docker --version`) via
- *      `child_process.execFileSync` — whitespace-split, no shell expansion.
- *      A non-zero exit (or any spawn error) throws via the central error
- *      factory; the thrown error message includes the manifest's
- *      `errorHint` so an agent catching it gets actionable text.
- *   2. Re-exports the five module utilities listed in the manifest's
- *      `exports` array: `PortRegistry`, `ContainerNaming`, `PortValidator`,
- *      `PortDiscovery`, `ContainerHealth`.
- *
- * The prerequisite runner is exposed as `_runPrerequisiteCheck` so tests
- * can mock `execFileSync` and exercise the failure path without an
- * environment dependency on the real `docker` binary.
+ * It also runs a side-effecting prerequisite check *at import time*: importing
+ * this module verifies that the host satisfies the commands listed in the
+ * docker module's `manifest.json` (e.g. that the `docker` CLI is present). The
+ * check throws `ModulePrerequisiteFailed` on the first unmet prerequisite, so a
+ * module whose host cannot support it fails loudly at load rather than midway
+ * through a run. The named-export `_runPrerequisiteCheck` is the same routine
+ * with injectable seams so tests can exercise it without a real `docker`.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -24,20 +21,20 @@ import { fileURLToPath } from 'node:url';
 
 import { createError } from '../../config-server/errors.js';
 
+// Shape of one manifest prerequisite: the command to run and the operator-facing
+// hint to surface if it fails.
 interface PrereqEntry {
   command: string;
   errorHint: string;
 }
 
+// The subset of the docker manifest this module reads.
 interface DockerManifestShape {
   prerequisites?: PrereqEntry[];
 }
 
-/**
- * Read the docker manifest at module-evaluation time. The path is
- * resolved relative to this source file so the barrel works whether the
- * package is consumed from `src/` (tests) or `dist/` (production).
- */
+// Read and parse the module's manifest.json, resolved relative to this file's
+// own location (not cwd) so it is found regardless of where the process runs.
 function loadManifest(): DockerManifestShape {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const manifestPath = path.join(here, 'manifest.json');
@@ -46,10 +43,19 @@ function loadManifest(): DockerManifestShape {
 }
 
 /**
- * Run every prerequisite command from the docker manifest. Each command
- * is whitespace-split (no shell expansion) and dispatched via
- * `execFileSync`. Failure throws via `createError('ModulePrerequisiteFailed', ...)`
- * with the manifest's `errorHint` woven into the message.
+ * Run every manifest-declared prerequisite command, throwing on the first
+ * failure. Exported (with the `_` prefix marking it as test/internal surface)
+ * so its seams can be injected.
+ *
+ * @param exec command runner; defaults to `execFileSync`. Test seam.
+ * @param manifest the manifest to read prerequisites from; defaults to the
+ *   module's own `manifest.json`. Test seam.
+ * @throws `ModulePrerequisiteFailed` when a command is empty after tokenisation,
+ *   or when running it throws (e.g. the binary is missing or exits non-zero);
+ *   the error carries the manifest's `errorHint` to guide the operator.
+ *
+ * Commands are split on whitespace into `argv` and run without a shell, so a
+ * prerequisite string cannot inject shell syntax.
  */
 export function _runPrerequisiteCheck(
   exec: typeof execFileSync = execFileSync,
@@ -80,41 +86,35 @@ export function _runPrerequisiteCheck(
   }
 }
 
-// Run the prerequisite check at module-evaluation time. The barrel must
-// fail-fast when Docker is missing so an agent importing the module
-// receives a structured error rather than a confusing utility-call
-// failure later in the run.
+// Import-time gate: fail fast if the host cannot support the docker module.
 _runPrerequisiteCheck();
-
-// The manifest's `exports` array names — these are the canonical
-// public-API surface. `ContainerNaming` and `PortValidator` are
-// re-exported under the manifest names as namespace objects bundling
-// their helpers; `PortRegistry`, `PortDiscovery`, and `ContainerHealth`
-// are named symbols (class / function).
 
 export { PortRegistry } from './PortRegistry.js';
 export type { PortRegistryEntry, PortRegistryFile } from './PortRegistry.js';
 
 import { nameForWorktree } from './ContainerNaming.js';
 export type { NameForWorktreeOptions } from './ContainerNaming.js';
-/** Manifest-name surface: ContainerNaming bundles `nameForWorktree`. */
+
+// Capability namespaces: each groups its function(s) under a stable object so
+// callers can write `ContainerNaming.nameForWorktree(...)`. The same functions
+// are also re-exported standalone at the bottom for direct import.
 export const ContainerNaming = { nameForWorktree } as const;
 
 import { isPortFree } from './PortValidator.js';
 export type { IsPortFreeOptions, PortProbeResult, PortProbeRunner } from './PortValidator.js';
-/** Manifest-name surface: PortValidator bundles `isPortFree`. */
+
 export const PortValidator = { isPortFree } as const;
 
 import { discoverPort } from './PortDiscovery.js';
 export type { DiscoverPortOptions, DockerPsRunner } from './PortDiscovery.js';
-/** Manifest-name surface: PortDiscovery bundles `discoverPort`. */
+
 export const PortDiscovery = { discoverPort } as const;
 
 import { waitForHealthy } from './ContainerHealth.js';
 export type { WaitForHealthyOptions } from './ContainerHealth.js';
-/** Manifest-name surface: ContainerHealth bundles `waitForHealthy`. */
+
 export const ContainerHealth = { waitForHealthy } as const;
 
-// Also re-export the underlying helpers under their function-level
-// names for callers that prefer them.
+// Standalone re-exports of the same functions, for callers that prefer a flat
+// import over the namespace objects above.
 export { nameForWorktree, isPortFree, discoverPort, waitForHealthy };

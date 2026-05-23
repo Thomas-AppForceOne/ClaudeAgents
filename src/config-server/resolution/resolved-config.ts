@@ -1,27 +1,20 @@
 /**
- * R1 sprint 5 — `composeResolvedConfig`: full F2 stable-shape JSON.
+ * Top of the config-resolution pipeline: compose the single, fully-resolved
+ * config object the rest of the `/gan` loop reads.
  *
- * Pulls together everything S2–S5 has built:
- *   1. Run `validateAll` (so the snapshot's stackFiles/overlays carry
- *      parsed data and any phase 1–3 issues are accumulated).
- *   2. Cascade the three overlay tiers (C4) into a merged view.
- *   3. Run detection (C2) using the cascaded `stack.override`.
- *   4. Materialise the F2 stable shape — keys sorted at every depth via
- *      `determinism.stableStringify` for any serialised output.
+ * This orchestrates the lower layers in order — validate everything, snapshot
+ * stack files, cascade the overlay tiers, detect active stacks, resolve each
+ * to a concrete file, gather module config, and collect issues — then freezes
+ * the result into a deterministic, canonical form.
  *
- * Idempotency: two consecutive calls return byte-identical JSON. We
- * achieve this by:
- *   - Sorting every collection that the call produces (active set,
- *     discarded list, additionalContext path-resolution rows, issues
- *     list).
- *   - Round-tripping the entire payload through
- *     `JSON.parse(stableStringify(...))` before returning, which sorts
- *     keys at every depth without re-running anything stateful.
- *
- * The result is cached per canonical project root (`cache.ts` singleton);
- * callers receive the cached value on subsequent calls until either an
- * explicit `invalidate(projectRoot)` happens (S6's writes will wire that)
- * or the server process restarts.
+ * Two guarantees hold throughout:
+ * 1. Determinism: the returned object is round-tripped through
+ *    {@link stableStringify} so key order is canonical and byte-stable; all
+ *    lists are sorted via {@link localeSort}.
+ * 2. Cached + self-invalidating: the result is memoised in the shared
+ *    resolved-config cache, tagged with the mtimes of every file it depends on
+ *    (overlays, active stacks at every tier, module configs), so a later edit
+ *    to any of them transparently busts the cache.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -42,121 +35,129 @@ import {
 import { resolveStackFile, type ResolveStackOptions } from './stack-resolution.js';
 
 /**
- * One value in `ResolvedConfig.modules`, keyed by module name. Carries
- * the registration meta from `ValidationSnapshot.modules[i]` (`name`,
- * `manifestPath`, optional `pairsWith`) AND, when the project has
- * authored a per-module config YAML at
- * `<projectRoot>/.claude/gan/modules/<name>.yaml`, the parsed YAML
- * fields are spread directly into the same row so that
- * `getResolvedConfig().modules.<name>.<configField>` works as the M2
- * spec body documents.
+ * A resolved module's entry in {@link ResolvedConfig.modules}.
  *
- * The keying-by-name (object, not array) is M2's design: M1 originally
- * carried this surface as an array, but M2's per-module config is
- * accessed via `.modules.<name>` and a record-shaped surface composes
- * cleanly without the post-M1 callers having to do `arr.find(...)`.
+ * @property name the module's unique name.
+ * @property manifestPath absolute path of the module's manifest.
+ * @property pairsWith optional name of a module this one is paired with.
+ * @property [extra] the module's own resolved config fields are spread in via
+ *   the index signature, except the three reserved keys above (which the
+ *   manifest cannot shadow).
  */
 export interface ResolvedModuleEntry {
   name: string;
   manifestPath: string;
   pairsWith?: string;
-  // Per-module YAML fields are spread directly onto this row. We do
-  // not enumerate them statically (each module's schema differs); the
-  // index signature carries them.
+
   [extra: string]: unknown;
 }
 
-/** Stable F2-shape resolved config. */
+/**
+ * The fully-resolved configuration for a project — the single source the loop
+ * consumes.
+ *
+ * @property apiVersion the config-server package version this was resolved by.
+ * @property schemaVersions the schema versions in force for stacks/overlays.
+ * @property runtimeMode runtime flags (currently just `noProjectCommands`).
+ * @property stacks active stack names plus a per-name resolution
+ *   ({@link ResolvedStackEntry}).
+ * @property overlay the merged overlay (the cascade's `merged` output).
+ * @property discarded dotted field names truncated by `discardInherited`.
+ * @property additionalContext planner/proposer context-file rows
+ *   ({@link AdditionalContextRow}), with existence resolved.
+ * @property issues every problem found across all phases, de-duplicated and
+ *   stably sorted. A non-empty `issues` does NOT prevent a config being
+ *   returned — callers inspect it to decide whether to proceed.
+ * @property modules resolved module entries keyed by module name.
+ */
 export interface ResolvedConfig {
   apiVersion: string;
   schemaVersions: { stack: number; overlay: number };
-  /**
-   * Runtime knobs that affect how downstream agents *use* the resolved
-   * config (rather than how the framework computed it). R5 S3
-   * introduces `noProjectCommands`: when `true`, agents must skip
-   * project-declared commands (per F4's `--no-project-commands`
-   * runtime knob). The value is supplied by the caller via
-   * `ComposeContext.noProjectCommands`; it is *not* read from any env
-   * var here — the caller is responsible for surfacing the user's
-   * choice.
-   */
+
   runtimeMode: { noProjectCommands: boolean };
   stacks: {
-    /** Sorted active stack names. */
+
     active: string[];
-    /** Per-stack metadata, keyed by stack name. */
+
     byName: Record<string, ResolvedStackEntry>;
   };
-  /** Cascaded overlay (the merged view). */
+
   overlay: Record<string, unknown>;
-  /** `<block>.<field>` paths whose upstream contribution was discarded. */
+
   discarded: string[];
-  /**
-   * Path-resolution status for `additionalContext` entries. Keyed by
-   * agent block (`planner`, `proposer`); each value is a list of
-   * `{path, exists}` rows.
-   */
+
   additionalContext: {
     planner: AdditionalContextRow[];
     proposer: AdditionalContextRow[];
   };
-  /** Sorted issue list (validation + cascade + detection). */
+
   issues: Issue[];
-  /**
-   * Registered modules. Keyed by module name; each value is a
-   * `ResolvedModuleEntry` carrying both registration meta (`name`,
-   * `manifestPath`, optional `pairsWith`) and any per-module config
-   * fields parsed from `<projectRoot>/.claude/gan/modules/<name>.yaml`.
-   * Empty object when no modules ship on disk yet.
-   */
+
   modules: Record<string, ResolvedModuleEntry>;
 }
 
+/**
+ * Where an active stack resolved to.
+ *
+ * @property tier which tier won (project > user > builtin).
+ * @property path absolute path of the winning stack file.
+ * @property schemaVersion the stack schema version (pinned to the framework's).
+ */
 export interface ResolvedStackEntry {
-  /** Tier the resolved stack file came from. */
+
   tier: 'project' | 'user' | 'builtin';
-  /** Absolute path to the resolved stack file. */
+
   path: string;
-  /** Stack body schemaVersion (per F3). */
+
   schemaVersion: number;
 }
 
+/**
+ * One additional-context entry resolved against the filesystem.
+ *
+ * @property path the path as declared in the overlay (kept as-declared for
+ *   display, not canonicalised).
+ * @property exists whether that path resolves to an existing *file* now.
+ */
 export interface AdditionalContextRow {
   path: string;
   exists: boolean;
 }
 
-/** Optional dependency injection for tests. */
+/**
+ * Optional inputs/overrides for composition; the production default `{}`
+ * derives everything from env and package layout.
+ *
+ * @property userHome user home for overlay/stack user-tier resolution.
+ * @property apiVersion pin the reported API version (else read from the
+ *   package); the async {@link composeResolvedConfig} fills this in.
+ * @property packageRoot installed-package root for built-in stack resolution.
+ * @property noProjectCommands sets `runtimeMode.noProjectCommands`.
+ * @property modulesRoot override for where modules are discovered.
+ */
 export interface ComposeContext {
   userHome?: string;
   apiVersion?: string;
-  /**
-   * Override for the package root used by the C5 resolver's primary
-   * built-in tier. When unset, the resolver calls `packageRoot()`
-   * itself; tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Surface F4's `--no-project-commands` runtime knob into the
-   * resolved view. Callers (CLI / MCP) translate the user's choice
-   * into this boolean; the resolution layer only mirrors it onto
-   * `runtimeMode.noProjectCommands`. Defaults to `false`.
-   */
+
   noProjectCommands?: boolean;
-  /**
-   * Override the modules root used for M1 module discovery. Tests
-   * inject a fixture path so the resolved view's `modules` rows are
-   * hermetic. Production callers leave this unset.
-   */
+
   modulesRoot?: string;
 }
 
+// The schema versions this build of the framework speaks. Frozen as the single
+// source for the versions stamped into every resolved config.
 const SCHEMA_VERSIONS = { stack: 1, overlay: 1 } as const;
 
 /**
- * Build the full F2 resolved-config JSON for a project root. Cached on
- * first call; subsequent calls return the same byte-identical JSON until
- * `invalidate(projectRoot)` is called.
+ * Async entry point: resolve `apiVersion` (from `ctx` or the package
+ * `package.json`) and delegate to {@link composeResolvedConfigSync}.
+ *
+ * @param projectRoot the project to resolve config for (any spelling;
+ *   canonicalised inside).
+ * @param ctx see {@link ComposeContext}.
+ * @returns the resolved config (cached on subsequent calls).
  */
 export async function composeResolvedConfig(
   projectRoot: string,
@@ -167,10 +168,15 @@ export async function composeResolvedConfig(
 }
 
 /**
- * Synchronous compose. Used by the public `getResolvedConfig` path once
- * `apiVersion` is known. Splitting async/sync lets tests build the full
- * shape without depending on `node:fs/promises` and lets the production
- * path keep `getResolvedConfig` async-only (it must read package.json).
+ * Synchronous core of resolution. Returns a cached value when one is still
+ * fresh; otherwise runs the full pipeline and caches the result.
+ *
+ * @param projectRoot the project; canonicalised to the cache key internally.
+ * @param apiVersion the API version to stamp (the async wrapper supplies it).
+ * @param ctx see {@link ComposeContext}.
+ * @returns the {@link ResolvedConfig}. Does not throw on config problems —
+ *   those are collected into `issues`; only genuinely unexpected I/O faults
+ *   (outside the per-step try/catch) would propagate.
  */
 export function composeResolvedConfigSync(
   projectRoot: string,
@@ -179,6 +185,8 @@ export function composeResolvedConfigSync(
 ): ResolvedConfig {
   const canonRoot = cacheKeyForProjectRoot(projectRoot);
   const cache = getResolvedConfigCache<ResolvedConfig>();
+  // Fast path: a still-fresh cached value (the cache self-evicts if any backing
+  // file changed) avoids re-running the whole pipeline.
   const cached = cache.get(canonRoot);
   if (cached !== undefined) return cached;
 
@@ -192,15 +200,16 @@ export function composeResolvedConfigSync(
   );
   const allIssues: Issue[] = [...validation.issues];
 
-  // Re-build the snapshot to access parsed stack bodies for detection.
-  // The cost is bounded (a few file reads); the alternative would be
-  // exposing a snapshot accessor on `validateAll`, which would leak phase
-  // internals.
+  // Build the phase-1 snapshot (stack/module discovery). Despite the test-only
+  // name, this is the production discovery pass; detection consumes its rows.
   const snapshot = _runPhase1ForTests(canonRoot, {
     ...(ctx.userHome ? { userHome: ctx.userHome } : {}),
     ...(ctx.packageRoot ? { packageRoot: ctx.packageRoot } : {}),
     ...(ctx.modulesRoot ? { modulesRoot: ctx.modulesRoot } : {}),
   });
+  // Ensure each stack row has its parsed body: phase 1 may leave `data`
+  // unpopulated, and detection needs the parsed `detection` block. Parse the
+  // remaining rows here on a best-effort basis.
   for (const row of snapshot.stackFiles.values()) {
     if (row.data !== undefined) continue;
     try {
@@ -215,7 +224,6 @@ export function composeResolvedConfigSync(
     }
   }
 
-  // Cascade the three overlay tiers.
   const overlayLoadOpts = ctx.userHome ? { userHome: ctx.userHome } : {};
   const def = loadOverlay('default', canonRoot, overlayLoadOpts);
   const user = loadOverlay('user', canonRoot, overlayLoadOpts);
@@ -227,12 +235,13 @@ export function composeResolvedConfigSync(
   });
   for (const issue of cascade.issues) allIssues.push(issue);
 
-  // Run detection using the cascaded `stack.override`.
+  // Detection consumes the cascaded `stack.override` (if any) to choose between
+  // explicit and auto-detection modes.
   const stackOverride = readStackOverride(cascade.merged);
   const detection = detectActiveStacks(snapshot, { stackOverride });
   for (const issue of detection.issues) allIssues.push(issue);
 
-  // Build per-stack metadata for every active stack via C5's resolver.
+  // Resolve each active stack name to its winning file/tier.
   const byName: Record<string, ResolvedStackEntry> = {};
   const opts: ResolveStackOptions = {};
   if (ctx.userHome) opts.userHome = ctx.userHome;
@@ -251,7 +260,6 @@ export function composeResolvedConfigSync(
     }
   }
 
-  // Path-resolution status for additionalContext.
   const additionalContext = {
     planner: extractAdditionalContextRows(cascade.merged, 'planner', canonRoot),
     proposer: extractAdditionalContextRows(cascade.merged, 'proposer', canonRoot),
@@ -259,11 +267,8 @@ export function composeResolvedConfigSync(
 
   const sortedIssues = sortIssues(allIssues);
 
-  // Modules surface. Keyed by module name. Each entry carries the
-  // snapshot's registration meta AND, when the project has authored a
-  // per-module YAML at `<projectRoot>/.claude/gan/modules/<name>.yaml`,
-  // the parsed YAML fields spread directly onto the entry so
-  // `getResolvedConfig().modules.<name>.<configField>` works.
+  // Assemble each module's resolved entry: identity from the snapshot, plus the
+  // module's own config spread in.
   const modules: Record<string, ResolvedModuleEntry> = {};
   for (const m of snapshot.modules) {
     const entry: ResolvedModuleEntry = { name: m.name, manifestPath: m.manifestPath };
@@ -271,8 +276,8 @@ export function composeResolvedConfigSync(
     const cfg = loadModuleConfig(canonRoot, m.name);
     if (cfg !== null && isObject(cfg)) {
       for (const k of Object.keys(cfg)) {
-        // Don't let the config silently overwrite the registration
-        // meta — those keys are reserved.
+        // Reserved identity keys are owned by the snapshot; a module's own
+        // config must not shadow them, so skip those keys when spreading.
         if (k === 'name' || k === 'manifestPath' || k === 'pairsWith') continue;
         entry[k] = cfg[k];
       }
@@ -295,14 +300,14 @@ export function composeResolvedConfigSync(
     modules,
   };
 
-  // Round-trip through stableStringify so every nested key order is
-  // canonicalised.
+  // Freeze to the canonical form: serialise with sorted keys then re-parse, so
+  // the cached/returned object has deterministic, byte-stable key ordering
+  // regardless of the order fields were assembled above.
   const canonical = JSON.parse(stableStringify(resolved)) as ResolvedConfig;
 
-  // F5 slice 3 — collect the per-backing-file state snapshot the cache
-  // compares against on every subsequent read. A hand-edit to any of
-  // these files invalidates the entry the next time someone calls
-  // `getResolvedConfig` / `getActiveStacks` / `getMergedSplicePoints`.
+  // Tag the cache entry with the mtimes of every file this result depends on,
+  // so any later edit to an overlay, an active stack (at any tier), or a module
+  // config transparently invalidates the entry on the next read.
   const backingFileStates = collectBackingFileStates({
     canonRoot,
     userHome: ctx.userHome,
@@ -314,40 +319,13 @@ export function composeResolvedConfigSync(
   return canonical;
 }
 
-// ---- helpers --------------------------------------------------------------
-
-/**
- * F5 slice 3 — assemble the per-backing-file state snapshot the cache
- * uses for hand-edit detection. Tracks:
- *
- *  - **Overlay tier paths.** The three well-known overlay paths
- *    (`default.md`, `project.md`, `user.md`). All three are stat'd
- *    whether or not the loader returned data — a `null` recorded
- *    state means "this file was absent when we cached," and a brand-
- *    new overlay appearing flips the state and busts the cache on
- *    the next read. The user tier is resolved via the same env-var
- *    fallback the loader uses (`GAN_USER_HOME` → `HOME` →
- *    `USERPROFILE`); when none of those resolve, the user-tier path
- *    is omitted.
- *  - **Per active-stack tier paths.** For every active stack, every
- *    tier the resolver consults (project shadow → user shadow →
- *    builtin) is stat'd. Tracking the higher-tier shadow paths even
- *    when they were absent at compose time closes the case where a
- *    user adds a shadow file mid-session: the absent path flips from
- *    `null` to a real mtime and the cache invalidates on the next
- *    read. The lower-tier paths (which still exist as the active
- *    resolution) are stat'd too, so hand-edits at the active tier
- *    are caught the same way.
- *  - **Per-module config paths.** Each registered module's per-project
- *    config YAML at `<canonRoot>/.claude/gan/modules/<name>.yaml`.
- *    Hand-edits to a module config bust the cache; absent-but-
- *    expected configs are tracked as `null`.
- *
- * For a typical project (one stack, no modules, with a `userHome`
- * configured), this is 3 (overlays) + 3 (stack tiers) = 6 stat calls
- * per read — still in the microsecond range, well within the spec's
- * "stat is cheap" budget.
- */
+// Build the file→mtime snapshot the cache uses to detect staleness. It records
+// the overlay files at every tier, every active stack at both project and user
+// tiers (not just the winning one — a NEW higher-tier file appearing must
+// invalidate, even though it was absent at resolution time), and each module's
+// config file. Paths are seeded to `null` then filled with their current
+// mtime; a path that did not exist stays `null`, and its later appearance reads
+// as a change.
 function collectBackingFileStates(input: {
   canonRoot: string;
   userHome: string | undefined;
@@ -357,7 +335,6 @@ function collectBackingFileStates(input: {
 }): Map<string, number | null> {
   const states = new Map<string, number | null>();
 
-  // Resolve the effective user-home for path-derivation.
   const userHome =
     input.userHome ??
     process.env['GAN_USER_HOME'] ??
@@ -365,7 +342,6 @@ function collectBackingFileStates(input: {
     process.env['USERPROFILE'];
   const hasUserHome = typeof userHome === 'string' && userHome.length > 0;
 
-  // Overlay tier paths.
   states.set(
     path.join(input.canonRoot, '.claude', 'gan', 'default.md'),
     null,
@@ -378,13 +354,11 @@ function collectBackingFileStates(input: {
     states.set(path.join(userHome, '.claude', 'gan', 'user.md'), null);
   }
 
-  // Active stack paths (current resolution).
   for (const p of input.activeStackPaths) states.set(p, null);
 
-  // Higher-tier stack shadows for every active stack — even when they
-  // do not exist today, so a newly-appearing shadow busts the cache.
-  // The resolver checks tiers in this order; tracking all of them
-  // makes the cache honest about tier shifts.
+  // Track each active stack at BOTH project and user tiers, not just where it
+  // resolved from: if a higher-precedence file is later created, that new file
+  // changes resolution and must bust the cache even though it was absent now.
   for (const name of input.activeStackNames) {
     states.set(path.join(input.canonRoot, '.claude', 'gan', 'stacks', `${name}.md`), null);
     if (hasUserHome) {
@@ -392,20 +366,21 @@ function collectBackingFileStates(input: {
     }
   }
 
-  // Per-module config paths.
   for (const name of input.moduleNames) {
     states.set(path.join(input.canonRoot, '.claude', 'gan', 'modules', `${name}.yaml`), null);
   }
 
-  // Final pass: stat every path once. Doing it in one pass after the
-  // path-set is fully assembled means a given path is only stat'd
-  // once even if multiple tier rules name it.
+  // Second pass: replace the seeded `null`s with each file's actual mtime
+  // (still `null` for files that do not exist).
   for (const p of states.keys()) {
     states.set(p, backingFileMtime(p));
   }
   return states;
 }
 
+// Extract the cascaded `stack.override` list (string entries only) from the
+// merged overlay, or undefined when absent — which keeps detection in
+// auto-detection mode. Non-string entries are filtered out defensively.
 function readStackOverride(merged: Record<string, unknown>): string[] | undefined {
   if (!isObject(merged)) return undefined;
   const stack = merged['stack'];
@@ -417,6 +392,11 @@ function readStackOverride(merged: Record<string, unknown>): string[] | undefine
   return undefined;
 }
 
+// Build the planner/proposer additionalContext rows for one block: read the
+// declared paths, resolve each (relative to the project root unless absolute),
+// and record whether it currently points at an existing file. Paths are
+// de-duplicated (keeping the last occurrence) and locale-sorted so the output
+// is stable. `path` is kept as-declared for display, not canonicalised.
 function extractAdditionalContextRows(
   merged: Record<string, unknown>,
   block: 'planner' | 'proposer',
@@ -441,20 +421,17 @@ function extractAdditionalContextRows(
     }
     rows.push({ path: entry, exists });
   }
-  // Sort by path so the row order is deterministic. Re-build via the
-  // determinism-pinned `localeSort` over the path strings, then map back
-  // to row objects.
+
   const byPath = new Map<string, AdditionalContextRow>();
   for (const r of rows) byPath.set(r.path, r);
   return localeSort(Array.from(byPath.keys())).map((k) => byPath.get(k) as AdditionalContextRow);
 }
 
-/**
- * Sort issues by `(code, path, field, message)`. Implemented by
- * building a composite sort key per issue and sorting those keys via the
- * F3-pinned `localeSort`. Avoids a raw sort call with a custom
- * comparator and centralises the locale rule.
- */
+// Stably order issues for deterministic output. Each issue gets a composite
+// key (code, path, field, message, original index) joined by a control-char
+// separator that cannot occur in the fields; the trailing index keeps
+// otherwise-identical issues distinct so none is lost in the Map-based de-dup,
+// while locale-sorting the keys gives a reproducible order.
 function sortIssues(issues: Issue[]): Issue[] {
   const SEP = '';
   const keyed = issues.map((issue, idx) => ({
@@ -466,15 +443,19 @@ function sortIssues(issues: Issue[]): Issue[] {
   return localeSort(Array.from(byKey.keys())).map((k) => byKey.get(k) as Issue);
 }
 
+// Read the API version from the package metadata. Done via a dynamic import of
+// `../index.js` to avoid a static import cycle (index.ts imports this module).
 async function readApiVersion(): Promise<string> {
   const mod = await import('../index.js');
   const meta = await mod.readPackageMeta();
   return meta.version;
 }
 
+// Local plain-object guard: true only for a non-null, non-array object.
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-// Re-exports for test consumers.
+// Convenience re-exports so consumers of resolved-config can reach these
+// determinism primitives without importing the determinism module directly.
 export { canonicalizePath, localeSort };

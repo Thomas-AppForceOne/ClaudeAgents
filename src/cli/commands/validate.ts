@@ -1,31 +1,12 @@
 /**
- * R3 sprint 4 — `gan validate [--json] [--project-root DIR]`.
+ * `gan validate` — run every configuration validator for a project and report
+ * the collected issues.
  *
- * Calls R1's `validateAll({ projectRoot })` in-process (per the
- * CLI-imports-library rule). Renders a human-readable report on stdout
- * and maps the issue list to an exit code via the centralized
- * `exitCodeForIssues` helper.
- *
- * Output:
- *   - human (default): one line per issue followed by a summary count.
- *     Issue line format:
- *
- *       <severity> <code> <path>[<:field>]: <message>
- *
- *     The last non-empty line is `<N> issue(s) found.` (singular form
- *     when N == 1; the success path emits `0 issues found.`).
- *
- *   - `--json`: emits the full `validateAll` return value via the central
- *     `emitJson` helper (sorted keys, two-space indent, trailing newline).
- *
- * Exit codes (via `lib/exit-codes.ts`):
- *   - 0 if no error-severity issues
- *   - 4 if any `InvariantViolation`
- *   - 3 if any `SchemaMismatch` (and no invariant violations)
- *   - 2 otherwise
- *   - 5 if R1's library is unreachable (rare; usually a build problem)
- *
- * No literal numeric exit codes appear in this file (per AN20).
+ * Validation issues are *data*, not errors: a project with problems still
+ * exits cleanly through the normal output path, and the issue severities (not
+ * the presence of a thrown exception) drive the exit code. A genuine fault
+ * while validating (a thrown {@link ConfigServerError}) is the only thing that
+ * routes through the error path.
  */
 
 import { validateAll, type Issue } from '../../index.js';
@@ -41,16 +22,23 @@ import { resolveProjectRoot } from '../lib/project-root.js';
 import { EXIT_OK, exitCodeForIssues } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+/**
+ * Shape returned by `validateAll`.
+ *
+ * @property issues every validation issue found; an empty array means the
+ *   project validated clean.
+ */
 interface ValidateAllResult {
   issues: Issue[];
 }
 
 /**
- * Format one issue as a single line. The format string is locked by the
- * sprint contract (AC18): `<severity> <code> <path>[<:field>]: <message>`.
+ * Format one issue as a single human-readable line.
  *
- * Issues without a `path` (rare; only some pipeline-level errors lack one)
- * render with `<no-path>` so the format never collapses into ambiguity.
+ * @param issue the issue to format.
+ * @returns `"<severity> <code> <path>[:<field>]: <message>"`. Severity
+ *   defaults to `error` when unset; an absent/empty path renders as
+ *   `<no-path>`; the `:field` suffix is omitted when there is no field.
  */
 function formatIssueLine(issue: Issue): string {
   const sev = issue.severity ?? 'error';
@@ -60,8 +48,12 @@ function formatIssueLine(issue: Issue): string {
 }
 
 /**
- * Render the human report. The summary line is always last and obeys
- * pluralisation: `0 issues found.`, `1 issue found.`, `N issues found.`.
+ * Render the validation result for human (non-JSON) output: one line per
+ * issue followed by a count summary (with correct singular/plural).
+ *
+ * @param result the collected issues.
+ * @returns the formatted report with a trailing newline; for a clean project
+ *   it is just the `0 issues found.` summary line.
  */
 function renderHuman(result: ValidateAllResult): string {
   const lines: string[] = [];
@@ -74,6 +66,17 @@ function renderHuman(result: ValidateAllResult): string {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * CLI entrypoint for `gan validate`.
+ *
+ * @param parsed parsed argv; honours `--json` and `--project-root`.
+ * @returns a {@link CommandResult}. Failure modes are returned as data:
+ *   project-root resolution or a thrown {@link ConfigServerError} maps via
+ *   {@link errorResult}; any other thrown value becomes
+ *   {@link unreachableResult}. On a completed validation the report is on
+ *   `stdout` and the exit code is {@link EXIT_OK} when clean, otherwise the
+ *   severity-derived code from {@link exitCodeForIssues}.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
@@ -88,12 +91,16 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   try {
     result = validateAll({ projectRoot });
   } catch (e) {
+    // A ConfigServerError is an expected, mapped fault; anything else is
+    // unexpected and is reported as the library being unreachable.
     if (e instanceof ConfigServerError) {
       return errorResult(e, wantJson);
     }
     return unreachableResult(wantJson);
   }
 
+  // Exit code is driven by issue severity, not by the count: a clean run is OK,
+  // otherwise the strictest issue decides the code.
   const code = result.issues.length === 0 ? EXIT_OK : exitCodeForIssues(result.issues);
   const stdout = wantJson ? emitJson(result) : renderHuman(result);
   return { stdout, stderr: '', code };

@@ -1,25 +1,31 @@
-/**
- * Shared safe JSON-object file reader for the F7 storage modules.
- *
- * Run-state files under the central store (`progress.json`, `run.lock`) are read
- * back as UNTRUSTED input. {@link readJsonObjectFile} centralises the defensive
- * preamble every reader needs — an absent file, unreadable bytes, malformed
- * JSON, or a non-object (null / array / scalar) all collapse to `undefined`
- * rather than throwing — replacing a hand-rolled copy that previously lived in
- * three modules. {@link stripForbiddenKeys} additionally drops
- * prototype-polluting keys, for the readers that fold the parsed keys into a
- * merged object (rather than reading named scalar fields).
- */
 
+
+/**
+ * Tolerant JSON-object reading for state files (run progress, lock contents).
+ *
+ * These files are read on hot paths where a missing or corrupt file is a normal
+ * condition, not an error to surface — so reads here never throw, returning
+ * `undefined` instead. The companion {@link stripForbiddenKeys} guards against
+ * prototype-pollution: parsed JSON is attacker-influenceable (it comes from
+ * files on disk), so dangerous keys are dropped before the data is merged into
+ * any object the framework subsequently uses.
+ */
 import { existsSync, readFileSync } from 'node:fs';
 
-/** Keys that must never be folded into a merged object (prototype-pollution guard). */
+// Keys that can poison an object's prototype chain when copied in. Stripped by
+// stripForbiddenKeys so untrusted JSON can never reach Object.prototype.
 const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
- * Read a JSON file into a plain object, or `undefined` when the file is absent,
- * unreadable, not valid JSON, or not a JSON object (null / array / scalar).
- * Never throws — malformed run-state on disk degrades to `undefined`.
+ * Read and parse a JSON file that is expected to hold a plain object.
+ *
+ * @param filePath absolute path to the JSON file.
+ * @returns the parsed object, or `undefined` in every non-object case: the file
+ *   does not exist, cannot be read, is not valid JSON, or parses to `null`, an
+ *   array, or a non-object scalar. Never throws — all failures collapse to
+ *   `undefined` so callers can treat "absent" and "unusable" uniformly. The
+ *   returned object is NOT prototype-sanitised; pass it through
+ *   {@link stripForbiddenKeys} before merging it into a live object.
  */
 export function readJsonObjectFile(filePath: string): Record<string, unknown> | undefined {
   if (!existsSync(filePath)) return undefined;
@@ -34,9 +40,14 @@ export function readJsonObjectFile(filePath: string): Record<string, unknown> | 
 }
 
 /**
- * Return a shallow own-property copy of `obj` with prototype-polluting keys
- * (`__proto__`, `constructor`, `prototype`) dropped. Use before folding a
- * parsed-from-disk object's keys into framework state (e.g. spreading it).
+ * Return a shallow copy of `obj` with prototype-polluting keys
+ * (`__proto__`, `constructor`, `prototype`) removed.
+ *
+ * @param obj an object parsed from untrusted JSON.
+ * @returns a new object containing only the safe own-enumerable entries; the
+ *   input is not mutated. Only top-level keys are filtered — nested objects are
+ *   carried over by reference and are not deep-sanitised, which is sufficient
+ *   here because callers spread the result one level deep.
  */
 export function stripForbiddenKeys(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

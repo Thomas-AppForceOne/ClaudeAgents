@@ -1,66 +1,63 @@
-/**
- * YAML-block writer.
- *
- * Pairs with `yaml-block-parser.ts` to produce a byte-identical re-emit
- * when the YAML data is unchanged, and to splice new YAML content back
- * into the original prose when it is changed.
- *
- * Algorithm:
- *
- *  1. Caller hands us `{originalSource, originalParse, newData}`.
- *  2. We compare `newData` to `originalParse.data` by **structural
- *     equality**. If equal, we return `originalSource` byte-for-byte —
- *     this preserves any non-canonical YAML formatting the user had
- *     (comments, alternate quote styles, indentation choices) when the
- *     data did not actually change.
- *  3. If the data changed, we re-serialise the YAML body via
- *     `yaml.stringify` with the canonical `---\n` markers, and emit
- *     `prose.before + canonicalYamlBlock + prose.after`. Prose is
- *     preserved byte-identically; only the YAML region is regenerated.
- *
- * The compare-by-equality step is critical: a write tool that loads,
- * mutates, and re-writes must not perturb the file when the requested
- * mutation was a no-op (e.g. `setOverlayField` to the same value the file
- * already held). The byte-identical guarantee falls out of step 2.
- */
 
+
+/**
+ * Write an updated YAML body back into a parsed YAML-block document while
+ * preserving the surrounding Markdown prose.
+ *
+ * This is the write counterpart to yaml-block-parser. Given the original source,
+ * its parse, and a new YAML value, it re-emits only the YAML block between the
+ * preserved `before`/`after` prose. A no-op write (new data deep-equal to the
+ * original) returns the original source byte-for-byte, so persisting an
+ * unchanged document never reformats it or churns the file.
+ */
 import { serializeYamlBlock, type ParsedYamlBlock } from './yaml-block-parser.js';
 
+/**
+ * Inputs to {@link writeYamlBlock}.
+ *
+ * @property originalSource the original full file contents.
+ * @property originalParse the parse of `originalSource` (supplies the prose to
+ *   preserve and the prior data for the change check).
+ * @property newData the new YAML value to write into the block.
+ */
 export interface WriteYamlBlockInput {
-  /** The full original source bytes. */
+
   originalSource: string;
-  /** The parse result for `originalSource` (from `parseYamlBlock`). */
+
   originalParse: ParsedYamlBlock;
-  /** The new YAML body. May be the same reference as `originalParse.data`. */
+
   newData: unknown;
 }
 
 /**
- * Re-emit a markdown source with a (possibly mutated) YAML body. Returns
- * the original source byte-for-byte when `newData` is structurally equal
- * to `originalParse.data`. Otherwise returns
- * `prose.before + canonical YAML block + prose.after`.
+ * Produce the new file contents with `newData` serialised into the YAML block
+ * and the original surrounding prose preserved.
+ *
+ * @param input see {@link WriteYamlBlockInput}.
+ * @returns the new full source. When `newData` is deep-equal to the original
+ *   parsed data, returns `originalSource` unchanged (byte-identical) — the value
+ *   short-circuit that avoids reserialising an effectively-unmodified document.
+ *   Pure; no I/O.
  */
 export function writeYamlBlock(input: WriteYamlBlockInput): string {
   const { originalSource, originalParse, newData } = input;
 
   if (deepEqual(newData, originalParse.data)) {
-    // Unchanged: emit exact original bytes, including any non-canonical
-    // marker formatting (e.g. trailing whitespace on `---  `).
+    // No semantic change: return the original verbatim so an unchanged write
+    // neither reformats the YAML nor disturbs the file's bytes.
     return originalSource;
   }
 
-  // Changed: re-serialise the YAML block via the canonical writer (which
-  // emits `---\n<body>---\n`). Prose flanks are preserved byte-identically.
   const yamlBlock = serializeYamlBlock(newData);
   return originalParse.prose.before + yamlBlock + originalParse.prose.after;
 }
 
 /**
- * Structural equality for YAML-shaped data. Handles plain objects, arrays,
- * primitives, and `null` / `undefined`. Object comparison is order-
- * independent — `{a: 1, b: 2}` equals `{b: 2, a: 1}`. This matches the
- * semantic intent: "did the data change", not "did the JSON-text change".
+ * Structural deep equality for JSON-shaped YAML values (objects, arrays,
+ * scalars). Used only to detect a no-op write. Compares arrays element-wise and
+ * objects by same key set + recursively-equal values; key *order* does not
+ * matter, so a reordered-but-equivalent mapping is correctly treated as
+ * unchanged.
  */
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;

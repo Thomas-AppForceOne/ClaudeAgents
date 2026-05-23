@@ -1,28 +1,13 @@
 /**
- * Trust-event log sink for the config server (R5 sprint 3).
+ * Append-only audit trail for trust decisions (approve/revoke).
  *
- * Routing rule: when `GAN_RUN_ID` is set, trust events are appended to
- * `<cwd>/.gan-state/runs/<id>/logs/trust.log`. When `GAN_RUN_ID` is
- * unset/empty (CLI mode, lint scripts, tests, ad-hoc invocations), the
- * function is a no-op — no stderr write, no file write. Trust mutations
- * surface their outcome through return values (`trustApprove` /
- * `trustRevoke`), so silencing logging outside a /gan run does not lose
- * user-visible information; it only suppresses the structured event
- * stream that exists for /gan-run forensics.
- *
- * Each in-run call writes exactly one line. Lines are serialised through
- * `stableStringify` (per F3's determinism pin) and collapsed onto a
- * single line so each `trust.log` entry is grep-able as one record.
- *
- * Anonymisation: trust hashes and project roots are *not* user-secret —
- * the trust check exposes both in user-visible error messages — so the
- * sanitisation step from `logger.ts` does not apply here. The schema is
- * fixed: `{ timestamp, action, projectRoot, hash?, result? }`.
- *
- * Locked imports per R5 S3's contract: `stableStringify` from
- * `determinism/`, `mkdirSync`/`appendFileSync` from `node:fs`, `path`
- * from `node:path`. No `JSON.stringify`, no inline crypto, no log
- * libraries.
+ * Each call records one line in a per-run `trust.log`, giving the `/gan` run a
+ * tamper-evident record of when a project was approved or revoked and against
+ * which content hash. Two deliberate properties:
+ * - It is a no-op outside a run (no `GAN_RUN_ID`): the audit trail only makes
+ *   sense scoped to a run, and writing elsewhere would leak into the user's cwd.
+ * - Each event is collapsed to exactly one physical line, so the file is a
+ *   clean JSON-lines stream that downstream tooling can read line-by-line.
  */
 
 import { mkdirSync, appendFileSync } from 'node:fs';
@@ -30,34 +15,45 @@ import path from 'node:path';
 
 import { stableStringify } from '../determinism/index.js';
 
+/**
+ * A single trust audit event.
+ *
+ * @property action the verb being recorded (e.g. `'approve'`, `'revoke'`).
+ * @property projectRoot the project the decision applies to (raw, as supplied
+ *   by the caller).
+ * @property hash optional aggregate content hash pinned by the decision;
+ *   present for approvals, absent for revokes.
+ * @property result optional outcome qualifier (e.g. `'approved'`, `'revoked'`,
+ *   `'no-op'`).
+ */
 export interface TrustLogEvent {
-  /** Short verb. Today: `'check'`, `'approve'`, `'revoke'`. */
+
   action: string;
-  /** Canonical absolute path of the project the event relates to. */
+
   projectRoot: string;
-  /** Aggregate hash, if relevant for the event. Optional. */
+
   hash?: string;
-  /** Outcome string, if relevant for the event. Optional. */
+
   result?: string;
 }
 
 /**
- * Append one trust event to the active trust log sink, or no-op.
+ * Record a trust event to the current run's audit log.
  *
- * When `GAN_RUN_ID` is non-empty, the line is appended to
- * `<cwd>/.gan-state/runs/<id>/logs/trust.log` (parent dir created
- * recursively). File-write errors are swallowed — a logging failure must
- * never abort a trust check.
+ * @param event see {@link TrustLogEvent}. `hash`/`result` are written only
+ *   when present, so the line stays minimal.
  *
- * When `GAN_RUN_ID` is unset or empty, the function returns immediately
- * without writing anywhere. This keeps CLI output, lint scripts, and
- * test stderr free of structured trust JSON; the trust event stream is
- * a forensic record for /gan runs only.
+ * Side effect: appends one line to
+ * `<cwd>/.gan-state/runs/<GAN_RUN_ID>/logs/trust.log`, creating directories as
+ * needed. Returns silently (no throw, no write) when `GAN_RUN_ID` is unset or
+ * empty. Writes are best-effort: an I/O failure drops the event rather than
+ * throwing or falling back to stderr — see the catch below for why.
  */
 export function logTrustEvent(event: TrustLogEvent): void {
   const runId = process.env.GAN_RUN_ID;
   if (typeof runId !== 'string' || runId.length === 0) {
-    // Outside a /gan run: silent. No stderr, no file.
+    // Not inside a /gan run: there is no per-run audit file to write to, and
+    // writing anywhere else would pollute the user's working directory.
     return;
   }
 
@@ -69,10 +65,6 @@ export function logTrustEvent(event: TrustLogEvent): void {
   if (event.hash !== undefined) payload['hash'] = event.hash;
   if (event.result !== undefined) payload['result'] = event.result;
 
-  // `stableStringify` produces sorted-key, two-space-indent output with a
-  // trailing newline. Collapse internal whitespace so the line is a
-  // grep-able single record. We deliberately preserve the trailing
-  // newline so consecutive calls produce one record per line.
   const multiline = stableStringify(payload);
   const line = collapseToOneLine(multiline);
 
@@ -87,17 +79,14 @@ export function logTrustEvent(event: TrustLogEvent): void {
   }
 }
 
-/**
- * Collapse the multi-line `stableStringify` output into a single record
- * line: replace every newline + indent with a single space, then ensure
- * the result ends with exactly one trailing newline.
- */
+// Flatten the pretty-printed (multi-line, indented) stableStringify output
+// into a single JSON-lines record: strip the trailing newline, replace every
+// internal line break plus its following indentation with a single space, then
+// re-append exactly one newline as the record terminator.
 function collapseToOneLine(s: string): string {
-  // `stableStringify` adds a trailing newline; strip it before collapsing.
+
   const trimmed = s.endsWith('\n') ? s.slice(0, -1) : s;
-  // Replace every internal CR/LF (and run of leading spaces) with a single
-  // space. Ajv-style `String.prototype.replaceAll` is available on Node
-  // 20+ so we use the regex form for clarity.
+
   const oneLine = trimmed.replace(/\r?\n\s*/g, ' ');
   return oneLine + '\n';
 }

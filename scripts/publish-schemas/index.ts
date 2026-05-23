@@ -1,42 +1,20 @@
 #!/usr/bin/env node
 /**
- * R4 sprint 4 — `publish-schemas` maintainer script.
+ * `publish-schemas` CLI — keeps the published JSON Schemas in canonical form.
  *
- * Drift check for the published JSON Schema documents under
- * `<repo>/schemas/`. For each schema in the hard-coded list, the script:
+ * For each schema in the hard-coded {@link SCHEMA_FILES} set, it parses the
+ * on-disk JSON, re-emits it through the same `stableStringify` the runtime
+ * uses, and compares byte-for-byte. The two modes differ only in how drift is
+ * handled: `--dry-run` reports it as a `SchemaDrift` failure (so CI fails),
+ * while the default write mode repairs it in place via `atomicWriteFile` and
+ * tallies the rewrite count. Canonical-on-disk schemas are the precondition
+ * for the byte-level comparisons other checks rely on.
  *
- *   1. Reads the on-disk bytes (failure → `SchemaMissing`).
- *   2. Parses the JSON (failure → `SchemaParseError`).
- *   3. Re-emits the parsed value via `stableStringify` (sorted keys,
- *      two-space indent, trailing newline — F3's determinism pin).
- *   4. Compares the on-disk bytes to the canonical form. Mismatch in
- *      `--dry-run` mode surfaces as `SchemaDrift`; in default (write)
- *      mode the script repairs the file in place via `atomicWriteFile`
- *      and reports the rewrite count.
- *
- * Per the R4 spec, this is a canonicalisation drift check: today the
- * `<repo>/schemas/` files ARE the source of truth, so the canonical form
- * is "parse-and-re-emit-yourself". When the domain specs (C1, C3, F2)
- * grow fenced JSON Schema blocks, the canonicalisation seam below
- * becomes the splice point for spec-extraction logic.
- *
- * Per the single-implementation rule, the script delegates serialisation
- * to `stableStringify` and writes via `atomicWriteFile` — no inline
- * `JSON.stringify` and no raw `fs.writeFileSync`.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no drift, or drift repaired in write mode);
- *   - 1 when one or more schemas drifted (in dry-run), are missing, or
- *     fail to parse;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message);
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
+ * The schema set is intentionally hard-coded — adding or removing one is a
+ * coordinated change, not a glob — so a missing file is a `SchemaMissing`
+ * failure rather than a silently smaller run. Output/exit follow the shared
+ * `scripts/lib` contract (`0`/`1`/`64`); `run` is exported, `main` owns argv.
  */
-
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,20 +30,21 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
-// Hard-coded schema list. R4 forbids `readdirSync` / `opendir` / glob
-// auto-discovery in maintainer scripts (anti-criterion AN9): the schema
-// set is part of the published API and changes with a coordinated PR
-// per the schema-immutability rule, never silently with a new file on
-// disk.
+// The published schema set, hard-coded on purpose: adding or removing a schema
+// is a coordinated edit (the runtime, fixtures, and this list move together),
+// so the script checks exactly these and treats any absent file as a failure
+// rather than letting a glob quietly shrink the set.
 const SCHEMA_FILES = ['api-tools-v1.json', 'overlay-v1.json', 'stack-v1.json'] as const;
 
+// Locate the repo root relative to this compiled module so default paths work
+// regardless of cwd. `here` is dist/scripts/publish-schemas, so three levels up
+// is the repo root, and `<repo>/schemas` holds the published schema files.
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Script lives at `dist/scripts/publish-schemas/index.js`. After
-// `path.dirname`, `here` is `<repo>/dist/scripts/publish-schemas`, so
-// three `..` segments reach the repo root.
+
 const repoRoot = path.resolve(here, '..', '..', '..');
 const defaultSchemaRoot = path.join(repoRoot, 'schemas');
 
+/** Build the `--help` text. Pure; returns the usage block as a single string. */
 function renderHelp(): string {
   return [
     'Usage: publish-schemas [--dry-run] [--schema-root <path>]',
@@ -98,23 +77,36 @@ function renderHelp(): string {
   ].join('\n');
 }
 
+/** What {@link run} returns: the text for each stream plus the process exit code. */
 interface RunResult {
   stdout: string;
   stderr: string;
   code: number;
 }
 
+/**
+ * Resolved options for {@link run}, produced by {@link main} from parsed argv.
+ *
+ * @property schemaRoot directory holding the schema files to check.
+ * @property dryRun report drift as failures instead of rewriting files.
+ * @property json emit the report as JSON instead of the human summary.
+ * @property quiet suppress the stdout summary on a clean run.
+ */
 interface RunOptions {
-  /** Directory holding the schema set. */
   schemaRoot: string;
-  /** When true, report drift instead of rewriting. */
+
   dryRun: boolean;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
+/**
+ * Read a file as UTF-8, or return `null` if it does not exist / cannot be
+ * read. Distinguishes "absent" (caller reports `SchemaMissing`) from a present
+ * file, without throwing.
+ */
 function readFileIfExists(absPath: string): string | null {
   try {
     return readFileSync(absPath, 'utf8');
@@ -123,6 +115,22 @@ function readFileIfExists(absPath: string): string | null {
   }
 }
 
+/**
+ * Check (and, outside `--dry-run`, repair) every schema's canonical form.
+ *
+ * For each {@link SCHEMA_FILES} entry: a missing file → `SchemaMissing`
+ * failure; invalid JSON → `SchemaParseError` failure; otherwise the parsed
+ * value is re-serialised canonically and compared to the bytes on disk. When
+ * they match, nothing happens. When they differ, `--dry-run` records a
+ * `SchemaDrift` failure while write mode calls `atomicWriteFile` and increments
+ * `rewritten`. `checked` is always the full schema count regardless of outcome.
+ *
+ * The exit code is `SUCCESS` when there are no failures (so a successful
+ * write-mode repair exits `0`), else `FAILURE`. Side effect: in write mode,
+ * rewrites drifted schema files on disk; otherwise read-only.
+ *
+ * @param opts resolved {@link RunOptions}.
+ */
 export function run(opts: RunOptions): RunResult {
   const failures: ReportFailure[] = [];
   let rewritten = 0;
@@ -155,10 +163,11 @@ export function run(opts: RunOptions): RunResult {
       continue;
     }
 
-    // TODO(future): when domain specs (C1, C3, F2) gain fenced JSON Schema
-    // blocks, replace canonicalization-of-self with extraction-from-spec.
     const canonical = stableStringify(parsed);
 
+    // Byte-identical to canonical form: nothing to report or rewrite. The
+    // comparison is on raw bytes (not parsed equality) because the whole point
+    // is that the file's serialisation, not just its data, is canonical.
     if (onDisk === canonical) {
       continue;
     }
@@ -204,9 +213,16 @@ export function run(opts: RunOptions): RunResult {
 }
 
 /**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
+ * CLI entrypoint: parse argv, dispatch to {@link run}, and write its output.
+ *
+ * Returns the exit code rather than calling `process.exit`, so it is testable
+ * in-process. `--help` short-circuits with `SUCCESS`; an unknown flag or
+ * unexpected positional returns `BAD_ARGS` before any schema is touched.
+ * `--project-root` is accepted only for arg-parser uniformity and ignored.
+ * Side effects: writing stdout/stderr, plus whatever {@link run} writes in
+ * non-dry-run mode.
+ *
+ * @param argv argument tokens, typically `process.argv.slice(2)`.
  */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
@@ -251,6 +267,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   return result.code;
 }
 
+// Module-level invocation: run as a script and translate the resolved exit
+// code into the actual process exit. The rejection arm is the last-resort net
+// for an *unexpected* throw (anticipated failures are already returned as a
+// report); it prints a `fatal:` line and exits FAILURE so an uncaught error
+// can never masquerade as success.
 main(process.argv.slice(2)).then(
   (code) => {
     process.exit(code);

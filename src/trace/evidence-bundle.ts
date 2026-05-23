@@ -1,69 +1,86 @@
 /**
- * T1 Sprint 3 — the evidence-bundle verifier (F3.2).
+ * Evidence-bundle verifier — checks that an evaluator's verdicts are backed by
+ * real, resolvable evidence in a run's trace.
  *
- * Given a produced evaluator evidence bundle, the criteria of the matching
- * `sprint-{N}-contract.json`, and the run's trace events, this helper reports
- * whether the bundle is well-formed against the four T1 invariants:
+ * An evidence bundle is the evaluator's structured claim: for each contract
+ * criterion, a verdict plus references to the trace events that justify it.
+ * {@link verifyEvidenceBundle} runs four checks in a fixed order and collects
+ * every failure (it does not stop at the first) so a caller sees the full
+ * picture in one pass:
  *
- *  1. SCHEMA — the bundle validates against `evaluator-evidence-bundle-v1.json`
- *     by REUSING the Sprint-1 `getEvaluatorEvidenceBundleValidator` (not a
- *     hand-rolled re-validation). ajv errors are surfaced, not swallowed.
- *  2. JOIN-KEY — every `criteria[].name` matches a `criteria[].name` present
- *     in the supplied contract criteria (pure set membership; no I/O beyond
- *     the inputs handed in).
- *  3. REF-INTEGRITY — every `evidence.traceEventRefs` entry, of the form
- *     `<eventType>:<sequenceNumber>`, resolves to an event actually present in
- *     the supplied trace events (eventType AND sequenceNumber both match). An
- *     empty `traceEventRefs` (permitted for `verdict='skipped'`) trivially
- *     resolves.
- *  4. FAIL-COMPLETENESS — any criterion with `verdict='fail'` carries BOTH a
- *     non-empty `evidence.reproductionCommand` AND `evidence.deltaFromContract`
- *     `{expected, observed}`. This is re-asserted as a SEMANTIC check on top
- *     of the schema's conditional-required clause, so a future schema
- *     relaxation cannot silently drop the guarantee.
+ * 1. schema — the bundle validates against `evaluator-evidence-bundle-v1.json`.
+ *    This is a hard gate: a schema-invalid bundle cannot be trusted to have the
+ *    shape the later checks assume, so verification returns immediately.
+ * 2. joinKey — every bundle criterion name resolves to a contract criterion.
+ * 3. refIntegrity — every cited `eventType:sequenceNumber` ref resolves to an
+ *    event actually present in the trace.
+ * 4. failCompleteness — a `fail` verdict carries the reproduction command and
+ *    expected/observed delta needed to act on it.
  *
- * The verifier returns a structured result that names the offending bundle
- * criterion names / refs per failed check, so the caller (and a test) can
- * point at the exact cause. It never throws on a malformed bundle: a bad
- * bundle is reported, not raised.
+ * All outcomes are returned as data in {@link EvidenceBundleVerifyResult}; this
+ * module never throws for a verification failure.
  */
 
 import { getEvaluatorEvidenceBundleValidator } from '../config-server/validation/schema-check.js';
 import type { TraceEvent } from './events.js';
 
-/** A criterion as it appears in a `sprint-{N}-contract.json`. Only the join key is read. */
+/**
+ * Minimal shape of a contract criterion needed for the join-key check: just
+ * its `name`. Accepting this structural subset lets callers pass full contract
+ * criteria without this module depending on their richer type.
+ */
 export interface ContractCriterionLike {
   name: string;
 }
 
-/** The four named checks the verifier runs, in evaluation order. */
+/** The four verification checks; the `check` discriminant on a failure. */
 export type EvidenceBundleCheck = 'schema' | 'joinKey' | 'refIntegrity' | 'failCompleteness';
 
-/** A single failure, naming the check and the offending item. */
+/**
+ * One verification failure.
+ *
+ * @property check which check produced it.
+ * @property detail human-readable explanation.
+ * @property criterionName the offending criterion, when the failure is scoped
+ *   to one (absent for the bundle-wide schema failure).
+ * @property unresolvedRef the specific trace-event ref that did not resolve,
+ *   present only for `refIntegrity` failures.
+ */
 export interface EvidenceBundleFailure {
-  /** Which invariant failed. */
+
   check: EvidenceBundleCheck;
-  /** Human-readable detail naming the offending criterion name / ref / ajv error. */
+
   detail: string;
-  /** The offending bundle criterion name, when the failure is criterion-scoped. */
+
   criterionName?: string;
-  /** The unresolved trace ref, when the failure is a dangling reference. */
+
   unresolvedRef?: string;
 }
 
-/** The structured verifier result. */
+/**
+ * Aggregate verification result.
+ *
+ * @property ok `true` iff `failures` is empty.
+ * @property schemaValid whether the bundle passed JSON-schema validation.
+ * @property schemaErrors the schema validator's raw errors (empty when valid).
+ * @property failures every failure across all checks; empty means fully verified.
+ */
 export interface EvidenceBundleVerifyResult {
-  /** True iff every check passed. */
+
   ok: boolean;
-  /** True iff the bundle validated against the Sprint-1 schema. */
+
   schemaValid: boolean;
-  /** The ajv errors verbatim when `schemaValid` is false (surfaced, not swallowed). */
+
   schemaErrors: unknown[];
-  /** Every failure across all checks, in evaluation order. */
+
   failures: EvidenceBundleFailure[];
 }
 
-/** Minimal shape the post-schema checks read off a criterion. */
+/**
+ * One criterion within an evidence bundle: a verdict plus the evidence backing
+ * it (trace-event refs, and — for failures — a reproduction command and the
+ * expected-vs-observed delta).
+ */
 export interface BundleCriterion {
   name: string;
   verdict: 'pass' | 'fail' | 'blocked' | 'skipped';
@@ -74,19 +91,23 @@ export interface BundleCriterion {
   };
 }
 
+// Post-schema-validation view of the bundle. Only used after schema validation
+// has confirmed the shape, so the typed access below is safe.
 interface EvidenceBundleLike {
   criteria: BundleCriterion[];
 }
 
 /**
- * The load-bearing FAIL-COMPLETENESS invariant, as a standalone SEMANTIC
- * predicate (F3.2): a `verdict='fail'` criterion must carry BOTH a non-empty
- * `evidence.reproductionCommand` AND `evidence.deltaFromContract` with string
- * `expected`/`observed`. Exposed (and applied by `verifyEvidenceBundle`) so the
- * guarantee is asserted IN ADDITION to the schema's conditional-required
- * clause — a future schema relaxation cannot silently drop it. Returns the
- * list of missing requirements (empty when complete); a non-`fail` verdict is
- * trivially complete.
+ * Report which fail-completeness fields a criterion is missing. A non-`fail`
+ * verdict has no completeness requirement and yields `[]`. A `fail` verdict
+ * must carry a non-empty `reproductionCommand` and a `deltaFromContract` with
+ * string `expected`/`observed`; each that is absent or wrong-typed is named in
+ * the result.
+ *
+ * @param criterion the verdict + evidence to inspect (the rest of the
+ *   criterion is irrelevant here, hence the `Pick`).
+ * @returns the missing field names; empty when complete (or not a fail).
+ *   Returned as data — never throws.
  */
 export function checkFailCompleteness(
   criterion: Pick<BundleCriterion, 'verdict' | 'evidence'>,
@@ -106,11 +127,11 @@ export function checkFailCompleteness(
   return missing;
 }
 
-/**
- * Parse a `<eventType>:<sequenceNumber>` ref into its parts. Returns `null`
- * for a ref that does not match the shape; the schema already pins the
- * pattern, so a parse miss here is defensive.
- */
+// Parse an `eventType:sequenceNumber` ref into its parts, or null if
+// malformed. Split on the LAST colon so an eventType is free to contain colons
+// itself; reject an empty type (idx<=0) or empty seq (idx at end), and require
+// the seq to be a canonical non-negative integer with no leading zeros so each
+// event has exactly one valid ref spelling.
 function parseRef(ref: string): { eventType: string; sequenceNumber: number } | null {
   const idx = ref.lastIndexOf(':');
   if (idx <= 0 || idx === ref.length - 1) return null;
@@ -121,14 +142,18 @@ function parseRef(ref: string): { eventType: string; sequenceNumber: number } | 
 }
 
 /**
- * Verify a produced evidence bundle against the four T1 invariants.
+ * Verify an evidence bundle against its sprint contract and the run's trace,
+ * running all four checks (see the module block) and collecting every failure.
  *
- * @param bundle the produced evaluator evidence bundle (parsed JSON; treated
- *   as untrusted — schema validation is the first gate).
- * @param contractCriteria the `criteria[]` of the matching
- *   `sprint-{N}-contract.json`; only each `name` is read (the join key).
- * @param traceEvents the run's trace events (e.g. from `scanEvents`); refs
- *   resolve against this set.
+ * @param bundle the untrusted evidence bundle; validated against
+ *   `evaluator-evidence-bundle-v1.json` before any field is read.
+ * @param contractCriteria the sprint contract's criteria; supplies the set of
+ *   valid criterion names for the join-key check.
+ * @param traceEvents the run's events; supplies the set of resolvable
+ *   `eventType:sequenceNumber` refs for the ref-integrity check.
+ * @returns an {@link EvidenceBundleVerifyResult}; `ok` is true only when no
+ *   check failed. Never throws — a schema-invalid bundle short-circuits to a
+ *   single schema failure rather than risking a read against a malformed shape.
  */
 export function verifyEvidenceBundle(
   bundle: unknown,
@@ -137,7 +162,6 @@ export function verifyEvidenceBundle(
 ): EvidenceBundleVerifyResult {
   const failures: EvidenceBundleFailure[] = [];
 
-  // ---- Check 1: SCHEMA (reuse the Sprint-1 validator) -------------------
   const validate = getEvaluatorEvidenceBundleValidator();
   const schemaValid = validate(bundle) as boolean;
   const schemaErrors: unknown[] = schemaValid ? [] : [...(validate.errors ?? [])];
@@ -148,15 +172,15 @@ export function verifyEvidenceBundle(
         'The evidence bundle did not validate against evaluator-evidence-bundle-v1.json: ' +
         JSON.stringify(schemaErrors),
     });
-    // Without a schema-valid bundle the structural shape is untrustworthy, so
-    // the semantic checks below would be reading unvalidated input. Stop here
-    // and surface the ajv errors verbatim.
+
+    // Hard gate: the later checks read `bundle` as EvidenceBundleLike, which is
+    // only sound once the schema has confirmed the shape. Bail before that.
     return { ok: false, schemaValid, schemaErrors, failures };
   }
 
+  // Safe only because the schema check above succeeded.
   const typed = bundle as EvidenceBundleLike;
 
-  // ---- Check 2: JOIN-KEY (pure set membership) --------------------------
   const contractNames = new Set(contractCriteria.map((c) => c.name));
   for (const crit of typed.criteria) {
     if (!contractNames.has(crit.name)) {
@@ -170,8 +194,8 @@ export function verifyEvidenceBundle(
     }
   }
 
-  // ---- Check 3: REF-INTEGRITY -------------------------------------------
-  // Index the trace events by `<eventType>:<sequenceNumber>` for O(1) lookup.
+  // Precompute the set of resolvable refs once (O(events)), so the nested
+  // per-criterion ref loop below is O(refs) lookups rather than O(refs*events).
   const presentRefs = new Set<string>();
   for (const ev of traceEvents) {
     presentRefs.add(`${ev.eventType}:${ev.sequenceNumber}`);
@@ -193,9 +217,6 @@ export function verifyEvidenceBundle(
     }
   }
 
-  // ---- Check 4: FAIL-COMPLETENESS (semantic re-assert) ------------------
-  // Uses the standalone `checkFailCompleteness` predicate so the guarantee is
-  // re-asserted in addition to the schema's conditional-required clause.
   for (const crit of typed.criteria) {
     for (const missing of checkFailCompleteness(crit)) {
       failures.push({

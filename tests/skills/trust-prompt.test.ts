@@ -1,17 +1,19 @@
-/**
- * R5 sprint 4 — static content assertions for `skills/gan/trust-prompt.md`.
- *
- * The trust prompt is markdown the orchestrator (E1) presents to the
- * user. The file must contain every locked substring from R5's prompt
- * design (the `[v]` / `[a]` / `[r]` / `[c]` choice grid plus the two
- * `git diff` / `git log` follow-ups) so the discriminator can verify
- * the prompt without parsing markdown.
- */
+// Content guard for the shipped `skills/gan/trust-prompt.md` (the R5 S4 trust
+// prompt presented to the user when a project's config is untrusted). It reads
+// the actual file and asserts the load-bearing fragments are present verbatim:
+// a top-level heading, every choice token ([v]/[a]/[r]/[c]), the exact
+// approvedCommit-aware `git diff` and `git log` review suggestions, and the
+// disclosure that invoked scripts are NOT covered by the trust hash. These are
+// the user-facing affordances and the security caveat; this test keeps an edit
+// to the prose from silently dropping any of them.
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Resolve the prompt relative to this test file's location (../../ up to the
+// repo root, then into the shipped skills tree).
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const promptPath = path.join(repoRoot, 'skills', 'gan', 'trust-prompt.md');

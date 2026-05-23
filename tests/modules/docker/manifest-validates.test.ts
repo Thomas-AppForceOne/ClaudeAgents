@@ -1,13 +1,11 @@
-/**
- * M2 — manifest schema acceptance + spec-body match.
- *
- * Asserts:
- *   - `src/modules/docker/manifest.json` validates against
- *     `schemas/module-manifest-v1.json`.
- *   - The manifest's documented fields match the M2 spec body's
- *     example: name, schemaVersion, pairsWith, prerequisites[0].command,
- *     non-empty errorHint, and the five-name `exports` array.
- */
+// Conformance suite for the shipped docker module manifest (src/modules/docker/
+// manifest.json). It guards the contract every other docker test assumes: the
+// manifest validates against module-manifest-v1.json, declares the expected identity
+// (name=docker, schemaVersion=1, pairsWith=docker), carries a non-empty errorHint on
+// its `docker --version` prerequisite (so a missing-docker failure stays actionable),
+// and lists EXACTLY the five public exports. This is the on-disk source of truth, so
+// drift between the manifest and the module's real surface is caught here rather than
+// surfacing as a confusing barrel-load failure elsewhere.
 
 import AjvImport2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import { readFileSync } from 'node:fs';
@@ -34,6 +32,8 @@ describe('docker manifest', () => {
   const manifest = JSON.parse(raw) as Record<string, unknown>;
 
   it('validates against module-manifest-v1.json', () => {
+    // strict + allErrors so a malformed manifest reports every violation at once; on
+    // failure the serialized ajv errors are thrown to make the diagnostic actionable.
     const ajv = new Ajv2020({ strict: true, allErrors: true, useDefaults: false });
     const v = ajv.compile(moduleManifestV1);
     const ok = v(manifest);
@@ -61,6 +61,8 @@ describe('docker manifest', () => {
   it('lists exactly the five exports', () => {
     const exports = manifest.exports as string[];
     expect(Array.isArray(exports)).toBe(true);
+    // Compare on a sorted copy so declaration order in the manifest is irrelevant;
+    // the trailing length check pins the count so neither additions nor drops slip by.
     expect(exports.slice().sort()).toEqual(
       ['ContainerHealth', 'ContainerNaming', 'PortDiscovery', 'PortRegistry', 'PortValidator'].sort(),
     );

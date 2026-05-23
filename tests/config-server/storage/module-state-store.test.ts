@@ -1,24 +1,21 @@
-/**
- * F8 slice 1 — central, repo-keyed module-state store resolution.
- *
- * Covers the Sprint 1 contract criteria with injectable home/env/git seams
- * (no reliance on the real environment or a real git invocation, except the
- * integration block which uses real temp repos + linked worktrees):
- *   - store_root_precedence_resolution (env > marker > default, empty fall-through)
- *   - store_root_path_absolutized (tilde / relative / absolute)
- *   - module_state_path_shape_and_repo_key (<root>/<repo-key>/<module>/<key>.json)
- *   - repo_key_reuses_f7_not_cloned (imports the F7 helpers; same key across worktrees)
- *   - module_state_root_separate_from_run_data_root
- *   - path_determinism_via_shared_canonicalize (case / trailing slash)
- *   - new_behavior_covered_by_tests
- *
- * NOTE ON LOCATION: the runnable test lives under `tests/` (not co-located in
- * `src/`) because this repo's `tsconfig.json` compiles `src/**` into `dist/`
- * and its vitest config only includes `tests/**`. A `*.test.ts` under `src/`
- * would be emitted into the production build (pulling vitest into `dist`) and
- * would never be picked up by `npm test`. This file mirrors the shipped F7
- * `tests/config-server/storage/run-store.test.ts` exactly.
- */
+// Covers the module-state store's path resolution. Module state lives in a
+// central store keyed by repo, NOT inside the working tree, so it survives
+// worktree removal and is shared across every worktree of the same repo.
+//
+// Pinned behaviours:
+//   - store-root precedence: GAN_MODULE_STATE env > marker file > default
+//     (~/.gan-module-state), with env/marker absolutised (~ expanded, relative
+//     resolved against home, trailing whitespace trimmed);
+//   - the module-state root is a distinct sibling of the run-data root (a
+//     regression that aliased them would let one subsystem clobber the other);
+//   - path shape <store>/<repo-key>/<module>/<key>.json, where the repo-key is
+//     the F7 <basename>-<sha256[:12]> derivation reused from run-store (NOT
+//     re-implemented here) and is canonical (slash/case-insensitive on
+//     darwin/win32);
+//   - the repo-key is shared across linked worktrees and memoised per fromDir,
+//     while an injected git seam bypasses the memo.
+// The static-source checks assert the implementation reuses the shared
+// F7/store-common helpers and only ever shells out via argv arrays.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -62,16 +59,13 @@ afterEach(() => {
   }
 });
 
-// The repo-key memo is process-global. Clear it before every test so no
-// real-git resolution from one test leaks into another. (Injected-exec tests
-// bypass the memo anyway; this is belt-and-suspenders for the default-exec
-// integration tests, which all use unique temp dirs regardless.)
 beforeEach(() => {
   _resetModuleRepoKeyCacheForTests();
 });
 
-// A StoreEnv whose `homedir` points at a throwaway dir, so the real
-// `~/.claude/gan/module-state-dir` marker never leaks into these tests.
+// Builds an injected dependency seam pointing homedir() at a fresh scratch dir
+// and process.env at the supplied map, so resolution is hermetic and never
+// touches the real home directory or environment.
 function fakeHomeEnv(env: NodeJS.ProcessEnv = {}): {
   home: string;
   deps: { homedir: () => string; env: NodeJS.ProcessEnv };
@@ -80,6 +74,8 @@ function fakeHomeEnv(env: NodeJS.ProcessEnv = {}): {
   return { home, deps: { homedir: () => home, env } };
 }
 
+// Writes the marker file (the second tier of the precedence ladder) under the
+// fake home, at the well-known relative path the resolver reads.
 function writeMarker(home: string, contents: string): void {
   const markerPath = path.join(home, MODULE_STATE_MARKER_RELPATH);
   mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -88,8 +84,10 @@ function writeMarker(home: string, contents: string): void {
 
 describe('resolveModuleStateRoot — precedence (store_root_precedence_resolution)', () => {
   it('GAN_MODULE_STATE env wins over marker and default', () => {
+    // Both env and marker are set to different values; the env value must win,
+    // and the marker value must not leak through.
     const { home, deps } = fakeHomeEnv({ GAN_MODULE_STATE: '/tmp/gan-modstate-A' });
-    // A marker pointing elsewhere must be ignored when the env var is set.
+
     writeMarker(home, '/tmp/gan-modstate-B');
 
     const root = resolveModuleStateRoot(deps);
@@ -106,7 +104,6 @@ describe('resolveModuleStateRoot — precedence (store_root_precedence_resolutio
 
   it('default expands homedir/.gan-module-state when env + marker absent (never a literal ~)', () => {
     const { home, deps } = fakeHomeEnv({});
-    // No marker file written.
 
     const root = resolveModuleStateRoot(deps);
     expect(root).toBe(path.join(home, DEFAULT_MODULE_STATE_DIRNAME));
@@ -115,6 +112,8 @@ describe('resolveModuleStateRoot — precedence (store_root_precedence_resolutio
   });
 
   it('treats an empty/whitespace GAN_MODULE_STATE as unset (falls through to marker)', () => {
+    // A whitespace-only env value is not a real override; resolution must fall
+    // through to the marker rather than producing a blank/cwd path.
     const { home, deps } = fakeHomeEnv({ GAN_MODULE_STATE: '   ' });
     writeMarker(home, '/tmp/gan-modstate-marker-wins');
 
@@ -183,12 +182,14 @@ describe('module_state_root_separate_from_run_data_root', () => {
   });
 
   it('the two default roots are siblings under home but never the same path', () => {
+    // Same parent (home) but distinct leaf dirs: aliasing the two would let
+    // module-state and run-data writes collide.
     const { home, deps } = fakeHomeEnv({});
     const moduleRoot = resolveModuleStateRoot(deps);
     const runDataRoot = path.join(home, DEFAULT_STORE_DIRNAME);
 
     expect(moduleRoot).toBe(path.join(home, DEFAULT_MODULE_STATE_DIRNAME));
-    expect(path.dirname(moduleRoot)).toBe(path.dirname(runDataRoot)); // siblings under home
+    expect(path.dirname(moduleRoot)).toBe(path.dirname(runDataRoot));
     expect(moduleRoot).not.toBe(runDataRoot);
   });
 });
@@ -196,7 +197,9 @@ describe('module_state_root_separate_from_run_data_root', () => {
 describe('resolveModuleStatePath — shape (module_state_path_shape_and_repo_key)', () => {
   it('resolves <store-root>/<repo-key>/<module>/<key>.json', () => {
     const { deps } = fakeHomeEnv({ GAN_MODULE_STATE: '/tmp/module-store' });
-    // Stub git so the repo-key derives deterministically from a fixed common-dir.
+
+    // The git stub reports the main worktree root, so the repo-key derives from
+    // /Repo/App regardless of the (arbitrary) fromDir passed below.
     const mainRoot = '/Repo/App';
     const exec = makeGitStub(mainRoot);
 
@@ -229,14 +232,15 @@ describe('path_determinism_via_shared_canonicalize', () => {
 
   it('on case-insensitive filesystems a case-only difference yields the same key + path', () => {
     if (platform() !== 'darwin' && platform() !== 'win32') {
-      // On case-sensitive Linux a case difference is a genuinely different repo.
+      // On case-sensitive filesystems (Linux), /Repo/App and /repo/app are
+      // genuinely different paths, so the keys must differ. The case-folding
+      // assertions below only apply to darwin/win32.
       expect(computeRepoKey('/Repo/App')).not.toBe(computeRepoKey('/repo/app'));
       return;
     }
     expect(computeRepoKey('/Repo/App')).toBe(computeRepoKey('/repo/app'));
     expect(computeRepoKey('/Repo/App/')).toBe(computeRepoKey('/repo/app'));
 
-    // And the full resolved path is identical for the two spellings.
     const { deps } = fakeHomeEnv({ GAN_MODULE_STATE: '/tmp/module-store' });
     const a = resolveModuleStatePath('docker', 'port-registry', '/x', {
       deps,
@@ -250,6 +254,8 @@ describe('path_determinism_via_shared_canonicalize', () => {
   });
 
   it('the repo-key matches the manual <basename>-<sha256[:12]> of the canonical path', () => {
+    // Recompute the key by hand from the documented formula to pin the exact
+    // derivation (basename of the canonical path + first 12 hex of its sha256).
     const repoRoot = makeTmp('myapp-');
     const canonical = canonicalizePath(repoRoot);
     const fullHash = createHash('sha256').update(canonical).digest('hex');
@@ -258,11 +264,8 @@ describe('path_determinism_via_shared_canonicalize', () => {
   });
 });
 
-// ---- integration: real temp repo + linked worktrees ----------------------
-// repo_key_reuses_f7_not_cloned: two distinct worktree dirs sharing one
-// git-common-dir resolve to the SAME key and SAME module-state path.
-
-/** Run git with an argv array (never a shell string) inside `cwd`. */
+// Thin argv-array git runner for the real-git integration cases below
+// (gpgsign disabled so commits do not block on a signing key in CI).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd,
@@ -270,6 +273,7 @@ function git(cwd: string, args: string[]): string {
   }).toString();
 }
 
+// Creates a real, committed git repo in a scratch dir for the worktree tests.
 function initRepo(): string {
   const repo = makeTmp('cas-module-main-repo-');
   git(repo, ['init', '-q']);
@@ -290,14 +294,14 @@ describe('integration — repo-key reuse across worktrees (repo_key_reuses_f7_no
     git(main, ['worktree', 'add', '-q', '-b', 'feature/a', wt1]);
     git(main, ['worktree', 'add', '-q', '-b', 'feature/b', wt2]);
 
-    // Same key from each worktree (and from the main checkout).
+    // All three worktrees belong to one repo, so they share one key (the
+    // module state is repo-scoped, not worktree-scoped).
     const keyMain = resolveModuleRepoKey(main);
     const keyWt1 = resolveModuleRepoKey(wt1);
     const keyWt2 = resolveModuleRepoKey(wt2);
     expect(keyMain).toBe(keyWt1);
     expect(keyWt1).toBe(keyWt2);
 
-    // Same resolved module-state path from each worktree.
     const deps = {
       homedir: () => makeTmp('cas-module-home-'),
       env: { GAN_MODULE_STATE: '/tmp/ms' },
@@ -311,38 +315,32 @@ describe('integration — repo-key reuse across worktrees (repo_key_reuses_f7_no
   });
 });
 
-// ---- repo-key memoisation (default git seam) -----------------------------
-// The repo-key is invariant per fromDir for a process's lifetime, so the git
-// derivation is cached and reused across module-state resolutions. The memo is
-// consulted only for the default (real) git seam; an injected seam bypasses it.
-
 describe('repo-key memoisation (default git seam)', () => {
   it('memoises the git-derived key per fromDir: a second resolve does not re-invoke git', () => {
     const main = initRepo();
     _resetModuleRepoKeyCacheForTests();
 
-    // First resolve derives the key from real git and caches the main-root.
     const key1 = resolveModuleRepoKey(main);
     expect(key1).toMatch(/-[0-9a-f]{12}$/);
 
-    // Break the repo so any FRESH git derivation from `main` would now fail.
+    // Destroying .git would break a fresh git lookup; the second resolve still
+    // returns the same key, proving it came from the memo, not a new git call.
     rmSync(path.join(main, '.git'), { recursive: true, force: true });
 
-    // Cached: the second resolve returns the same key without touching git.
     expect(resolveModuleRepoKey(main)).toBe(key1);
 
-    // After clearing the memo, the now-broken dir can no longer resolve —
-    // proving the prior success came from the cache, not a re-derivation.
+    // After clearing the memo, the now-broken repo can no longer be resolved,
+    // confirming the earlier success really was cached.
     _resetModuleRepoKeyCacheForTests();
     expect(() => resolveModuleRepoKey(main)).toThrow();
   });
 
   it('an injected git seam bypasses the memo, so each stub is honoured', () => {
+    // Same fromDir but two different injected stubs: each call must honour its
+    // own stub (the memo only applies to the default git seam), so the keys
+    // differ.
     const fromDir = '/some/repo/dir';
-    // Same fromDir, two different stubbed main-roots: because an injected exec
-    // bypasses the cache, the second stub is honoured rather than returning the
-    // first call's cached value (this is what keeps the determinism tests above
-    // exercising their stubs).
+
     const k1 = resolveModuleRepoKey(fromDir, makeGitStub('/Repo/One'));
     const k2 = resolveModuleRepoKey(fromDir, makeGitStub('/Repo/Two'));
     expect(k1).toBe(computeRepoKey('/Repo/One'));
@@ -351,9 +349,12 @@ describe('repo-key memoisation (default git seam)', () => {
   });
 });
 
-// ---- static reuse / safety check ----------------------------------------
-// repo_key_reuses_f7_not_cloned (static half) + shell_and_subprocess_safety.
-
+// These cases read the source of module-state-store.ts as text and grep it.
+// They guard *implementation discipline* that behaviour tests cannot see: that
+// the file reuses the shared F7 repo-key / store-root helpers instead of
+// re-deriving them, and that any subprocess call is argv-based (no shell-string
+// exec). Re-implementing the derivation could silently diverge from run-store;
+// a shell-string exec would reopen a command-injection surface.
 describe('reuse + subprocess safety (static source check)', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(here, '..', '..', '..');
@@ -366,7 +367,7 @@ describe('reuse + subprocess safety (static source check)', () => {
     expect(storeSrc).toContain("from './run-store.js'");
     expect(storeSrc).toContain('computeRepoKey');
     expect(storeSrc).toContain('resolveMainWorktreeRoot');
-    // It must NOT re-derive the git-common-dir, SHA-256 keying, or case-folding.
+
     expect(/rev-parse/.test(storeSrc)).toBe(false);
     expect(/createHash\s*\(/.test(storeSrc)).toBe(false);
     expect(/realpathSync/.test(storeSrc)).toBe(false);
@@ -376,7 +377,7 @@ describe('reuse + subprocess safety (static source check)', () => {
   it('reuses the shared store-root precedence ladder rather than re-implementing absolutize/marker', () => {
     expect(storeSrc).toContain("from './store-common.js'");
     expect(storeSrc).toContain('resolveStoreRootByPrecedence');
-    // No bespoke tilde expansion or marker read in the new module.
+
     expect(/readFileSync\s*\(/.test(storeSrc)).toBe(false);
     expect(/expanded\.startsWith\(['"]~/.test(storeSrc)).toBe(false);
   });
@@ -384,19 +385,15 @@ describe('reuse + subprocess safety (static source check)', () => {
   it('any subprocess use goes through execFile/spawn argv arrays, never exec/execSync strings', () => {
     expect(/\bexecSync\b/.test(storeSrc)).toBe(false);
     expect(/child_process['"]\)?\.exec\s*\(/.test(storeSrc)).toBe(false);
-    // No template-literal command string is ever fed to a subprocess API.
+
     expect(/exec\w*\(\s*`/.test(storeSrc)).toBe(false);
   });
 });
 
-// ---- local helpers -------------------------------------------------------
-
-/**
- * A git exec stub matching `execFileSync('git', argv, opts)` that returns
- * `<mainRoot>/.git` for `rev-parse --git-common-dir`, so the F7 derivation
- * resolves the main-worktree root to `<mainRoot>` deterministically without a
- * real repo. Returns a Buffer (as `execFileSync` does) so `.toString()` works.
- */
+// Fake execFileSync that answers only the `rev-parse --git-common-dir` probe
+// (the one call repo-key derivation makes) by reporting <mainRoot>/.git, so the
+// resolver believes mainRoot is the repo's main worktree. Any trailing slash on
+// mainRoot is stripped so the reported path is well-formed.
 function makeGitStub(mainRoot: string): typeof execFileSync {
   const normalized = mainRoot.replace(/[/\\]$/, '');
   const stub = ((_cmd: string, args?: readonly string[]) => {

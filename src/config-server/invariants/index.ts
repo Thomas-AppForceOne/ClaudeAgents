@@ -1,25 +1,17 @@
 /**
- * Cross-file invariant registry (R1, sprint 4).
+ * Cross-document invariant registry for the config-server's validation phase 3.
  *
- * Phase 3 of `validateAll()` runs every invariant catalogued in F3 that R1
- * owns (8 of the 9; `trust.approved` is owned by R5 and is omitted until
- * R5 ships). Each invariant lives in its own file under this directory —
- * one file per F3-cataloged check — and exports a single check function
- * with the shape:
+ * Schema validation (phase 2) checks each overlay/stack file in isolation;
+ * invariants are the checks that need the *whole* {@link ValidationSnapshot} —
+ * relationships between files, between tiers, or between a stack and the module
+ * it pairs with. Every invariant is a pure function from the snapshot to a list
+ * of {@link Issue}s: it reads only what discovery already loaded and never
+ * touches disk on the hot path beyond confirming a referenced file exists.
  *
- *   export function checkXyz(snapshot: ValidationSnapshot): Issue[];
- *
- * The registry below collects them in a deterministic order (alphabetical
- * by id) and runs each one without short-circuit. Every callable that
- * needs to evaluate a cross-file invariant — `validateAll`'s phase 3,
- * R4's `lint-stacks` script, future build-time checks — imports from this
- * registry. There is no second implementation anywhere in the codebase
- * (R1's "single-implementation rule" — see `PROJECT_CONTEXT.md`).
- *
- * Invariants return `Issue[]`, never throw. A check that needs to bail
- * (e.g. snapshot missing required fields) returns `[]`. Issue codes are
- * drawn from F2's enum; `InvariantViolation` is the typical one for the
- * checks owned here. No new error codes are introduced by S4.
+ * This module is the single place that lists which invariants run and in what
+ * order. {@link runAllInvariants} fans the snapshot out to each registered
+ * check and concatenates their issues; callers (the validate tools) treat the
+ * combined list as the phase-3 output.
  */
 
 import type { Issue } from '../validation/schema-check.js';
@@ -35,9 +27,14 @@ import { checkStackNoDraftBanner } from './stack-no-draft-banner.js';
 import { checkStackTierApiVersion } from './stack-tier-api-version.js';
 
 /**
- * Shape of a registry entry: the F3-catalog id of the invariant, plus the
- * pure check function. Order in the exported array is alphabetical by id
- * (deterministic — F3 determinism contract).
+ * One entry in the invariant registry.
+ *
+ * @property id stable dotted identifier for the invariant (e.g.
+ *   `path.escape`); surfaced in logs/diagnostics and used by tests to address a
+ *   single check, so it must not change once shipped.
+ * @property check the pure invariant function: given the full snapshot it
+ *   returns zero or more {@link Issue}s. Never throws for a normal validation
+ *   outcome — a detected violation is returned as data, not raised.
  */
 export interface InvariantRegistration {
   id: string;
@@ -45,10 +42,10 @@ export interface InvariantRegistration {
 }
 
 /**
- * The full set of cross-file invariants R1 owns. R4 lint, validateAll's
- * phase 3, and any future caller iterate this list; no caller hard-codes
- * a subset. New invariants land by adding a file under this directory and
- * a row to this array (kept alphabetical by id).
+ * The ordered list of invariants run during validation. Order is the iteration
+ * order of {@link runAllInvariants}, so it determines the relative ordering of
+ * issues from different invariants in the combined output; keep it stable so
+ * diagnostics and snapshot tests stay deterministic.
  */
 export const INVARIANTS: InvariantRegistration[] = [
   { id: 'additionalContext.path_resolves', check: checkAdditionalContextPathResolves },
@@ -62,10 +59,17 @@ export const INVARIANTS: InvariantRegistration[] = [
 ];
 
 /**
- * Run every invariant against the snapshot and return the concatenated
- * issue list. Order is registry order (alphabetical by id) so callers can
- * rely on a stable cross-run output ordering. No short-circuit: a check
- * that returns 1+ issues does not prevent later checks from running.
+ * Run every registered invariant against `snapshot` and return the flattened
+ * list of issues, in registry order.
+ *
+ * Has no side effects and never throws on a normal validation outcome (each
+ * check is pure and returns violations as data); an empty result means no
+ * cross-document invariant was violated. An invariant that throws would
+ * propagate, but that signals a programming fault, not a config problem.
+ *
+ * @param snapshot the fully-discovered validation snapshot (stacks, overlays,
+ *   modules); each invariant reads only the parts it needs.
+ * @returns all issues produced by all invariants, concatenated; possibly empty.
  */
 export function runAllInvariants(snapshot: ValidationSnapshot): Issue[] {
   const out: Issue[] = [];

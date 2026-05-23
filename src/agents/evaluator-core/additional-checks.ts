@@ -1,19 +1,24 @@
+
+
 /**
- * Splices in `evaluator.additionalChecks` from the cascaded overlay.
- *
- * The snapshot's `mergedSplicePoints['evaluator.additionalChecks']` has
- * already been cascaded through C4's three tiers (default → user →
- * project) per C3's catalog rule (`union-by-key` on `command`, with
- * `discardInherited` semantics applied upstream). This carve-out does
- * not duplicate the cascade logic — it passes the merged list through
- * verbatim, copying entries so the caller cannot mutate the snapshot
- * by mutating the plan.
- *
- * If the splice point is absent or empty, returns `[]`.
+ * Builder for {@link EvaluatorPlan.evaluatorAdditionalChecks}: the extra checks
+ * contributed through the `evaluator.additionalChecks` config splice point.
  */
 
 import type { EvaluatorCoreSnapshot, EvaluatorPlan } from './types.js';
 
+/**
+ * Project the merged `evaluator.additionalChecks` splice entries into the
+ * plan's check rows.
+ *
+ * Unlike the other builders this one does NOT sort: the splice point's merge
+ * order is meaningful (it reflects tier precedence) and must be preserved, so
+ * the rows are emitted in the order resolution produced them. An absent splice
+ * point yields an empty array, never `undefined`.
+ *
+ * @param snapshot resolved config; only `mergedSplicePoints` is read.
+ * @returns one row per merged check, copying `command`/`on_failure`/`tier`.
+ */
 export function buildEvaluatorAdditionalChecks(
   snapshot: EvaluatorCoreSnapshot,
 ): EvaluatorPlan['evaluatorAdditionalChecks'] {

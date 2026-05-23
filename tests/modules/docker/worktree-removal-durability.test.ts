@@ -1,15 +1,14 @@
-/**
- * F8 Sprint 2 — durability fix (spec §1): removing a worktree leaves the
- * shared module-state registry byte-intact.
- *
- * Because the registry lives in the central repo-keyed store OUTSIDE any
- * single worktree, deleting one worktree of a repo cannot delete or mutate
- * the registry file. This is the durability half of F8's motivation, and
- * it is DISTINCT from prune-on-load: removal alone must not touch the file;
- * only a *subsequent load* performs reclamation. These tests therefore
- * capture the registry bytes, remove a worktree WITHOUT performing a load,
- * and assert the on-disk file is byte-for-byte identical afterwards.
- */
+// F8 durability: running `git worktree remove` must NOT, by itself, touch the shared
+// port registry. Reclaiming the removed worktree's port is the job of prune-on-load
+// (covered in prune-on-load.test.ts), and the two responsibilities must stay separate.
+// This suite asserts that after a worktree is removed the registry file is still
+// present and byte-for-byte identical (same bytes AND same sha256), then shows that a
+// SUBSEQUENT PortRegistry load is what actually reclaims the entry — proving the
+// removal alone did nothing. Conflating the two would risk mutating shared state from a
+// git operation that has no business writing to it.
+//
+// Uses a real repo with two `git worktree add` checkouts plus a staged install and
+// temp module-state store, so the shared registry lives in a repo-keyed sandbox.
 
 import { createHash } from 'node:crypto';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
@@ -36,6 +35,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
+// Stage a throwaway install: real package.json (for package-root detection) plus a
+// docker manifest declaring the port-registry state key, so the registry resolves.
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'f8-durability-modroot-'));
   writeFileSync(
@@ -107,7 +108,8 @@ describe('F8 worktree removal leaves the shared registry byte-intact', () => {
   });
 
   it('git worktree remove leaves the registry file present and byte-for-byte identical', () => {
-    // Both worktrees register against the one shared repo-keyed registry.
+    // Register both worktrees through a registry rooted at the shared repo, then snapshot
+    // the file's raw bytes and hash as the baseline.
     const reg = new PortRegistry(mainRepo);
     reg.register(worktreeA, 8080, 'app-a');
     reg.register(worktreeB, 8081, 'app-b');
@@ -116,24 +118,19 @@ describe('F8 worktree removal leaves the shared registry byte-intact', () => {
     expect(existsSync(filePath)).toBe(true);
     const before = readFileSync(filePath);
     const beforeHash = sha256OfFile(filePath);
-    // Capture the canonical entry keys WHILE the worktrees still exist;
-    // canonicalizePath realpath-resolves, so it would change once a dir
-    // is gone. The on-disk keys, however, do not change on removal.
+
     const keyA = canonicalizePath(worktreeA);
     const keyB = canonicalizePath(worktreeB);
 
-    // Remove worktree A via real git worktree remove. No registry load is
-    // performed, so no prune runs: removal alone must not mutate the file.
+    // Remove worktreeA via git; this deletes the checkout but must not write the registry.
     removeGitWorktree(mainRepo, worktreeA);
     expect(existsSync(worktreeA)).toBe(false);
 
-    // The shared registry file still exists at the repo-keyed location and
-    // its bytes are unchanged — it lives outside the removed worktree.
+    // File still exists and is unchanged — checked both by raw-byte equality and by hash.
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath).equals(before)).toBe(true);
     expect(sha256OfFile(filePath)).toBe(beforeHash);
-    // Both entries are still on disk under their original keys (no prune
-    // happened on removal).
+
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8')) as {
       entries: Record<string, unknown>;
     };
@@ -151,10 +148,12 @@ describe('F8 worktree removal leaves the shared registry byte-intact', () => {
 
     removeGitWorktree(mainRepo, worktreeA);
 
-    // Still byte-intact immediately after removal (no load yet).
+    // Removal alone changed nothing on disk...
     expect(sha256OfFile(filePath)).toBe(beforeHash);
 
-    // Only NOW, on a subsequent load, does prune-on-load reclaim A's entry.
+    // ...it is the next load (prune-on-load) that drops the now-absent worktreeA entry,
+    // while the still-present worktreeB entry is retained. This ordering is the proof
+    // that reclaim is a load-time concern, not a side effect of `git worktree remove`.
     const after = new PortRegistry(mainRepo);
     expect(after.lookup(worktreeA)).toBeNull();
     expect(after.lookup(worktreeB)).toEqual({ port: 8081, containerName: 'app-b' });

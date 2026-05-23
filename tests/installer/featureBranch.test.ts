@@ -1,14 +1,19 @@
 /**
- * R2 sprint 3 — feature-branch warning tests for `install.sh`.
+ * Coverage for the S3 feature-branch warning: when the framework repo is itself
+ * checked out on the in-progress `feature/stack-plugin-rfc` branch, install.sh
+ * warns the user the install may be mid-pivot / not functional.
  *
- * Covers S3-AC8..S3-AC9:
- *   AC8 — Warning fires when the repo's current branch is the literal
- *         string `feature/stack-plugin-rfc`.
- *   AC9 — Warning trigger is hardcoded — `install.sh` contains the
- *         literal branch name in at least one place, and there is no
- *         environment-variable override pattern (e.g. FEATURE_BRANCH,
- *         GAN_BRANCH, BRANCH_OVERRIDE).
+ * What this verifies: with git stubbed to report that branch name, the warning
+ * fires on stdout naming the branch and flagging it as mid-pivot/not-functional
+ * (AC8); and statically, that the trigger is a hardcoded literal in install.sh
+ * with NO env-var override knob (AC9).
+ *
+ * What it guards (WHY): the warning must not be silently disable-able. AC9
+ * forbids any `FEATURE_BRANCH`/`GAN_BRANCH`/`BRANCH_OVERRIDE` escape hatch, so a
+ * user can't accidentally (or be tricked into) suppressing the "this build is
+ * unfinished" notice. The branch name in the stubbed git body is DATA.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -35,10 +40,9 @@ describe('install.sh — S3 feature-branch warning', () => {
     cleanups.push(tmp);
     const v = packageVersion();
 
-    // Stub `git` that intercepts `rev-parse --abbrev-ref HEAD` and
-    // returns the trigger branch name. All other invocations forward
-    // to the real `/usr/bin/git` so subcommands like
-    // `git rev-parse --show-toplevel` (used by zone prep) still work.
+    // Stub git so `rev-parse --abbrev-ref HEAD` (both the `-C <dir>` and bare
+    // forms the installer may use) reports the in-progress feature branch,
+    // triggering the warning; all other git calls pass through to the real one.
     writeStubBin(
       tmp.bin,
       'git',
@@ -76,20 +80,18 @@ describe('install.sh — S3 feature-branch warning', () => {
       cwd: tmp.repo!,
     });
     expect(result.exitCode).toBe(0);
-    // The warning text mentions the trigger branch by name.
+
     expect(result.stdout).toContain('feature/stack-plugin-rfc');
-    // And it is presented as a heads-up / mid-pivot warning.
+
     expect(result.stdout.toLowerCase()).toMatch(/mid-pivot|not functional/);
   });
 
   it('S3-AC9: warning trigger is hardcoded — `feature/stack-plugin-rfc` literal in install.sh, no env-var override pattern', () => {
     const installSh = readFileSync(installScriptPath(), 'utf8');
-    // Hardcoded literal branch name: at least one occurrence.
+
     const literalMatches = installSh.match(/feature\/stack-plugin-rfc/g) ?? [];
     expect(literalMatches.length).toBeGreaterThanOrEqual(1);
 
-    // No env-var-override pattern. The contract names three forbidden
-    // sigils; any match is a violation.
     const forbidden = /FEATURE_BRANCH|GAN_BRANCH|BRANCH_OVERRIDE/g;
     const violations = installSh.match(forbidden) ?? [];
     if (violations.length > 0) {

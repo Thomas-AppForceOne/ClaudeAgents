@@ -1,39 +1,56 @@
 /**
- * R2 sprint 2 — `npm` and `claudeagents-config-server` stubs for installer
- * tests.
+ * Fake `npm` and `claudeagents-config-server` binaries for the installer
+ * suites, plus helpers to read back what the installer invoked.
  *
- * `writeFakeNpm()` writes a stub `npm` into `bin/` that records every
- * invocation (one line per call: argv joined by spaces) into a sentinel
- * file the test reads via `readNpmInvocations()`. Configurable to
- * succeed silently, fail with a chosen exit code, or echo a stderr
- * line.
+ * Real `npm install -g` and a real config-server are slow, networked, and
+ * machine-mutating — unacceptable in a hermetic test. These stubs stand in:
+ * the fake `npm` records every invocation to a log file (so a test can assert
+ * *what* the installer called, e.g. that a second run did not re-install) and
+ * can be told to fail the `install` subcommand on demand; the fake
+ * config-server answers `--version` with a caller-chosen string so the
+ * installer's version-probe / reinstall logic can be driven both ways.
  *
- * `writeFakeConfigServer()` writes a stub `claudeagents-config-server`
- * that responds to `--version` with a configurable string. Other argv
- * forms (e.g. `--validate-all`) succeed silently by default.
+ * The shell bodies passed to {@link writeStubBin} are DATA: `$1`, `$*`,
+ * `printf`, etc. are interpolated test fixtures, not this module's own code.
  */
+
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { writeStubBin } from './tmpenv.js';
 
+/**
+ * Behaviour knobs for the fake `npm` written by {@link writeFakeNpm}.
+ *
+ * @property exitCode exit status the stub returns for a normal invocation;
+ *   defaults to `0`. (The `install` subcommand can still be forced to fail
+ *   independently via the `CAS_FAIL_NPM_INSTALL` env flag.)
+ * @property stderr a line emitted to stderr on every invocation; defaults to
+ *   empty (nothing written). Lets a test simulate npm's own error chatter.
+ * @property invocationLog absolute path the stub appends each invocation's
+ *   argument string to; required, and the same path is later read by
+ *   {@link readNpmInvocations}.
+ */
 export interface FakeNpmOptions {
-  /** Exit code to return; default 0. */
+
   exitCode?: number;
-  /** Optional stderr line to emit before exiting. */
+
   stderr?: string;
-  /** Path to a sentinel file the stub appends every invocation to. */
+
   invocationLog: string;
 }
 
 /**
- * Writes a stub `npm` into `bin/`. Records each invocation to
- * `options.invocationLog` (one line per call, argv joined by single
- * spaces).
+ * Write a fake `npm` executable into `bin`.
  *
- * Honours `$CAS_FAIL_NPM_INSTALL=1` from the environment: when set, an
- * `install`-flavoured invocation exits 1 with a synthetic stderr line
- * regardless of the configured `exitCode`. Used by R2 S3 rollback
- * tests via `injectFailureAt(env, 'npm-install')`.
+ * The stub appends its arguments to the invocation log on every call, may
+ * print a fixed stderr line, fails the `install` subcommand when
+ * `CAS_FAIL_NPM_INSTALL=1` (the rollback suites' npm-failure seam), and
+ * otherwise exits with `options.exitCode`. All option values are JSON-escaped
+ * before embedding so paths containing quotes or spaces stay intact.
+ *
+ * @param bin the stub-binary directory to install `npm` into.
+ * @param options see {@link FakeNpmOptions}.
+ * @returns the absolute path of the written stub.
  */
 export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
   const exitCode = options.exitCode ?? 0;
@@ -41,9 +58,6 @@ export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
   const escapedLog = JSON.stringify(options.invocationLog);
   const escapedStderr = JSON.stringify(stderrLine);
 
-  // The body appends `$*` (joined argv) plus a newline to the log file
-  // every call, optionally prints a stderr line, honours the failure
-  // injection env var, then exits.
   const body = [
     `printf '%s\\n' "$*" >> ${escapedLog}`,
     `if [ -n ${escapedStderr} ]; then`,
@@ -58,20 +72,33 @@ export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
   return writeStubBin(bin, 'npm', body);
 }
 
+/**
+ * Behaviour knobs for the fake `claudeagents-config-server` written by
+ * {@link writeFakeConfigServer}.
+ *
+ * @property version the string the stub prints for `--version`. Setting this
+ *   equal to / different from `package.json`'s version is how the suites drive
+ *   the installer's "already current" vs "version mismatch → reinstall" paths.
+ * @property defaultExitCode exit status for any non-`--version` invocation;
+ *   defaults to `0`.
+ */
 export interface FakeConfigServerOptions {
-  /** Version string to print for `--version` (no leading `v`). */
+
   version: string;
-  /**
-   * Exit code for non-`--version` invocations (e.g. `--validate-all`);
-   * default 0.
-   */
+
   defaultExitCode?: number;
 }
 
 /**
- * Writes a stub `claudeagents-config-server` into `bin/`. Responds to
- * `--version` with the configured version string. Any other argv form
- * exits with `defaultExitCode` (0 by default).
+ * Write a fake `claudeagents-config-server` executable into `bin`.
+ *
+ * The stub prints `options.version` and exits 0 for `--version`; any other
+ * invocation exits with `options.defaultExitCode`. The version is JSON-escaped
+ * before embedding.
+ *
+ * @param bin the stub-binary directory to install the server into.
+ * @param options see {@link FakeConfigServerOptions}.
+ * @returns the absolute path of the written stub.
  */
 export function writeFakeConfigServer(bin: string, options: FakeConfigServerOptions): string {
   const exitCode = options.defaultExitCode ?? 0;
@@ -81,9 +108,12 @@ export function writeFakeConfigServer(bin: string, options: FakeConfigServerOpti
 }
 
 /**
- * Reads the sentinel file populated by `writeFakeNpm()` and returns the
- * recorded invocations as an array (one entry per call, in order). Each
- * entry is the argv string the stub received.
+ * Read back the fake npm's recorded invocations, one per line.
+ *
+ * @param invocationLog the log path given to {@link writeFakeNpm}.
+ * @returns each invocation's argument string in call order; an empty array
+ *   when the log is absent or empty (npm was never invoked). Blank lines are
+ *   filtered out so callers can compare against `[]` to assert "no calls".
  */
 export function readNpmInvocations(invocationLog: string): string[] {
   if (!existsSync(invocationLog)) return [];
@@ -92,7 +122,13 @@ export function readNpmInvocations(invocationLog: string): string[] {
   return raw.split('\n').filter((line) => line.length > 0);
 }
 
-/** Convenience: builds a sentinel-file path inside the tmp root. */
+/**
+ * The conventional invocation-log path for a given temp root, so the stub
+ * writer and the reader agree on one location without threading it manually.
+ *
+ * @param tmpRoot the per-test temp root.
+ * @returns `<tmpRoot>/npm-invocations.log`.
+ */
 export function npmInvocationLog(tmpRoot: string): string {
   return path.join(tmpRoot, 'npm-invocations.log');
 }

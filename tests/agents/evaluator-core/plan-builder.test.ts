@@ -1,14 +1,28 @@
 /**
- * Phase 3 Sprint 2 — evaluator-core carve-out tests.
+ * buildEvaluatorPlan suite — proves the evaluator's deterministic core plan is
+ * assembled correctly from the active-stack snapshot, sprint plan, and worktree,
+ * and that polyglot stacks stay strictly isolated.
  *
- * These tests exercise `buildEvaluatorPlan(snapshot, sprintPlan,
- * worktreeState)` as a pure function over typed data. The carve-out
- * does not read files, parse YAML, or call into the config-server; the
- * orchestrator (Sprint 3) is responsible for assembling the snapshot.
+ * Per-section guards:
+ * - empty/minimal: an empty active set yields empty arrays and an empty
+ *   buildTestLint; a minimal `generic` stack emits a single active stack with
+ *   no surfaces/commands but still contributes a secrets scan for its glob.
+ * - command + surface plumbing (web-node): auditCmd (with its absenceSignal),
+ *   build/test/lint commands, and a security surface are emitted only when a
+ *   touched file matches both the surface's scope AND a keyword; triggerEvidence
+ *   records the matched files and the hit keywords, and the template text is
+ *   carried verbatim.
+ * - polyglot: two active stacks each contribute their own surfaces and audits,
+ *   and mergedSplicePoints feed evaluatorAdditionalChecks through unchanged.
+ * - cross-contamination (the central invariant): a stack-A surface, secrets
+ *   scan, or audit never applies to a file that lives only in stack-B scope —
+ *   even when the file's CONTENT contains the other stack's keyword (the decoy
+ *   fixtures), because scope, not content, gates applicability.
+ * - determinism: identical input yields deep-equal and byte-identical-JSON
+ *   output, with active stacks, secrets scans, and surface keys all sorted.
  *
- * Test naming is load-bearing: the discriminator greps for the labels
- * 'empty active set', 'generic only', 'web-node only', 'polyglot',
- * 'cross-contamination', 'deterministic'.
+ * Note the decoy worktree contents embed the other stack's keyword inside the
+ * file body specifically to prove scope wins over a content match.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -19,8 +33,6 @@ import type {
   SprintPlan,
   WorktreeState,
 } from '../../../src/agents/evaluator-core/index.js';
-
-// ---- Fixture helpers ----------------------------------------------------
 
 function emptySnapshot(): EvaluatorCoreSnapshot {
   return { activeStacks: [], mergedSplicePoints: {} };
@@ -84,8 +96,6 @@ function syntheticStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
   };
 }
 
-// ---- Tests --------------------------------------------------------------
-
 describe('buildEvaluatorPlan', () => {
   it('empty active set — returns a plan with empty arrays and an empty buildTestLint', () => {
     const snapshot = emptySnapshot();
@@ -120,7 +130,6 @@ describe('buildEvaluatorPlan', () => {
     expect(plan.securitySurfacesInstantiated).toEqual([]);
     expect(plan.buildTestLint).toEqual({});
 
-    // Generic's secretsGlob ['env'] should match '.env' (dot:true).
     expect(plan.secretsScans).toEqual([
       { stack: 'generic', extension: 'env', files: ['.env'] },
     ]);
@@ -164,6 +173,9 @@ describe('buildEvaluatorPlan', () => {
       lintCmd: 'run-lint',
     });
 
+    // handler.ts is in scope and contains both `app.get(` and `req.query`, so
+    // the surface instantiates; package.json is in scope but matches no keyword,
+    // so it contributes no surface row.
     expect(plan.securitySurfacesInstantiated.length).toBe(1);
     const surface = plan.securitySurfacesInstantiated[0];
     expect(surface.stack).toBe('web-node');
@@ -173,10 +185,9 @@ describe('buildEvaluatorPlan', () => {
     expect(surface.triggerEvidence.keywordsHit.sort()).toEqual(
       ['app.get(', 'req.query'].sort(),
     );
-    // Template is verbatim (no interpolation per C1).
+
     expect(surface.templateText).toContain('Route handlers must validate');
 
-    // secretsScans: 'src/handler.ts' is in scope and matches 'ts'.
     const tsScan = plan.secretsScans.find((s) => s.extension === 'ts');
     expect(tsScan).toBeTruthy();
     expect(tsScan!.files).toEqual(['src/handler.ts']);
@@ -205,33 +216,24 @@ describe('buildEvaluatorPlan', () => {
 
     const plan = buildEvaluatorPlan(snapshot, sprintPlan, worktree);
 
-    // activeStacks sorted by name.
     expect(plan.activeStacks.map((s) => s.name)).toEqual(['synthetic-second', 'web-node']);
 
-    // Both audits present, sorted by stack name.
     expect(plan.auditCommands.map((a) => a.stack)).toEqual([
       'synthetic-second',
       'web-node',
     ]);
 
-    // Both surfaces instantiated.
     const ids = plan.securitySurfacesInstantiated.map((s) => `${s.stack}.${s.id}`);
     expect(ids).toContain('web-node.route_input_validation');
     expect(ids).toContain('synthetic-second.synth_marker');
 
-    // additionalChecks pass-through.
     expect(plan.evaluatorAdditionalChecks).toEqual([
       { command: 'extra-typecheck', on_failure: 'blockingConcern', tier: 'project' },
     ]);
   });
 
   it('cross-contamination — stack A surfaces never apply to files only inside stack B scope', () => {
-    // Both stacks active; we touch a `.synth` file with a web-node-style
-    // keyword in it, and a `.ts` file with a synthetic-style keyword in
-    // it. Each stack's surfaces must apply only to files inside its own
-    // scope: web-node's surface must NOT match the .synth file even
-    // though the keyword is present, and synthetic's surface must NOT
-    // match the .ts file even though the keyword is present.
+
     const snapshot: EvaluatorCoreSnapshot = {
       activeStacks: [webNodeStack(), syntheticStack()],
       mergedSplicePoints: {},
@@ -243,26 +245,28 @@ describe('buildEvaluatorPlan', () => {
     const worktree: WorktreeState = {
       files: ['data/decoy.synth', 'src/decoy.ts'],
       fileContents: {
-        // .synth file contains web-node's trigger keyword on purpose.
+
         'data/decoy.synth': 'app.get("/decoy", () => req.query) // not a web handler\n',
-        // .ts file contains synthetic's trigger keyword on purpose.
+
         'src/decoy.ts': '// SYNTHETIC_MARKER decoy in TS file\n',
       },
     };
 
     const plan = buildEvaluatorPlan(snapshot, sprintPlan, worktree);
 
-    // The web-node surface must not have appliesToFiles outside its scope.
+    // The surface may legitimately not instantiate at all (the decoy file is
+    // out of scope); the guard asserts only that IF it did, it never claimed
+    // the cross-stack file — so the test passes whether the surface is absent
+    // or present-but-correctly-scoped.
     const wn = plan.securitySurfacesInstantiated.find(
       (s) => s.stack === 'web-node' && s.id === 'route_input_validation',
     );
     if (wn !== undefined) {
       expect(wn.appliesToFiles).not.toContain('data/decoy.synth');
-      // It also must not list .synth files in its scopeMatched evidence.
+
       expect(wn.triggerEvidence.scopeMatched).not.toContain('data/decoy.synth');
     }
 
-    // The synthetic surface must not have appliesToFiles outside its scope.
     const syn = plan.securitySurfacesInstantiated.find(
       (s) => s.stack === 'synthetic-second' && s.id === 'synth_marker',
     );
@@ -271,8 +275,6 @@ describe('buildEvaluatorPlan', () => {
       expect(syn.triggerEvidence.scopeMatched).not.toContain('src/decoy.ts');
     }
 
-    // secretsScans: web-node's 'ts' rows must NOT include .synth files,
-    // and synthetic's 'synth' rows must NOT include .ts files.
     for (const row of plan.secretsScans) {
       if (row.stack === 'web-node') {
         expect(row.files.every((f) => !f.endsWith('.synth'))).toBe(true);
@@ -282,7 +284,6 @@ describe('buildEvaluatorPlan', () => {
       }
     }
 
-    // auditCommands: each stack's row only references its own command.
     const wnAudit = plan.auditCommands.find((a) => a.stack === 'web-node');
     const synAudit = plan.auditCommands.find((a) => a.stack === 'synthetic-second');
     if (wnAudit) expect(wnAudit.command).toBe('audit-tool --level=high');
@@ -292,7 +293,7 @@ describe('buildEvaluatorPlan', () => {
   it('deterministic — same input yields byte-identical JSON across two calls', () => {
     const snapshot: EvaluatorCoreSnapshot = {
       activeStacks: [
-        // Intentionally out of name order to exercise sorting.
+
         webNodeStack(),
         syntheticStack(),
         genericStack(),
@@ -322,19 +323,16 @@ describe('buildEvaluatorPlan', () => {
     const a = buildEvaluatorPlan(snapshot, sprintPlan, worktree);
     const b = buildEvaluatorPlan(snapshot, sprintPlan, worktree);
 
-    // Object equality.
     expect(a).toEqual(b);
-    // JSON-stringified equality (the strict E3 contract).
+
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
 
-    // activeStacks sorted by name.
     expect(a.activeStacks.map((s) => s.name)).toEqual([
       'generic',
       'synthetic-second',
       'web-node',
     ]);
 
-    // secretsScans sorted by (stack, extension).
     const keys = a.secretsScans.map((r) => `${r.stack}.${r.extension}`);
     const sortedKeys = [...keys].sort();
     expect(keys).toEqual(sortedKeys);

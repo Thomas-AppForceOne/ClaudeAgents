@@ -1,49 +1,24 @@
 #!/usr/bin/env node
 /**
- * R4 sprint 5 — `lint-no-stack-leak` maintainer script.
+ * `lint-no-stack-leak` CLI — guards the framework/ecosystem boundary.
  *
- * Permanent backstop for the multi-stack guard rail (per
- * PROJECT_CONTEXT.md): ecosystem-specific tokens (`npm`, `node_modules`,
- * `package.json`, …) must live inside their owning stack file or an
- * allowlisted framework path. This script walks a fixed scan scope and
- * fails when a forbidden token appears in a non-allowlisted file.
+ * The shipped surface (agent prompts, the gan skill, the config-server source)
+ * must stay ecosystem-neutral: ecosystem-specific vocabulary belongs inside
+ * the stack files that own it, never in the generic framework. This script
+ * walks a fixed scan scope (`agents/*.md`, `skills/gan/SKILL.md`, and the
+ * `.ts` files under `src/config-server/`, recursively) and reports any line
+ * containing a forbidden token (from `forbidden.json`) unless allowlisted.
  *
- * Scan scope (hard-coded; see `listScanFiles`):
- *   - `<scan-root>/agents/*.md`
- *   - `<scan-root>/skills/gan/SKILL.md`
- *   - `<scan-root>/src/config-server/**\/*.ts` (recursive, skipping
- *     `node_modules`, `dist`, `build`).
+ * Two allowlist tiers exist. A permanent `paths` entry exempts a file with a
+ * written justification. A `transitional` entry is a temporary exemption that
+ * must *still* leak — the script emits {@link EMPTY_TRANSITIONAL_CODE} when a
+ * transitional file no longer contains any token (or is gone), forcing the
+ * dead exemption to be removed so it cannot outlive the file it protected.
  *
- * Forbidden tokens come from `./forbidden.json` (the `web-node` array).
- * `lint-error-text` reads the same file as the single source of truth.
- *
- * Allowlist (`./allowlist.json`) has two blocks:
- *   - `paths` — permanent exemptions; framework infrastructure that
- *     legitimately references its own ecosystem (`reads.ts` reading its
- *     package.json, `detection.ts` skipping `node_modules`, etc.). Every
- *     entry carries a justification string.
- *   - `transitional` — files slated for retirement (e.g. legacy agent
- *     prompts retired by E1). Each entry is an internal-consistency
- *     check: the script reads the file and verifies it still contains
- *     at least one forbidden token. An empty transitional entry fails
- *     until the entry is removed (so the allowlist cannot rot).
- *
- * Per anti-criterion AN3, this script does not throw. Failures surface
- * as `LeakDetected` / `EmptyTransitionalEntry` report entries.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no failures);
- *   - 1 when one or more files leak a forbidden token outside the
- *     allowlist, OR when a transitional entry is empty/missing;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message).
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
+ * Output/exit follow the shared `scripts/lib` contract (`0`/`1`/`64`); the
+ * leak report counts total hits, not distinct files. `run` is exported and
+ * read-only; `main` owns argv and process I/O.
  */
-
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,29 +32,46 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
+// Stable issue codes. A line carrying a forbidden token outside the allowlist
+// is a LeakDetected; a transitional exemption that has gone quiet (the file no
+// longer leaks, or is missing) is an EmptyTransitionalEntry. Named so tests/CI
+// match on the constant rather than the literal string.
 const LEAK_DETECTED_CODE = 'LeakDetected';
 const EMPTY_TRANSITIONAL_CODE = 'EmptyTransitionalEntry';
 
+// Repo root derived from this compiled module's location (dist/scripts/...),
+// so the default forbidden/allowlist paths resolve regardless of cwd.
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Script lives at `dist/scripts/lint-no-stack-leak/index.js`. Three `..`
-// segments reach the repo root (mirrors the other R4 scripts).
+
 const repoRoot = path.resolve(here, '..', '..', '..');
-// `forbidden.json` and `allowlist.json` ship as source-tree data under
-// `<repo>/scripts/lint-no-stack-leak/` (tsc does not copy non-TS files
-// to dist). The script reads them at runtime from the source location;
-// tests can override either via `--forbidden-file` / `--allowlist-file`.
+
+// `forbidden.json` is the single source of truth for forbidden tokens — shared
+// with lint-error-text — and `allowlist.json` holds this script's exemptions.
 const defaultForbiddenFile = path.join(repoRoot, 'scripts', 'lint-no-stack-leak', 'forbidden.json');
 const defaultAllowlistFile = path.join(repoRoot, 'scripts', 'lint-no-stack-leak', 'allowlist.json');
 
+/**
+ * Shape of `forbidden.json`. The `web-node` key holds the list of forbidden
+ * ecosystem tokens; a `string[]` is the only field this script reads.
+ */
 interface ForbiddenFile {
   'web-node': string[];
 }
 
+/**
+ * Shape of `allowlist.json`.
+ *
+ * @property paths permanent exemptions, keyed by scan-root-relative path; the
+ *   value is the free-text justification (read by humans, not by this script).
+ * @property transitional temporary exemptions, same key/value shape, but each
+ *   must still leak or it is flagged for removal (see module doc).
+ */
 interface AllowlistFile {
   paths: Record<string, string>;
   transitional: Record<string, string>;
 }
 
+/** Build the `--help` text. Pure; returns the usage block as a single string. */
 function renderHelp(): string {
   return [
     'Usage: lint-no-stack-leak [--scan-root <path>] [--allowlist-file <path>]',
@@ -110,31 +102,44 @@ function renderHelp(): string {
   ].join('\n');
 }
 
+/** What {@link run} returns: the text for each stream plus the process exit code. */
 interface RunResult {
   stdout: string;
   stderr: string;
   code: number;
 }
 
+/**
+ * Resolved options for {@link run}, produced by {@link main} from parsed argv.
+ *
+ * @property scanRoot root the fixed scan scope is taken relative to.
+ * @property allowlistFile path to the allowlist JSON (overridable for tests).
+ * @property forbiddenFile path to the forbidden-tokens JSON (overridable).
+ * @property json emit the report as JSON instead of the human summary.
+ * @property quiet suppress the stdout summary on a clean run.
+ */
 interface RunOptions {
-  /** Pre-canonicalised scan root. */
   scanRoot: string;
-  /** Absolute path to the allowlist JSON file. */
+
   allowlistFile: string;
-  /** Absolute path to the forbidden-tokens JSON file. */
+
   forbiddenFile: string;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
+// Directories never descended into when walking TS sources: build output and
+// dependencies are not part of the authored surface this lint governs.
 const SKIP_DIRS = new Set('node_modules dist build'.split(' '));
 
 /**
- * Recursively walk a directory and return absolute paths to every
- * `.ts` file, skipping standard build-artefact directories. Returns an
- * empty list if the directory does not exist.
+ * Recursively collect every `.ts` file under `dir`, skipping {@link SKIP_DIRS}.
+ *
+ * Returns `[]` when `dir` is absent or not a directory, and silently skips any
+ * entry that cannot be `stat`ed, so a partially-readable tree never aborts the
+ * scan. Order is filesystem order here; the callers sort. Reads disk only.
  */
 function walkTsFiles(dir: string): string[] {
   let entries: string[];
@@ -165,13 +170,13 @@ function walkTsFiles(dir: string): string[] {
 }
 
 /**
- * Build the full scan list:
- *   - every `*.md` file directly under `<scanRoot>/agents/`;
- *   - `<scanRoot>/skills/gan/SKILL.md` if present;
- *   - every `.ts` file under `<scanRoot>/src/config-server/` recursively.
+ * Build the ordered list of files in the fixed scan scope: every `agents/*.md`,
+ * the gan `SKILL.md`, and every `.ts` under `src/config-server/`.
  *
- * Returns an empty list for any missing directory; each subtree is
- * sorted for deterministic enumeration.
+ * Each segment is sorted independently and appended in a fixed order so the
+ * file list (and thus the report) is deterministic. Missing pieces of the
+ * scope (no `agents/`, no skill file) are skipped rather than erroring — the
+ * scope is a superset and a repo need not contain every part. Reads disk only.
  */
 function listScanFiles(scanRoot: string): string[] {
   const files: string[] = [];
@@ -210,6 +215,11 @@ function listScanFiles(scanRoot: string): string[] {
   return files;
 }
 
+/**
+ * Read and `JSON.parse` a file, returning `null` (never throwing) on any read
+ * or parse error. The generic `T` is an unchecked cast — callers validate the
+ * shape afterward, treating `null` and a wrong shape alike as "unreadable".
+ */
 function readJsonFile<T>(absPath: string): T | null {
   try {
     const text = readFileSync(absPath, 'utf8');
@@ -219,14 +229,18 @@ function readJsonFile<T>(absPath: string): T | null {
   }
 }
 
+/** A single forbidden-token match: the `token` found and its 1-based `line`. */
 interface MatchHit {
   token: string;
   line: number;
 }
 
 /**
- * Find every forbidden-token hit in a file's text. Returns one entry per
- * match (multiple tokens on the same line yield multiple hits).
+ * Find every forbidden-token occurrence in `text`, scanning line by line so
+ * each hit carries a 1-based line number for the report. A token appearing on
+ * several lines yields several hits; several tokens on one line yield several
+ * too. Substring match (`includes`), not word-boundary, so a token embedded in
+ * a larger identifier still counts. Pure.
  */
 function findHits(text: string, tokens: readonly string[]): MatchHit[] {
   const hits: MatchHit[] = [];
@@ -243,9 +257,11 @@ function findHits(text: string, tokens: readonly string[]): MatchHit[] {
 }
 
 /**
- * Translate `<scan-root>/some/path` to its scan-root-relative form
- * (`some/path`, POSIX separators). Returns the absolute path unchanged
- * if it does not live under `scanRoot`.
+ * Express `abs` as a forward-slashed path relative to `scanRoot`, for matching
+ * against the allowlist keys (which are stored in that form). Falls back to the
+ * absolute path when `abs` is outside `scanRoot` (a `..`-prefixed or absolute
+ * relative result), so an out-of-tree file can never accidentally match an
+ * allowlist key. Pure.
  */
 function relativeToScanRoot(scanRoot: string, abs: string): string {
   const rel = path.relative(scanRoot, abs);
@@ -253,6 +269,22 @@ function relativeToScanRoot(scanRoot: string, abs: string): string {
   return rel.split(path.sep).join('/');
 }
 
+/**
+ * Scan the fixed scope for forbidden-token leaks and check transitional
+ * exemptions, returning a rendered {@link RunResult}.
+ *
+ * First the inputs are loaded: an unreadable/malformed `forbidden.json` →
+ * `ForbiddenFileUnreadable`, an unreadable/malformed `allowlist.json` →
+ * `AllowlistFileUnreadable`; either short-circuits with `checked: 0`. Then each
+ * scan file not in `paths` or `transitional` is scanned, emitting a
+ * {@link LEAK_DETECTED_CODE} failure per hit. Finally every `transitional`
+ * entry is re-checked: if it no longer leaks (or the file is gone) it yields an
+ * {@link EMPTY_TRANSITIONAL_CODE} failure so the stale exemption is removed.
+ *
+ * Exit code is `SUCCESS` with no failures, else `FAILURE`. Read-only.
+ *
+ * @param opts resolved {@link RunOptions}.
+ */
 export function run(opts: RunOptions): RunResult {
   const failures: ReportFailure[] = [];
 
@@ -303,16 +335,18 @@ export function run(opts: RunOptions): RunResult {
   const files = listScanFiles(opts.scanRoot);
   for (const abs of files) {
     const rel = relativeToScanRoot(opts.scanRoot, abs);
+    // Both allowlist tiers exempt a file from the leak scan here; transitional
+    // entries are not scanned for leaks but ARE separately re-checked below to
+    // confirm they still leak (otherwise the exemption is dead).
     if (rel in allowedPaths || rel in transitionalPaths) {
-      // Allowlisted: skip leak detection (transitional entries get the
-      // internal-consistency check below).
       continue;
     }
     let text: string;
     try {
       text = readFileSync(abs, 'utf8');
     } catch {
-      // Unreadable file: skip silently rather than fabricating a leak.
+      // Listed but now unreadable: skip rather than fail — the file was
+      // present at enumeration, so a transient read error is not a leak.
       continue;
     }
     const hits = findHits(text, tokens);
@@ -328,16 +362,18 @@ export function run(opts: RunOptions): RunResult {
     }
   }
 
-  // Internal-consistency check: every transitional entry must still
-  // contain at least one forbidden token. If the file is missing or no
-  // longer references any token, the entry has rotted and must be
-  // removed.
+  // Transitional sweep: a temporary exemption must keep earning its place. If
+  // a transitional file no longer contains any forbidden token — or has been
+  // deleted — the exemption is stale and must be removed, so flag it. This is
+  // what stops the allowlist from accumulating exemptions for problems that no
+  // longer exist (and silently exempting a file that re-leaks later).
   for (const rel of Object.keys(transitionalPaths)) {
     const abs = path.join(opts.scanRoot, rel);
     let text: string | null = null;
     try {
       text = readFileSync(abs, 'utf8');
     } catch {
+      // Missing/unreadable file counts as "no longer leaks" → flagged below.
       text = null;
     }
     const stillLeaks = text !== null && findHits(text, tokens).length > 0;
@@ -361,6 +397,11 @@ export function run(opts: RunOptions): RunResult {
   return finalize(report, opts);
 }
 
+/**
+ * Turn a finished report into a {@link RunResult}: render it (JSON vs. human),
+ * suppress the clean-run stdout summary under `--quiet`, and derive the exit
+ * code (`SUCCESS` iff there are no failures, else `FAILURE`). Pure.
+ */
 function finalize(report: LintNoStackLeakReport, opts: RunOptions): RunResult {
   if (opts.json) {
     return {
@@ -379,9 +420,16 @@ function finalize(report: LintNoStackLeakReport, opts: RunOptions): RunResult {
 }
 
 /**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
+ * CLI entrypoint: parse argv, dispatch to {@link run}, and write its output.
+ *
+ * Returns the exit code rather than calling `process.exit`, so it is testable
+ * in-process. `--help` short-circuits with `SUCCESS`; an unknown flag or
+ * unexpected positional returns `BAD_ARGS` before scanning. The `scan-root`,
+ * `allowlist-file`, and `forbidden-file` overrides are resolved to absolute
+ * paths (testing seams); `--project-root` is accepted but ignored. Side effect:
+ * writing stdout/stderr.
+ *
+ * @param argv argument tokens, typically `process.argv.slice(2)`.
  */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
@@ -437,6 +485,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   return result.code;
 }
 
+// Module-level invocation: run as a script and translate the resolved exit
+// code into the actual process exit. The rejection arm is the last-resort net
+// for an *unexpected* throw (anticipated failures are already returned as a
+// report); it prints a `fatal:` line and exits FAILURE so an uncaught error
+// can never masquerade as success.
 main(process.argv.slice(2)).then(
   (code) => {
     process.exit(code);

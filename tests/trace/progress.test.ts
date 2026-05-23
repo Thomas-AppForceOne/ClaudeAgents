@@ -1,15 +1,28 @@
 /**
- * T1 Sprint 3 — the stderr progress-line formatters (F3.5, F3.6, F3.7).
+ * Progress-line formatter suite — pins the human-facing stderr strings the
+ * orchestrator prints, byte-for-byte. These lines are a stable UI contract, so
+ * the assertions are exact-string, not shape checks.
  *
- * Covers contract criteria:
- *  - heartbeat_formatter_exact_string
- *  - per_llm_call_formatter_exact_string (both cache branches; latency form)
- *  - sprint_end_summary_formatter_aggregates_exact_string
+ * What is guarded:
+ * - formatHeartbeat: exactly `[<role>] thinking...`, role echoed verbatim for
+ *   any kebab-case role, pure (same in -> same out), and crucially carries NO
+ *   digits / token counts / latency / payload content.
+ * - formatLlmCallSummary: the cache-hit and cache-miss branches render
+ *   byte-exact, latency is shown as latencyMs/1000 to one decimal (e.g. 8341ms
+ *   -> "8.3s"), and the line leaks no hash or prompt/response text.
+ * - aggregateSprintSummary + formatSprintSummary(FromEvents): aggregation
+ *   counts only llmCall events for "calls" and agentAttempt events for
+ *   "agents", sums the three token fields, and derives wallclock from
+ *   first-to-last event timestamp. The line is byte-exact and carries no
+ *   payload content and no dollar cost. Empty trace renders the 0/0 ... 0s
+ *   degenerate line.
+ * - formatWallclock: the three rendering styles — h+m+s, m+s, bare s — with
+ *   60_000ms rendering as "1m0s" (minutes always pull a seconds component).
  *
- * Every assertion is byte-exact against the spec.md format strings, and each
- * test confirms the output carries metadata only (no payload content: no
- * hashes, no prompt/response text).
+ * The recurring "no SHA / no digits / no $" assertions are the redaction
+ * contract: progress output is metadata only and must never echo payloads.
  */
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -42,7 +55,7 @@ describe('heartbeat_formatter_exact_string', () => {
   it('carries no token counts, latency, or payload content', () => {
     const out = formatHeartbeat('gan-generator');
     expect(out).toBe('[gan-generator] thinking...');
-    expect(out).not.toMatch(/\d/); // no numeric metadata
+    expect(out).not.toMatch(/\d/);
     expect(out).not.toContain('cache');
     expect(out).not.toContain(SHA);
   });
@@ -74,7 +87,7 @@ describe('per_llm_call_formatter_exact_string', () => {
       latencyMs: 8341,
       cacheHit: false,
     });
-    // spec example: 8341ms -> 8.3s
+
     expect(line).toBe('[gan-evaluator] 4096 in / 512 out / 0 cached / 8.3s [miss]');
   });
 
@@ -145,11 +158,15 @@ describe('sprint_end_summary_formatter_aggregates_exact_string', () => {
       llmCall(2, base + 2000, 4096, 512, 0),
       agentAttempt(3, base + 3000, 'gan-evaluator', 1),
       llmCall(4, base + 4000, 100, 50, 25),
-      // 4m23s span: last event at base + 263_000ms (263s = 4m23s)
+
+      // Last event sits 263s after the first, so wallclock spans the whole
+      // window regardless of the events in between — exercises the 4m23s render.
       agentAttempt(5, base + 263_000, 'gan-generator', 2),
     ];
 
     const agg = aggregateSprintSummary(events);
+    // 3 llmCall events, 3 agentAttempt events — the two counts are tallied by
+    // eventType, not by total event count.
     expect(agg.calls).toBe(3);
     expect(agg.agents).toBe(3);
     expect(agg.tokensInput).toBe(1200 + 4096 + 100);
@@ -204,6 +221,8 @@ describe('formatWallclock styles', () => {
     expect(formatWallclock(42_000)).toBe('42s');
     expect(formatWallclock(0)).toBe('0s');
     expect(formatWallclock(3_661_000)).toBe('1h1m1s');
+    // Exactly one minute still emits the seconds component ("1m0s"), not a bare
+    // "1m" — the minute and second parts are not independently suppressed.
     expect(formatWallclock(60_000)).toBe('1m0s');
   });
 });

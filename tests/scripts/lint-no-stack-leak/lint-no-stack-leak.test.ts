@@ -1,20 +1,25 @@
 /**
- * Integration tests for `scripts/lint-no-stack-leak/`.
+ * Black-box tests for the `lint-no-stack-leak` bin, the guard that keeps
+ * stack-specific / ecosystem-specific instructions from leaking into the
+ * stack-agnostic shipped surface (the `agents/` files). A leak is a forbidden
+ * token (e.g. a package-manager command) appearing in a file that is supposed
+ * to stay generic.
  *
- * Spawns the built bin (`dist/scripts/lint-no-stack-leak/index.js`) and
- * asserts:
+ * The suite drives the compiled bin as a real process: a clean canonical repo
+ * passes; a planted leaking agent file is caught (LeakDetected); the --json
+ * shape and unknown-flag (exit 64) / --help paths behave; and the
+ * allowlist's "transitional" entries are policed — a transitional entry that
+ * points at a file with no actual forbidden token is itself an error
+ * (EmptyTransitionalEntry), so stale exemptions can't accumulate.
  *
- *   - default run (no flags) → exit 0; stdout matches
- *     `^[0-9]+ files scanned, 0 hits\n$`; stderr empty;
- *   - hermetic temp scan-root with a planted leaking agent file → exit 1;
- *     stderr contains `LeakDetected`;
- *   - `--json` clean run → stdout parses as JSON with the documented
- *     `{checked, failed, failures: []}` shape and a trailing newline;
- *   - unknown flag → exit 64;
- *   - hermetic temp scan-root + `--allowlist-file` pointing to a JSON
- *     whose transitional entry references a file with no forbidden
- *     token → exit 1; stderr contains `EmptyTransitionalEntry`.
+ * Regression guarded: the leak detector going quiet on a real leak, or the
+ * allowlist letting a rotted transitional entry linger unnoticed.
+ *
+ * NOTE: the writeFileSync payloads below are FIXTURE FILE CONTENTS the bin
+ * scans (and the allowlist JSON it reads). The forbidden tokens inside them
+ * are deliberate test data — do not edit inside those string/object literals.
  */
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +27,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { runScript } from '../helpers/spawn.js';
 
+// Temp scan-roots created per test, swept in afterAll.
 const tmpRoots: string[] = [];
 
 function newTmpRoot(): string {
@@ -50,6 +56,8 @@ describe('lint-no-stack-leak bin', () => {
 
   it('hermetic temp scan-root with a leaking agent file → exit 1; stderr names LeakDetected', async () => {
     const root = newTmpRoot();
+    // Leaks are policed under agents/; plant a file there carrying a forbidden
+    // package-manager command (the leak the bin must detect).
     const agentsDir = path.join(root, 'agents');
     mkdirSync(agentsDir, { recursive: true });
     const planted = path.join(agentsDir, 'test.md');
@@ -88,11 +96,13 @@ describe('lint-no-stack-leak bin', () => {
     const root = newTmpRoot();
     const agentsDir = path.join(root, 'agents');
     mkdirSync(agentsDir, { recursive: true });
-    // Planted file has zero forbidden tokens — the transitional entry
-    // covering it is therefore stale and must fire EmptyTransitionalEntry.
+
+    // A clean file (no forbidden token) that the allowlist nonetheless exempts.
     const stale = path.join(agentsDir, 'stale.md');
     writeFileSync(stale, '# Stale agent\n\nNothing leaky here.\n', 'utf8');
 
+    // The transitional exemption points at that clean file — a rotted entry the
+    // bin must reject so dead exemptions don't pile up.
     const allowlistPath = path.join(root, 'allowlist.json');
     const allowlist = {
       paths: {},

@@ -1,3 +1,8 @@
+// Pins how composeResolvedConfig (R5 S3) surfaces runtimeMode. The only field
+// today is noProjectCommands, and the contract is: it mirrors the
+// ComposeContext flag, defaulting to false when the flag is omitted. The
+// explicit-false case is kept distinct from the omitted case to guard against a
+// regression where "false" and "absent" might be conflated differently.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

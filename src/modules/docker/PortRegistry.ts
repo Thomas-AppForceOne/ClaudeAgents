@@ -1,82 +1,19 @@
 /**
- * PortRegistry — persists worktree → {port, containerName} mappings for
- * the docker module.
+ * PortRegistry — durable, self-pruning record of host-port allocations, one
+ * entry per worktree.
  *
- * Persistence is routed through M1's module-state surface
- * (`setModuleState` / `loadModuleState`), keyed by module name
- * "docker" plus the F2/M3 state key "port-registry". Four properties
- * depend on this routing:
+ * The registry persists `{ worktreePath → { port, containerName } }` through
+ * the config-server module-state store under module `docker`, key
+ * `port-registry`. It is the authoritative layer {@link PortDiscovery} consults
+ * before guessing from `docker ps`. Two invariants the class maintains:
  *
- *   1. Cross-process serialisation. Two `/gan` runs both reach the
- *      single Configuration MCP server process; the server mediates
- *      writes. PortRegistry never imports the on-disk file path or
- *      `atomicWriteFile` helper.
- *
- *   2. Black-box rule (F2). Modules don't know about storage layout.
- *      F8 relocated the registry into the central, repo-keyed
- *      module-state store at
- *      `<module-state-root>/<repo-key>/docker/port-registry.json`
- *      (NOT a per-worktree `<projectRoot>/.gan-state/modules/...`
- *      path). PortRegistry never names that path — it passes only the
- *      module name, the state key, and a `projectRoot` (any directory
- *      inside the repo) from which the store derives F7's repo-key via
- *      `git rev-parse --git-common-dir`. The resolution owner is
- *      `module-state-store.ts`; this class is a pure consumer of it.
- *
- *   3. Repo-wide sharing — F8's correctness fix. Because the repo-key
- *      is derived from the shared git-common-dir, every linked worktree
- *      of one repo resolves to the SAME shared file. PortRegistry's
- *      duplicate-port refusal therefore sees allocations made from
- *      *other* worktrees, which is what finally makes M2's
- *      cross-worktree non-collision guarantee hold. Entries stay keyed
- *      by canonical worktree path, so each worktree still gets a
- *      distinct port and container name.
- *
- *   4. Mutation tracking (F2 §"Write functions return a mutation
- *      indicator"). `setModuleState` returns `{mutated, path, ...}`;
- *      callers downstream of PortRegistry that need to refresh caches
- *      can act on it.
- *
- * The only filesystem fact PortRegistry needs is "does this worktree
- * directory still exist?" for prune-on-load. That probe is taken
- * through an injectable {@link WorktreeExistsProbe} seam (default
- * `node:fs existsSync`), so PortRegistry still imports no `node:fs`
- * read helper for the registry file itself and never names the
- * on-disk registry path — the black-box rule above is preserved.
- *
- * The on-disk JSON shape is fixed (unchanged by F8 — only the location
- * and the repo-wide sharing changed):
- *
- *   {
- *     "version": 1,
- *     "entries": {
- *       "<canonical-worktree-path>": {
- *         "port": <number>,
- *         "containerName": "<string>"
- *       }
- *     }
- *   }
- *
- * The constructor takes a project root (any directory inside the repo);
- * tests pass a scratch repo dir.
- *
- * Stale-entry reclamation (F8 §3). Because the shared registry outlives
- * the individual worktrees it tracks, it accumulates entries for
- * worktrees that have been removed. On every load, entries whose keyed
- * worktree path no longer exists on disk are pruned and their host
- * ports freed — reusing the same entry-deletion path `release` uses
- * (see {@link PortRegistry.load} / {@link deleteEntry}). Pruning is
- * conservative: an entry is removed only when its worktree path
- * genuinely no longer exists, so live entries are never touched.
- *
- * Note (M3): F2's per-key contract is honoured end-to-end. Each
- * declared `stateKeys` entry persists to its own `<key>.json` file
- * under `<module-state-root>/<repo-key>/<name>/`. The docker module
- * declares `stateKeys: ["port-registry"]`, so this class routes all
- * reads/writes through `key: "port-registry"`. A second docker
- * subsystem would add a new entry to the manifest and write through
- * `setModuleState('docker', '<new-key>', …)` without conflicting with
- * this file.
+ * 1. Ports are unique across worktrees: {@link PortRegistry.register} refuses
+ *    (throws `PortInUse`) to assign a port already held by a *different*
+ *    worktree, so two live worktrees can never collide on one host port.
+ * 2. The registry is keyed by canonical path, and entries for worktrees that no
+ *    longer exist on disk are pruned on read (a worktree that was deleted
+ *    cannot keep holding its port). Pruning rewrites the store as a side effect
+ *    of {@link PortRegistry.load}.
  */
 
 import { existsSync as fsExistsSync } from 'node:fs';
@@ -86,77 +23,78 @@ import { createError } from '../../config-server/errors.js';
 import { loadModuleState } from '../../config-server/storage/module-loader.js';
 import { setModuleState } from '../../config-server/tools/writes.js';
 
-/**
- * Probe for "does this worktree directory still exist on disk?", used by
- * prune-on-load. Injectable so tests can simulate a removed worktree
- * without touching the real filesystem; production uses
- * {@link defaultWorktreeExists} (`node:fs existsSync`).
- *
- * The argument is the canonical worktree path (a directory path), NOT
- * the registry file path — PortRegistry never resolves or names the
- * on-disk registry path (F2 black-box rule).
- */
+/** Predicate: does a worktree still exist on disk? Injection seam for pruning. */
 export type WorktreeExistsProbe = (worktreePath: string) => boolean;
 
-/** Default worktree-existence probe: `node:fs existsSync` on the directory. */
+// Production probe: a real filesystem existence check.
 const defaultWorktreeExists: WorktreeExistsProbe = (worktreePath) => fsExistsSync(worktreePath);
 
-/** Persisted JSON shape (version 1). */
+/**
+ * On-disk shape of the registry. `version` is pinned to `1` (validated on load
+ * via `SchemaMismatch`); `entries` is keyed by canonical worktree path.
+ */
 export interface PortRegistryFile {
   version: 1;
   entries: Record<string, { port: number; containerName: string }>;
 }
 
-/** Single decoded entry as exposed via `getAll()`. */
+/** A single allocation, as returned by {@link PortRegistry.getAll} (key inlined). */
 export interface PortRegistryEntry {
   worktreePath: string;
   port: number;
   containerName: string;
 }
 
+// Module-state coordinates: the docker module's `port-registry` key.
 const MODULE_NAME = 'docker';
 const STATE_KEY = 'port-registry';
 
-/** Optional construction seams (tests inject; production uses defaults). */
+/**
+ * Construction options.
+ *
+ * @property worktreeExists override the on-disk existence probe used by
+ *   absent-worktree pruning; defaults to a real `fs.existsSync`. Test seam.
+ */
 export interface PortRegistryOptions {
-  /**
-   * Probe deciding whether a keyed worktree path still exists on disk,
-   * used by prune-on-load. Defaults to `node:fs existsSync`.
-   */
+
   worktreeExists?: WorktreeExistsProbe;
 }
 
 /**
- * PortRegistry — worktree → {port, containerName} mapping persisted to
- * disk via M1's module-state surface. The constructor takes the project
- * root so persistence routes through `setModuleState`/`loadModuleState`
- * keyed by `name: "docker"`.
- *
- * The `projectRoot` is any directory inside the repo; F8's repo-keyed
- * store derives the shared `<repo-key>` from it, so all worktrees of a
- * repo address one shared registry file.
+ * Durable per-project port registry. Construct once per project root; the
+ * methods load/persist the backing module-state file on each call (no in-memory
+ * caching), so concurrent processes always see the latest persisted state.
  */
 export class PortRegistry {
   private readonly projectRoot: string;
   private readonly worktreeExists: WorktreeExistsProbe;
 
+  /**
+   * @param projectRoot project whose module-state store holds the registry.
+   * @param options see {@link PortRegistryOptions}.
+   */
   constructor(projectRoot: string, options: PortRegistryOptions = {}) {
     this.projectRoot = projectRoot;
     this.worktreeExists = options.worktreeExists ?? defaultWorktreeExists;
   }
 
   /**
-   * Register a port + container name for `worktreePath`. Throws
-   * `PortInUse` if any other worktree has already registered the same
-   * port (per AC13's "no two entries share a port" rule).
+   * Allocate `port`/`containerName` to `worktreePath` (last-writer-wins for the
+   * same worktree).
    *
-   * Re-registering the same `worktreePath` with the same port + name is
-   * idempotent: the entry is overwritten in place.
+   * @param worktreePath worktree to register; canonicalised for the key.
+   * @param port host port to assign.
+   * @param containerName container name to associate.
+   * @throws `PortInUse` if `port` is already held by a *different* worktree —
+   *   re-registering the same worktree on its own port is allowed.
+   *   Side effect: persists the updated registry.
    */
   register(worktreePath: string, port: number, containerName: string): void {
     const key = canonicalizePath(worktreePath);
     const blob = this.load();
     for (const [otherKey, entry] of Object.entries(blob.entries)) {
+      // Skip our own entry so re-registering the same worktree on the same
+      // port is a no-conflict update, not a self-collision.
       if (otherKey === key) continue;
       if (entry.port === port) {
         throw createError('PortInUse', {
@@ -170,7 +108,15 @@ export class PortRegistry {
     this.persist(blob);
   }
 
-  /** Return the entry for `worktreePath`, or `null` when no entry exists. */
+  /**
+   * Look up the allocation for `worktreePath`.
+   *
+   * @param worktreePath worktree to look up; canonicalised for the key.
+   * @returns the `{ port, containerName }` if registered, else `null`.
+   *   Note: because lookup goes through {@link PortRegistry.load}, an entry for
+   *   a now-deleted worktree is pruned (and absent from the result) as a side
+   *   effect of this read.
+   */
   lookup(worktreePath: string): { port: number; containerName: string } | null {
     const key = canonicalizePath(worktreePath);
     const blob = this.load();
@@ -180,8 +126,9 @@ export class PortRegistry {
   }
 
   /**
-   * Return every registered entry as an array. Output is sorted by
-   * worktreePath so iteration order is deterministic across processes.
+   * Return every allocation, sorted by canonical worktree path for
+   * deterministic output. Reads through {@link PortRegistry.load}, so absent
+   * worktrees are pruned first.
    */
   getAll(): PortRegistryEntry[] {
     const blob = this.load();
@@ -194,10 +141,11 @@ export class PortRegistry {
   }
 
   /**
-   * Remove the entry for `worktreePath`, freeing its host port. Silent
-   * no-op when absent. This is the single entry-deletion path; the
-   * prune-on-load reclamation reuses {@link deleteEntry} (which `release`
-   * also calls) rather than introducing a parallel deletion routine.
+   * Release the allocation for `worktreePath`, if any.
+   *
+   * @param worktreePath worktree to release; canonicalised for the key.
+   *   Side effect: persists only when an entry was actually removed; releasing
+   *   an unregistered worktree is a silent no-op (no write).
    */
   release(worktreePath: string): void {
     const key = canonicalizePath(worktreePath);
@@ -207,23 +155,11 @@ export class PortRegistry {
     }
   }
 
-  /**
-   * Read the registry blob via M1's `loadModuleState`, then prune stale
-   * entries (F8 §3). Empty blob when no state file has been written yet.
-   * Throws via the factory if the persisted state has the wrong
-   * top-level shape (M1 already throws on JSON parse failure).
-   *
-   * Prune-on-load: a shared registry outlives the worktrees it tracks,
-   * so any entry whose keyed worktree path no longer exists on disk is
-   * removed here and its host port freed — making that port re-allocatable
-   * on the next `register`. The removal goes through the SAME
-   * {@link deleteEntry} path `release` uses (REUSE, not a parallel
-   * deletion routine). When a prune actually removes something, the
-   * reclaimed blob is persisted so the freeing is durable; if nothing is
-   * stale the file is left untouched (no spurious write). Pruning is
-   * conservative — an entry is dropped only when its worktree path
-   * genuinely no longer exists, so live entries are never disturbed.
-   */
+  // Load and validate the registry from module state, pruning entries for
+  // worktrees that no longer exist. An absent state file is a fresh empty
+  // registry. Pruning that removes anything is persisted immediately, so a
+  // read can rewrite the store — the cost of keeping stale ports from
+  // accumulating.
   private load(): PortRegistryFile {
     const record = loadModuleState(MODULE_NAME, STATE_KEY, this.projectRoot);
     if (record === null) return { version: 1, entries: {} };
@@ -234,25 +170,21 @@ export class PortRegistry {
     return blob;
   }
 
-  /**
-   * Prune every entry whose keyed worktree path no longer exists on
-   * disk, freeing its host port via the shared {@link deleteEntry} path.
-   * Mutates `blob` in place; returns `true` when at least one entry was
-   * removed (so the caller persists the reclaimed state).
-   */
+  // Drop entries whose worktree no longer exists on disk; returns whether
+  // anything was removed (so the caller can decide to persist).
   private pruneAbsentWorktrees(blob: PortRegistryFile): boolean {
     let mutated = false;
-    // Snapshot keys first: deleting while iterating Object.entries is
-    // unsafe, and the keys ARE the canonical worktree paths.
+
     for (const key of Object.keys(blob.entries)) {
       if (this.worktreeExists(key)) continue;
-      // Worktree gone → reuse release's entry-deletion path to free the port.
+
       if (deleteEntry(blob, key)) mutated = true;
     }
     return mutated;
   }
 
-  /** Write the registry blob via M1's `setModuleState`. */
+  // Persist the registry through the config-server write tool (atomic write +
+  // schema validation live there). Wholesale overwrite of the key.
   private persist(blob: PortRegistryFile): void {
     setModuleState({
       projectRoot: this.projectRoot,
@@ -263,21 +195,20 @@ export class PortRegistry {
   }
 }
 
-/**
- * The single entry-deletion path: drop `key`'s entry from `blob`, which
- * frees its host port (the port becomes re-allocatable). Returns `true`
- * when an entry was actually removed, `false` when `key` was absent
- * (so `release` stays a silent no-op and prune skips a redundant write).
- * Both `release` (worktree explicitly released) and prune-on-load
- * (worktree gone) route through here — there is no parallel deletion
- * routine.
- */
+// Delete an entry by key; returns whether it existed (so callers can skip a
+// no-op persist).
 function deleteEntry(blob: PortRegistryFile, key: string): boolean {
   if (!(key in blob.entries)) return false;
   delete blob.entries[key];
   return true;
 }
 
+// Validate and normalise untrusted module state into a PortRegistryFile.
+// Throws MalformedInput when the top level is not an object, and SchemaMismatch
+// on an unexpected version. A non-object `entries` is tolerated as empty (the
+// registry self-heals). Individual entries with the wrong shape are silently
+// dropped rather than failing the whole load, so one bad row cannot lock out
+// every other worktree's port.
 function validateBlob(state: unknown): PortRegistryFile {
   if (!isObject(state)) {
     throw createError('MalformedInput', {
@@ -307,6 +238,7 @@ function validateBlob(state: unknown): PortRegistryFile {
   return out;
 }
 
+// Plain-object guard (excludes null and arrays).
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

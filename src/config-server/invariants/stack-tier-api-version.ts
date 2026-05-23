@@ -1,26 +1,31 @@
 /**
- * `stack.tier_apiVersion` invariant (F3 catalog; sourced from C1).
+ * Invariant `stack.tier_apiVersion`: every stack file (any tier) must declare
+ * `schemaVersion: 1`, the only stack schema this framework version understands.
  *
- * Each active stack file's `schemaVersion` must match the API's known
- * stack schema version. Today the only known version is 1; mismatches
- * surface as an `InvariantViolation` issue (per S4's "no new error
- * codes" rule).
- *
- * Phase 2 already raises a `SchemaMismatch` issue per ajv when a stack
- * file's `schemaVersion` is wrong; this invariant is the cross-tier
- * sanity backstop — it ensures every stack file at every tier the
- * framework saw during phase 1 carries the expected API version, even
- * if a future phase 2 path lets one through. The catalog entry exists
- * because F3 owns the cross-file invariants list; deferring to phase 2
- * would couple the catalog to an implementation detail.
+ * The stack-file counterpart of `overlay.tier_apiVersion`. A missing or wrong
+ * version means the file targets a different framework version, so it is an
+ * `error`; the two cases get distinct messages (add vs. change the field). A
+ * non-mapping body is left to schema validation.
  */
 
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
 
+// The sole stack schema version this framework build accepts; see the overlay
+// counterpart for the bump-vs-edit rule.
 const EXPECTED_STACK_SCHEMA_VERSION = 1;
 
+/**
+ * Check the declared `schemaVersion` of every stack file in the snapshot.
+ *
+ * Reads only `snapshot.stackFiles`; pure and never throws on a normal outcome.
+ *
+ * @param snapshot the validation snapshot.
+ * @returns one `error` {@link Issue} per stack whose `schemaVersion` is absent
+ *   or not exactly `1`, in stable sort order; empty when all match. Stacks
+ *   whose body is not a mapping are skipped (schema validation owns those).
+ */
 export function checkStackTierApiVersion(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
   for (const row of orderedStackRows(snapshot)) {
@@ -32,6 +37,14 @@ export function checkStackTierApiVersion(snapshot: ValidationSnapshot): Issue[] 
   return issues;
 }
 
+/**
+ * Build the version issue for a stack file, with "missing" vs. "mismatch"
+ * wording as in the overlay check.
+ *
+ * @param row the stack row; its `path` is the reported location.
+ * @param declared the raw `schemaVersion` read from the body (`undefined` when
+ *   absent).
+ */
 function buildIssue(row: SnapshotStackRow, declared: unknown): Issue {
   const messageBody =
     declared === undefined
@@ -51,6 +64,11 @@ function buildIssue(row: SnapshotStackRow, declared: unknown): Issue {
   };
 }
 
+/**
+ * Return the snapshot's stack rows in a deterministic order, sorted by their
+ * map key (tier-prefixed path), so the emitted issues are ordered the same way
+ * on every run.
+ */
 function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   const keys = Array.from(snapshot.stackFiles.keys()).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: 'variant', numeric: false }),
@@ -63,6 +81,7 @@ function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   return out;
 }
 
+/** Narrow to a non-null, non-array object (a YAML mapping). */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

@@ -1,76 +1,128 @@
+
+
 /**
- * R3 sprint 1 — bespoke arg parser.
+ * The CLI's argument parser and the types describing a command's flag surface.
  *
- * No external dependency: per PROJECT_CONTEXT.md, R3 ships no new deps.
- * The parser is small enough to own; the surface we need is narrow.
+ * This is a deliberately small, dependency-free parser tailored to the `gan`
+ * CLI's needs rather than a general option library. A command declares its
+ * flags as a {@link CommandSpec}; {@link parseArgs} turns a raw argv into a
+ * {@link ParsedArgs} carrying positionals, resolved flag values, and a
+ * structured {@link ParseError} on failure.
  *
- * Surface:
- *   - `--flag=value` (one token)
- *   - `--flag value` (two tokens; consumes the next non-flag-looking token)
- *   - `-h` and `--help` (treated as boolean help)
- *   - `--json` (boolean)
- *   - `--project-root <path>` (string)
- *   - positional args
- *   - `--` terminator: every subsequent token becomes a positional
- *   - repeated flags: last-write-wins for scalars; help/json toggles stay true
- *   - missing-value detection: `--project-root` with no following token is
- *     a structured error, not a throw
- *   - unknown-flag detection: returns an error rather than throwing, so the
- *     dispatcher can render a one-liner with a `--help` pointer
- *
- * The parser is **value-shape agnostic**: it never coerces types. Callers
- * decide how to interpret string values.
+ * Shared design choices worth stating once:
+ * - Parsing never throws; a malformed argv produces a `ParsedArgs` whose
+ *   `error` field is set, so callers branch on data rather than catch.
+ * - A bare `--` ends flag parsing: every token after it is a positional, even
+ *   if it looks like a flag. `doubleDashSeen` records that this happened.
+ * - Flags are stored under their long name with the leading `--` stripped, so
+ *   `--project-root` is read as `flags['project-root']` regardless of whether
+ *   the short or long form was used.
  */
 
+/**
+ * Declares one flag a command accepts.
+ *
+ * @property long the canonical long form including `--` (e.g. `--json`); also
+ *   the storage key (minus the `--`) in {@link ParsedArgs.flags}.
+ * @property short optional single-dash alias (e.g. `-h`).
+ * @property type `boolean` (presence flag) or `string` (consumes a value).
+ * @property defaultValue seed value placed in `flags` before parsing; when
+ *   omitted, boolean flags still default to `false` and string flags are
+ *   simply absent until provided.
+ */
 export interface FlagSpec {
-  /** Long form, e.g. `--json`. Always required. */
+
   long: string;
-  /** Optional short form, e.g. `-h`. */
+
   short?: string;
-  /** `boolean`: presence-only. `string`: requires a value (= or next token). */
+
   type: 'boolean' | 'string';
-  /** Default value. */
+
   defaultValue?: string | boolean;
 }
 
+/**
+ * The flag surface a command exposes to {@link parseArgs}.
+ *
+ * @property flags the declared flags.
+ * @property allowUnknownFlags when `true`, a token that looks like a flag but
+ *   matches no spec is passed through as a positional instead of producing an
+ *   `unknown-flag` error — used by pass-through commands that forward unknown
+ *   options downstream. Defaults to rejecting unknown flags.
+ */
 export interface CommandSpec {
-  /** Flags supported by this command (or globally, when no command yet). */
+
   flags: readonly FlagSpec[];
-  /**
-   * If true, unknown flags are still allowed (treated as positional). The
-   * dispatcher uses `false` so unknown flags surface as exit-64 errors.
-   */
+
   allowUnknownFlags?: boolean;
 }
 
+/**
+ * The result of parsing an argv against a {@link CommandSpec}.
+ *
+ * @property _ positional arguments, in order (everything that was not a flag,
+ *   plus everything after a `--`).
+ * @property flags resolved flag values keyed by long name without `--`;
+ *   booleans are always present (defaulting to `false`), string flags appear
+ *   only once supplied or defaulted.
+ * @property doubleDashSeen `true` when a `--` terminator was encountered.
+ * @property error set when parsing failed; when present the other fields hold
+ *   only what was parsed up to the failure and should not be trusted as
+ *   complete.
+ */
 export interface ParsedArgs {
-  /** Positional arguments, in order. */
+
   _: string[];
-  /** Flag values keyed by long form (without the leading `--`). */
+
   flags: Record<string, string | boolean>;
-  /** Whether `--` was seen during parse (terminator). */
+
   doubleDashSeen: boolean;
-  /** A parse error, if any; structured for the dispatcher. */
+
   error?: ParseError;
 }
 
+/**
+ * Structured description of a parse failure (returned via
+ * {@link ParsedArgs.error}, never thrown).
+ *
+ * @property kind `unknown-flag` (a flag not in the spec, with unknown flags
+ *   disallowed) or `missing-value` (a string flag with no value, or a boolean
+ *   flag given an explicit non-`true`/`false` value).
+ * @property flag the offending flag token, as the user wrote it.
+ * @property message a ready-to-print, human-readable explanation.
+ */
 export interface ParseError {
-  /** `unknown-flag` | `missing-value`. */
+
   kind: 'unknown-flag' | 'missing-value';
-  /** The offending token (e.g. `--nope`, `--project-root`). */
+
   flag: string;
-  /** Human-readable summary, suitable for stderr. */
+
   message: string;
 }
 
+// Look up a flag by either its long or short form. Returns undefined when no
+// declared flag matches, which the parser turns into an unknown-flag outcome.
 function findFlag(spec: CommandSpec, token: string): FlagSpec | undefined {
   return spec.flags.find((f) => f.long === token || f.short === token);
 }
 
 /**
- * Parse `argv` against `spec`. Never throws; structured failures surface as
- * `error` on the returned object so the dispatcher can map them to exit
- * codes deterministically.
+ * Parse a raw argv against a command's flag spec.
+ *
+ * Recognises three flag forms — `--name=value`, `-x`/`--name value`, and bare
+ * boolean flags — and treats everything else as a positional. A `--` token
+ * ends flag parsing and forces all remaining tokens to be positionals.
+ *
+ * Failure is returned, not thrown: on the first malformed token the function
+ * sets `out.error` (see {@link ParseError}) and returns immediately, so `_`
+ * and `flags` reflect only what was parsed before the error. Recognised
+ * failure cases: an unknown flag when `spec.allowUnknownFlags` is falsy; a
+ * `--bool=...` whose value is neither `true` nor `false`; and a string flag
+ * with no following value (or whose next token looks like another flag).
+ *
+ * @param argv the raw arguments (already sliced past the command name).
+ * @param spec the command's {@link CommandSpec}.
+ * @returns the {@link ParsedArgs}; check `.error` before using the rest.
  */
 export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArgs {
   const out: ParsedArgs = {
@@ -79,7 +131,9 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
     doubleDashSeen: false,
   };
 
-  // Seed defaults so consumers can read flags[name] unconditionally.
+  // Seed defaults before scanning argv so absent flags still have a value:
+  // an explicit default wins; otherwise a boolean defaults to false (string
+  // flags are left absent until supplied).
   for (const f of spec.flags) {
     if (f.defaultValue !== undefined) {
       out.flags[stripLong(f.long)] = f.defaultValue;
@@ -92,16 +146,19 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
   while (i < argv.length) {
     const token = argv[i]!;
 
+    // `--` terminates option parsing: everything after it is a positional even
+    // if it starts with a dash. Record that we saw it, then drain the rest.
     if (token === '--') {
       out.doubleDashSeen = true;
-      // Everything after `--` is positional, including dash-prefixed tokens.
+
       for (let j = i + 1; j < argv.length; j += 1) {
         out._.push(argv[j]!);
       }
       break;
     }
 
-    // `--flag=value` form: split on the first `=`.
+    // `--name=value` form: split on the first `=` so values may themselves
+    // contain `=`.
     if (token.startsWith('--') && token.includes('=')) {
       const eqIdx = token.indexOf('=');
       const name = token.slice(0, eqIdx);
@@ -120,9 +177,10 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
         };
         return out;
       }
-      // Boolean flags don't accept `=value`; treat as malformed only when the
-      // value is not a boolean-string. We accept `=true`/`=false` as a kindness
-      // to scripted callers, but `--json=anything-else` is an error.
+
+      // A boolean flag in `=` form only accepts the literal `true`/`false`;
+      // any other value (e.g. `--json=1`) is a usage error, surfaced as
+      // missing-value rather than silently coerced.
       if (flag.type === 'boolean') {
         if (value === 'true') {
           out.flags[stripLong(flag.long)] = true;
@@ -143,7 +201,8 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
       continue;
     }
 
-    // Long or short flag form: `--flag` or `-h` (no `=`).
+    // Space-separated form: `-x` / `--name` (length > 1 so a lone `-` is a
+    // positional, e.g. stdin convention).
     if (token.startsWith('-') && token.length > 1) {
       const flag = findFlag(spec, token);
       if (!flag) {
@@ -164,8 +223,11 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
         i += 1;
         continue;
       }
-      // String flag: consume next token as value. Reject if missing or if
-      // the next token looks like another flag (defensive).
+
+      // A string flag consumes the next token as its value. A following token
+      // that starts with `-` is treated as the next flag, not this flag's
+      // value, so a forgotten value is reported rather than silently swallowing
+      // the next option.
       const next = argv[i + 1];
       if (next === undefined || next.startsWith('-')) {
         out.error = {
@@ -180,7 +242,6 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
       continue;
     }
 
-    // Positional argument.
     out._.push(token);
     i += 1;
   }
@@ -188,16 +249,19 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
   return out;
 }
 
+// Normalise a long flag name to its storage key by dropping a leading `--`.
+// Keeps the `flags` map keyed consistently whether the short or long form was
+// supplied.
 function stripLong(long: string): string {
   return long.startsWith('--') ? long.slice(2) : long;
 }
 
 /**
- * The CLI's global flag set. Subcommands extend this.
+ * The flags every command accepts, spread into each command's own spec.
  *
- * Boolean help is intentionally `--help` AND `-h`. `--json` and
- * `--project-root` are surfaced globally so every read subcommand can pick
- * them up without redeclaring.
+ * Frozen (the array and each entry) so this shared default cannot be mutated by
+ * a command that splices it in. Comprises `--help`/`-h`, `--json`, and
+ * `--project-root`.
  */
 export const GLOBAL_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ long: '--help', short: '-h', type: 'boolean' as const }),

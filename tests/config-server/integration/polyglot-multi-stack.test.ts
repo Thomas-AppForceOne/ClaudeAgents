@@ -1,20 +1,23 @@
 /**
- * R1 sprint 7 integration test — multi-stack guard rail.
+ * Multi-stack guard rail: a project where two stacks (`web-node` and a
+ * synthetic second stack) are simultaneously active. The core invariant is
+ * isolation — when several stacks resolve at once, each stack's fields stay
+ * with that stack and never cross-contaminate the other.
  *
- * Validates the polyglot fixture (`web-node` + `synthetic-second`) end to
- * end:
- *
- *   1. `validateAll` returns zero issues — the fixture is designed to
- *      satisfy every R1 invariant (no schema-mismatch, no detection
- *      tier-1/2 leak, no cacheEnv conflict, no path escape, etc.).
- *   2. `getResolvedConfig` reports both stacks as active with builtin
- *      tier provenance.
- *   3. Per the dispatch invariants in PROJECT_CONTEXT.md, both stacks'
- *      data is exposed via `getStack` (active-set union), and stack-
- *      scoped fields (`securitySurfaces`, `scope`, `secretsGlob`) are
- *      keyed under the stack that owns them — no cross-contamination
- *      across ecosystems.
+ * Coverage:
+ *   - a clean polyglot fixture validates with zero issues;
+ *   - the active set is the deterministic union (sorted) of both stack names,
+ *     each reported with `builtin` tier provenance;
+ *   - per-stack reads (scope, securitySurfaces, cacheEnv) are mutually
+ *     exclusive — the explicit cross-checks assert no surface id from one stack
+ *     appears in the other;
+ *   - the synthetic stack is intentionally maximal: it exercises *every* C1
+ *     schema field (anyOf/allOf detection, scope, secretsGlob, cacheEnv,
+ *     auditCmd absence signalling, build/test/lint commands, and both
+ *     keyword+scope and scope-only security-surface triggers), so a field the
+ *     resolver silently drops shows up as a failure here.
  */
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,26 +77,21 @@ describe('integration: polyglot multi-stack guard rail', () => {
     const webData = webNode.data as Record<string, unknown>;
     const synData = synthetic.data as Record<string, unknown>;
 
-    // Both stacks resolve from the built-in tier.
     expect(webNode.sourceTier).toBe('builtin');
     expect(synthetic.sourceTier).toBe('builtin');
 
-    // Each stack carries its own `scope`. No overlap: web-node owns
-    // **/*.{ts,tsx,js,jsx}; synthetic-second owns synthetic/**.
     expect(webData.scope).toEqual(['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx']);
     expect(synData.scope).toEqual(['synthetic/**']);
 
-    // Each stack carries its own `securitySurfaces`. No surface from
-    // web-node leaks into synthetic-second's record (or vice versa).
     const webSurfaces = (webData.securitySurfaces as Array<{ id: string }>).map((s) => s.id);
     const synSurfaces = (synData.securitySurfaces as Array<{ id: string }>).map((s) => s.id);
     expect(webSurfaces).toEqual(['prototype_pollution']);
     expect(synSurfaces).toEqual(['synthetic_keyword_surface', 'synthetic_scope_only_surface']);
+    // No-cross-contamination: neither stack's surface ids may bleed into the
+    // other's resolved data when both are active at once.
     for (const s of synSurfaces) expect(webSurfaces).not.toContain(s);
     for (const s of webSurfaces) expect(synSurfaces).not.toContain(s);
 
-    // Each stack carries its own `cacheEnv` envVar — neither overlaps,
-    // confirming cacheEnv conflict-resolution had nothing to do.
     const webCache = webData.cacheEnv as Array<{ envVar: string }>;
     const synCache = synData.cacheEnv as Array<{ envVar: string }>;
     expect(webCache.map((e) => e.envVar)).toEqual(['NPM_CONFIG_CACHE']);
@@ -103,10 +101,12 @@ describe('integration: polyglot multi-stack guard rail', () => {
   it('synthetic-second exercises every C1 schema field (multi-stack guard rail)', () => {
     const stack = getStack({ projectRoot: polyglotFixture, name: 'synthetic-second' });
     const data = stack.data as Record<string, unknown>;
-    // Frontmatter:
+
     expect(data.name).toBe('synthetic-second');
     expect(data.schemaVersion).toBe(1);
-    // Composite detection (allOf + anyOf both present):
+
+    // The synthetic stack's detection rules deliberately include both an
+    // `anyOf` and an `allOf` clause so both detection combinators are covered.
     const detection = data.detection as unknown[];
     expect(Array.isArray(detection)).toBe(true);
     const hasAnyOf = detection.some(
@@ -117,23 +117,26 @@ describe('integration: polyglot multi-stack guard rail', () => {
     );
     expect(hasAnyOf).toBe(true);
     expect(hasAllOf).toBe(true);
-    // scope, secretsGlob, cacheEnv:
+
     expect((data.scope as unknown[]).length).toBeGreaterThan(0);
     expect((data.secretsGlob as unknown[]).length).toBeGreaterThan(0);
     expect((data.cacheEnv as unknown[]).length).toBeGreaterThan(0);
-    // auditCmd with non-silent absenceSignal + absenceMessage:
+
     const audit = data.auditCmd as Record<string, unknown>;
     expect(audit.absenceSignal).toBe('warning');
     expect(typeof audit.absenceMessage).toBe('string');
-    // Three command fields present:
+
     expect(typeof data.buildCmd).toBe('string');
     expect(typeof data.testCmd).toBe('string');
     expect(typeof data.lintCmd).toBe('string');
-    // Surfaces with both keyword + scope triggers, AND scope-only:
+
     const surfaces = data.securitySurfaces as Array<{
       id: string;
       triggers?: { keywords?: string[]; scope?: string[] };
     }>;
+    // Both trigger shapes must be present: one surface gated on keywords AND
+    // scope, and one gated on scope alone (no keywords) — so the resolver is
+    // proven to preserve each variant rather than normalising them together.
     const keywordAndScope = surfaces.find(
       (s) =>
         Array.isArray(s.triggers?.keywords) &&

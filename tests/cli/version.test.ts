@@ -1,8 +1,13 @@
 /**
- * R3 sprint 1 — `gan version` + `--json` round-trip determinism.
+ * End-to-end tests for `gan version` (feature acceptance criterion F-AC1).
  *
- * Covers contract criterion F-AC1.
+ * Verifies the version surface in both human and `--json` modes: it reports
+ * apiVersion / serverVersion / schemas, the JSON form is canonical (sorted
+ * keys, two-space indent, trailing newline) and deterministic across runs, and
+ * apiVersion and serverVersion agree because both are read from the single
+ * `package.json` — guarding against the two drifting apart.
  */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 
@@ -20,17 +25,21 @@ describe('gan version', () => {
     const r = await runGan(['version', '--json']);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
-    // Trailing newline (F3 determinism rule).
+
     expect(r.stdout.endsWith('\n')).toBe(true);
-    // Two-space indent.
+
+    // A two-space-indented top-level key is the cheap structural proof that the
+    // emitter pretty-prints with two spaces rather than tabs or compact JSON.
     expect(r.stdout).toContain('\n  "');
-    // Parse cleanly.
+
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(parsed).toHaveProperty('apiVersion');
     expect(parsed).toHaveProperty('serverVersion');
     expect(parsed).toHaveProperty('schemas');
     expect(Array.isArray(parsed.schemas)).toBe(true);
-    // Sorted keys at the top level: apiVersion < schemas < serverVersion.
+
+    // Key order is asserted exactly (alphabetical) — the determinism contract is
+    // sorted keys, so `schemas` must sit between the two version fields.
     const keys = Object.keys(parsed);
     expect(keys).toEqual(['apiVersion', 'schemas', 'serverVersion']);
   });
@@ -44,7 +53,8 @@ describe('gan version', () => {
       expect(typeof s.name).toBe('string');
       expect(typeof s.version).toBe('number');
     }
-    // Includes the schemas R1 ships on disk.
+
+    // The two schemas the framework actually versions must both be advertised.
     const names = parsed.schemas.map((s) => s.name);
     expect(names).toContain('stack');
     expect(names).toContain('overlay');

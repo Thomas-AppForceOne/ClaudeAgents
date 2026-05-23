@@ -1,33 +1,39 @@
 /**
- * T1 Sprint 3 — public barrel exports (new_helpers_exported_and_build_green).
+ * Public-surface guard for the trace barrels — pins what the Sprint-3 work
+ * adds to the package's API and proves it didn't drop the Sprint-2 surface.
  *
- * The new Sprint-3 helpers must be reachable from both the trace barrel
- * (src/trace/index.ts) and the top-level public barrel (src/index.ts) so
- * downstream phases import them rather than re-deriving them — mirroring the
- * Sprint-2 export pattern. `npm run build` is the compile gate; this test is
- * the reachability gate.
+ * Why this exists: helpers can be implemented yet never wired into a barrel,
+ * leaving them unreachable to consumers and to the rest of the framework. This
+ * suite asserts every new Sprint-3 helper is a callable export from BOTH the
+ * trace barrel (src/trace/index.js) and the top-level public barrel
+ * (src/index.js) — re-export, not just internal definition — and that the
+ * pre-existing Sprint-2 surface is still reachable, so a re-export refactor
+ * can't silently regress the API. A `typeof === 'function'` check is a
+ * deliberately coarse but stable contract: it survives signature changes while
+ * still catching a missing or renamed export.
  */
+
 import { describe, expect, it } from 'vitest';
 
 import * as traceBarrel from '../../src/trace/index.js';
 import * as topBarrel from '../../src/index.js';
 
 const NEW_HELPERS = [
-  // evidence-bundle verifier (F3.2)
+
   'verifyEvidenceBundle',
   'checkFailCompleteness',
-  // integration-event builders (F3.3, F3.4)
+
   'buildTrustEventBody',
   'buildValidationAbortBody',
   'buildValidationAbortFromCode',
-  // progress-line formatters (F3.5, F3.6, F3.7)
+
   'formatHeartbeat',
   'formatLlmCallSummary',
   'formatSprintSummary',
   'aggregateSprintSummary',
   'formatSprintSummaryFromEvents',
   'formatWallclock',
-  // recovery continuation (F3.8)
+
   'reconstructRecoveryState',
   'nextRecoverySequence',
 ] as const;

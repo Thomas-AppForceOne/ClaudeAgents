@@ -1,18 +1,28 @@
 /**
- * T1 Sprint 2 — hash boundary (F2.3).
+ * promptRef hash-boundary suite — defines exactly which request fields are
+ * inside the identity hash and which are deliberately excluded, so the hash is
+ * a stable cache/dedup key for "the same prompt" across runs.
  *
- * Covers contract criteria:
- *  - hash_boundary_determinism: equal in-boundary content ⇒ byte-identical
- *    bare-64-hex promptRef.
- *  - hash_boundary_correctness: varying any OUT-of-boundary field (temperature,
- *    top-p, top-k, seed, max-tokens, run-id, timestamp) leaves promptRef
- *    unchanged.
+ * Determinism: equal content hashes to a byte-identical ref, and the ref is a
+ * bare lowercase 64-hex string with NO `sha256:` prefix (the storage layer
+ * assumes that exact shape). Message history is order-SENSITIVE — reversing two
+ * turns changes the ref — because turn order is part of prompt identity.
+ *
+ * Boundary correctness — the load-bearing distinction:
+ * - IN-boundary (must change the ref): model, systemPrompt, userPrompt,
+ *   messageHistory, toolDefinitions. Each is varied alone and must differ.
+ * - OUT-of-boundary (must NOT change the ref): sampling/runtime knobs and
+ *   trace metadata — temperature, topP, topK, seed, maxTokens, runId,
+ *   timestamp. Each is varied alone, and then ALL at once, and the ref must
+ *   stay equal to the base. This keeps the hash keyed to *what was asked*, not
+ *   *how it was sampled or when it ran*, so two runs with the same prompt but
+ *   different seeds/timestamps still collide intentionally.
  */
+
 import { describe, expect, it } from 'vitest';
 
 import { computePromptRef, isSha256Hex, type LlmRequestIdentity } from '../../src/trace/hash.js';
 
-/** A representative in-boundary request identity used across the suite. */
 function baseIdentity(): LlmRequestIdentity {
   return {
     model: 'claude-opus-4',
@@ -82,9 +92,6 @@ describe('hash boundary — determinism (hash_boundary_determinism)', () => {
 describe('hash boundary — correctness (hash_boundary_correctness)', () => {
   const base = computePromptRef(baseIdentity());
 
-  // Out-of-boundary fields are modelled by augmenting the request object with
-  // extra knobs the boundary type does not include; `computePromptRef` only
-  // reads the in-boundary fields, so these must never change the hash.
   const outOfBoundaryCases: Array<[string, Record<string, unknown>]> = [
     ['temperature', { temperature: 0.9 }],
     ['top-p', { topP: 0.1 }],

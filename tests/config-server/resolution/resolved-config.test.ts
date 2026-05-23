@@ -1,3 +1,11 @@
+// Pins the F2 "stable shape" contract of composeResolvedConfig: the full set
+// of top-level keys, their default values for a minimal project, and — most
+// importantly — determinism. The same project must serialise byte-identically
+// across calls, and stableStringify must sort keys at every depth so the
+// serialised form is a fixed point (re-serialising a parse of it yields the
+// same bytes). That stability is what lets downstream consumers hash/diff the
+// resolved config; a non-deterministic key order or a drifting key set would
+// break those consumers, so the assertions are deliberately exact.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,10 +30,10 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     const r: ResolvedConfig = await composeResolvedConfig(jsTsMinimal);
     expect(r.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(r.schemaVersions).toEqual({ stack: 1, overlay: 1 });
-    // No package.json on disk → empty active set, empty byName.
+
     expect(r.stacks.active).toEqual([]);
     expect(r.stacks.byName).toEqual({});
-    // Project overlay only declares schemaVersion → cascaded overlay empty.
+
     expect(r.overlay).toEqual({});
     expect(r.discarded).toEqual([]);
     expect(r.additionalContext.planner).toEqual([]);
@@ -42,7 +50,10 @@ describe('composeResolvedConfig — F2 stable shape', () => {
   it('keys are sorted at every depth (stableStringify round-trip property)', async () => {
     const r = await composeResolvedConfig(jsTsMinimal);
     const serialised = stableStringify(r);
-    // Manually-produced sorted serialisation should match.
+
+    // Fixed-point property: parsing the serialised form and re-serialising must
+    // reproduce the exact bytes. This holds only if stableStringify sorts keys
+    // recursively, so it doubles as a depth-wise sort check.
     const parsed = JSON.parse(serialised);
     const reSerialised = stableStringify(parsed);
     expect(serialised).toBe(reSerialised);

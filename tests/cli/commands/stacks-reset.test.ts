@@ -1,6 +1,11 @@
-/**
- * R-post sprint 6 — `gan stacks reset` spawn-based tests.
- */
+// End-to-end tests for `gan stacks reset`, spawning the built CLI. The command
+// removes a tier's customisation file, reverting to the built-in. The key
+// behaviour is idempotence: resetting an absent customisation is NOT an error —
+// it warns on stderr and still exits 0 (JSON surface reports
+// `{deleted: false, reason: 'no-customization'}`), so the command is safe to
+// run unconditionally. Successful deletes (project and user tiers) remove the
+// file and report it; argument errors (missing name, invalid --tier) exit 64.
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,6 +14,7 @@ import path from 'node:path';
 import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
+// Temp project/home dirs created per test, removed in teardown.
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -21,12 +27,16 @@ afterEach(() => {
   }
 });
 
+// A fresh temp dir with a descriptive prefix, registered for teardown.
 function makeTmpDir(prefix: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(dir);
   return dir;
 }
 
+// Seed a customisation file under `<rootDir>/.claude/gan/stacks/<name>.md`
+// (rootDir is a project root or a user home depending on the tier under test);
+// returns its path so the test can assert it gets deleted.
 function seedCustomization(rootDir: string, name: string, body: string = `# ${name}\n`): string {
   const dir = path.join(rootDir, '.claude', 'gan', 'stacks');
   mkdirSync(dir, { recursive: true });

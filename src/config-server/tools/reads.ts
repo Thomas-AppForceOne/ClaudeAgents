@@ -1,40 +1,22 @@
 /**
- * R1 sprint 2 + sprint 5 — read tool implementations.
+ * Read tools for the config-server — the query side, mirroring `writes.ts`.
  *
- * Direct library entry points for all 11 F2 read tools. The MCP wrapper in
- * `index.ts` delegates here; tests and downstream library callers may also
- * import these functions directly (per the dual-callable surface rule).
+ * Every export here is a side-effect-free lookup over already-persisted config:
+ * stacks, overlays, the resolved/merged config, module state, and the trust
+ * cache. Two conventions hold across the surface:
  *
- * S2 coverage:
- *  - `getApiVersion` — real (delegated to `index.ts`'s implementation; the
- *    real handler lives there for bootstrap reasons and is re-exported in
- *    the public index).
- *  - `getStack` / `getOverlay` / `getStackResolution` — real reads via the
- *    storage + resolution layers.
- *  - `getTrustState` — real (R5 S4): recomputes the project's aggregate
- *    trust hash, looks it up in the user-tier trust cache, and reports
- *    the approval state. `getTrustDiff` remains the deferred stub (the
- *    structured per-file diff is not in v1's scope).
- *  - `trustList` — real (R5 S4): lists every approval recorded in the
- *    cache.
- *  - `getModuleState` / `listModules` — no-op (zero modules) per OQ4.
- *  - `getStackConventions` / `getOverlayField` are NOT in this sprint's
- *    scope — they remain `NotImplemented` stubs in `index.ts`.
+ * 1. **`projectRoot` is canonicalised** at the top of each tool, so symlinked or
+ *    relative roots resolve to the same underlying directory the writes side
+ *    keyed on.
+ * 2. **`ctx` is an injection seam.** `userHome`/`packageRoot` redirect where
+ *    overlays/stacks/packaged defaults are read from, and `moduleStateStore`
+ *    redirects module-state I/O — production passes nothing and uses real
+ *    seams; tests point them at fixtures.
  *
- * S5 upgrades:
- *  - `getResolvedConfig` — full F2 stable shape via `composeResolvedConfig`.
- *    Cached per canonical project root by the cache singleton; consecutive
- *    calls return byte-identical JSON.
- *  - `getActiveStacks` — derived from the resolved config (active set).
- *  - `getMergedSplicePoints` — derived from the resolved config (the
- *    cascaded overlay with `stack` block stripped, since it is observed
- *    via `getActiveStacks` instead).
- *
- * Determinism:
- *  - Any string sort goes through `localeSort`.
- *  - `projectRoot` is canonicalised via `canonicalizePath` before downstream
- *    use so callers cannot smuggle distinct casings.
- *  - Glob match (detection) goes through `determinism.glob` (picomatch v4).
+ * Failure modes vary per tool and are documented on each: most propagate the
+ * underlying loader's `ConfigServerError` (e.g. `UnknownStack`, `MissingFile`,
+ * `TrustCacheCorrupt`); the `requireX` validators throw `MalformedInput`. None
+ * mutate disk.
  */
 
 import { readFileSync } from 'node:fs';
@@ -67,39 +49,51 @@ import { computeTrustHash } from '../trust/hash.js';
 import { readCache, type TrustApproval } from '../trust/cache-io.js';
 import { _runPhase1ForTests } from './validate.js';
 
-/** Common options passed to every read tool. */
+/**
+ * Ambient context threaded into every read tool. All fields are optional; an
+ * empty `{}` is the production default.
+ *
+ * @property logger optional structured logger (used by tools that emit
+ *   warnings, e.g. {@link getTrustDiff}); falls back to the ambient logger.
+ * @property userHome override for the user's home directory, steering
+ *   `user`-tier overlay/stack resolution.
+ * @property packageRoot override for the installed-package root, steering where
+ *   built-in stacks and packaged defaults are read from.
+ * @property moduleStateStore injection seam for the module-state store.
+ */
 export interface ReadToolContext {
-  /** Optional logger override (tests inject a spy). Defaults to `getLogger()`. */
+
   logger?: Logger;
-  /** Forwarded to stack/overlay resolvers. Tests use this for the user tier. */
+
   userHome?: string;
-  /**
-   * Forwarded to the C5 stack resolver as the package-tier built-in
-   * directory. When unset, the resolver walks up from `import.meta.url`
-   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Home/env + git injection seams for the repo-keyed module-state store
-   * (F8). Production leaves this unset and uses the real `os.homedir`,
-   * `process.env`, and `execFileSync('git', …)` seams; tests inject a fake
-   * home (so no real marker leaks) and a stub git seam (so no real repo is
-   * required) to make module-state resolution deterministic.
-   */
+
   moduleStateStore?: ModuleStateStoreOptions;
 }
 
+/** Minimal slice of the package's own `package.json` this module needs. */
 interface PackageMeta {
   version: string;
 }
 
+// Process-lifetime cache of the package version. The installed package.json is
+// immutable for the life of the process, so reading it once is safe and avoids
+// repeated disk reads on hot read paths.
 let cachedMeta: PackageMeta | null = null;
 
+/**
+ * Read (and memoise) the installed package's `version`, used as the API version
+ * fed to config resolution.
+ *
+ * Reads `package.json` from the resolved package root on first call and caches
+ * the result; subsequent calls are pure. Throws if the package root cannot be
+ * resolved, the file cannot be read, or it is not valid JSON — all of which
+ * indicate a broken install, not user error.
+ */
 function readPackageMetaSync(): PackageMeta {
   if (cachedMeta) return cachedMeta;
-  // Read `package.json` from the package root located via the shared
-  // helper (which walks up from `import.meta.url` and verifies the
-  // package name). Avoids duplicating the walk-up logic here.
+
   const pkgPath = path.join(resolvePackageRoot(), 'package.json');
   const raw = readFileSync(pkgPath, 'utf8');
   const parsed = JSON.parse(raw) as { version: string };
@@ -107,11 +101,32 @@ function readPackageMetaSync(): PackageMeta {
   return cachedMeta;
 }
 
+/**
+ * Input to {@link getStack}.
+ *
+ * @property projectRoot project directory; canonicalised before resolution.
+ * @property name the stack name to load; resolved across tiers (project wins
+ *   over user wins over built-in).
+ */
 export interface GetStackInput {
   projectRoot: string;
   name: string;
 }
 
+/**
+ * Load a single named stack file, returning its parsed body, surrounding prose,
+ * and provenance (which tier and exact path it came from).
+ *
+ * Read-only. Throws the loader's `ConfigServerError` when the stack cannot be
+ * resolved or read (e.g. `UnknownStack`, `MissingFile`, or a YAML parse error) —
+ * these are not folded into return data here.
+ *
+ * @param input see {@link GetStackInput}.
+ * @param ctx ambient context; `ctx.userHome`/`ctx.packageRoot` steer where the
+ *   stack is resolved from.
+ * @returns the stack's `data`/`prose` plus `sourceTier` and `sourcePath`
+ *   describing which file actually supplied it.
+ */
 export function getStack(
   input: GetStackInput,
   ctx: ReadToolContext = {},
@@ -134,14 +149,26 @@ export function getStack(
   };
 }
 
+/**
+ * Input to {@link getActiveStacks}.
+ *
+ * @property projectRoot project directory; canonicalised before resolution.
+ */
 export interface GetActiveStacksInput {
   projectRoot: string;
 }
 
 /**
- * Return the active stack set per C2 dispatch. Derived from the cached
- * resolved config (so the dispatch math runs once per project root per
- * server-process lifetime).
+ * Report the names of the stacks active for a project, after full config
+ * resolution (detection + overrides applied).
+ *
+ * Read-only; resolves config synchronously. Throws a `ConfigServerError` if
+ * resolution fails (e.g. an unresolvable override).
+ *
+ * @param input see {@link GetActiveStacksInput}.
+ * @param ctx ambient context steering resolution.
+ * @returns `{ active }` — a defensive copy (`.slice()`) of the active-stack
+ *   names, so the caller cannot mutate the resolver's internal array.
  */
 export function getActiveStacks(
   input: GetActiveStacksInput,
@@ -153,14 +180,32 @@ export function getActiveStacks(
     userHome: ctx.userHome,
     packageRoot: ctx.packageRoot,
   });
+  // Copy out so callers cannot mutate the resolver's internal array.
   return { active: resolved.stacks.active.slice() };
 }
 
+/**
+ * Input to {@link getOverlay}.
+ *
+ * @property projectRoot project directory; canonicalised before resolution.
+ * @property tier which overlay tier to load (`project`/`default`/`user`).
+ */
 export interface GetOverlayInput {
   projectRoot: string;
   tier: OverlayTier;
 }
 
+/**
+ * Load a single overlay document for the requested tier.
+ *
+ * Read-only. Throws the loader's `ConfigServerError` on a malformed/unreadable
+ * overlay.
+ *
+ * @param input see {@link GetOverlayInput}.
+ * @param ctx ambient context; `ctx.userHome` resolves the `user` tier.
+ * @returns the overlay's `data`/`prose`/`path`/`tier`, or `null` when no
+ *   overlay file exists for that tier (a normal absence, not an error).
+ */
 export function getOverlay(
   input: GetOverlayInput,
   ctx: ReadToolContext = {},
@@ -183,16 +228,25 @@ export function getOverlay(
   };
 }
 
+/**
+ * Input to {@link getMergedSplicePoints}.
+ *
+ * @property projectRoot project directory; canonicalised before resolution.
+ */
 export interface GetMergedSplicePointsInput {
   projectRoot: string;
 }
 
 /**
- * Return the cascaded overlay (the merged splice-point view) per C4.
- * The returned shape mirrors C3's splice-point catalog: keys are agent
- * role names (`planner`, `proposer`, `evaluator`, etc.) and values are
- * the splice-point payloads. The `stack` block is included so consumers
- * can read the resolved `override` / `cacheEnvOverride`.
+ * Return the fully-merged overlay (the "splice points") for a project — the
+ * single overlay view after all tiers are composed.
+ *
+ * Read-only; resolves config synchronously. Throws a `ConfigServerError` on a
+ * resolution failure.
+ *
+ * @param input see {@link GetMergedSplicePointsInput}.
+ * @param ctx ambient context steering resolution.
+ * @returns `{ mergedSplicePoints }` — the resolved overlay map.
  */
 export function getMergedSplicePoints(
   input: GetMergedSplicePointsInput,
@@ -207,15 +261,43 @@ export function getMergedSplicePoints(
   return { mergedSplicePoints: resolved.overlay };
 }
 
+/**
+ * Input to {@link getTrustState}.
+ *
+ * @property projectRoot the project to report trust state for; hashed in raw
+ *   form and canonicalised for the cache lookup.
+ */
 export interface GetTrustStateInput {
   projectRoot: string;
 }
 
+/**
+ * Summary of what an *unapproved* project is asking to run, shown to help the
+ * user decide whether to approve.
+ *
+ * @property additionalChecksCount how many evaluator commands the project
+ *   overlay declares.
+ * @property perStackOverridesCount reserved; currently always `0` (per-stack
+ *   override accounting is not yet wired up).
+ */
 export interface GetTrustStateSummary {
   additionalChecksCount: number;
   perStackOverridesCount: number;
 }
 
+/**
+ * Result of {@link getTrustState}.
+ *
+ * @property approved whether the current config hash has a matching approval.
+ * @property currentHash the freshly computed aggregate trust hash.
+ * @property approvedHash the hash the stored approval was granted against
+ *   (present only when `approved`; equals `currentHash` by construction).
+ * @property approvedAt approval timestamp (present only when `approved`).
+ * @property approvedCommit git sha captured at approval (present only when
+ *   `approved` *and* it was captured).
+ * @property summary command-count summary (present only when *not* `approved`,
+ *   to inform an approval decision).
+ */
 export interface GetTrustStateResult {
   approved: boolean;
   currentHash: string;
@@ -226,21 +308,21 @@ export interface GetTrustStateResult {
 }
 
 /**
- * Real implementation (R5 S4). Recomputes the project's aggregate trust
- * hash, looks it up in the user-tier trust cache (`~/.claude/gan/trust-
- * cache.json`), and returns the approval state.
+ * Report whether a project's *current* config is approved, plus the supporting
+ * detail.
  *
- *  - Approved: matching `(canonical projectRoot, aggregateHash)` pair
- *    found in the cache. The result echoes the stored `approvedAt` and,
- *    when present, the `approvedCommit` SHA captured at approve time.
- *  - Not approved: no match. The result includes a small summary derived
- *    from the project-tier overlay (today: count of
- *    `evaluator.additionalChecks` entries) so callers can present the
- *    user with a concrete description of what would be approved.
+ * Read-only: recomputes the trust hash and reads the trust cache. Throws
+ * `TrustCacheCorrupt` ({@link ConfigServerError}) if the cache is unreadable —
+ * unlike the trust *gate*, this query does not fold corruption into a result.
  *
- * Pure read: never mutates the cache and never logs. Path comparisons go
- * through `canonicalizePath` (per F3 determinism); hash recomputation
- * routes through `computeTrustHash` (per the single-implementation rule).
+ * The two result arms are mutually exclusive: an approved result carries the
+ * approval metadata (`approvedHash`/`approvedAt`/optional `approvedCommit`); an
+ * unapproved result carries the `summary` instead.
+ *
+ * @param input see {@link GetTrustStateInput}.
+ * @param ctx ambient context plus optional `homeDir` for the cache location
+ *   (defaults to `os.homedir()`).
+ * @returns the {@link GetTrustStateResult}.
  */
 export function getTrustState(
   input: GetTrustStateInput,
@@ -262,16 +344,15 @@ export function getTrustState(
       approvedHash: found.aggregateHash,
       approvedAt: found.approvedAt,
     };
+    // Only attach approvedCommit when the approval actually captured one, so the
+    // field stays absent rather than serialising as undefined.
     if (found.approvedCommit !== undefined) {
       result.approvedCommit = found.approvedCommit;
     }
     return result;
   }
 
-  // Unapproved: derive a small summary so the caller (the trust prompt)
-  // can describe what it would be approving. We re-use the phase-1
-  // discovery snapshot helper to load the project-tier overlay without
-  // duplicating the loader pipeline here.
+  // Unapproved: attach a summary of what would run, to inform the decision.
   const summary = computeProjectSummary(input.projectRoot, ctx);
   return {
     approved: false,
@@ -280,15 +361,29 @@ export function getTrustState(
   };
 }
 
+/**
+ * Input to {@link getTrustDiff}.
+ *
+ * @property projectRoot the project a diff would be computed for; currently
+ *   unused (the feature is deferred).
+ */
 export interface GetTrustDiffInput {
   projectRoot: string;
 }
 
 /**
- * Deferred per R5 S4 — the structured per-file trust diff is a future
- * task (the prompt's `[v]` flow today suggests a `git diff` invocation
- * instead). The stub returns the same shape it has shipped since R1 so
- * existing consumers continue to compile.
+ * Placeholder for the (deferred) trust-diff feature: it would describe *what*
+ * changed between the approved and current config. Until implemented it always
+ * returns an empty diff and logs a warning so callers know the result is a
+ * stub, not a "no changes" answer.
+ *
+ * Side effect: emits one `warn` log line. Never throws.
+ *
+ * @param _input unused (see {@link GetTrustDiffInput}).
+ * @param ctx ambient context; `ctx.logger` receives the deferral warning,
+ *   falling back to the ambient logger.
+ * @returns `{ diff: [], reason: 'trust-diff-deferred' }` — the `reason`
+ *   distinguishes this stub from a genuine empty diff.
  */
 export function getTrustDiff(
   _input: GetTrustDiffInput,
@@ -301,22 +396,25 @@ export function getTrustDiff(
   return { diff: [], reason: 'trust-diff-deferred' };
 }
 
-/**
- * Reserved for future filtering knobs (e.g. by host or by recency). v1
- * takes no input — see `trustList` below. Kept as a type alias rather
- * than an interface so the empty shape does not trip
- * `no-empty-object-type` lint.
- */
+/** Input to {@link trustList}: this tool takes no parameters. */
 export type TrustListInput = Record<string, never>;
 
+/** Result of {@link trustList}: every approval currently in the cache. */
 export interface TrustListResult {
   approvals: TrustApproval[];
 }
 
 /**
- * List every approval in the user-tier trust cache. Pure read: never
- * mutates the cache. Output preserves the cache's on-disk order (already
- * locale-sorted by `<projectRoot><aggregateHash>` per `cache-io.ts`).
+ * List all trust approvals across every project.
+ *
+ * Read-only. Throws `TrustCacheCorrupt` ({@link ConfigServerError}) if the
+ * cache is unreadable.
+ *
+ * @param _input unused (the tool takes no parameters).
+ * @param ctx ambient context plus optional `homeDir` for the cache location
+ *   (defaults to `os.homedir()`).
+ * @returns `{ approvals }` — the cache's approval list as-is (not a copy);
+ *   treat as read-only.
  */
 export function trustList(
   _input: TrustListInput = {},
@@ -327,18 +425,16 @@ export function trustList(
 }
 
 /**
- * Build the trust-state summary for the unapproved branch. Counts
- * command-declaring fields in the project-tier overlay only — user-tier
- * and default-tier overlays are not part of the trust gate today (per
- * `trust/integration.ts`). The two counted shapes are the bare list form
- * (`evaluator.additionalChecks: [...]`) and the structured wrapper form
- * (`evaluator.additionalChecks: { discardInherited, value: [...] }`),
- * matching the predicate in `trust/integration.projectDeclaresCommands`.
+ * Count the evaluator commands a project declares, for an unapproved
+ * {@link getTrustState} summary.
  *
- * `perStackOverridesCount` is reserved for the per-stack
- * `auditCmd`/`buildCmd`/`testCmd`/`lintCmd` override count — that surface
- * is post-E1 work (tracked alongside `trust/integration.ts`), so v1
- * returns `0` here.
+ * Runs phase-1 discovery (via the test-exposed `_runPhase1ForTests`) to load
+ * the project overlay, then counts `evaluator.additionalChecks`, accepting both
+ * the plain-array and the `{ value: [...] }` provenance-wrapped shapes.
+ * `perStackOverridesCount` is always `0` (not yet implemented).
+ *
+ * @param projectRoot the project to summarise.
+ * @param ctx ambient context; `userHome`/`packageRoot` steer discovery.
  */
 function computeProjectSummary(
   projectRoot: string,
@@ -364,6 +460,13 @@ function computeProjectSummary(
   return { additionalChecksCount, perStackOverridesCount: 0 };
 }
 
+/**
+ * Input to {@link getModuleState}.
+ *
+ * @property projectRoot project directory; canonicalised before lookup.
+ * @property name the owning module.
+ * @property key the state key to read.
+ */
 export interface GetModuleStateInput {
   projectRoot: string;
   name: string;
@@ -371,18 +474,15 @@ export interface GetModuleStateInput {
 }
 
 /**
- * Real read (M3 per-key). Loads the persisted JSON blob at the central,
- * repo-keyed module-state store
- * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation; the
- * repo-key is derived from `projectRoot` via F7's git-common-dir resolution,
- * so all worktrees of a repo read the same file). Returns `null` when the
- * file does not exist; throws via the factory on read/parse failure so
- * callers can distinguish "no state" from "corrupt state".
+ * Load a single module's stored state for `key`.
  *
- * Reads against a `key` that the module manifest does not declare
- * also return `null` (consistent with "no file") rather than throwing
- * — tooling that probes for keys is a legitimate use case, and there
- * is no risk of corrupting durable state on a read.
+ * Read-only. No allowlist check is applied on read (the allowlist gates
+ * writes); a `key` that was never written simply has no file.
+ *
+ * @param input see {@link GetModuleStateInput}.
+ * @param ctx ambient context; `ctx.moduleStateStore` injects the store seam.
+ * @returns the {@link ModuleStateRecord}, or `null` when no state exists for
+ *   that module/key.
  */
 export function getModuleState(
   input: GetModuleStateInput,
@@ -392,17 +492,26 @@ export function getModuleState(
   return loadModuleState(input.name, input.key, root, ctx.moduleStateStore);
 }
 
+/**
+ * Input to {@link listModules}.
+ *
+ * @property projectRoot accepted for interface symmetry but unused — the module
+ *   registry is process-global, not per-project.
+ */
 export interface ListModulesInput {
   projectRoot: string;
 }
 
 /**
- * Real read (M1). Returns the names of every registered module (i.e.
- * every module whose `manifest.json` was discovered and validated by
- * the loader). The `projectRoot` argument is unused today — module
- * registration is package-scoped, not per-project — but kept on the
- * input shape for forward-compatibility with future per-project
- * configuration views.
+ * List the names of all registered modules.
+ *
+ * Read-only. Reads the process-global module registry; the `input` (and so the
+ * `projectRoot`) is intentionally ignored — `void input` documents that and
+ * satisfies no-unused-vars.
+ *
+ * @param input see {@link ListModulesInput} (unused).
+ * @param _ctx ambient context (unused).
+ * @returns `{ modules }` — the registered module names.
  */
 export function listModules(
   input: ListModulesInput,
@@ -413,11 +522,28 @@ export function listModules(
   return { modules: registered.map((r) => r.name) };
 }
 
+/**
+ * Input to {@link getStackResolution}.
+ *
+ * @property projectRoot project directory; canonicalised before resolution.
+ * @property name the stack name to resolve.
+ */
 export interface GetStackResolutionInput {
   projectRoot: string;
   name: string;
 }
 
+/**
+ * Resolve a stack name to its winning file and tier *without* loading or
+ * parsing the file — the "where would this stack come from?" query.
+ *
+ * Read-only. Throws the resolver's `ConfigServerError` (e.g. `UnknownStack`,
+ * `MissingFile`) when the name cannot be resolved.
+ *
+ * @param input see {@link GetStackResolutionInput}.
+ * @param ctx ambient context steering resolution.
+ * @returns the {@link StackResolution} (path + tier).
+ */
 export function getStackResolution(
   input: GetStackResolutionInput,
   ctx: ReadToolContext = {},
@@ -429,28 +555,27 @@ export function getStackResolution(
   return resolveStackFile(input.name, root, opts);
 }
 
+/**
+ * Input to {@link getResolvedConfig}.
+ *
+ * @property projectRoot project directory; passed through to async composition
+ *   (canonicalisation happens inside the composer).
+ */
 export interface GetResolvedConfigInput {
   projectRoot: string;
 }
 
 /**
- * Return the F2 stable-shape resolved config. Cached per canonical project
- * root by the `cache.ts` singleton; consecutive calls return byte-identical
- * JSON (per F2's snapshot freshness rule).
+ * Compose and return the full resolved config for a project.
  *
- * The returned shape:
+ * The only async tool here: it uses {@link composeResolvedConfig} (the async
+ * composer) rather than the `*Sync` variants the other reads use, so detection
+ * that needs async I/O can run. Read-only; rejects with a `ConfigServerError`
+ * on a resolution failure.
  *
- *  - `apiVersion` — package semver.
- *  - `schemaVersions` — `{ stack: 1, overlay: 1 }`.
- *  - `stacks: { active, byName }` — active set + per-stack metadata
- *    (tier, path, schemaVersion).
- *  - `overlay` — cascaded overlay (the merged splice-point view).
- *  - `discarded` — list of `<block>.<field>` paths whose upstream
- *    contribution was discarded by `discardInherited` somewhere in the
- *    cascade.
- *  - `additionalContext` — path-resolution status for `planner` and
- *    `proposer` additionalContext entries.
- *  - `issues` — sorted list of every validation/cascade/detection issue.
+ * @param input see {@link GetResolvedConfigInput}.
+ * @param ctx ambient context steering resolution.
+ * @returns a promise of the {@link ResolvedConfig}.
  */
 export async function getResolvedConfig(
   input: GetResolvedConfigInput,
@@ -462,11 +587,24 @@ export async function getResolvedConfig(
   });
 }
 
+/** Narrow to a non-null, non-array object. */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Validate that `projectRoot` is a non-empty string; throw `MalformedInput` otherwise. */
+/**
+ * Validate that untrusted `input` carries a non-empty `projectRoot` string,
+ * returning it. A shared input guard used by the tool dispatch layer to fail
+ * fast on malformed requests before a tool runs.
+ *
+ * Throws `MalformedInput` ({@link ConfigServerError}) — naming the offending
+ * `tool` and `projectRoot` field — when `input` is not an object, lacks the
+ * field, or it is empty/non-string.
+ *
+ * @param input the raw, untrusted tool input.
+ * @param tool the calling tool's name, embedded in the error for diagnostics.
+ * @returns the validated `projectRoot`.
+ */
 export function requireProjectRoot(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.projectRoot !== 'string' || input.projectRoot.length === 0) {
     throw createError('MalformedInput', {
@@ -478,7 +616,16 @@ export function requireProjectRoot(input: unknown, tool: string): string {
   return input.projectRoot;
 }
 
-/** Validate that `name` is a non-empty string; throw `MalformedInput` otherwise. */
+/**
+ * Validate that untrusted `input` carries a non-empty `name` string, returning
+ * it. Companion to {@link requireProjectRoot} for name-bearing tools.
+ *
+ * Throws `MalformedInput` when the field is absent, empty, or non-string.
+ *
+ * @param input the raw, untrusted tool input.
+ * @param tool the calling tool's name, embedded in the error.
+ * @returns the validated `name`.
+ */
 export function requireName(input: unknown, tool: string): string {
   if (!isObject(input) || typeof input.name !== 'string' || input.name.length === 0) {
     throw createError('MalformedInput', {
@@ -490,7 +637,17 @@ export function requireName(input: unknown, tool: string): string {
   return input.name;
 }
 
-/** Validate that `tier` is one of the three overlay tiers. */
+/**
+ * Validate that untrusted `input` carries a valid overlay `tier`, returning it
+ * narrowed to {@link OverlayTier}.
+ *
+ * Throws `MalformedInput` in two distinct cases with different messages: `tier`
+ * missing/non-string, or present-but-not one of `default`/`user`/`project`.
+ *
+ * @param input the raw, untrusted tool input.
+ * @param tool the calling tool's name, embedded in the error.
+ * @returns the validated overlay tier.
+ */
 export function requireOverlayTier(input: unknown, tool: string): OverlayTier {
   if (!isObject(input) || typeof input.tier !== 'string') {
     throw createError('MalformedInput', {

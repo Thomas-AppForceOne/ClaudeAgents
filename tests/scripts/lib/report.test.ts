@@ -1,15 +1,20 @@
 /**
- * Unit tests for `scripts/lib/report.ts`.
+ * Unit tests for the shared report formatters every CLI bin uses to print its
+ * outcome: `formatReport` (human-readable summary on stdout + per-failure
+ * detail on stderr) and `formatReportJson` (machine-readable, sorted-key,
+ * two-space-indented JSON).
  *
- * Covers the documented surface:
- *   - `formatReport` zero-failure path: empty stderr, summary on stdout.
- *   - `formatReport` failure path: per-failure stderr lines name the
- *     path, the issue code, and the message; summary stdout line stays
- *     a single sentence.
- *   - `formatReportJson` emits sorted-key two-space-indent JSON with a
- *     trailing newline (the F3 determinism shape) — we round-trip the
- *     output through JSON.parse to assert the documented schema.
+ * The tests pin the exact contract callers and CI depend on: the stdout
+ * summary line and its trailing newline, the "failed" count being unique
+ * FILES rather than raw failure entries, stderr carrying path/code/message for
+ * each failure, and the JSON form having stable key ordering plus a
+ * round-trippable `{ checked, failed, failures[] }` shape.
+ *
+ * Regression guarded: drift in the summary wording, the unique-file counting,
+ * or the JSON key order/shape would break downstream parsers and the bins'
+ * golden-output assertions.
  */
+
 import { describe, expect, it } from 'vitest';
 import {
   formatReport,
@@ -18,6 +23,8 @@ import {
   type ReportFailure,
 } from '../../../scripts/lib/index.js';
 
+// Two failures on DIFFERENT files, reused across cases to exercise both the
+// multi-file and same-file counting paths.
 const FAILURE_A: ReportFailure = {
   path: '/abs/proj/stacks/web-node.md',
   code: 'ScaffoldBannerPresent',
@@ -75,7 +82,7 @@ describe('formatReport (lint-stacks)', () => {
     };
     const out = formatReport(report);
     expect(out.stdout).toBe('2 stacks checked, 2 failed\n');
-    // One stderr line per failure record, terminated by `\n`.
+
     const lines = out.stderr.split('\n').filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain(FAILURE_A.path);
@@ -83,6 +90,8 @@ describe('formatReport (lint-stacks)', () => {
   });
 
   it('multiple failures on the same file: counts the file once', () => {
+    // Two failures sharing one path: the summary counts 1 failed FILE, but
+    // stderr still lists both individual issues.
     const second: ReportFailure = {
       path: FAILURE_A.path,
       code: 'SchemaMismatch',
@@ -94,8 +103,7 @@ describe('formatReport (lint-stacks)', () => {
       failures: [FAILURE_A, second],
     };
     const out = formatReport(report);
-    // Two stderr lines (one per failure record), but the summary
-    // counts unique files.
+
     expect(out.stdout).toBe('1 stacks checked, 1 failed\n');
     const lines = out.stderr.split('\n').filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
@@ -111,10 +119,14 @@ describe('formatReportJson (lint-stacks)', () => {
     };
     const json = formatReportJson(report);
     expect(json.endsWith('\n')).toBe(true);
-    // Two-space indent per the F3 pin.
+
+    // Two-space indent at top level (the leading-newline anchors confirm the
+    // pretty-print width).
     expect(json).toContain('\n  "checked": 1');
     expect(json).toContain('\n  "failed": 1');
-    // Keys at every depth are sorted lexicographically: `code` < `message` < `path`.
+
+    // Keys are emitted in sorted order; assert by relative index so the test
+    // is robust to whitespace: code < message < path alphabetically.
     const codeIdx = json.indexOf('"code"');
     const messageIdx = json.indexOf('"message"');
     const pathIdx = json.indexOf('"path"');

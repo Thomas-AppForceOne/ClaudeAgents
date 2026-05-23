@@ -1,47 +1,27 @@
-/**
- * F7 slice 4 — merge-aware `--cleanup` planner + executor, re-anchored to the
- * central store (over O2 §5.5).
- *
- * `--cleanup` ALWAYS deletes the central-store run directory
- * (`<store-root>/<repo-key>/runs/<run-id>/`) for every confirmed target — that
- * is the source-of-truth artifact removal, and its failure is the only step
- * that escalates to a non-zero batch exit (other per-run steps warn and
- * continue).
- *
- * Workspace handling depends on `workspace.createdByGan`:
- *
- *   - **gan-created (cases 1b/1c, `createdByGan === true`)** — remove the
- *     run-scoped worktree, then handle the task branch BY MERGE STATUS:
- *       * MERGED into its base/upstream -> delete locally (`git branch -D`) and,
- *         when a tracking branch exists, on the remote
- *         (`git push <remote> --delete <branch>`).
- *       * NOT merged -> WARN (naming the branch) and do NOT delete it without
- *         `--yes`/confirmation.
- *     The merge check ALWAYS runs BEFORE any deletion (no unconditional
- *     `git branch -D`).
- *   - **user-owned (case 1a, `createdByGan === false`)** — the worktree and
- *     branch are NEVER touched: only the central-store run dir is removed.
- *
- * Active-run guard: cleanup reads the central-store `run.lock`; if a target's
- * run id matches the lock's `runId` AND the holder pid is alive, cleanup
- * refuses (non-zero) naming the run id and pid — nothing is removed. A stale
- * lock (dead pid) is ignored.
- *
- * Subprocess safety (`shell_and_subprocess_safety`). The run-id, branch name,
- * base branch, worktree path, and remote name all trace to user-controlled
- * input and are UNTRUSTED. Every git invocation goes through the injectable
- * {@link GitExec} seam with an ARGV ARRAY (`execFileSync`, never a shell string,
- * never the shell-spawning option), so a value containing shell metacharacters
- * reaches git as ONE literal argument with no expansion. The destructive
- * branch deletes are gated on the prior merge-status check; the recorded argv
- * order proves merge-status precedes any `branch -D` / `push --delete`.
- *
- * Zone safety: the only filesystem write is the central-store run-dir deletion
- * (delegated to an injectable {@link RmDir} seam, defaulting to
- * `fs.rmSync(..., { recursive, force })`); nothing here reads or writes the
- * module-state store, `.claude/gan/`, or `.gan-cache/`.
- */
 
+
+/**
+ * Plan and execute teardown of a `/gan` run's on-disk footprint: its run
+ * directory, the worktree it ran in, and the branch that worktree held.
+ *
+ * The module is split into a pure planning phase ({@link planRunCleanup}) and a
+ * side-effecting execution phase ({@link executeRunCleanup}). Planning inspects
+ * git state and decides *what* should happen ({@link RunCleanupPlan}); execution
+ * carries it out and reports *what did* happen ({@link RunCleanupOutcome}). The
+ * split lets callers preview a destructive cleanup before committing to it.
+ *
+ * Two safety invariants run through the whole module:
+ * 1. Only artifacts the framework created are ever removed. A run the user set
+ *    up themselves (`createdByGan !== true`) is left entirely alone — its
+ *    worktree and branch are never touched.
+ * 2. An unmerged branch is never silently deleted: the default plan only warns,
+ *    and deletion happens solely when the caller passes `--yes`. This prevents
+ *    cleanup from destroying commits that exist nowhere else.
+ *
+ * Removing the run directory is treated as the one hard failure (it THROWS);
+ * worktree and branch removal failures are downgraded to warnings so a stuck
+ * git operation cannot block reclaiming the run's disk space.
+ */
 import { rmSync } from 'node:fs';
 
 import { createError } from '../errors.js';
@@ -49,70 +29,119 @@ import type { EnumeratedRun } from './run-enumerator.js';
 import { readRunLock, defaultIsAlive, type IsAlive } from './run-lock.js';
 import { defaultGitExec, resolveDefaultBranch, type GitExec } from './worktree-resolver.js';
 
-/** Recursive directory removal seam (tests). Defaults to `fs.rmSync`. */
+/** Injectable directory-removal seam (recursive `rm -rf`-style). Overridden in
+ * tests to assert on what would be deleted without touching the real disk. */
 export type RmDir = (dir: string) => void;
 
-/** Default directory-removal seam: `fs.rmSync(dir, { recursive, force })`. */
+/** Production {@link RmDir}: recursive, force-removes `dir` and never throws on
+ * a missing directory (`force: true`), so a double-cleanup is idempotent. */
 export const defaultRmDir: RmDir = (dir) => rmSync(dir, { recursive: true, force: true });
 
-/** How a target's branch should be handled, decided BEFORE any deletion. */
+/**
+ * What should happen to a run's branch during cleanup. The three arms are
+ * mutually exclusive:
+ * - `none` — do nothing. `reason` distinguishes a user-owned run from a
+ *   gan-owned run that simply has no branch to clean.
+ * - `delete-merged` — the branch is fully merged and safe to delete; `remote`
+ *   (when present) names the remote whose tracking branch should also be
+ *   deleted.
+ * - `warn-unmerged` — the branch has commits not reachable from its base or
+ *   upstream; deletion would lose work, so it is withheld pending `--yes`.
+ */
 export type BranchPlan =
   | { kind: 'none'; reason: 'user-owned' | 'no-branch' }
   | { kind: 'delete-merged'; branch: string; remote?: string }
   | { kind: 'warn-unmerged'; branch: string };
 
-/** The plan for a single run, computed before any side effect. */
+/**
+ * The cleanup decision for a single run, produced by {@link planRunCleanup} and
+ * consumed by {@link executeRunCleanup}. Pure data — computing it performs git
+ * reads but no mutations.
+ *
+ * @property runId the run's identifier (timestamp-suffix form).
+ * @property runDir absolute path to the run's directory in the central store;
+ *   always removed by execution regardless of ownership.
+ * @property createdByGan whether the framework created this run's workspace.
+ *   When `false`, worktree/branch are left untouched (only `runDir` is removed).
+ * @property worktreePath absolute path of the run's worktree, present only for
+ *   gan-created runs that have one.
+ * @property branchPlan the per-branch decision; see {@link BranchPlan}.
+ */
 export interface RunCleanupPlan {
-  /** The run id. */
+
   runId: string;
-  /** The central-store run dir to remove (always). */
+
   runDir: string;
-  /** Whether gan created the workspace (1b/1c) vs the user owns it (1a). */
+
   createdByGan: boolean;
-  /** The gan-created worktree to remove, when `createdByGan` is true. */
+
   worktreePath?: string;
-  /** How the branch is handled (merge status decided here, before deletes). */
+
   branchPlan: BranchPlan;
 }
 
-/** Per-run execution outcome. */
+/**
+ * Report of what {@link executeRunCleanup} actually did. Each boolean flips to
+ * `true` only when the corresponding action succeeded; warnings collect the
+ * human-readable lines for steps that were skipped or failed soft.
+ *
+ * @property runId the run that was cleaned.
+ * @property runDirRemoved whether the run directory was removed (the only step
+ *   whose failure throws, so on a returned outcome this is always `true`).
+ * @property worktreeRemoved whether the worktree was removed.
+ * @property branchDeletedLocal whether the local branch was deleted.
+ * @property branchDeletedRemote whether the remote tracking branch was deleted.
+ * @property warnings accumulated soft-failure / skip messages, also emitted via
+ *   the `warn` sink as they occur.
+ */
 export interface RunCleanupOutcome {
   runId: string;
-  /** `true` when the central-store run dir was removed. */
+
   runDirRemoved: boolean;
-  /** `true` when the run-scoped worktree was removed. */
+
   worktreeRemoved: boolean;
-  /** `true` when the local branch was deleted. */
+
   branchDeletedLocal: boolean;
-  /** `true` when the remote branch was deleted. */
+
   branchDeletedRemote: boolean;
-  /** Non-fatal warnings raised for this run (e.g. unmerged branch, step failure). */
+
   warnings: string[];
 }
 
-/** Options shared by the planner and executor. */
+/**
+ * Inputs shared by planning and execution.
+ *
+ * @property git git executor seam; defaults to {@link defaultGitExec}.
+ * @property fromDir directory git commands run in (`-C`/cwd); must sit inside
+ *   the repository whose worktrees/branches are being cleaned.
+ * @property remote remote name for tracking-branch deletion; defaults to
+ *   `'origin'`.
+ * @property defaultBranch optional explicit merge base; when omitted the base
+ *   is derived from the run record or, failing that, the repo's default branch.
+ */
 export interface CleanupOptions {
-  /** Injectable git seam; defaults to {@link defaultGitExec}. */
+
   git?: GitExec;
-  /** Directory the git commands run from (the main checkout). */
+
   fromDir: string;
-  /** Remote name for the remote-delete. Defaults to `origin`. */
+
   remote?: string;
-  /**
-   * Pre-resolved default branch, used as the merge base for runs that did not
-   * record a `baseBranch`. Supplying it once for a batch (e.g. `--cleanup
-   * --all`) avoids re-resolving the repo-constant default branch per run.
-   */
+
   defaultBranch?: string;
 }
 
-// ---- merge-status (always evaluated BEFORE any delete) --------------------
-
 /**
- * Resolve the base ref a branch is checked for merge against:
- * the run's recorded `baseBranch` when present, else a caller-supplied
- * pre-resolved `defaultBranch`, else the slice-2 {@link resolveDefaultBranch}
- * (origin/HEAD -> init.defaultBranch -> develop/main/master), else `undefined`.
+ * Pick the ref to test the run's branch against for "is it merged?".
+ *
+ * Precedence: the base branch the run recorded at start (authoritative — it is
+ * what the run actually diverged from), then a caller-supplied override, then
+ * the repository's discovered default branch. Returns `undefined` when none can
+ * be determined, in which case merge-detection falls back to upstream only.
+ *
+ * @param git git executor.
+ * @param fromDir directory git runs in.
+ * @param run the run whose `baseBranch` is preferred when present.
+ * @param defaultBranch caller override, used only if the run recorded no base.
  */
 export function resolveMergeBase(
   git: GitExec,
@@ -125,12 +154,19 @@ export function resolveMergeBase(
 }
 
 /**
- * `true` when `branch`'s tip is an ancestor of `base` OR its upstream
- * (`@{upstream}`) — i.e. the branch is MERGED. Uses
- * `git merge-base --is-ancestor <branch> <ref>` (exit 0 = ancestor); the seam
- * surfaces a non-zero exit as a throw, which we map to `false`. The branch and
- * every ref are passed as discrete argv elements, never interpolated into a
- * shell line.
+ * Decide whether `branch` is fully merged — i.e. safe to delete without losing
+ * commits. A branch counts as merged when it is an ancestor of *either* its
+ * base ref *or* its upstream tracking branch (whichever exist). Checking both
+ * avoids a false "unmerged" when work landed via one path but not the other
+ * (e.g. merged into the remote but the local base hasn't been pulled).
+ *
+ * @param git git executor.
+ * @param fromDir directory git runs in.
+ * @param branch the branch under test.
+ * @param base the base ref to test against; `undefined`/empty contributes no
+ *   ref, leaving only the upstream check.
+ * @returns `true` if `branch` is an ancestor of any candidate ref. Never throws
+ *   — git failures are treated as "not an ancestor of that ref".
  */
 export function isBranchMerged(
   git: GitExec,
@@ -146,8 +182,10 @@ export function isBranchMerged(
 }
 
 /**
- * The branch's configured upstream tracking ref (`@{upstream}`), or `undefined`
- * when none is configured. The branch is passed as a discrete argv element.
+ * Resolve `branch`'s configured upstream (e.g. `origin/feature/x`), or
+ * `undefined` when the branch has no tracking ref. The git command errors when
+ * no upstream is set, so the throw is caught and folded into `undefined` rather
+ * than propagated — "no upstream" is a normal state, not a fault.
  */
 function resolveUpstream(git: GitExec, fromDir: string, branch: string): string | undefined {
   try {
@@ -159,10 +197,10 @@ function resolveUpstream(git: GitExec, fromDir: string, branch: string): string 
 }
 
 /**
- * `true` when `branch`'s tip is an ancestor of ANY ref in `refs` — i.e. the
- * branch is merged. `git merge-base --is-ancestor <branch> <ref>` exits 0 when
- * it is an ancestor; the seam surfaces a non-zero exit as a throw, mapped to a
- * "try the next ref" miss. Branch and refs are discrete argv elements.
+ * Return `true` if `branch` is an ancestor of any ref in `refs`. Uses
+ * `git merge-base --is-ancestor`, which exits non-zero (and so throws here)
+ * when the branch is *not* an ancestor — that non-zero is the expected "no"
+ * answer for this ref, so it is swallowed and the loop tries the next ref.
  */
 function isMergedIntoAny(
   git: GitExec,
@@ -181,12 +219,21 @@ function isMergedIntoAny(
   return false;
 }
 
-// ---- planning (no side effects) -------------------------------------------
-
 /**
- * Plan cleanup for a single run WITHOUT performing any side effect. Classifies
- * the workspace and — for a gan-created branch — evaluates merge status now, so
- * the destructive decision is made strictly before any delete is issued.
+ * Compute the cleanup plan for one run without performing any deletion. Pure
+ * apart from git *reads* (merge/upstream detection).
+ *
+ * Decision flow:
+ * 1. Not gan-created → `branchPlan: none/user-owned`, no worktree touched.
+ * 2. Gan-created but no branch recorded → `none/no-branch`.
+ * 3. Gan-created with a branch → test merged-ness; `warn-unmerged` if not
+ *    merged, else `delete-merged` (carrying `remote` only when an upstream
+ *    exists, so a purely-local branch is not pushed-deleted).
+ *
+ * @param run the enumerated run to plan for; its `workspace`/`runBranch`/
+ *   `baseBranch` fields drive the decision.
+ * @param opts see {@link CleanupOptions}.
+ * @returns the {@link RunCleanupPlan}; never throws.
  */
 export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCleanupPlan {
   const git = opts.git ?? defaultGitExec;
@@ -194,7 +241,8 @@ export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCle
   const createdByGan = run.workspace?.createdByGan === true;
 
   if (!createdByGan) {
-    // Case 1a: never touch the user's worktree or branch.
+    // User-owned run: only the run directory is ours to remove; the worktree
+    // and branch belong to the user and are left entirely untouched.
     return {
       runId: run.runId,
       runDir: run.runDir,
@@ -215,9 +263,6 @@ export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCle
     };
   }
 
-  // Merge check FIRST — before the executor issues any delete. Resolve the
-  // upstream ref ONCE and reuse it for both the merge decision and the
-  // remote-delete decision (avoids probing `@{upstream}` twice per run).
   const base = resolveMergeBase(git, opts.fromDir, run, opts.defaultBranch);
   const upstream = resolveUpstream(git, opts.fromDir, branch);
   const refs: string[] = [];
@@ -246,36 +291,43 @@ export function planRunCleanup(run: EnumeratedRun, opts: CleanupOptions): RunCle
   };
 }
 
-// ---- execution ------------------------------------------------------------
-
-/** Options for {@link executeRunCleanup}. */
+/**
+ * Execution-time inputs, extending {@link CleanupOptions}.
+ *
+ * @property yes when `true`, authorises deleting an unmerged branch (the
+ *   `warn-unmerged` plan) — the explicit opt-in that overrides the safety
+ *   default of refusing to drop unmerged work.
+ * @property rmDir directory-removal seam; defaults to {@link defaultRmDir}.
+ * @property warn sink for warnings; defaults to writing to `stderr`.
+ */
 export interface ExecuteCleanupOptions extends CleanupOptions {
-  /** Confirmation gate: an unmerged branch is deleted only when this is true. */
+
   yes?: boolean;
-  /** Directory-removal seam; defaults to {@link defaultRmDir}. */
+
   rmDir?: RmDir;
-  /** Warning sink; defaults to `console.error`. */
+
   warn?: (line: string) => void;
 }
 
 /**
- * Execute a previously-computed {@link RunCleanupPlan}. Order of operations:
+ * Carry out a {@link RunCleanupPlan}, removing the worktree, handling the
+ * branch, and removing the run directory, in that order.
  *
- *   1. Remove the run-scoped worktree (gan-created only) — best-effort.
- *   2. Handle the branch per the plan (merge status was decided in planning,
- *      strictly before this point):
- *        - `delete-merged` -> `git branch -D` locally, then
- *          `git push <remote> --delete <branch>` when a remote was planned.
- *        - `warn-unmerged` -> warn naming the branch; delete only when
- *          `yes === true` (then warn + delete); otherwise leave it.
- *        - `none` -> touch nothing (user-owned or no branch).
- *   3. ALWAYS remove the central-store run dir. A failure here is the only
- *      step that throws (escalating to a non-zero batch exit); every other
- *      step warns and continues.
+ * Ordering is deliberate: the worktree is removed before the run directory so
+ * the worktree's git metadata is gone first; branch handling sits between them.
  *
- * Returns a {@link RunCleanupOutcome} describing what happened.
+ * Side effects: removes a git worktree, deletes local/remote branches, and
+ * recursively removes the run directory — all on disk and in git.
  *
- * @throws ConfigServerError when the central-store run-dir removal fails.
+ * Failure modes: worktree removal and branch deletion failures are SOFT — they
+ * are recorded in `outcome.warnings`, emitted via `warn`, and execution
+ * continues. Only run-directory removal is HARD: a failure THROWS
+ * `ConfigServerError('MalformedInput')`, because leaving the run directory
+ * behind would defeat the entire cleanup.
+ *
+ * @param plan the precomputed plan (see {@link planRunCleanup}).
+ * @param opts see {@link ExecuteCleanupOptions}.
+ * @returns a {@link RunCleanupOutcome} describing what succeeded.
  */
 export function executeRunCleanup(
   plan: RunCleanupPlan,
@@ -293,26 +345,30 @@ export function executeRunCleanup(
     warnings: [],
   };
 
-  // 1. Remove the gan-created worktree (best-effort).
   if (plan.createdByGan && plan.worktreePath !== undefined) {
     try {
+      // `--force` so a dirty worktree is still removed: cleanup is invoked on a
+      // run we are tearing down, where uncommitted changes in its scratch
+      // worktree are expected and discardable.
       git(['worktree', 'remove', '--force', plan.worktreePath], opts.fromDir);
       outcome.worktreeRemoved = true;
     } catch {
+      // Soft failure: a stuck/locked worktree must not block reclaiming the
+      // run directory, so we warn and press on.
       const w = `Run ${plan.runId}: could not remove worktree ${plan.worktreePath}; continuing.`;
       outcome.warnings.push(w);
       warn(w);
     }
   }
 
-  // 2. Branch handling (merge status already decided in the plan).
   handleBranch(plan, opts, git, warn, outcome);
 
-  // 3. ALWAYS remove the central-store run dir. Failure escalates.
   try {
     rmDir(plan.runDir);
     outcome.runDirRemoved = true;
   } catch (e) {
+    // The one hard failure: if the run directory survives, the run is not
+    // actually cleaned up, so this propagates instead of degrading to a warning.
     throw createError('MalformedInput', {
       path: plan.runDir,
       field: 'runDir',
@@ -325,6 +381,12 @@ export function executeRunCleanup(
   return outcome;
 }
 
+/**
+ * Apply the branch portion of a plan. A `none` plan is a no-op; a
+ * `delete-merged` plan deletes local (and, if a remote was recorded, remote);
+ * a `warn-unmerged` plan only warns — unless `opts.yes` is set, the gate that
+ * authorises destroying unmerged commits. All git failures here are soft.
+ */
 function handleBranch(
   plan: RunCleanupPlan,
   opts: ExecuteCleanupOptions,
@@ -340,20 +402,29 @@ function handleBranch(
     return;
   }
 
-  // warn-unmerged: always warn naming the branch.
   const line =
     `Run ${plan.runId}: branch '${bp.branch}' is not merged into its base/upstream; ` +
     `its commits would be lost if deleted.`;
   outcome.warnings.push(line);
   warn(line);
   if (opts.yes === true) {
-    // The user explicitly confirmed; delete the unmerged branch.
+    // `remote` is passed as undefined here on purpose: a forced delete of an
+    // unmerged branch only drops the local ref, never the pushed copy — the
+    // remote remains as a recovery point for the un-merged commits.
     warn(`Run ${plan.runId}: deleting unmerged branch '${bp.branch}' (--yes given).`);
     deleteBranchLocalAndRemote(bp.branch, undefined, opts, git, warn, outcome);
   }
   // Without --yes: leave the branch in place (no delete argv issued).
 }
 
+/**
+ * Delete `branch` locally and, when `remote` is given, on that remote too.
+ * Local deletion uses `-D` (force) because the merged-ness check already
+ * happened during planning; relying on git's own `-d` merge check here would
+ * double-check against the wrong base. Both deletions are soft — a failure is
+ * warned and recorded, never thrown — so a missing or protected branch does not
+ * abort the surrounding cleanup.
+ */
 function deleteBranchLocalAndRemote(
   branch: string,
   remote: string | undefined,
@@ -382,28 +453,39 @@ function deleteBranchLocalAndRemote(
   }
 }
 
-// ---- active-run guard ------------------------------------------------------
-
-/** Result of {@link checkActiveRunGuard}. */
+/**
+ * Outcome of the pre-cleanup safety check.
+ *
+ * @property ok `true` when cleanup may proceed; `false` when a target run is
+ *   live and must not be torn down.
+ * @property runId the live run's id (only on `ok: false`).
+ * @property pid the live run's process id (only on `ok: false`).
+ * @property message human-readable refusal explaining why and what to do (only
+ *   on `ok: false`).
+ */
 export interface ActiveRunGuardResult {
-  /** `true` when cleanup may proceed (no live lock on a target). */
+
   ok: boolean;
-  /** The active run id, when refused. */
+
   runId?: string;
-  /** The active holder pid, when refused. */
+
   pid?: number;
-  /** The refusal message, when refused. */
+
   message?: string;
 }
 
 /**
- * Refuse cleanup of any target that is currently active. Reads the central-store
- * `run.lock`; if its `runId` is among `targetRunIds` AND its `pid` is alive,
- * returns `{ ok: false, ... }` naming the run id and pid. A stale lock (dead
- * pid) or a non-matching lock is ignored (`{ ok: true }`).
+ * Refuse to clean up a run that is currently executing. Reads the repo's run
+ * lock and blocks (`ok: false`) only when all three hold: a lock is present,
+ * its holder is one of `targetRunIds`, and that holder's process is still
+ * alive. A stale lock (holder process gone) does not block — `ok: true`.
  *
- * Side-effect-free: the caller maps a non-`ok` result to a non-zero exit and
- * removes nothing.
+ * @param lockPath path to the repository's `run.lock`.
+ * @param targetRunIds the run ids the caller intends to clean; the guard only
+ *   fires when the live lock holder is among them.
+ * @param isAlive liveness probe for the holder pid; defaults to
+ *   {@link defaultIsAlive}. Injected in tests to simulate a live/dead holder.
+ * @returns an {@link ActiveRunGuardResult}; never throws.
  */
 export function checkActiveRunGuard(
   lockPath: string,
@@ -413,7 +495,7 @@ export function checkActiveRunGuard(
   const holder = readRunLock(lockPath);
   if (holder === undefined) return { ok: true };
   if (!targetRunIds.includes(holder.runId)) return { ok: true };
-  if (!isAlive(holder.pid)) return { ok: true }; // stale lock; ignore
+  if (!isAlive(holder.pid)) return { ok: true };
   return {
     ok: false,
     runId: holder.runId,

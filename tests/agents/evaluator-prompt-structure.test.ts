@@ -1,17 +1,36 @@
 /**
- * T1 Sprint 3 — structure check for the reconciled evaluator prompt (F3.1).
+ * gan-evaluator prompt-structure suite — reads the SHIPPED agents/gan-evaluator.md
+ * verbatim and asserts the prompt documents the contract the evaluator-core
+ * code enforces, so prompt and code can never drift apart.
  *
- * Covers contract criterion:
- *  - evaluator_prompt_documents_bundle_shape
+ * Two concerns:
+ * 1. Evidence-bundle shape (T1): the prompt must spell out the artifact path,
+ *    the top-level fields, the per-criterion fields, the four verdict values,
+ *    the join key against the contract criterion `name`, how to gather
+ *    traceEventRefs as `<eventType>:<sequenceNumber>`, a deterministic
+ *    reproductionCommand, how to fill deltaFromContract, and that a `fail`
+ *    verdict carries BOTH repro + delta. It must NOT carry the legacy
+ *    feedback-artifact shape, and must preserve the scoring/plan guidance.
+ * 2. Doc-lint snapshot input (BEH-1/2/3, FUNC-4): a `docLintCmd` bullet must
+ *    document absence-tolerance, baseline delta-vs-absolute, severity
+ *    gates-or-warns routing, and layer-(c) per-criterion gating with no
+ *    special-casing.
  *
- * The shape is schema-pinned (Sprint 1, evaluator-evidence-bundle-v1.json);
- * agents/gan-evaluator.md is the source of truth for HOW the bundle is
- * produced. This test asserts the prompt documents the T1 evidence-bundle
- * shape and the production guidance, that the legacy
- * {passed, feedback[], blockingConcerns[], overallSummary} prose is gone, and
- * that the prose carries no repo-internal process leak or ecosystem tool
- * tokens (lint-no-stack-leak / error-text discipline).
+ * Boundary discipline (the load-bearing negative assertions): the shipped
+ * prompt must leak NO repo-internal process references (roadmap.md,
+ * PROJECT_CONTEXT, etc.) and NO ecosystem-specific tokens (npm, package.json,
+ * tsconfig.json, ...), enforcing lint-no-stack-leak — the framework prompt is
+ * the product and must stay stack-agnostic.
+ *
+ * docLintBullet() slices out just the docLintCmd bullet (from its marker to the
+ * next snapshot-input bullet) so the BEH/HYG assertions target that one bullet
+ * rather than the whole prompt — e.g. HYG-1 checks the bullet itself carries no
+ * ecosystem token and restates no documentation-standard prose.
+ *
+ * The string and regex tokens here are search terms / expected prompt content,
+ * not code.
  */
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -80,11 +99,11 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
   });
 
   it('does NOT carry the legacy feedback-artifact shape', () => {
-    // The legacy top-level keys must be gone from the documented output shape.
+
     expect(prompt).not.toContain('"overallSummary"');
     expect(prompt).not.toContain('overallSummary');
     expect(prompt).not.toContain('blockingConcerns');
-    // The legacy per-entry score map shape.
+
     expect(prompt).not.toContain('"criterion": "criterion_name"');
   });
 
@@ -95,7 +114,7 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
 
   it('preserves the scoring discipline (1-10 against the per-criterion threshold)', () => {
     expect(prompt).toContain('threshold');
-    expect(prompt).toMatch(/1.?10/); // the 1-10 scale
+    expect(prompt).toMatch(/1.?10/);
   });
 
   it('leaks no repo-internal process references', () => {
@@ -116,6 +135,74 @@ describe('evaluator_prompt_documents_bundle_shape', () => {
       'tsconfig.json',
     ]) {
       expect(prompt, `ecosystem token: ${token}`).not.toContain(token);
+    }
+  });
+});
+
+function docLintBullet(): string {
+  const marker = '`snapshot.activeStacks[*].docLintCmd`';
+  const start = prompt.indexOf(marker);
+  expect(start, 'docLintCmd snapshot-input bullet must exist').toBeGreaterThan(-1);
+  const rest = prompt.slice(start);
+
+  const nextField = rest.indexOf('- `snapshot.activeStacks[*].testCmd`');
+  return nextField === -1 ? rest : rest.slice(0, nextField);
+}
+
+describe('evaluator_prompt_documents_doc_lint_snapshot_input (BEH-1/BEH-3 prompt layer)', () => {
+  it('the snapshot-input list gains a docLintCmd bullet', () => {
+    expect(prompt).toContain('`snapshot.activeStacks[*].docLintCmd`');
+  });
+
+  it('BEH-1 — the bullet instructs absence-tolerance parallel to auditCmd (warn, do not fail for absence alone)', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('absenceSignal');
+    expect(bullet).toContain('absenceMessage');
+
+    expect(bullet.toLowerCase()).toContain('warning');
+
+    expect(bullet).toMatch(/do (\*\*)?not(\*\*)? score the documentation criterion as failed/i);
+
+    expect(bullet.toLowerCase()).toContain('remainder of the plan');
+  });
+
+  it('BEH-2 — the bullet documents the baseline delta-vs-absolute semantics', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('baseline');
+    expect(bullet).toContain('delta');
+    expect(bullet).toContain('absolute');
+
+    expect(bullet.toLowerCase()).toContain('base ref');
+  });
+
+  it('BEH-3 — the bullet documents the severity gates-or-warns routing', () => {
+    const bullet = docLintBullet();
+    expect(bullet).toContain('severity');
+
+    expect(bullet).toMatch(/blocker.{0,40}fail/i);
+    expect(bullet).toMatch(/warning.{0,60}record/i);
+    expect(bullet).toMatch(/advisory.{0,80}never block/i);
+  });
+
+  it('BEH-3 — the bullet states layer-(c) documentation criteria gate through the existing per-criterion path', () => {
+    const bullet = docLintBullet();
+    expect(bullet.toLowerCase()).toContain('per-criterion');
+    expect(bullet).toMatch(/below its `?threshold`?/i);
+    expect(bullet).toMatch(/no special-casing/i);
+  });
+
+  it('FUNC-4 — the Deterministic core plan-coverage list gains a per-stack doc-lint line', () => {
+    expect(prompt).toMatch(/Per-stack doc-lint invocations/i);
+  });
+
+  it('HYG-1 — the docLintCmd bullet restates no documentation-standard prose and carries no ecosystem token', () => {
+    const bullet = docLintBullet();
+
+    expect(bullet.toLowerCase()).not.toContain("parameter's meaning");
+    expect(bullet.toLowerCase()).not.toContain('doc comment');
+
+    for (const token of ['npm', 'doc-lint', 'package.json', 'pnpm', 'yarn']) {
+      expect(bullet, `ecosystem token in docLintCmd bullet: ${token}`).not.toContain(token);
     }
   });
 });

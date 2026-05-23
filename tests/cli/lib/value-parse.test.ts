@@ -1,13 +1,11 @@
-/**
- * R3 sprint 3 — `parseCliValue` unit tests.
- *
- * Covers every documented surface from `src/cli/lib/value-parse.ts`:
- *   - JSON literal parsing (booleans, numbers, arrays, objects, null).
- *   - Bare-string fallback for unquoted words.
- *   - Edge cases: empty string, JSON-with-leading-whitespace, hex-like
- *     bare words, the literal string `"null"` (quoted) vs the bare word
- *     `null`, deeply-nested JSON.
- */
+// Tests for `parseCliValue`, the converter behind CLI commands that take a
+// `--value`. The contract is "JSON-first with a bare-string fallback": a token
+// that parses as JSON becomes that typed value (boolean, number, null, array,
+// object, or the inner string of a quoted literal), and a token that does NOT
+// parse as JSON is returned verbatim as a string. This lets users pass typed
+// config without quoting, while shell-friendly bare values like `docs/notes.md`
+// or `0xff` (not valid JSON) still round-trip as plain strings.
+
 import { describe, expect, it } from 'vitest';
 import { parseCliValue } from '../../../src/cli/lib/value-parse.js';
 
@@ -41,7 +39,7 @@ describe('parseCliValue', () => {
   });
 
   it('parses JSON-quoted strings as the inner string', () => {
-    // `"hello"` is valid JSON whose value is the string `hello`.
+
     expect(parseCliValue('"hello"')).toBe('hello');
     expect(parseCliValue('""')).toBe('');
   });
@@ -49,10 +47,13 @@ describe('parseCliValue', () => {
   it('falls back to bare strings when JSON parse fails', () => {
     expect(parseCliValue('hello')).toBe('hello');
     expect(parseCliValue('docs/notes.md')).toBe('docs/notes.md');
-    // Multi-word ARGV is one shell-joined token; the value parser doesn't
-    // care about spaces.
+
+    // Has an interior space, so it is not a valid JSON token: kept verbatim
+    // (a command string the user typed, e.g. for a `testCmd` field).
     expect(parseCliValue('vitest run')).toBe('vitest run');
-    // Hex-like — not valid JSON, falls back to string.
+
+    // `0xff` is a number to a human but NOT valid JSON (JSON has no hex), so the
+    // fallback preserves it as the literal string rather than guessing 255.
     expect(parseCliValue('0xff')).toBe('0xff');
   });
 
@@ -66,7 +67,8 @@ describe('parseCliValue', () => {
   });
 
   it('JSON with leading whitespace still parses', () => {
-    // JSON.parse tolerates leading whitespace per the spec.
+    // Surrounding whitespace is insignificant to JSON.parse, so a padded number
+    // token still yields the number — the shell may leave such padding behind.
     expect(parseCliValue('   8  ')).toBe(8);
   });
 

@@ -1,22 +1,24 @@
+
+
 /**
- * Per-stack `auditCmd` resolution.
- *
- * For each active stack that declares an `auditCmd`, emits one row with
- * the verbatim command, the stack's `absenceSignal`, and the stack name
- * for provenance. Stacks without `auditCmd` are silently skipped (the
- * absence is itself the signal — there is no implicit "no audit
- * tool" entry).
- *
- * All commands flow from `snapshot.activeStacks[*].auditCmd` — the
- * carve-out hard-codes no ecosystem-specific audit tooling. This is
- * what makes the multi-stack guard rail (synthetic-second + polyglot
- * fixtures + `lint-no-stack-leak`) correct by construction.
- *
- * Result is sorted by `stack` so the plan output is deterministic.
+ * Builder for {@link EvaluatorPlan.auditCommands}: collects the audit command
+ * each active stack declares.
  */
 
 import type { EvaluatorCoreSnapshot, EvaluatorPlan } from './types.js';
 
+/**
+ * Emit one audit-command row per stack that declares an `auditCmd`, sorted by
+ * stack name for determinism.
+ *
+ * Stacks without an audit command are skipped, so a stack contributes at most
+ * one row and may contribute none. The `absenceSignal` is carried through as
+ * data; this builder takes no action on a missing command itself. Pure and
+ * non-throwing; never returns `undefined`.
+ *
+ * @param snapshot resolved config; only `activeStacks[].auditCmd` is read.
+ * @returns audit rows, one per declaring stack, ordered by stack name.
+ */
 export function buildAuditCommands(
   snapshot: EvaluatorCoreSnapshot,
 ): EvaluatorPlan['auditCommands'] {

@@ -1,3 +1,20 @@
+// Verifies the trust-log writer's contract: it is a no-op unless a run is
+// active, and when active it emits exactly one deterministic JSON line per
+// event to a run-scoped log file.
+//
+// Two invariants are load-bearing and each has a dedicated test:
+//  1. Silence without a run. `logTrustEvent` must produce NOTHING — no stderr,
+//     no file — when GAN_RUN_ID is unset, so calling it outside a run never
+//     litters the cwd. (Contrast the general logger, which falls back to
+//     stderr; the trust log does not.)
+//  2. Deterministic, append-only JSON-lines. Each call appends one line keyed
+//     by GAN_RUN_ID into <cwd>/.gan-state/runs/<id>/logs/trust.log, serialised
+//     via stableStringify so keys come out alphabetically — which is why the
+//     key-order test asserts action < hash < projectRoot < result < timestamp.
+//
+// `process.cwd()` is mocked to a temp dir (cwdSpy) so the writer's
+// cwd-relative path resolution is captured under the scratch tree; GAN_RUN_ID
+// is saved/restored around each test so the suite does not leak run state.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,9 +30,7 @@ describe('logging/trust-log', () => {
   beforeEach(() => {
     tmpCwd = mkdtempSync(path.join(tmpdir(), 'r5-trust-log-'));
     originalRunId = process.env.GAN_RUN_ID;
-    // Vitest worker threads forbid `process.chdir`. Spy on `process.cwd`
-    // so the trust-log module sees the temp dir as its working
-    // directory without us actually chdir-ing.
+
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tmpCwd);
   });
 
@@ -28,6 +43,8 @@ describe('logging/trust-log', () => {
 
   it('is silent when GAN_RUN_ID is unset (no stderr, no file)', () => {
     delete process.env.GAN_RUN_ID;
+    // Capture every stderr write so we can assert NONE happened — the trust log
+    // must not fall back to stderr the way the general logger does.
     const writes: string[] = [];
     const spy = vi
       .spyOn(process.stderr, 'write')
@@ -44,15 +61,15 @@ describe('logging/trust-log', () => {
     } finally {
       spy.mockRestore();
     }
-    // No stderr writes — outside a /gan run, the trust event stream is
-    // suppressed entirely so CLI output / test stderr stay clean.
+
     expect(writes.length).toBe(0);
-    // No file written either: `.gan-state/` should not have been
-    // created under tmpCwd.
+
+    // The writer may legitimately never create .gan-state at all; if some other
+    // code did create it, it must at least be empty. Either shape counts as "no
+    // file written".
     const stateDir = path.join(tmpCwd, '.gan-state');
     if (existsSync(stateDir)) {
-      // If the dir exists for some unrelated reason, it must be empty
-      // of trust-log artifacts.
+
       const entries = readdirSync(stateDir);
       expect(entries).toEqual([]);
     } else {
@@ -74,7 +91,8 @@ describe('logging/trust-log', () => {
     const contents = readFileSync(expected, 'utf8');
     expect(contents).toContain('"action": "check"');
     expect(contents).toContain('"hash": "sha256:abc"');
-    // One JSON record per call → one line.
+
+    // Exactly one non-empty line: one event produces one JSON-lines record.
     expect(contents.split('\n').filter((l) => l.length > 0).length).toBe(1);
   });
 
@@ -101,7 +119,11 @@ describe('logging/trust-log', () => {
     });
     const expected = path.join(tmpCwd, '.gan-state', 'runs', 'run-keys', 'logs', 'trust.log');
     const line = readFileSync(expected, 'utf8');
-    // Keys should appear in alphabetical order: action < hash < projectRoot < result < timestamp.
+
+    // Keys must appear in alphabetical order on the line — the observable proof
+    // that the writer used stableStringify (sorted keys) rather than insertion
+    // order. The byte offsets must be strictly increasing in the order
+    // action < hash < projectRoot < result < timestamp.
     const idxAction = line.indexOf('"action"');
     const idxHash = line.indexOf('"hash"');
     const idxProjectRoot = line.indexOf('"projectRoot"');

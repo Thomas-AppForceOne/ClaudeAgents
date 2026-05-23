@@ -1,3 +1,11 @@
+// Pins the C5 stack-file resolution invariants: which on-disk tier wins when a
+// stack name exists in more than one place. The precedence is
+// project > user > built-in (package) > project-local fixture fallback. The
+// suite also asserts that an explicit userHome overrides the env-var fallbacks,
+// that an unresolvable stack throws MissingFile, and that the MissingFile
+// message enumerates every path that was checked (so a user can see exactly
+// where the loader looked). A final case pins that packageRoot() is memoised
+// and resolves to the config-server package.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +20,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 const jsTsMinimal = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'js-ts-minimal');
 
+// Identical stub content written into each candidate tier; resolution is by
+// path/tier precedence, not by file contents, so one shared body is enough.
 const STUB_STACK = ['---', 'name: web-node', 'schemaVersion: 1', '---', 'body', ''].join('\n');
 
 describe('resolveStackFile (C5 invariants)', () => {
@@ -35,7 +45,8 @@ describe('resolveStackFile (C5 invariants)', () => {
   });
 
   it('user tier wins over built-in tier', () => {
-    // Seed `<projectRoot>/stacks/web-node.md` (built-in) and a user-tier file.
+    // Same stack present in both the project-local built-in dir and the user
+    // dir; the user tier must take precedence.
     const builtinDir = path.join(workRoot, 'stacks');
     mkdirSync(builtinDir, { recursive: true });
     writeFileSync(path.join(builtinDir, 'web-node.md'), STUB_STACK);
@@ -79,7 +90,6 @@ describe('resolveStackFile (C5 invariants)', () => {
     mkdirSync(userStacksDir, { recursive: true });
     writeFileSync(path.join(userStacksDir, 'web-node.md'), STUB_STACK);
 
-    // workRoot has neither project- nor built-in-tier file, so user tier wins.
     const resolved = resolveStackFile('web-node', workRoot, { userHome });
     expect(resolved.tier).toBe('user');
   });
@@ -103,8 +113,9 @@ describe('resolveStackFile — built-in package vs. fixture fallback (4-tier)', 
   });
 
   it('package-tier wins over the fixture-tier fallback', () => {
-    // Both `<packageRoot>/stacks/web-node.md` AND `<projectRoot>/stacks/web-node.md`
-    // exist. Resolver returns the package-tier path, still labelled `'builtin'`.
+    // Both the installed-package stacks dir and the project-local fixture
+    // fallback carry the stack; the package tier (still reported as 'builtin')
+    // wins, so the resolved path points into pkgRoot.
     const pkgStacksDir = path.join(pkgRoot, 'stacks');
     mkdirSync(pkgStacksDir, { recursive: true });
     writeFileSync(path.join(pkgStacksDir, 'web-node.md'), STUB_STACK);
@@ -118,9 +129,8 @@ describe('resolveStackFile — built-in package vs. fixture fallback (4-tier)', 
   });
 
   it('falls back to <projectRoot>/stacks/<name>.md when packageRoot is empty', () => {
-    // packageRoot points at a tmp dir without any `stacks/` directory; the
-    // project-tier fixture path serves as the 4th-tier fallback. Provenance
-    // is still `'builtin'`.
+    // pkgRoot exists but has no stacks dir, so resolution falls through to the
+    // project-local <projectRoot>/stacks fixture as the built-in tier.
     const projStacksDir = path.join(workRoot, 'stacks');
     mkdirSync(projStacksDir, { recursive: true });
     writeFileSync(path.join(projStacksDir, 'web-node.md'), STUB_STACK);
@@ -131,7 +141,9 @@ describe('resolveStackFile — built-in package vs. fixture fallback (4-tier)', 
   });
 
   it('MissingFile message enumerates all four checked paths', () => {
-    // Neither package-tier nor any fallback contains the named stack.
+    // When a stack resolves nowhere, the error must list every candidate path
+    // (project, user, package, project-local fixture) so the user can see
+    // exactly where the loader looked.
     try {
       resolveStackFile('absent', workRoot, { userHome, packageRoot: pkgRoot });
       throw new Error('expected MissingFile');
@@ -139,13 +151,13 @@ describe('resolveStackFile — built-in package vs. fixture fallback (4-tier)', 
       expect(e).toBeInstanceOf(ConfigServerError);
       const err = e as ConfigServerError;
       expect(err.code).toBe('MissingFile');
-      // Project tier (under .claude/gan/stacks/).
+
       expect(err.message).toContain(path.join(workRoot, '.claude', 'gan', 'stacks', 'absent.md'));
-      // User tier.
+
       expect(err.message).toContain(path.join(userHome, '.claude', 'gan', 'stacks', 'absent.md'));
-      // Package-tier built-in.
+
       expect(err.message).toContain(path.join(pkgRoot, 'stacks', 'absent.md'));
-      // Project-tier fixture fallback.
+
       expect(err.message).toContain(path.join(workRoot, 'stacks', 'absent.md'));
     }
   });
@@ -155,9 +167,12 @@ describe('packageRoot() helper', () => {
   it('is memoized and points at @claudeagents/config-server', () => {
     const a = packageRoot();
     const b = packageRoot();
-    // Two consecutive calls return the same string (string equality).
+
+    // Memoised: repeated calls return the same string.
     expect(a).toBe(b);
-    // Reading <packageRoot()>/package.json yields the expected name.
+
+    // And it really is the config-server package root (its package.json name
+    // matches), not some ancestor directory.
     const pkgJson = JSON.parse(readFileSync(path.join(a, 'package.json'), 'utf8')) as {
       name?: string;
     };

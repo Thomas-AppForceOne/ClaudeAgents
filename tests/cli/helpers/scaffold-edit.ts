@@ -1,31 +1,43 @@
 /**
- * Shared helpers for the R6 scaffold tests — the "documented first-edit
- * pass" applied to a `buildScaffold` output, both at the parsed-body level
- * (schema/invariant unit checks) and at the text level (end-to-end
- * `validateAll`). Centralised here so `scaffold.test.ts` and
- * `scaffold-regression-guard.test.ts` (and the CLI end-to-end test) share
- * one definition instead of each carrying a copy.
+ * Test helpers for simulating the human edits a user makes to a freshly
+ * scaffolded stack file.
+ *
+ * A `gan stacks scaffold` output ships with a DRAFT banner and `TODO`-stubbed
+ * fields that intentionally fail validation until a human fills them in. These
+ * helpers reproduce that "edit the stub into a valid stack" step in two forms:
+ * a parsed-object form ({@link editedScaffoldBody}) and a textual find/replace
+ * form ({@link applyScaffoldFirstEditText}) that mirrors what a user would type
+ * by hand — so tests can assert the scaffold-then-edit round-trip validates.
  */
+
 import { buildScaffold, DRAFT_BANNER, type ScaffoldTier } from '../../../src/cli/lib/scaffold.js';
 import { parseYamlBlock } from '../../../src/config-server/storage/yaml-block-parser.js';
 
-/** The scaffold's second banner line (CI warning) — removed alongside the
- * DRAFT banner during the first-edit pass. */
+// The second comment line of the scaffold banner. Together with DRAFT_BANNER it
+// is what stripScaffoldBanner removes; held here as the single source of truth
+// so the strip logic and the banner stay in lockstep.
 export const SCAFFOLD_SECOND_LINE =
   "# `gan validate` and CI's lint-stacks will fail while this banner is present.";
 
-/** Parse the YAML frontmatter of a scaffold (parseYamlBlock tolerates the
- * leading DRAFT banner / comment prose). */
+/**
+ * Parse a stack file's YAML front-matter into a plain object.
+ *
+ * @param text the full scaffold/stack file source.
+ * @returns the parsed front-matter mapping, or `{}` when the block has no body.
+ */
 export function scaffoldFrontmatter(text: string): Record<string, unknown> {
   const parsed = parseYamlBlock(text);
   return (parsed.data ?? {}) as Record<string, unknown>;
 }
 
 /**
- * Programmatic documented first-edit pass on the PARSED body: replace every
- * TODO-marked stub with a schema-valid value. (Banner removal is a text
- * operation, irrelevant to the parsed frontmatter; see
- * {@link applyScaffoldFirstEditText} for the full-document version.)
+ * Build the object form of a scaffold that has been edited into a valid stack:
+ * the scaffold's own front-matter with every `TODO` stub overwritten by
+ * concrete, schema-valid values. Useful for tests that compare against an
+ * expected post-edit object without driving the textual edit path.
+ *
+ * @param name stack name fed to {@link buildScaffold}.
+ * @param tier scaffold tier (controls which fields the scaffold emits).
  */
 export function editedScaffoldBody(
   name: string,
@@ -44,9 +56,11 @@ export function editedScaffoldBody(
   };
 }
 
-/** Textually strip the DRAFT banner block (banner line + the second-line CI
- * warning that belongs to the banner block) from a scaffold, the way the
- * documented first-edit pass tells the author to. */
+/**
+ * Remove the two-line DRAFT banner from scaffold text, leaving the rest of the
+ * file (including its real comments) intact. Matches whole lines exactly so a
+ * line that merely contains the banner text is not accidentally dropped.
+ */
 export function stripScaffoldBanner(text: string): string {
   return text
     .split('\n')
@@ -55,18 +69,25 @@ export function stripScaffoldBanner(text: string): string {
 }
 
 /**
- * Apply the FULL documented first-edit pass to the scaffold TEXT: remove the
- * DRAFT banner block AND replace every TODO-stub value with a schema-valid
- * one. The result is the stack file a real user would hold after following
- * the scaffold's written instructions exactly — suitable for an end-to-end
- * `validateAll` (which also runs the `stack.no_draft_banner` invariant the
- * parsed-body checks cannot exercise).
+ * Apply the textual "first edit" pass to a raw scaffold: strip the banner and
+ * substitute each `TODO`-stubbed field for a concrete value, mimicking a user
+ * editing the file by hand.
  *
- * Throws if any expected stub is missing (so a future scaffold change cannot
- * silently turn a replacement into a no-op) or if a non-comment TODO value
- * survives the pass.
+ * Two guards make this strict rather than best-effort:
+ * - every expected stub MUST be present (a missing stub throws), so a drift in
+ *   the scaffold template surfaces here instead of silently producing
+ *   half-edited output;
+ * - after substitution, no non-comment line may still contain `TODO` (a
+ *   residual stub also throws), proving the edit pass left a fully valid stack.
+ *
+ * @param scaffoldText raw output of `buildScaffold` / `gan stacks scaffold`.
+ * @returns the edited, banner-free, TODO-free stack source.
+ * @throws Error if an expected stub is absent or a residual `TODO` value remains.
  */
 export function applyScaffoldFirstEditText(scaffoldText: string): string {
+  // Ordered [from, to] pairs. The `from` strings are the literal scaffold stubs
+  // (YAML fragments, including their inline `# TODO` comments) and the `to`
+  // strings are the concrete replacements — both are DATA, not code comments.
   const replacements: ReadonlyArray<readonly [string, string]> = [
     ['scope:\n  - "TODO/**/*"', 'scope:\n  - "src/**/*"'],
     [
@@ -92,6 +113,8 @@ export function applyScaffoldFirstEditText(scaffoldText: string): string {
   ];
   let out = stripScaffoldBanner(scaffoldText);
   for (const [from, to] of replacements) {
+    // Fail loudly if the template drifted: a stub we expected to replace is
+    // gone, so the rest of the pass would silently leave a stale/invalid field.
     if (!out.includes(from)) {
       throw new Error(
         `scaffold first-edit pass: expected stub not found: ${JSON.stringify(from)}`,
@@ -99,8 +122,10 @@ export function applyScaffoldFirstEditText(scaffoldText: string): string {
     }
     out = out.replace(from, to);
   }
-  // `# TODO:` comment lines are YAML comments and harmless to validation;
-  // a TODO in a *value* line would be a real defect. Guard the latter.
+
+  // Residual-TODO sweep: a comment line legitimately keeps its `# TODO`, so skip
+  // those; any non-comment line still carrying TODO means a value stub slipped
+  // through and the resulting stack would not validate.
   for (const line of out.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.startsWith('#')) continue;

@@ -1,46 +1,27 @@
+
+
 /**
- * R1 sprint 6 — write tool implementations.
+ * Mutation tools for the config-server.
  *
- * Direct library entry points for every F2 write tool. The MCP wrapper in
- * `index.ts` delegates here; tests and downstream library callers may also
- * import these functions directly (per the dual-callable surface rule).
+ * This module is the single write surface for everything the `/gan` loop
+ * persists: overlay documents (project/default/user tiers), stack files,
+ * the trust-approval cache, and per-module durable state. Every exported
+ * entrypoint shares three structural guarantees worth stating once here
+ * rather than repeating in each doc block:
  *
- * Three categories per F2:
+ * 1. Mutations are validate-then-write: the in-memory document is mutated
+ *    on a deep clone, validated against its schema, and only persisted if
+ *    validation produces no issues. A rejected mutation never touches disk.
+ * 2. Writes go through {@link atomicWriteFile} (temp-file + rename) so a
+ *    crash mid-write cannot leave a half-written config on disk.
+ * 3. A successful disk write invalidates the resolved-config cache for the
+ *    affected project root, and only after the write lands — so a failed
+ *    write never evicts a still-valid cache entry.
  *
- *  1. Zone-1 writes (real persistence):
- *     - `setOverlayField` / `appendToOverlayField` / `removeFromOverlayField`
- *       — operate on an overlay tier file (`<root>/.claude/gan/project.md`
- *       or `<userHome>/.claude/gan/user.md`). Composes-if-absent: if the
- *       overlay file does not exist, the helper creates it with the
- *       requested field plus `schemaVersion: 1`.
- *     - `updateStackField` / `appendToStackField` / `removeFromStackField`
- *       — operate on a stack file. Resolution goes through C5 (highest
- *       tier wins); writes typically land on the project-tier shadow
- *       (`.claude/gan/stacks/<name>.md`) when one exists.
- *
- *     Each of these follows the same five-step pipeline:
- *       1. Load the current file (or compose-if-absent for overlays).
- *       2. Apply the requested mutation in memory (deep clone first).
- *       3. Validate the new state through the schema validator. Cross-
- *          file invariants are not re-run on a single-file write — the
- *          orchestrator's next `validateAll` call exercises them.
- *       4. On validation failure: return `{ mutated: false, issues }`
- *          and persist nothing.
- *       5. On success: write via `yaml-block-writer` + `atomicWriteFile`,
- *          invalidate the cache, return `{ mutated: true, path, ... }`.
- *
- *  2. Trust writes (R5 S4):
- *     - `trustApprove` recomputes the project's aggregate hash, persists
- *       a record into the user-tier trust cache (`~/.claude/gan/trust-
- *       cache.json` via `cache-io.writeCache`), and emits an
- *       `action: 'approve'` audit-log line via `logTrustEvent`.
- *     - `trustRevoke` removes every approval for the project from the
- *       cache and emits an `action: 'revoke'` audit-log line.
- *
- *  3. Module no-ops (OQ4):
- *     - `setModuleState` / `appendToModuleState` / `removeFromModuleState`
- *       / `registerModule` return `{ mutated: false }` silently. Real
- *       module discovery ships with M1.
+ * Soft failures (bad input, schema rejection, duplicate entry) are returned
+ * as data in {@link WriteResult}; hard failures (allowlist violations,
+ * non-collection shapes, I/O errors that are not `ConfigServerError`)
+ * throw. Each export's doc block states which path applies.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -85,35 +66,70 @@ import {
 import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidden.js';
 import type { OverlayTier } from '../storage/overlay-loader.js';
 
+/**
+ * Re-export of the schema-validation {@link Issue} type. Callers that handle
+ * a `{ mutated: false; issues }` result need this shape, so it is surfaced
+ * from here to spare them an import from the validation layer.
+ */
 export type { Issue };
 
-/** Context shared by every write tool (logger + user-home override). */
+/**
+ * Ambient context threaded into every write tool. All fields are optional;
+ * an empty `{}` is the production default. The fields exist so tests can
+ * inject hermetic seams without touching real home directories or git.
+ *
+ * @property logger optional structured logger; tools log internally and
+ *   never surface secrets, so a missing logger is silently fine.
+ * @property userHome override for the user's home directory. Used to locate
+ *   the `user`-tier overlay; when absent, the tool falls back to
+ *   `GAN_USER_HOME`/`HOME`/`USERPROFILE` env vars.
+ * @property packageRoot override for the installed-package root, forwarded
+ *   to stack resolution so tests can point at a fixture install.
+ * @property moduleStateStore injection seam for the module-state store
+ *   (home/env/git overrides); production passes nothing and uses real seams.
+ */
 export interface WriteToolContext {
   logger?: Logger;
   userHome?: string;
-  /**
-   * Forwarded to the C5 stack resolver as the package-tier built-in
-   * directory. When unset, the resolver walks up from `import.meta.url`
-   * via `packageRoot()`. Tests inject a `mkdtempSync` directory.
-   */
+
   packageRoot?: string;
-  /**
-   * Home/env + git injection seams for the repo-keyed module-state store
-   * (F8). Production leaves this unset and uses the real seams; tests inject
-   * a fake home and a stub git seam so module-state writes are deterministic
-   * and need no real repo. See `ModuleStateStoreOptions`.
-   */
+
   moduleStateStore?: ModuleStateStoreOptions;
 }
 
-/** A canonical mutation result. */
+/**
+ * Discriminated result returned by the field/state mutation tools. Failure
+ * modes are encoded as data rather than thrown so callers can branch on the
+ * `mutated` flag without a try/catch:
+ *
+ * - `{ mutated: true; path }` — the document was written; `path` is the file
+ *   that changed (absolute).
+ * - `{ mutated: false; issues }` — the mutation was rejected before any
+ *   write because schema validation (or a recovered `ConfigServerError`)
+ *   produced one or more {@link Issue}s. Disk is untouched.
+ * - `{ mutated: false; reason }` — a benign no-op the caller may ignore or
+ *   report (e.g. `'duplicate-entry'`, `'entry-not-found'`,
+ *   `'unknown-module:<name>'`). Disk is untouched.
+ *
+ * Invariant: the two non-mutating arms never imply a partial write — either
+ * the full new document landed or nothing did.
+ */
 export type WriteResult =
   | { mutated: true; path: string }
   | { mutated: false; issues: Issue[] }
   | { mutated: false; reason: string };
 
-// ---- overlay writes -------------------------------------------------------
-
+/**
+ * Input to {@link setOverlayField}.
+ *
+ * @property projectRoot project directory; canonicalised before use, so a
+ *   relative or symlinked path is accepted and resolved.
+ * @property tier which overlay document to write (`project`/`default`/`user`).
+ * @property fieldPath dotted path naming the location to set, e.g.
+ *   `runner.thresholdOverride`; intermediate mappings are created on demand.
+ * @property value the value to store; deep-cloned before insertion so the
+ *   caller may keep mutating their copy without affecting the written doc.
+ */
 export interface SetOverlayFieldInput {
   projectRoot: string;
   tier: OverlayTier;
@@ -121,6 +137,25 @@ export interface SetOverlayFieldInput {
   value: unknown;
 }
 
+/**
+ * Set a single overlay field to `value`, creating intermediate mappings as
+ * needed (last-writer-wins at the leaf).
+ *
+ * Side effects (on success only): writes the overlay file atomically and
+ * invalidates the resolved-config cache for the canonical project root.
+ *
+ * Failure modes, all returned as a non-mutating {@link WriteResult} (no throw):
+ * - `tier` is `user` but no home directory can be resolved → `{ issues }`.
+ * - `fieldPath` is not a non-empty dotted path → `{ issues }`.
+ * - the existing overlay body is not a YAML mapping, or the post-mutation
+ *   document fails schema validation (or, for the `user` tier, sets a
+ *   forbidden field) → `{ issues }`.
+ * - an I/O error during the atomic write surfaces as `{ issues }` rather
+ *   than propagating, when it arrives as a `ConfigServerError`.
+ *
+ * @param input see {@link SetOverlayFieldInput}.
+ * @param ctx ambient context; `ctx.userHome` resolves the `user` tier.
+ */
 export function setOverlayField(
   input: SetOverlayFieldInput,
   ctx: WriteToolContext = {},
@@ -141,6 +176,16 @@ export function setOverlayField(
   });
 }
 
+/**
+ * Input to {@link appendToOverlayField}.
+ *
+ * @property projectRoot project directory; canonicalised before use.
+ * @property tier which overlay document to write.
+ * @property fieldPath dotted path naming the list to append to; intermediate
+ *   mappings are created on demand, and an absent leaf becomes a new
+ *   single-element list.
+ * @property value element to append; deep-cloned before insertion.
+ */
 export interface AppendToOverlayFieldInput {
   projectRoot: string;
   tier: OverlayTier;
@@ -148,6 +193,22 @@ export interface AppendToOverlayFieldInput {
   value: unknown;
 }
 
+/**
+ * Append `value` to the list at `fieldPath` in an overlay document. If the
+ * leaf is absent it is seeded as a one-element list; if it exists but is not
+ * an array the underlying append throws `MalformedInput` (a hard error,
+ * because appending to a scalar is a caller mistake, not a soft no-op).
+ *
+ * Side effects (on success only): atomic file write + cache invalidation for
+ * the canonical project root.
+ *
+ * Failure modes returned as a non-mutating {@link WriteResult}: unresolvable
+ * `user`-tier home, malformed `fieldPath`, non-mapping overlay body, schema
+ * rejection, `user`-tier forbidden field, or a recovered I/O error.
+ *
+ * @param input see {@link AppendToOverlayFieldInput}.
+ * @param ctx ambient context; `ctx.userHome` resolves the `user` tier.
+ */
 export function appendToOverlayField(
   input: AppendToOverlayFieldInput,
   ctx: WriteToolContext = {},
@@ -169,6 +230,15 @@ export function appendToOverlayField(
   });
 }
 
+/**
+ * Input to {@link removeFromOverlayField}.
+ *
+ * @property projectRoot project directory; canonicalised before use.
+ * @property tier which overlay document to write.
+ * @property fieldPath dotted path naming the list to remove from.
+ * @property value the element to remove; matched by deep value equality, so
+ *   every structurally-equal entry is dropped. Not cloned (read-only here).
+ */
 export interface RemoveFromOverlayFieldInput {
   projectRoot: string;
   tier: OverlayTier;
@@ -176,6 +246,22 @@ export interface RemoveFromOverlayFieldInput {
   value: unknown;
 }
 
+/**
+ * Remove every list element deep-equal to `value` from the list at
+ * `fieldPath`. Removing from an absent or non-list leaf is a silent no-op at
+ * the document level (no entries match), but the surrounding validate/write
+ * pipeline still runs and a `{ mutated: true }` is returned because the file
+ * is rewritten in canonical form.
+ *
+ * Side effects (on success only): atomic file write + cache invalidation.
+ *
+ * Failure modes returned as a non-mutating {@link WriteResult}: unresolvable
+ * `user`-tier home, malformed `fieldPath`, non-mapping overlay body, schema
+ * rejection, `user`-tier forbidden field, or a recovered I/O error.
+ *
+ * @param input see {@link RemoveFromOverlayFieldInput}.
+ * @param ctx ambient context; `ctx.userHome` resolves the `user` tier.
+ */
 export function removeFromOverlayField(
   input: RemoveFromOverlayFieldInput,
   ctx: WriteToolContext = {},
@@ -197,8 +283,15 @@ export function removeFromOverlayField(
   });
 }
 
-// ---- stack writes ---------------------------------------------------------
-
+/**
+ * Input to {@link updateStackField}.
+ *
+ * @property projectRoot project directory; canonicalised before use.
+ * @property name the stack's name; resolved to its on-disk file via the
+ *   stack-resolution layer (project tier wins over packaged defaults).
+ * @property fieldPath dotted path naming the field to set.
+ * @property value value to store; deep-cloned before insertion.
+ */
 export interface UpdateStackFieldInput {
   projectRoot: string;
   name: string;
@@ -206,6 +299,23 @@ export interface UpdateStackFieldInput {
   value: unknown;
 }
 
+/**
+ * Set a single field in a named stack file, creating intermediate mappings
+ * as needed.
+ *
+ * Side effects (on success only): atomic file write + cache invalidation.
+ *
+ * Failure modes returned as a non-mutating {@link WriteResult}: malformed
+ * `fieldPath`, the stack cannot be resolved (the `ConfigServerError` from
+ * resolution — e.g. `UnknownStack` / `MissingFile` — is caught and folded
+ * into `{ issues }`), a non-mapping stack body, or schema rejection. A
+ * non-`ConfigServerError` thrown by resolution is rethrown unchanged, since
+ * it signals an unexpected fault the caller must see.
+ *
+ * @param input see {@link UpdateStackFieldInput}.
+ * @param ctx ambient context; `ctx.userHome`/`ctx.packageRoot` steer where
+ *   the stack file is resolved from.
+ */
 export function updateStackField(
   input: UpdateStackFieldInput,
   ctx: WriteToolContext = {},
@@ -221,6 +331,10 @@ export function updateStackField(
     if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
     resolved = resolveStackFile(input.name, root, opts);
   } catch (e) {
+    // Resolution failures that are ConfigServerError are expected user-facing
+    // outcomes (unknown stack, missing file) and become return data; anything
+    // else is an unexpected fault and must propagate, not be swallowed as an
+    // "issue".
     if (e instanceof ConfigServerError) {
       return { mutated: false, issues: [issueFromError(e)] };
     }
@@ -232,6 +346,14 @@ export function updateStackField(
   });
 }
 
+/**
+ * Input to {@link appendToStackField}.
+ *
+ * @property projectRoot project directory; canonicalised before use.
+ * @property name stack name; resolved to its on-disk file.
+ * @property fieldPath dotted path naming the list to append to.
+ * @property value element to append; deep-cloned before insertion.
+ */
 export interface AppendToStackFieldInput {
   projectRoot: string;
   name: string;
@@ -239,6 +361,20 @@ export interface AppendToStackFieldInput {
   value: unknown;
 }
 
+/**
+ * Append `value` to the list at `fieldPath` in a named stack file. An absent
+ * leaf becomes a one-element list; appending to an existing non-array leaf
+ * throws `MalformedInput` (a caller mistake, not a soft no-op).
+ *
+ * Side effects (on success only): atomic file write + cache invalidation.
+ *
+ * Failure modes returned as a non-mutating {@link WriteResult}: malformed
+ * `fieldPath`, unresolvable stack (`ConfigServerError` folded into `issues`;
+ * other throws propagate), non-mapping stack body, or schema rejection.
+ *
+ * @param input see {@link AppendToStackFieldInput}.
+ * @param ctx ambient context steering stack resolution.
+ */
 export function appendToStackField(
   input: AppendToStackFieldInput,
   ctx: WriteToolContext = {},
@@ -266,6 +402,15 @@ export function appendToStackField(
   });
 }
 
+/**
+ * Input to {@link removeFromStackField}.
+ *
+ * @property projectRoot project directory; canonicalised before use.
+ * @property name stack name; resolved to its on-disk file.
+ * @property fieldPath dotted path naming the list to remove from.
+ * @property value element to remove; matched by deep value equality (every
+ *   structurally-equal entry is dropped). Not cloned (read-only here).
+ */
 export interface RemoveFromStackFieldInput {
   projectRoot: string;
   name: string;
@@ -273,6 +418,21 @@ export interface RemoveFromStackFieldInput {
   value: unknown;
 }
 
+/**
+ * Remove every list element deep-equal to `value` from the list at
+ * `fieldPath` in a named stack file. An absent or non-list leaf matches
+ * nothing; the file is still rewritten in canonical form and `{ mutated:
+ * true }` is returned.
+ *
+ * Side effects (on success only): atomic file write + cache invalidation.
+ *
+ * Failure modes returned as a non-mutating {@link WriteResult}: malformed
+ * `fieldPath`, unresolvable stack (`ConfigServerError` folded into `issues`;
+ * other throws propagate), non-mapping stack body, or schema rejection.
+ *
+ * @param input see {@link RemoveFromStackFieldInput}.
+ * @param ctx ambient context steering stack resolution.
+ */
 export function removeFromStackField(
   input: RemoveFromStackFieldInput,
   ctx: WriteToolContext = {},
@@ -300,45 +460,57 @@ export function removeFromStackField(
   });
 }
 
-// ---- trust writes (R5 S4) -----------------------------------------------
-
+/**
+ * Input to {@link trustApprove}.
+ *
+ * @property projectRoot the project being approved; both hashed (raw form,
+ *   so the digest matches what `computeTrustHash` sees) and canonicalised
+ *   (stored on the record so lookups are filesystem-case stable).
+ * @property contentHash optional caller-supplied hash. Note: the current
+ *   implementation always recomputes the aggregate hash from disk and does
+ *   not persist this field — it is reserved for callers that want to assert
+ *   the hash they observed, and is intentionally not trusted as input.
+ * @property note optional free-text annotation; persisted on the record only
+ *   when present and non-empty (an empty string is dropped, not stored).
+ */
 export interface TrustApproveInput {
   projectRoot: string;
-  /**
-   * Reserved for future client-supplied verification. v1 ignores any
-   * value supplied here and recomputes the aggregate hash from disk so
-   * the persisted approval cannot disagree with what the user is
-   * actually approving.
-   */
+
   contentHash?: string;
-  /** Optional free-form note. Stored verbatim alongside the record. */
+
   note?: string;
 }
 
+/**
+ * Result of {@link trustApprove}: always a successful mutation carrying the
+ * approval `record` that was written to the cache.
+ */
 export interface TrustApproveResult {
   mutated: true;
   record: TrustApproval;
 }
 
 /**
- * Approve the project's current overlay contents. The aggregate hash is
- * recomputed from disk via `computeTrustHash` (the supplied
- * `contentHash` argument is ignored in v1 — see the field doc).
+ * Record the user's trust approval for `projectRoot`, pinning the current
+ * aggregate config hash so later loads can detect tampering.
  *
- * The approved record stores:
- *   - `projectRoot` — canonicalised via `canonicalizePath` (per F3).
- *   - `aggregateHash` — recomputed from disk.
- *   - `approvedAt` — ISO-8601 timestamp captured at approval time.
- *   - `approvedCommit` — git HEAD SHA of `projectRoot` when the project
- *     is a git working tree; omitted otherwise. The capture goes
- *     through `child_process.execFileSync('git', …)` and falls through
- *     silently on any failure (no git binary, not a git tree, detached
- *     state with no rev, etc.).
- *   - `note` — supplied verbatim if non-empty.
+ * Side effects (this tool is all side effect — there is no soft-failure
+ * arm): recomputes the project's aggregate trust hash, writes/updates the
+ * approval in the on-disk trust cache, invalidates the resolved-config cache
+ * for the canonical root, and emits an `approve`/`approved` trust-log event.
  *
- * Persists via `upsertApproval` + `writeCache` (no direct file IO).
- * Logs one `action: 'approve'` event via `logTrustEvent` so the audit
- * log captures every approval.
+ * Failure modes are thrown, not returned: a corrupt trust cache surfaces as
+ * `TrustCacheCorrupt` from the cache read/write, and a cache-write I/O error
+ * propagates. There is no `{ mutated: false }` path.
+ *
+ * Invariants: the stored `aggregateHash` is the hash observed *now* (not the
+ * caller's `contentHash`); `approvedAt` is an ISO-8601 timestamp; the git
+ * HEAD is captured opportunistically (see {@link captureGitHead}) and
+ * omitted when unavailable rather than failing the approval.
+ *
+ * @param input see {@link TrustApproveInput}.
+ * @param ctx ambient context plus an optional `homeDir` override locating
+ *   the trust cache (defaults to `os.homedir()`).
  */
 export function trustApprove(
   input: TrustApproveInput,
@@ -355,17 +527,20 @@ export function trustApprove(
     projectRoot: canonRoot,
     aggregateHash: currentHash,
     approvedAt,
+    // Spread-only-if-present: optional fields are omitted entirely rather
+    // than written as `undefined`, so the persisted JSON stays minimal and
+    // an empty note never masquerades as a real annotation.
     ...(approvedCommit !== undefined ? { approvedCommit } : {}),
     ...(input.note !== undefined && input.note.length > 0 ? { note: input.note } : {}),
   };
 
+  // Persist before invalidating: the cache eviction must reflect a committed
+  // approval, never an in-flight one. If writeCache throws, the resolved-config
+  // cache is left intact (still consistent with the unchanged trust state).
   const cache = readCache(homeDir);
   const newCache = upsertApproval(cache, record);
   writeCache(homeDir, newCache);
 
-  // F5 slice 2 — invalidate the resolved-config cache synchronously so
-  // the next `getResolvedConfig` reflects the approval. Closes the
-  // dogfooded bug where the trust prompt re-fired after `[a]`.
   invalidateCache(canonRoot);
 
   logTrustEvent({
@@ -378,23 +553,42 @@ export function trustApprove(
   return { mutated: true, record };
 }
 
+/**
+ * Input to {@link trustRevoke}.
+ *
+ * @property projectRoot the project whose approvals should be removed;
+ *   matched inside `removeApprovals` against stored (canonical) roots.
+ */
 export interface TrustRevokeInput {
   projectRoot: string;
 }
 
+/**
+ * Result of {@link trustRevoke}.
+ *
+ * @property mutated `true` when at least one approval was removed; `false`
+ *   when the project had no approval (a no-op, not an error).
+ */
 export interface TrustRevokeResult {
   mutated: boolean;
 }
 
 /**
- * Revoke every approval for `projectRoot` from the user-tier trust
- * cache. `mutated` reflects whether at least one approval was actually
- * removed; revoking a project with no recorded approvals is a no-op
- * that returns `{ mutated: false }`.
+ * Remove all trust approvals for `projectRoot`. Safe to call when none
+ * exist — that case returns `{ mutated: false }`.
  *
- * Always rewrites the cache file (even on the no-op branch) so the
- * file's existence reflects "we made a decision here". Logs one
- * `action: 'revoke'` event via `logTrustEvent`.
+ * Side effects: rewrites the trust cache; on an actual removal, invalidates
+ * the resolved-config cache for the project; always emits a `revoke`
+ * trust-log event whose `result` is `revoked` or `no-op` accordingly.
+ *
+ * The cache is only invalidated when something was actually removed — a
+ * no-op revoke leaves a valid resolved-config cache untouched. Failure modes
+ * are thrown (corrupt cache → `TrustCacheCorrupt`; write I/O error
+ * propagates); there is no `issues` arm.
+ *
+ * @param input see {@link TrustRevokeInput}.
+ * @param ctx ambient context plus optional `homeDir` override for the cache
+ *   location (defaults to `os.homedir()`).
  */
 export function trustRevoke(
   input: TrustRevokeInput,
@@ -408,9 +602,6 @@ export function trustRevoke(
   writeCache(homeDir, newCache);
   const mutated = newCache.approvals.length !== beforeLength;
 
-  // F5 slice 2 — invalidate only on real state change; a no-op revoke
-  // (no matching approval for this project) leaves the resolved
-  // config unchanged, so the cache stays correct.
   if (mutated) invalidateForProject(input.projectRoot);
 
   logTrustEvent({
@@ -423,11 +614,17 @@ export function trustRevoke(
 }
 
 /**
- * Capture `git rev-parse HEAD` for `projectRoot`. Returns `undefined`
- * on any failure: missing git binary, non-git tree, detached/empty
- * repo, etc. The trust path must never abort because of git
- * environmental issues — `approvedCommit` is metadata, not
- * load-bearing.
+ * Best-effort capture of the current git HEAD sha for `projectRoot`, used to
+ * annotate a trust approval with the commit it was granted against.
+ *
+ * Returns `undefined` rather than throwing when git is absent, the directory
+ * is not a repo, or the command fails for any reason: the commit is a nice-to-
+ * have provenance hint, never a precondition for approving, so a missing sha
+ * must not block the user. `stderr` is discarded for the same reason.
+ *
+ * `execFileSync` is used with an argv array (`['-C', projectRoot, …]`) and no
+ * shell, so `projectRoot` cannot inject shell syntax — there is no command
+ * string for it to escape into.
  */
 function captureGitHead(projectRoot: string): string | undefined {
   try {
@@ -441,8 +638,17 @@ function captureGitHead(projectRoot: string): string | undefined {
   }
 }
 
-// ---- module writes (M1) --------------------------------------------------
-
+/**
+ * Input to {@link setModuleState}.
+ *
+ * @property projectRoot project directory; canonicalised for the cache key.
+ * @property name the module that owns this state; used both for the
+ *   allowlist check and to derive the per-module state path.
+ * @property key the state key; must be declared in the module manifest's
+ *   `stateKeys` allowlist or the write is rejected (thrown).
+ * @property state the value to persist wholesale; serialised deterministically
+ *   so byte-identical state produces a byte-identical file.
+ */
 export interface SetModuleStateInput {
   projectRoot: string;
   name: string;
@@ -451,109 +657,102 @@ export interface SetModuleStateInput {
 }
 
 /**
- * Persist the supplied `state` blob for module `name` at the named
- * `key` under the central, repo-keyed module-state store
- * `<module-state-root>/<repo-key>/<name>/<key>.json` (F8 relocation;
- * M3-locked per-key layout). Atomic write via `atomicWriteFile`;
- * serialised with `stableStringify` so the on-disk JSON is canonical
- * (sorted keys, two-space indent, trailing newline) per F3
- * determinism. The `<repo-key>` is derived from `projectRoot` via F7's
- * git-common-dir resolution, so every worktree of a repo writes the
- * same shared file (the central F8 correctness fix).
+ * Overwrite a module's state for `key` with `state` (last-writer-wins; no
+ * merge with prior contents).
  *
- * Whole-value replacement of the named key's blob. The `key` must
- * appear in the module manifest's `stateKeys` allowlist; an
- * undeclared key throws `UnknownStateKey` before any I/O. A module
- * whose manifest omits `stateKeys` cannot persist any state.
+ * Caller invariant: `key` must be in the module's manifest `stateKeys`
+ * allowlist. This is enforced first, before any path resolution or I/O, so a
+ * disallowed key never creates a directory or file.
  *
- * Other declared keys for the same module are unaffected — each key
- * lives in its own file.
+ * Side effects: creates the module-state directory if missing, writes the
+ * state file atomically (deterministic serialisation), and invalidates the
+ * resolved-config cache for the canonical root.
+ *
+ * Failure modes are thrown, not returned: `UnknownStateKey` when `key` is not
+ * allowlisted; `MalformedInput` from `atomicWriteFile` on an I/O error. On
+ * success always returns `{ mutated: true, path }`.
+ *
+ * @param input see {@link SetModuleStateInput}.
+ * @param ctx ambient context; `ctx.moduleStateStore` injects the store seam.
  */
 export function setModuleState(
   input: SetModuleStateInput,
   ctx: WriteToolContext = {},
 ): WriteResult {
+  // Allowlist gate runs first, before any path resolution or directory
+  // creation, so a key the manifest does not declare can never leave a
+  // side effect on disk.
   assertStateKeyAllowed(input.name, input.key);
   const root = canonicalizePath(input.projectRoot);
   const filePath = moduleStatePath(root, input.name, input.key, ctx.moduleStateStore);
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(input.state));
-  // F5 slice 2 — uniform invalidation discipline across every state-
-  // mutating tool. Module state is not part of the resolved-config
-  // snapshot today, but the contract is "no stale reads after a
-  // mutation" and invalidating here future-proofs the surface for
-  // the day module state surfaces into resolved config.
+
   invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
 /**
- * Recognised duplicate-handling policies for `appendToModuleState`.
- * Matches F2's contract for the corresponding overlay/stack append
- * tools:
- *
- *  - `'error'` (default): a duplicate aborts the write and returns
- *    `{ mutated: false, reason: 'duplicate-entry' }`.
- *  - `'skip'`: same outward result, but semantically "I expected
- *    this might already be there" — also no write.
- *  - `'allow'`: append unconditionally; for list shapes the list
- *    grows even with duplicates, for map shapes the existing key is
- *    overwritten.
- *
- * The default-when-absent is `'error'`; an unrecognised string is
- * rejected at input validation with `MalformedInput` (never silently
- * coerced to the default).
+ * Duplicate-handling policy for {@link appendToModuleState}:
+ * - `error` — reject a duplicate by returning `{ reason: 'duplicate-entry' }`
+ *   (the conservative default when the caller omits a policy);
+ * - `skip` — also a no-op return on duplicate, but signals the caller chose
+ *   to tolerate the collision rather than hit the default;
+ * - `allow` — append/overwrite even when a duplicate exists.
  */
 export type DuplicatePolicy = 'error' | 'skip' | 'allow';
 
+// Single source of truth for the valid policy strings, used by
+// resolveDuplicatePolicy to validate untrusted input without re-listing the
+// literals. Module-private (not exported); the DuplicatePolicy type is the
+// public surface.
 const DUPLICATE_POLICIES: ReadonlySet<DuplicatePolicy> = new Set(['error', 'skip', 'allow']);
 
+/**
+ * Input to {@link appendToModuleState}.
+ *
+ * @property projectRoot project directory; canonicalised for the cache key.
+ * @property name owning module; drives allowlist + path.
+ * @property key state key; must be allowlisted in the module manifest.
+ * @property fieldPath dotted path to the collection inside the state document
+ *   to append to; intermediate mappings are created on demand.
+ * @property value the entry to append; deep-cloned before insertion.
+ * @property duplicatePolicy how to treat a duplicate (see
+ *   {@link DuplicatePolicy}); defaults to `error` when omitted.
+ */
 export interface AppendToModuleStateInput {
   projectRoot: string;
   name: string;
   key: string;
   fieldPath: string;
   value: unknown;
-  /**
-   * How to handle a duplicate when the value at `fieldPath` already
-   * contains an entry that matches the new one. Default `'error'`.
-   * See `DuplicatePolicy` for the per-policy semantics. An
-   * unrecognised string throws `MalformedInput` before any I/O.
-   */
+
   duplicatePolicy?: DuplicatePolicy;
 }
 
 /**
- * Append `value` to the list-or-map at `fieldPath` inside the
- * module's state blob for the named `key`. Composes-if-absent: when
- * no state file exists for the key, treats the starting state as
- * `{}` and creates the list at the requested path. Loads, mutates,
- * writes via the same atomic pipeline as `setModuleState`.
+ * Append `value` to the collection at `fieldPath` within a module's state
+ * document. The collection's *shape* decides the append semantics:
+ * - absent leaf → seeded as a new single-element list;
+ * - list (array) → duplicate detection is deep value equality;
+ * - map (plain object) → the entry must carry a non-empty string `key`
+ *   property, and duplicate detection is collision on that key.
  *
- * Shape rules (per F2 / M3, mirroring
- * `appendToOverlayField`/`appendToStackField` for keyed entries):
+ * Caller invariants: `key` must be allowlisted (enforced first); when the
+ * target leaf is a map, `value` must be an object with a string `key`.
  *
- *   - The stored value at `fieldPath` may be an `Array<unknown>`
- *     (list-shape) or a `Record<string, unknown>` (map-shape).
- *     Anything else throws `ConfigServerError` with
- *     `code === 'MalformedInput'` whose message identifies the
- *     offending shape.
- *   - List-shape: `value` is appended; "duplicate" means deep-equal
- *     to an existing member.
- *   - Map-shape: the input `value` must be an object with a
- *     `key: string` property. The map property whose name equals
- *     `value.key` is the duplicate target.
+ * Side effects (on success only): creates the directory if missing, atomic
+ * write, cache invalidation for the canonical root.
  *
- * `duplicatePolicy` (default `'error'`) controls what happens on a
- * duplicate hit:
+ * Failure modes:
+ * - thrown — `UnknownStateKey` (disallowed key), `MalformedInput` (invalid
+ *   `duplicatePolicy`, map-target entry without a `key`, or a leaf that is
+ *   neither list nor map), `MalformedInput` from the atomic write;
+ * - returned as `{ mutated: false }` — malformed `fieldPath` (`issues`), or a
+ *   duplicate under a non-`allow` policy (`reason: 'duplicate-entry'`).
  *
- *   - `'error'` / `'skip'`: return
- *     `{ mutated: false, reason: 'duplicate-entry' }`; no write.
- *   - `'allow'`: append unconditionally; map-shape overwrites the
- *     existing property at `value.key`.
- *
- * The `key` parameter must appear in the manifest's `stateKeys`
- * allowlist; undeclared keys throw `UnknownStateKey` before any I/O.
+ * @param input see {@link AppendToModuleStateInput}.
+ * @param ctx ambient context; `ctx.moduleStateStore` injects the store seam.
  */
 export function appendToModuleState(
   input: AppendToModuleStateInput,
@@ -573,8 +772,11 @@ export function appendToModuleState(
   const current = parent[lastKey];
   const cloned = deepClone(input.value);
 
+  // Branch on the existing leaf's shape — the same call appends to a list,
+  // upserts into a map, or seeds a fresh list, and an incompatible scalar is
+  // a hard error rather than a silent coercion.
   if (current === undefined) {
-    // Compose-if-absent: initialise as a single-element list.
+
     parent[lastKey] = [cloned];
   } else if (Array.isArray(current)) {
     const isDuplicate = current.some((entry) => deepEqual(entry, cloned));
@@ -583,6 +785,8 @@ export function appendToModuleState(
     }
     current.push(cloned);
   } else if (isObject(current)) {
+    // Map-shaped leaf: the entry's own `key` property names its slot, so an
+    // entry without one cannot be addressed and is rejected.
     const entryKey = extractEntryMapKey(cloned);
     if (entryKey === null) {
       throw createError('MalformedInput', {
@@ -609,18 +813,11 @@ export function appendToModuleState(
 
   ensureDir(path.dirname(filePath));
   atomicWriteFile(filePath, stableStringify(data));
-  // F5 slice 2 — invalidate on successful append (see setModuleState).
+
   invalidateCache(root);
   return { mutated: true, path: filePath };
 }
 
-/**
- * Resolve duplicate-policy shape and return a concrete
- * `DuplicatePolicy`. `undefined` falls through to the default
- * `'error'`. Any other non-recognised value throws
- * `MalformedInput` so unknown policy strings (e.g. `"replace"`) can
- * never silently coerce to the default.
- */
 function resolveDuplicatePolicy(value: unknown): DuplicatePolicy {
   if (value === undefined) return 'error';
   if (typeof value === 'string' && DUPLICATE_POLICIES.has(value as DuplicatePolicy)) {
@@ -634,12 +831,6 @@ function resolveDuplicatePolicy(value: unknown): DuplicatePolicy {
   });
 }
 
-/**
- * Walk `data` to the immediate parent of `segments[last]`, creating
- * intermediate objects on the way (matching the behaviour of
- * `appendAtPath`/`setAtPath`). Returns the parent record so the
- * caller can inspect the child's shape directly.
- */
 function navigateToParent(
   data: Record<string, unknown>,
   segments: string[],
@@ -659,11 +850,6 @@ function navigateToParent(
   return cursor;
 }
 
-/**
- * Extract the `key` string from an entry intended for a map-shaped
- * field. Returns the key when `entry` is an object with a non-empty
- * `key: string` property; returns `null` otherwise.
- */
 function extractEntryMapKey(entry: unknown): string | null {
   if (!isObject(entry)) return null;
   const k = entry['key'];
@@ -671,13 +857,22 @@ function extractEntryMapKey(entry: unknown): string | null {
   return k;
 }
 
-/** Human-readable shape descriptor used in `MalformedInput` messages. */
 function describeShape(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
   return typeof v;
 }
 
+/**
+ * Input to {@link removeFromModuleState}.
+ *
+ * @property projectRoot project directory; canonicalised for the cache key.
+ * @property name owning module; drives allowlist + path.
+ * @property key state key; must be allowlisted in the module manifest.
+ * @property entryKey identifier of the entry to remove. For a list-shaped
+ *   state it matches each member's `key` property; for a map-shaped state it
+ *   is the object key. Must be a non-empty string.
+ */
 export interface RemoveFromModuleStateInput {
   projectRoot: string;
   name: string;
@@ -686,29 +881,25 @@ export interface RemoveFromModuleStateInput {
 }
 
 /**
- * Remove a single entry — addressed by `entryKey` — from the module's
- * state blob at the named `key`. Two stored shapes are supported (per
- * F2 / M3):
+ * Remove the entry identified by `entryKey` from a module's state document.
+ * The state's shape decides the lookup: in a list, the first member whose
+ * `key` equals `entryKey`; in a map, the property named `entryKey`.
  *
- *   - **Map-shape**: the file at the repo-keyed store
- *     `<module-state-root>/<repo-key>/<name>/<key>.json` is a plain JSON
- *     object. `entryKey` matches the property name; the property is deleted.
- *   - **List-shape**: the file is a JSON array of records, each
- *     carrying a `key: string` field. `entryKey` matches that field;
- *     the matching member is filtered out.
+ * Caller invariants: `key` allowlisted (enforced first); `entryKey` a
+ * non-empty string.
  *
- * If `entryKey` is not found in either shape (or the file is absent),
- * the call is a silent no-op that returns
- * `{ mutated: false, reason: 'entry-not-found' }` and never touches
- * disk. Removing the last entry leaves `[]` / `{}` on disk — the
- * file is not auto-deleted.
+ * Side effects (on an actual removal only): atomic rewrite of the state file
+ * and cache invalidation. A "not found" outcome touches nothing.
  *
- * The `key` must appear in the manifest's `stateKeys` allowlist;
- * undeclared keys throw `UnknownStateKey` before any I/O.
+ * Failure modes:
+ * - returned `{ mutated: false }` — invalid `entryKey` (`issues`); the state
+ *   file is absent, unreadable-as-state, or holds no matching entry
+ *   (`reason: 'entry-not-found'`);
+ * - thrown — `UnknownStateKey` (disallowed key); `MalformedInput` when the
+ *   stored value is neither a list nor a map.
  *
- * Anything other than a plain object or an array stored at `key` is
- * `MalformedInput` — `removeFromModuleState` has no defined meaning
- * against a scalar.
+ * @param input see {@link RemoveFromModuleStateInput}.
+ * @param ctx ambient context; `ctx.moduleStateStore` injects the store seam.
  */
 export function removeFromModuleState(
   input: RemoveFromModuleStateInput,
@@ -735,7 +926,7 @@ export function removeFromModuleState(
     const next = stored.slice();
     next.splice(idx, 1);
     atomicWriteFile(filePath, stableStringify(next));
-    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+
     invalidateCache(root);
     return { mutated: true, path: filePath };
   }
@@ -747,7 +938,7 @@ export function removeFromModuleState(
     const next: Record<string, unknown> = { ...stored };
     delete next[input.entryKey];
     atomicWriteFile(filePath, stableStringify(next));
-    // F5 slice 2 — invalidate on successful remove (see setModuleState).
+
     invalidateCache(root);
     return { mutated: true, path: filePath };
   }
@@ -760,6 +951,16 @@ export function removeFromModuleState(
   });
 }
 
+/**
+ * Input to {@link registerModule}.
+ *
+ * @property projectRoot project whose resolved-config cache is invalidated on
+ *   a successful registration lookup.
+ * @property name the module to look up in the registry; the lookup key.
+ * @property manifest accepted for forward-compatibility but currently unused
+ *   (see {@link registerModule}); pass whatever the caller has, including
+ *   `undefined`.
+ */
 export interface RegisterModuleInput {
   projectRoot: string;
   name: string;
@@ -767,30 +968,34 @@ export interface RegisterModuleInput {
 }
 
 /**
- * `registerModule` is a runtime registration probe. The authoritative
- * registration set is computed by the loader on server start (per AC6
- * — collisions there halt server start). This tool reports whether the
- * named module is currently registered, so external callers can verify
- * that their assumptions hold without reaching for the loader directly.
+ * Confirm a module is registered (by name) and report its manifest path.
  *
- * Returns `{ mutated: true }` to signal a successful registration probe;
- * `{ mutated: false, reason: 'unknown-module' }` when the named module
- * is not in the registry.
+ * Side effect (on a found module only): invalidates the resolved-config cache
+ * for the project, since registration may change what config resolves to.
+ *
+ * Failure mode: an unregistered name returns `{ mutated: false, reason:
+ * 'unknown-module:<name>' }` — a soft no-op, not a throw. There is no `issues`
+ * arm here.
+ *
+ * @param input see {@link RegisterModuleInput}.
+ * @param _ctx ambient context (unused; named with a leading underscore to mark
+ *   the deliberate non-use).
  */
 export function registerModule(
   input: RegisterModuleInput,
   _ctx: WriteToolContext = {},
 ): WriteResult {
+  // Registration is keyed purely by module name against the existing
+  // registry; the manifest is not parsed or persisted here. The parameter is
+  // reserved for a future manifest-driven registration path, so we explicitly
+  // void it to document the intent (and satisfy no-unused-vars).
   void input.manifest;
   const registry = getRegisteredModules();
   const found = registry.find((r) => r.name === input.name);
   if (!found) {
     return { mutated: false, reason: `unknown-module:${input.name}` };
   }
-  // F5 slice 2 — invalidate on every `mutated: true` return. Today
-  // the registry is package-scoped and the probe is advisory, but
-  // honouring the contract here means the surface stays honest the
-  // day `registerModule` writes durable state.
+
   invalidateForProject(input.projectRoot);
   return { mutated: true, path: found.manifestPath };
 }
@@ -814,13 +1019,6 @@ function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
-// ---- internals -----------------------------------------------------------
-
-/**
- * Resolve the absolute path of an overlay file for a given tier. Mirrors
- * the read-path resolver in `overlay-loader.ts`. Returns `null` if no path
- * can be determined (e.g. user tier with no resolvable home).
- */
 function overlayFilePathFor(
   tier: OverlayTier,
   projectRoot: string,
@@ -841,10 +1039,18 @@ function overlayFilePathFor(
 }
 
 /**
- * Persist an overlay-file mutation. Composes-if-absent: if the overlay
- * file does not exist, builds a minimal valid skeleton (`schemaVersion: 1`
- * + the requested mutation). Otherwise loads the file, applies the
- * mutation, validates, writes.
+ * Shared overlay write pipeline: read-or-seed → mutate a clone → validate →
+ * write atomically → invalidate cache. Used by all three overlay tools so the
+ * ordering guarantee lives in exactly one place.
+ *
+ * The ordering is load-bearing: validation runs on the post-mutation document
+ * *before* any write, so a schema-invalid mutation never reaches disk; the
+ * cache is invalidated only *after* the write succeeds, so a rejected or
+ * failed mutation never evicts a still-valid cache entry.
+ *
+ * `parsed`/`originalSource` are threaded to {@link buildOverlaySource} so an
+ * existing file's untouched YAML structure (comments, key order) is preserved
+ * across the edit rather than reserialised from scratch.
  */
 function persistOverlayMutation(
   filePath: string,
@@ -861,43 +1067,46 @@ function persistOverlayMutation(
       originalSource = readFileSync(filePath, 'utf8');
       parsed = parseYamlBlock(originalSource, filePath);
     } catch (e) {
+      // A parse failure surfaced as ConfigServerError is a malformed-file the
+      // caller should see as issues; anything else is an unexpected fault.
       if (e instanceof ConfigServerError) {
         return { mutated: false, issues: [issueFromError(e)] };
       }
       throw e;
     }
     if (parsed.data === null || parsed.data === undefined) {
+      // An empty body (file exists but no YAML mapping yet) is seeded with the
+      // pinned schema version so the mutation lands in a schema-valid document.
       data = { schemaVersion: 1 };
     } else if (!isObject(parsed.data)) {
       return malformed(
         `Overlay file '${filePath}' body must be a YAML mapping (object). Update the YAML body to start with key/value pairs.`,
       );
     } else {
+      // Mutate a clone, never the parser's own object: the original parse is
+      // reused below to preserve the file's structure, so it must stay pristine.
       data = deepClone(parsed.data) as Record<string, unknown>;
     }
   } else {
-    // Compose-if-absent: minimal valid overlay skeleton.
+    // No file yet: start from the minimal valid document so a first write to a
+    // never-created overlay still satisfies the schema's version requirement.
     data = { schemaVersion: 1 };
   }
 
   apply(data);
 
-  // Validate the resulting body against the overlay schema.
   const issues: Issue[] = [];
   validateOverlayBodyAgainstSchema(filePath, data, issues);
-  // Tier-aware forbidden-field guard (per C3 lines 71-75): a user-tier
-  // overlay declaring `planner.additionalContext`,
-  // `proposer.additionalContext`, `stack.override`, or
-  // `stack.cacheEnvOverride` is rejected before the file touches disk.
+
+  // The `user` tier forbids certain fields that lower tiers permit; this extra
+  // gate only applies there.
   if (tier === 'user') {
     checkUserOverlayForbiddenFields(filePath, data, issues);
   }
   if (issues.length > 0) return { mutated: false, issues };
 
-  // Build the new file source.
   const newSource = buildOverlaySource({ filePath, parsed, originalSource, data });
 
-  // Persist atomically.
   try {
     atomicWriteFile(filePath, newSource);
   } catch (e) {
@@ -907,20 +1116,21 @@ function persistOverlayMutation(
     throw e;
   }
 
-  // Invalidate cache.
   invalidateCache(canonicalRoot);
-  // `tier` is part of the path (project.md / user.md / default.md) — it
-  // does not influence persistence beyond pathing, but we accept it as a
-  // parameter for symmetry with the read API.
+
+  // `tier` has already been consumed (overlay path + forbidden-field gate);
+  // voiding it documents that the trailing reference is deliberate, not a
+  // forgotten use.
   void tier;
   return { mutated: true, path: filePath };
 }
 
 /**
- * Persist a stack-file mutation. The file must already exist (no
- * compose-if-absent here — stacks are non-trivial enough that creating
- * one mid-run requires a deliberate workflow, not a side effect of a
- * single field write).
+ * Shared stack-file write pipeline, mirroring {@link persistOverlayMutation}:
+ * read → mutate a clone → validate → write atomically → invalidate cache.
+ * Same ordering guarantee — validate before write, invalidate only after a
+ * successful write. A stack file (unlike an overlay) must already exist, so
+ * there is no "seed an empty document" branch here.
  */
 function persistStackMutation(
   filePath: string,
@@ -947,7 +1157,6 @@ function persistStackMutation(
   const data = deepClone(parsed.data) as Record<string, unknown>;
   apply(data);
 
-  // Validate the resulting body against the stack schema.
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(filePath, data, issues);
   if (issues.length > 0) return { mutated: false, issues };
@@ -971,16 +1180,6 @@ function persistStackMutation(
   return { mutated: true, path: filePath };
 }
 
-/**
- * Build the on-disk source for an overlay write. Three cases:
- *  - File did not exist → compose minimal source (canonical YAML markers,
- *    no surrounding prose). The skeleton serialises only the YAML body;
- *    the file becomes pure frontmatter.
- *  - File existed and the data is unchanged → return the original bytes
- *    (yaml-block-writer's deep-equal short-circuit).
- *  - File existed and the data changed → re-emit canonical YAML block
- *    flanked by the original prose.
- */
 function buildOverlaySource(input: {
   filePath: string;
   parsed: ParsedYamlBlock | null;
@@ -989,7 +1188,9 @@ function buildOverlaySource(input: {
 }): string {
   const { parsed, originalSource, data } = input;
   if (parsed === null || originalSource === null) {
-    // Compose-if-absent — emit a canonical YAML block with no prose around it.
+    // No prior file to preserve, so serialize from scratch. When a prior
+    // source exists we instead diff against it (below) to keep the user's
+    // comments and key ordering intact rather than rewriting the whole block.
     return serializeYamlBlock(data);
   }
   return writeYamlBlock({
@@ -999,41 +1200,15 @@ function buildOverlaySource(input: {
   });
 }
 
-/**
- * Drop the resolved-config cache entry for `canonicalRoot` after a
- * successful state-mutating write. F5 § Server-side cache coherence
- * requires this fire **before** the write tool returns, so a caller
- * that issues a write immediately followed by a read sees the post-
- * mutation state (the dogfooded `trustApprove` bug).
- *
- * Callers must pass an already-canonicalised root; the
- * `invalidateForProject` helper below covers the input-shape case.
- */
 function invalidateCache(canonicalRoot: string): void {
   const cache = getResolvedConfigCache();
   cache.invalidate(cacheKeyForProjectRoot(canonicalRoot));
 }
 
-/**
- * Convenience wrapper that canonicalises a write tool's input
- * `projectRoot` before invalidating. Used by the trust and module
- * write paths, which receive un-canonicalised `projectRoot` from
- * MCP callers; the overlay / stack write paths already canonicalise
- * upstream so they call `invalidateCache(root)` directly.
- */
 function invalidateForProject(projectRoot: string): void {
   invalidateCache(canonicalizePath(projectRoot));
 }
 
-// ---- field-path helpers --------------------------------------------------
-
-/**
- * Parse a dotted `fieldPath` (`planner.additionalContext`) into segments.
- * Returns `null` when the input is invalid (empty, non-string, or contains
- * empty segments). Numeric segments are kept as strings — array indexing
- * is intentionally not supported here; callers append/remove against
- * arrays via the dedicated helpers.
- */
 function parseFieldPath(fieldPath: unknown, _tool: string): string[] | null {
   if (typeof fieldPath !== 'string') return null;
   if (fieldPath.length === 0) return null;
@@ -1044,10 +1219,6 @@ function parseFieldPath(fieldPath: unknown, _tool: string): string[] | null {
   return parts;
 }
 
-/**
- * Set the value at `segments` inside `data`. Creates intermediate objects
- * as needed. The final segment is overwritten.
- */
 function setAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1064,11 +1235,6 @@ function setAtPath(data: Record<string, unknown>, segments: string[], value: unk
   cursor[segments[segments.length - 1]] = value;
 }
 
-/**
- * Append `value` to the array at `segments` inside `data`. Creates the
- * array if absent. Throws via `createError` if the existing value is not
- * an array.
- */
 function appendAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1097,12 +1263,6 @@ function appendAtPath(data: Record<string, unknown>, segments: string[], value: 
   current.push(value);
 }
 
-/**
- * Remove every entry deep-equal to `value` from the array at `segments`
- * inside `data`. If the array is absent or the path does not exist, the
- * mutation is a silent no-op (so removing an entry that was never there
- * matches the orchestrator's idempotent intent).
- */
 function removeAtPath(data: Record<string, unknown>, segments: string[], value: unknown): void {
   let cursor: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -1117,8 +1277,6 @@ function removeAtPath(data: Record<string, unknown>, segments: string[], value: 
   const filtered = current.filter((entry) => !deepEqual(entry, value));
   cursor[lastKey] = filtered;
 }
-
-// ---- helpers --------------------------------------------------------------
 
 function malformed(message: string): WriteResult {
   return {
@@ -1141,12 +1299,14 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+// Cloned via a JSON round-trip rather than structuredClone/manual recursion:
+// overlay and module-state values are always JSON-shaped config data, so the
+// round-trip is sufficient and dependency-free. The trade-off is deliberate —
+// non-JSON values (Date, Map, functions, undefined, circular refs) are dropped
+// or rejected; callers must only pass JSON-serialisable config.
 function deepClone<T>(v: T): T {
   if (v === null || typeof v !== 'object') return v;
-  // Structured clone semantics on plain JSON-shaped data are sufficient
-  // here — YAML data does not contain Map/Set/Date instances. Fall back
-  // to JSON round-trip; faster than `structuredClone` for small payloads
-  // and avoids the rare prototype edge case.
+
   return JSON.parse(JSON.stringify(v)) as T;
 }
 

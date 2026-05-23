@@ -1,88 +1,96 @@
-/**
- * F7 slice 4 — repo-wide run enumeration, re-anchored to the central store
- * (over O2 §4 / §4-list-recoverable / §5.5-cleanup).
- *
- * O2 enumerated runs under `<projectRoot>/.gan-state/runs/*`. Under F7 that
- * directory holds only a gan-created worktree (cases 1b/1c) and differs per
- * worktree, so enumerating it would make a run started in worktree A invisible
- * from worktree B. F7 enumerates the central, repo-keyed store instead —
- * `<store-root>/<repo-key>/runs/` (slice-1 {@link resolveRunsRoot}) — so every
- * run of the repo is visible from ANY worktree (all worktrees key to the same
- * `<repo-key>`). `--list-recoverable` and `--cleanup` both build on this.
- *
- * `progress.json.projectRoot` (the canonical main-worktree root) is what O2's
- * cross-project refusal compares against; this enumerator surfaces it on each
- * record so the orchestrator can apply that check, but it does NOT itself
- * refuse — enumeration is discovery, not resume.
- *
- * Read-only invariant: this module only reads `<store-root>/<repo-key>/runs/`
- * and the `progress.json` inside each run directory. It never mutates run state,
- * never writes anywhere, and never reads or writes the module-state store,
- * `.claude/gan/`, or `.gan-cache/`. It spawns no subprocess.
- *
- * Untrusted-input safety: `progress.json` is attacker-influenceable. Parsing
- * reads only pre-defined SCALAR fields by name (runId, workspace.worktreePath,
- * workspace.branch, workspace.createdByGan, projectRoot, terminal,
- * terminalReason, status, runBranch, baseBranch) and never merges attacker keys
- * into an object or its prototype — `__proto__` / `constructor` / `prototype`
- * keys are skipped on read (mirroring the slice-2 run-progress reader).
- */
 
+
+/**
+ * Enumerate the `/gan` runs recorded in a repository's run store.
+ *
+ * It scans the runs directory for run-id-shaped subdirectories, reads each
+ * run's optional `progress.json`, and projects a normalised {@link EnumeratedRun}
+ * record. Reads are deliberately tolerant: a run with no/unreadable/corrupt
+ * progress is still enumerated (with `hasProgress: false`), because the
+ * directory's existence is enough to list it for cleanup or recovery. Progress
+ * JSON is untrusted on-disk data, so it is prototype-sanitised
+ * ({@link stripForbiddenKeys}) and each field is copied across only when it has
+ * the expected type — a malformed field is ignored, never trusted.
+ *
+ * Runs are returned newest-first by directory mtime.
+ */
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { readJsonObjectFile, stripForbiddenKeys } from './json-read.js';
 import { RUN_ID_PATTERN } from './run-store.js';
 
-/** The workspace block surfaced from a run's `progress.json`. */
+/**
+ * Workspace facts projected from a run's progress (all optional — progress may
+ * predate these fields or omit them).
+ *
+ * @property worktreePath the worktree the run used.
+ * @property branch the branch checked out in that worktree.
+ * @property createdByGan whether the framework created the workspace (governs
+ *   whether cleanup may remove it).
+ */
 export interface EnumeratedWorkspace {
-  /** Canonical absolute worktree path (the recovery anchor). */
+
   worktreePath?: string;
-  /** The branch the run executes on. */
+
   branch?: string;
-  /** True only for gan-created worktrees (cases 1b/1c). */
+
   createdByGan?: boolean;
 }
 
-/** One enumerated run. */
+/**
+ * A normalised view of one run on disk.
+ *
+ * @property runId the run id (directory name, run-id-pattern shaped).
+ * @property runDir absolute path to the run directory.
+ * @property progressPath absolute path to the run's `progress.json` (whether or
+ *   not it exists).
+ * @property hasProgress whether a readable progress object was found.
+ * @property mtimeMs the run directory's modification time, used for sort order.
+ * @property projectRoot the project the run targeted (from progress, if valid).
+ * @property workspace the run's workspace facts (from progress, if valid).
+ * @property terminal whether the run reached a terminal state.
+ * @property terminalReason why it terminated, if recorded.
+ * @property status the run's recorded status string.
+ * @property runBranch the run's branch, if recorded directly.
+ * @property baseBranch the branch the run diverged from (used by cleanup as the
+ *   merge base).
+ */
 export interface EnumeratedRun {
-  /** The run id (directory name under `runs/`). */
+
   runId: string;
-  /** Absolute path of the run directory under the central store. */
+
   runDir: string;
-  /** Absolute path of the run's `progress.json` (whether or not it exists). */
+
   progressPath: string;
-  /** `true` when `progress.json` was present and parseable. */
+
   hasProgress: boolean;
-  /** Directory mtime (epoch ms) — most-recent-first sort key. */
+
   mtimeMs: number;
-  /** The canonical main-worktree root recorded at run start (cross-project key). */
+
   projectRoot?: string;
-  /** Resolved workspace block, when recorded. */
+
   workspace?: EnumeratedWorkspace;
-  /** `progress.json.terminal` (missing -> treated as non-terminal/recoverable). */
+
   terminal?: boolean;
-  /** `progress.json.terminalReason`, when set. */
+
   terminalReason?: string;
-  /** `progress.json.status`, when set. */
+
   status?: string;
-  /** `progress.json.runBranch`, when set. */
+
   runBranch?: string;
-  /** `progress.json.baseBranch`, when set. */
+
   baseBranch?: string;
 }
 
 /**
- * Enumerate every run directory under `runsRoot`
- * (`<store-root>/<repo-key>/runs/`), reading each run's `progress.json`.
+ * List all runs under `runsRoot`, newest first.
  *
- * Returns records sorted by directory mtime DESCENDING (most-recently-active
- * first), matching O2's `--list-recoverable` / `--cleanup` ordering. A run
- * directory whose name does not match the run-id grammar is skipped, so a
- * stray file or unrelated directory under `runs/` cannot masquerade as a run.
- *
- * Read-only: opens nothing outside `runsRoot`. When `runsRoot` does not exist,
- * returns an empty array (no runs yet for this repo).
+ * @param runsRoot the repository's `runs` directory.
+ * @returns the enumerated runs sorted by descending directory mtime; an empty
+ *   array if `runsRoot` is absent or unreadable. Never throws — unreadable or
+ *   non-directory entries are skipped, and a directory name that does not match
+ *   {@link RUN_ID_PATTERN} is ignored (so stray files cannot masquerade as runs).
  */
 export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
   if (!existsSync(runsRoot)) return [];
@@ -96,7 +104,9 @@ export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
 
   const runs: EnumeratedRun[] = [];
   for (const name of entries) {
-    if (!RUN_ID_PATTERN.test(name)) continue; // skip non-run entries
+    // Only run-id-shaped names are runs; this filters out any incidental files
+    // (e.g. run.lock) sharing the directory.
+    if (!RUN_ID_PATTERN.test(name)) continue;
     const runDir = path.join(runsRoot, name);
     let dirStat;
     try {
@@ -122,20 +132,30 @@ export function enumerateRuns(runsRoot: string): EnumeratedRun[] {
     runs.push(record);
   }
 
+  // Newest first: most recovery/cleanup callers care about recent runs.
   runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return runs;
 }
 
 /**
- * Parse `progress.json` into a plain object, skipping prototype-polluting keys.
- * Returns `undefined` when the file is absent, unreadable, or not a JSON object.
+ * Read a run's `progress.json` as a prototype-sanitised object, or `undefined`
+ * when it is absent/unreadable/non-object. The sanitise step matters because
+ * progress is untrusted on-disk data spread into other objects downstream.
  */
 function readProgress(progressPath: string): Record<string, unknown> | undefined {
   const obj = readJsonObjectFile(progressPath);
   return obj === undefined ? undefined : stripForbiddenKeys(obj);
 }
 
-/** Copy the pre-defined scalar fields off a parsed progress object. */
+/**
+ * Copy known fields from a raw progress object onto `record`, in place.
+ *
+ * Each field is type-checked before being copied, so a field present with the
+ * wrong type is silently skipped rather than corrupting the record — defensive
+ * because progress JSON is user/tool-written and may be malformed or stale.
+ * The nested `workspace` object is validated and rebuilt field-by-field for the
+ * same reason.
+ */
 function applyProgress(record: EnumeratedRun, progress: Record<string, unknown>): void {
   if (typeof progress.projectRoot === 'string') record.projectRoot = progress.projectRoot;
   if (typeof progress.terminal === 'boolean') record.terminal = progress.terminal;
@@ -155,7 +175,15 @@ function applyProgress(record: EnumeratedRun, progress: Record<string, unknown>)
   }
 }
 
-/** Look up a single enumerated run by id, or `undefined` if not present. */
+/**
+ * Find a single run by id.
+ *
+ * @param runsRoot the repository's `runs` directory.
+ * @param runId the run id to locate.
+ * @returns the matching {@link EnumeratedRun}, or `undefined` if no such run
+ *   exists. Enumerates all runs and filters, so the same tolerant reading rules
+ *   apply.
+ */
 export function findRun(runsRoot: string, runId: string): EnumeratedRun | undefined {
   return enumerateRuns(runsRoot).find((r) => r.runId === runId);
 }

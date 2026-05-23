@@ -1,19 +1,29 @@
+
+
 /**
- * Public entry point for the E3 evaluator deterministic core (carve-out).
+ * Public entry point for the evaluator-core planning layer.
  *
- * Re-exports the single `buildEvaluatorPlan` function and every public
- * type the carve-out emits or accepts. Sprint 3's orchestrator (the
- * agent-prompt rewrite under E1) and `scripts/evaluator-pipeline-check`
- * import from here.
- *
- * The carve-out is deliberately pure: no file I/O, no network, no
- * environment reads. Callers assemble inputs and consume outputs.
+ * This barrel is the only surface other packages import; it re-exports the
+ * plan builder, the individually-callable sub-builders that callers may want
+ * in isolation, and the plan/config type vocabulary. The internal helpers
+ * (`surface-instantiation`, `secrets-scans`, etc.) are deliberately not
+ * re-exported — they are implementation detail behind these entry points.
  */
 
 export { buildEvaluatorPlan } from './plan-builder.js';
 
+export { buildSecuritySurfacesInstantiated } from './security-surfaces.js';
+export {
+  buildDocumentationSurfacesInstantiated,
+  isKnownSurfaceId,
+} from './documentation-surfaces.js';
+
+export { buildDocLintInvocations } from './doc-lint-invocations.js';
+
 export type {
   AuditCmd,
+  DocLintCmd,
+  DocumentationSurface,
   EvaluatorCoreSnapshot,
   EvaluatorPlan,
   SecuritySurface,

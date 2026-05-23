@@ -1,29 +1,48 @@
 /**
- * Per-run log routing for the config server.
+ * Structured JSON logger for the config-server.
  *
- * R1-locked rule: when `GAN_RUN_ID` is set, routes to
- * `<projectRoot>/.gan-state/runs/<id>/logs/config-server.log`. Otherwise logs
- * to stderr. Lines are JSON via `stableStringify` (sorted keys, trailing
- * newline). Anonymisation: the logger never accepts `value` payloads,
- * overlay contents, or trust hashes — only names, paths, and result codes.
+ * Two shared guarantees hold for every entry, stated once here:
+ * 1. Secrets never reach a log. Metadata is run through {@link sanitiseMeta},
+ *    which drops a fixed denylist of sensitive keys (config values, overlay
+ *    contents, trust hashes) before the entry is written.
+ * 2. Inside a `/gan` run the log goes to a per-run *file*, never stderr —
+ *    stderr output during a run pollutes the MCP stdio channel and test
+ *    output. Outside a run (no `runId`) there is no file to write, so stderr
+ *    is the deliberate fallback.
  */
 
 import { mkdirSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { stableStringify } from '../determinism/index.js';
 
+/** Severity of a log entry; ordered informally info < warn < error. */
 export type LogLevel = 'info' | 'warn' | 'error';
 
+/**
+ * Configuration for {@link getLogger}. All fields optional; the production
+ * default `{}` derives everything from the process (cwd + `GAN_RUN_ID`).
+ *
+ * @property projectRoot base directory under which the per-run log file lives;
+ *   defaults to `process.cwd()`.
+ * @property runId the `/gan` run identifier that selects the file sink;
+ *   defaults to the `GAN_RUN_ID` env var. Absent ⇒ stderr sink.
+ * @property forceStderr when `true`, always log to stderr even if a `runId`
+ *   is present — used by tests/tooling that want to observe output directly.
+ */
 export interface LoggerOptions {
-  /** Project root used to anchor the per-run log path. Defaults to `cwd`. */
+
   projectRoot?: string;
-  /** Override `GAN_RUN_ID` for testing. */
+
   runId?: string;
-  /** Force-route to stderr regardless of `GAN_RUN_ID`. */
+
   forceStderr?: boolean;
 }
 
-/** A single log entry. Free-form `meta` is serialised as-is. */
+/**
+ * The serialised shape of one log line. `level`/`msg`/`ts` are always present;
+ * `ts` is an ISO-8601 timestamp. Sanitised metadata is spread in as additional
+ * fields via the index signature.
+ */
 export interface LogEntry {
   level: LogLevel;
   msg: string;
@@ -31,16 +50,29 @@ export interface LogEntry {
   [field: string]: unknown;
 }
 
+/**
+ * The logger handle returned by {@link getLogger}. Each level method writes one
+ * sanitised entry; `meta` is optional structured context (sensitive keys are
+ * stripped before writing).
+ *
+ * @property sink reports where entries go — the absolute log file path, or the
+ *   literal `'stderr'`. Useful for diagnostics and tests.
+ */
 export interface Logger {
   info(msg: string, meta?: Record<string, unknown>): void;
   warn(msg: string, meta?: Record<string, unknown>): void;
   error(msg: string, meta?: Record<string, unknown>): void;
-  /** Returns the active sink: `'stderr'` or the absolute log file path. */
+
   sink(): string;
 }
 
+// Metadata keys that may carry user config values or trust secrets. They are
+// dropped wholesale before any write — the security guarantee in the module
+// header. Callers may safely pass these keys; they simply will not be logged.
 const FORBIDDEN_META_KEYS = new Set(['value', 'overlay', 'overlayContents', 'trustHash', 'hash']);
 
+// Return a shallow copy of `meta` with every FORBIDDEN_META_KEYS entry omitted.
+// Centralised so the denylist is applied uniformly to all log levels.
 function sanitiseMeta(meta?: Record<string, unknown>): Record<string, unknown> {
   if (!meta) return {};
   const out: Record<string, unknown> = {};
@@ -52,10 +84,18 @@ function sanitiseMeta(meta?: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * Construct a logger respecting the per-run routing rule.
+ * Build a {@link Logger} bound to a sink chosen from `opts`.
  *
- * Note: the file sink is created lazily on first write so that constructing a
- * logger for a non-existent project root does not eagerly fail.
+ * Sink selection (see module header): a file under
+ * `<projectRoot>/.gan-state/runs/<runId>/logs/config-server.log` when a
+ * non-empty `runId` is available and `forceStderr` is not set; otherwise
+ * `process.stderr`.
+ *
+ * @param opts see {@link LoggerOptions}; defaults derive from cwd + env.
+ * @returns a logger whose level methods are side-effecting (each writes one
+ *   line). Writes are best-effort: if creating/appending the file fails, the
+ *   entry falls back to stderr rather than throwing — logging must never break
+ *   the operation it is observing.
  */
 export function getLogger(opts: LoggerOptions = {}): Logger {
   const projectRoot = opts.projectRoot ?? process.cwd();
@@ -74,7 +114,8 @@ export function getLogger(opts: LoggerOptions = {}): Logger {
         mkdirSync(path.dirname(filePath), { recursive: true });
         appendFileSync(filePath, line, { encoding: 'utf8' });
       } catch {
-        // If the file sink fails, fall back to stderr so we don't drop the line.
+        // File sink failed (permissions, missing dir we could not create):
+        // fall back to stderr so the entry is not silently lost.
         process.stderr.write(line);
       }
     } else {

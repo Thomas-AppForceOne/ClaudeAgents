@@ -1,39 +1,53 @@
 /**
- * `cacheEnv.no_conflict` invariant (F3 catalog; sourced from C1).
+ * Invariant `cacheEnv.no_conflict`: when two stack files both declare a
+ * `cacheEnv` entry for the same environment variable, they must agree on its
+ * `valueTemplate`.
  *
- * Across active stack files, no two stacks may declare `cacheEnv` entries
- * with the same `envVar` and *different* `valueTemplate` values. Two
- * stacks declaring the same env var with the *same* template is fine
- * (idempotent). C1 catalogues the rule; F3 enumerates it; this module
- * implements it.
+ * `cacheEnv` entries are merged across all active stacks into one environment,
+ * so two stacks defining the same key with different templates is ambiguous —
+ * there is no principled winner — and is reported as an `error` (it blocks).
+ * Same key + identical template is fine (redundant but consistent).
  *
- * Active set semantics (S4 placeholder): until C2 detection / dispatch
- * code lands in R1, "active" is approximated by "every discovered stack
- * file at any tier" — that is, every row in `snapshot.stackFiles`. This
- * is conservative (it may flag conflicts among stacks the project never
- * activates in practice), but the alternative — silently letting a
- * conflict ship — would defeat the invariant. Once C2's active-set
- * computation lands inside the snapshot, this module narrows to that set
- * without changing its public shape.
+ * Determinism matters here: the "first" stack to declare a key becomes the
+ * baseline that later stacks are compared against, so stacks are walked in a
+ * stable, locale-sorted order ({@link orderedStackRows}). A `dedupeKey` guards
+ * against emitting the same conflict twice when a key appears more than once
+ * within a single later file.
  */
 
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
 
+/** A single observed `cacheEnv` declaration, remembered so a later, conflicting
+ * declaration of the same key can name both sides in its message. */
 interface Declaration {
-  /** Stack file the declaration came from. */
+
   filePath: string;
-  /** Resolved value template from the YAML body. */
+
   valueTemplate: string;
 }
 
+/**
+ * Detect cross-stack `cacheEnv` value-template conflicts.
+ *
+ * Reads only `snapshot.stackFiles`; pure and never throws on a normal outcome.
+ *
+ * @param snapshot the validation snapshot.
+ * @returns one `error` {@link Issue} per distinct (key, fileA, fileB) conflict,
+ *   attributed to the *second* (later-sorted) file's path; empty when every
+ *   shared key agrees. Entries missing `envVar`/`valueTemplate` strings, and
+ *   stacks whose `cacheEnv` is not an array, are silently ignored (schema
+ *   validation owns those shape complaints).
+ */
 export function checkCacheEnvNoConflict(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
-  // envVar -> first-seen declaration (used to compare against later rows).
+
+  // First-writer-wins record of each env var's baseline declaration.
   const seen: Map<string, Declaration> = new Map();
-  // envVar -> set of (filePath|template) tuples we've already flagged so a
-  // three-way conflict produces exactly one issue per offending file pair.
+
+  // Conflicts already reported, keyed by (var, priorFile, currentFile), so a
+  // key repeated within one file does not produce duplicate issues.
   const flagged: Set<string> = new Set();
 
   for (const row of orderedStackRows(snapshot)) {
@@ -47,9 +61,11 @@ export function checkCacheEnvNoConflict(snapshot: ValidationSnapshot): Issue[] {
       if (typeof envVar !== 'string' || typeof valueTemplate !== 'string') continue;
       const prior = seen.get(envVar);
       if (!prior) {
+        // First sighting of this key becomes the baseline; nothing to compare.
         seen.set(envVar, { filePath: row.path, valueTemplate });
         continue;
       }
+      // Same key, same template across files is consistent — not a conflict.
       if (prior.valueTemplate === valueTemplate) continue;
       const dedupeKey = `${envVar}::${prior.filePath}::${row.path}`;
       if (flagged.has(dedupeKey)) continue;
@@ -58,10 +74,7 @@ export function checkCacheEnvNoConflict(snapshot: ValidationSnapshot): Issue[] {
         filePath: row.path,
         valueTemplate,
       });
-      // Build the error via the central factory so the wording stays
-      // alongside other CacheEnvConflict messaging if it ever gains a
-      // dedicated factory branch. We use `InvariantViolation` for the
-      // F2 issue code (per S4 contract — no new codes introduced).
+
       const err = createError('InvariantViolation', { message: messageBody });
       issues.push({
         code: 'InvariantViolation',
@@ -76,6 +89,14 @@ export function checkCacheEnvNoConflict(snapshot: ValidationSnapshot): Issue[] {
   return issues;
 }
 
+/**
+ * Compose the human-facing conflict message naming both stacks, the disputed
+ * env var, and each side's template, plus how to fix it.
+ *
+ * @param envVar the shared environment-variable name.
+ * @param prior the baseline declaration (first file, by sort order).
+ * @param current the conflicting declaration (later file).
+ */
 function buildConflictMessage(envVar: string, prior: Declaration, current: Declaration): string {
   return (
     `Stack files '${prior.filePath}' and '${current.filePath}' both declare cacheEnv ` +
@@ -88,11 +109,10 @@ function buildConflictMessage(envVar: string, prior: Declaration, current: Decla
 }
 
 /**
- * Iterate snapshot stack rows in deterministic order: the snapshot map is
- * keyed by `<tier>:<path>` and was inserted in `localeSort` order during
- * phase 1, but JavaScript Map iteration is insertion-order-based, which
- * means a re-arrangement in phase 1 would silently shift our output. We
- * sort the keys defensively here.
+ * Return the snapshot's stack rows in a deterministic order, sorted by their
+ * map key (tier-prefixed path). The stable order is what makes the
+ * "first-writer-wins baseline" above reproducible across runs and machines: a
+ * raw `Map` iteration order would be insertion-dependent.
  */
 function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   const keys = Array.from(snapshot.stackFiles.keys()).sort((a, b) =>
@@ -106,6 +126,7 @@ function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   return out;
 }
 
+/** Narrow to a non-null, non-array object (a YAML mapping). */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

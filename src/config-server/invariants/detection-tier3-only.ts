@@ -1,26 +1,34 @@
 /**
- * `detection.tier3_only` invariant (F3 catalog; sourced from C5).
+ * Invariant `detection.tier3_only`: a `detection` block may appear only in
+ * built-in (tier-3) stack files.
  *
- * Detection blocks belong only in the built-in (tier-3) stack file. A
- * project- or user-tier stack file that carries a `detection` block
- * fires this invariant — silent-drop is rejected per F3's catalog (a
- * project-tier file's `detection` reading like documentation but never
- * activating would be a footgun).
- *
- * Per C5: a user who needs to introduce a new stack ships the file in
- * their project tier *and* forces it via `stack.override` in the project
- * overlay. Customising activation rules is *not* a supported overlay
- * surface; users who want different detection must fork into the
- * built-in tier of their fork of the framework.
+ * Detection patterns decide which stacks auto-activate for a project, so they
+ * are framework-owned and must ship in the built-in tier. Project- and
+ * user-tier files exist to *customise the contents* of a stack, not to invent
+ * new activation rules — a project that wants a stack on regardless uses
+ * `stack.override` in its overlay instead. A `detection` block in a non-builtin
+ * file is therefore an `error`.
  */
 
 import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotStackRow, ValidationSnapshot } from '../tools/validate.js';
 
+/**
+ * Flag any project- or user-tier stack that declares a `detection` block.
+ *
+ * Reads only `snapshot.stackFiles`; pure and never throws on a normal outcome.
+ *
+ * @param snapshot the validation snapshot.
+ * @returns one `error` {@link Issue} per offending non-builtin stack, in stable
+ *   sort order; built-in stacks and stacks without a `detection` key produce
+ *   none. Mere *presence* of the key is the trigger — its value is not
+ *   inspected.
+ */
 export function checkDetectionTier3Only(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
   for (const row of orderedStackRows(snapshot)) {
+    // Built-in stacks are the only tier allowed to own detection rules.
     if (row.tier === 'builtin') continue;
     if (!row.data || !isObject(row.data)) continue;
     if (!('detection' in row.data)) continue;
@@ -29,6 +37,14 @@ export function checkDetectionTier3Only(snapshot: ValidationSnapshot): Issue[] {
   return issues;
 }
 
+/**
+ * Build the error issue for a non-builtin stack that carries a `detection`
+ * block, tailoring the tier label (project vs. user) and pointing at the fix
+ * (remove the block; use `stack.override` to force activation).
+ *
+ * @param row the offending stack row; its `tier` selects the label and its
+ *   `path` is the reported location.
+ */
 function buildIssue(row: SnapshotStackRow): Issue {
   const tierLabel = row.tier === 'project' ? 'project-tier' : 'user-tier';
   const messageBody =
@@ -48,6 +64,11 @@ function buildIssue(row: SnapshotStackRow): Issue {
   };
 }
 
+/**
+ * Return the snapshot's stack rows in a deterministic order, sorted by their
+ * map key (tier-prefixed path), so the emitted issues are ordered the same way
+ * on every run.
+ */
 function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   const keys = Array.from(snapshot.stackFiles.keys()).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: 'variant', numeric: false }),
@@ -60,6 +81,7 @@ function orderedStackRows(snapshot: ValidationSnapshot): SnapshotStackRow[] {
   return out;
 }
 
+/** Narrow to a non-null, non-array object (a YAML mapping). */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

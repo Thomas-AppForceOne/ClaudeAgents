@@ -1,63 +1,79 @@
 /**
- * Tiny argument parser for R4 maintainer scripts.
+ * Minimal, dependency-free argv parser shared by every `scripts/` CLI.
  *
- * The R3 CLI (`src/cli/lib/args.ts`) has its own parser tuned for the
- * `gan` surface (per-subcommand specs, F2 error mapping). Maintainer
- * scripts have a narrower need: a small set of recognised flags, plus a
- * pass-through bucket for unknown flags so each script can decide how
- * strict it wants to be (e.g. `lint-stacks` treats unknowns as exit 64,
- * while a future script may forward unknowns to a child process).
- *
- * The parser is intentionally minimal:
- *   - Recognised flags (per `spec`): `--json`, `--quiet`, `--help` are
- *     boolean; `--project-root <path>` takes a string value.
- *   - Both `--flag=value` and `--flag value` shapes are accepted.
- *   - Repeated string flags: last-write-wins.
- *   - Tokens that do not start with `--` (and are not a `--flag value`
- *     value-token) are positionals.
- *   - Tokens that look like flags but are not in `spec.boolean` /
- *     `spec.string` go into `unknown`. The parser does not throw; the
- *     caller decides exit-code semantics.
- *
- * The `projectRoot` field on the return value is a small convenience —
- * it canonicalises the `--project-root` value (or `process.cwd()`) via
- * the determinism module so every script gets the same canonical form
- * that the runtime uses (per F3).
+ * The parser is deliberately small: it understands `--flag`, `--flag=value`,
+ * and `--key value` for a fixed, caller-declared set of names, and collects
+ * everything else into `positionals`/`unknown` for the caller to reject. It
+ * does not throw on bad input — unrecognised or malformed flags are returned
+ * as data in `unknown` so each script can emit its own usage error and exit
+ * with the shared `BAD_ARGS` code. The one always-present derived field is
+ * `projectRoot`, canonicalised from `--project-root` (or the cwd) so every
+ * script sees a stable, symlink-resolved root.
  */
-
 import { canonicalizePath } from '../../src/config-server/determinism/index.js';
 
+/**
+ * Declares which flag names a script accepts and how each is typed. Names are
+ * given without the leading `--`. A name in {@link ArgsSpec.boolean} is a
+ * presence flag (default `false`, also accepts `=true`/`=false`); a name in
+ * {@link ArgsSpec.string} consumes a value (`--name value` or `--name=value`).
+ * Both lists are `readonly` so a spec can be a shared `as const` literal.
+ *
+ * @property boolean flag names parsed as booleans.
+ * @property string flag names that take a string value.
+ */
 export interface ArgsSpec {
-  /** Long-form names of recognised boolean flags (without leading `--`). */
   boolean: readonly string[];
-  /** Long-form names of recognised string-valued flags. */
+
   string: readonly string[];
 }
 
+/**
+ * The parsed result of {@link parseArgs}.
+ *
+ * @property flags every declared flag, keyed by name. Booleans are always
+ *   present (defaulted to `false`); string flags appear only when supplied.
+ * @property positionals non-flag tokens, in argv order. Scripts that take no
+ *   positionals treat a non-empty array as a usage error.
+ * @property unknown tokens that looked like flags but were not in the spec, or
+ *   were malformed (e.g. a string flag with no value, a boolean given a
+ *   non-`true`/`false` `=value`). Never throws — the caller decides what to do.
+ * @property projectRoot the canonicalised project root: `--project-root` if a
+ *   string was given, otherwise `process.cwd()`, always run through
+ *   {@link canonicalizePath} so it is absolute and symlink-resolved.
+ */
 export interface ParsedScriptArgs {
-  /** Flag values keyed by long-form name (without `--`). */
   flags: Record<string, string | boolean>;
-  /** Positional arguments, in source order. */
+
   positionals: string[];
-  /** Unknown flag tokens, in source order. Each entry is the raw token. */
+
   unknown: string[];
-  /**
-   * Canonical project root. If `--project-root <path>` was supplied, the
-   * string value is canonicalised via the determinism module; otherwise
-   * `process.cwd()` is canonicalised the same way.
-   */
+
   projectRoot: string;
 }
 
+// Default spec used when a caller does not pass one: the flags common to
+// every script. Scripts with extra flags pass their own widened spec instead.
 const RECOGNISED_BOOLEANS = ['json', 'quiet', 'help'] as const;
 const RECOGNISED_STRINGS = ['project-root'] as const;
 
 /**
- * Parse maintainer-script argv against `spec`.
+ * Parse a CLI argument vector against `spec`.
  *
- * Tokens that look like flags but are not recognised land in `unknown`.
- * Callers decide whether an unknown is a hard error (exit 64) or a
- * pass-through; `lint-stacks` chooses the former.
+ * Recognises three flag shapes: `--name` (boolean, sets `true`),
+ * `--name=value` (boolean coerced from `'true'`/`'false'`, or string assigned
+ * verbatim), and `--name value` (string flags only — consumes the next token
+ * unless it is absent or itself starts with `--`). Anything unrecognised is
+ * pushed to `unknown`; bare tokens become `positionals`.
+ *
+ * Never throws on malformed input: invalid flags are reported as data in
+ * `unknown` so the caller can produce a script-specific usage message. The
+ * only side effect is reading `process.cwd()` when `--project-root` is absent.
+ *
+ * @param argv the raw argument tokens (typically `process.argv.slice(2)`).
+ * @param spec which flag names are booleans vs. strings; defaults to the
+ *   common `json`/`quiet`/`help` + `project-root` set.
+ * @returns the {@link ParsedScriptArgs}, with `projectRoot` always populated.
  */
 export function parseArgs(
   argv: readonly string[],
@@ -67,16 +83,22 @@ export function parseArgs(
   const positionals: string[] = [];
   const unknown: string[] = [];
 
-  // Seed boolean defaults so callers can read flags[name] unconditionally.
+  // Pre-seed every boolean to `false` so callers can read `flags[name]`
+  // unconditionally without an `in`/undefined check; string flags are left
+  // absent so a missing string is distinguishable from an empty value.
   for (const name of spec.boolean) {
     flags[name] = false;
   }
 
+  // Manual index walk (not a for-of) because the `--key value` form must look
+  // ahead and consume a second token, advancing `i` by 2.
   let i = 0;
   while (i < argv.length) {
     const token = argv[i]!;
 
-    // `--flag=value` form.
+    // Form 1: `--name=value`. Split on the first `=` so a value may itself
+    // contain `=`. A boolean only accepts the literals true/false here;
+    // anything else is malformed and reported rather than silently coerced.
     if (token.startsWith('--') && token.includes('=')) {
       const eqIdx = token.indexOf('=');
       const name = token.slice(2, eqIdx);
@@ -94,7 +116,7 @@ export function parseArgs(
       continue;
     }
 
-    // `--flag` form (boolean) or `--flag value` (string).
+    // Form 2: a bare `--name` (length > 2 excludes a lone `--`).
     if (token.startsWith('--') && token.length > 2) {
       const name = token.slice(2);
       if (spec.boolean.includes(name)) {
@@ -104,9 +126,10 @@ export function parseArgs(
       }
       if (spec.string.includes(name)) {
         const next = argv[i + 1];
+        // A string flag needs a value token. Treat a following `--`-token as a
+        // new flag (not this flag's value), so `--out --json` reports `--out`
+        // as unknown rather than swallowing `--json` as its argument.
         if (next === undefined || next.startsWith('--')) {
-          // Missing value — treat as unknown so the caller can surface a
-          // structured "bad args" exit. We do not invent a value.
           unknown.push(token);
           i += 1;
           continue;
@@ -120,11 +143,14 @@ export function parseArgs(
       continue;
     }
 
-    // Anything else is a positional.
+    // Anything not matching a flag shape is a positional argument.
     positionals.push(token);
     i += 1;
   }
 
+  // `project-root` is special-cased into a derived field: fall back to the cwd
+  // when unset, then canonicalise so downstream code always gets an absolute,
+  // symlink-resolved root regardless of how the user expressed it.
   const projectRootRaw =
     typeof flags['project-root'] === 'string' ? (flags['project-root'] as string) : process.cwd();
   const projectRoot = canonicalizePath(projectRootRaw);

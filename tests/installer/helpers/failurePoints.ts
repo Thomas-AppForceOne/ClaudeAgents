@@ -1,62 +1,35 @@
 /**
- * R2 sprint 3 — failure-injection helper for installer rollback tests.
+ * Fault-injection seams for the install/rollback suites.
  *
- * `injectFailureAt()` mutates an environment-variable map that gets
- * threaded into `runInstall({ extraEnv })`, and (where needed) writes
- * extra stub binaries into the supplied stub-bin directory. Each
- * named point causes `install.sh` to fail at the corresponding step:
+ * The installer is built to roll back cleanly when any step fails partway
+ * through. To exercise that without relying on real, flaky failures, the
+ * installer honours a set of `CAS_FAIL_*` environment variables that force a
+ * specific step to fail deterministically; some steps additionally need a
+ * stubbed binary on `PATH` that fails only when its trigger var is set. This
+ * module names those failure points and wires up both halves (env var, and the
+ * stub binary where required) so a test can say "fail at step X, then assert
+ * everything earlier was undone".
  *
- *   - 'npm-install' — fake `npm` exits 1 on an `install`-flavoured
- *     invocation when `CAS_FAIL_NPM_INSTALL=1` is in the environment.
- *     (The version-probe path is unaffected; this only triggers when
- *     `install_mcp_server` actually runs.)
- *
- *   - 'json-edit'   — a stub `node` wrapper exits 1 for `node -e ...`
- *     invocations when `CAS_FAIL_JSON_EDIT=1` is in the environment.
- *     `node --version` and `node -p ...` (used by `read_mcp_server_version`)
- *     still delegate to the real host node so prereq checks pass.
- *
- *   - 'zone-prep'   — a stub `mkdir` wrapper exits 1 when invoked with a
- *     path ending in `.gan-state` or `.gan-cache` and `CAS_FAIL_ZONE_PREP=1`
- *     is in the environment. Other `mkdir` invocations delegate to
- *     `/bin/mkdir`, so the installer's earlier `mkdir -p ~/.claude/agents`
- *     calls still succeed.
- *
- *   - 'confine-hook-write' — sets `CAS_FAIL_CONFINE_HOOK_WRITE=1`,
- *     which `write_confine_hook` reads at the END of its body, AFTER it has
- *     rendered the hook to `~/.claude/hooks/gan-confine.sh` and merged the
- *     `hooks.PreToolUse[]` registration into `~/.claude/settings.json`. The
- *     installer then returns non-zero, routing through its real ERR trap and
- *     `rollback()` so a test can assert the partial hook file is removed and
- *     the settings.json registration is gone (restored from the preedit copy).
- *     No stub binary is required — the failure is an env-flagged branch in
- *     install.sh's own real code path, leaving every other side effect real.
- *
- *   - 'runs-dir-config' — (F7 slice 5) sets `CAS_FAIL_RUNS_DIR_CONFIG=1`,
- *     which `configure_runs_dir` reads at the END of its body, AFTER it has
- *     written the central-store marker (`~/.claude/gan/runs-data-dir`) and
- *     merged the store-root read/write grant into `~/.claude/settings.json`.
- *     The installer then returns non-zero, routing through the real ERR trap
- *     and `rollback()` so a test can assert BOTH writes are undone (marker
- *     removed/restored, settings grant gone). Same env-flagged-branch shape as
- *     'confine-hook-write' — no stub binary required.
- *
- *   - 'module-state-dir-config' — (F8) sets `CAS_FAIL_MODULE_STATE_DIR_CONFIG=1`,
- *     which `configure_module_state_dir` reads at the END of its body, AFTER it
- *     has written the module-state marker (`~/.claude/gan/module-state-dir`).
- *     The installer then returns non-zero, routing through the real ERR trap and
- *     `rollback()` so a test can assert the marker write is undone (marker
- *     removed when newly created, byte-restored when pre-existing). PARITY-MINUS
- *     vs 'runs-dir-config': F8 writes NO settings.json grant, so there is no
- *     second write to undo — the rollback is marker-only. Same
- *     env-flagged-branch shape as 'runs-dir-config' — no stub binary required.
- *
- * The helper deliberately works via env-flagged stubs (rather than
- * patching `install.sh`) so the script under test sees its real code
- * paths — only the side-effect surface is faked.
+ * The two binary-backed points (`json-edit`, `zone-prep`) install a fake
+ * `node` / `mkdir` whose embedded shell DATA reproduces the real tool's
+ * behaviour except when the injected `CAS_FAIL_*` var is `1`, at which point it
+ * prints an error and exits non-zero. The remaining points are pure env flags
+ * the installer itself checks.
  */
+
 import { writeStubBin } from './tmpenv.js';
 
+/**
+ * The set of installer steps that can be made to fail on demand. Each value
+ * maps to a `CAS_FAIL_*` env var (and, for `json-edit`/`zone-prep`, a stubbed
+ * binary):
+ * - `npm-install` — the global package install (`npm install -g .`).
+ * - `json-edit` — the node-driven edit of `~/.claude.json`.
+ * - `zone-prep` — creation of the `.gan-state` / `.gan-cache` zone dirs.
+ * - `confine-hook-write` — writing/registering the confinement hook.
+ * - `runs-dir-config` — persisting the runs-dir marker + settings grant.
+ * - `module-state-dir-config` — persisting the module-state-dir marker.
+ */
 export type FailurePoint =
   | 'npm-install'
   | 'json-edit'
@@ -65,26 +38,52 @@ export type FailurePoint =
   | 'runs-dir-config'
   | 'module-state-dir-config';
 
+/**
+ * Accumulator for injected failures: the env-var bag to splice into a
+ * `runInstall` call. Built empty by {@link makeFailureEnv} and mutated in place
+ * by {@link injectFailureAt}.
+ *
+ * @property env the `CAS_FAIL_*` (and any companion) variables to pass through
+ *   to the installer process.
+ */
 export interface FailurePointEnv {
-  /** Env vars the stubs read to know whether to fail. */
+
   env: Record<string, string>;
 }
 
+/**
+ * Create an empty {@link FailurePointEnv} to be populated by
+ * {@link injectFailureAt}.
+ */
 export function makeFailureEnv(): FailurePointEnv {
   return { env: {} };
 }
 
 /**
- * Mutates `target.env` to flip the named failure point on. For points
- * that need an extra stub binary (`json-edit`, `zone-prep`), writes the
- * stub into `bin` — the caller is responsible for supplying the same
- * stub-bin dir its `runInstall()` call uses.
+ * Arm a failure at `point` on `target`, returning the same (mutated) object for
+ * chaining.
  *
- * `hostNode` is the absolute path to a real Node interpreter the
- * `json-edit` stub falls back to for non-`-e` invocations; defaults to
- * `process.execPath`.
+ * For env-only points this just sets the matching `CAS_FAIL_*` flag. For the
+ * two binary-backed points it also writes a stub onto `PATH`:
+ * - `json-edit` requires `bin` (the stub directory). The stub answers
+ *   `node --version` truthfully (so the prerequisite check still passes) but
+ *   fails any `node -e ...` invocation while `CAS_FAIL_JSON_EDIT=1`, simulating
+ *   a failed JSON edit *after* npm install has already run. `hostNode` is the
+ *   real node to delegate non-failing calls to (defaults to the test runner's
+ *   own `process.execPath`).
+ * - `zone-prep` requires `bin`. The stub fails `mkdir` only for paths ending in
+ *   `.gan-state` / `.gan-cache` (so unrelated directory creation still works),
+ *   isolating the failure to the zone-prep step.
  *
- * Returns `target` for chaining.
+ * @param target the env accumulator to mutate.
+ * @param point which step to make fail.
+ * @param bin path to the stub-binary directory; required for `json-edit` and
+ *   `zone-prep`, ignored otherwise.
+ * @param hostNode override for the real node binary the `json-edit` stub
+ *   delegates to; defaults to `process.execPath`.
+ * @returns `target`, for fluent chaining.
+ * @throws Error when `bin` is omitted for a point that needs it, or when
+ *   `point` is not a known {@link FailurePoint} (the exhaustiveness guard).
  */
 export function injectFailureAt(
   target: FailurePointEnv,
@@ -102,11 +101,10 @@ export function injectFailureAt(
         throw new Error("injectFailureAt('json-edit'): bin path is required");
       }
       const node = hostNode ?? process.execPath;
-      // Re-write the `node` stub so `node -e ...` fails when the env
-      // var is set, while `node --version` and `node -p ...` still
-      // shell through to the real interpreter. The default version
-      // emitted is `v20.10.0` to satisfy the prereq range; tests that
-      // care about a specific version can re-stub afterwards.
+
+      // Stub `node`: report a passing version for the prerequisite probe, fail
+      // the `-e` JSON-edit invocation while the flag is set, and exec the real
+      // node for every other call so the rest of the install behaves normally.
       writeStubBin(
         bin,
         'node',
@@ -129,11 +127,10 @@ export function injectFailureAt(
       if (bin === undefined) {
         throw new Error("injectFailureAt('zone-prep'): bin path is required");
       }
-      // Stub `mkdir` that fails when one of the args ends in
-      // `.gan-state` or `.gan-cache` (the zone names). All other
-      // invocations forward to `/bin/mkdir`. By placing this stub in
-      // the override bin, the installer's earlier `mkdir` calls still
-      // succeed (they target `~/.claude/agents` etc., not zone paths).
+
+      // Stub `mkdir`: fail only when asked to create a zone dir (a path ending
+      // in `.gan-state` / `.gan-cache`) so the failure is scoped to zone prep;
+      // any other mkdir delegates to the real binary.
       writeStubBin(
         bin,
         'mkdir',
@@ -154,29 +151,21 @@ export function injectFailureAt(
       break;
     }
     case 'confine-hook-write':
-      // Pure env-flagged branch in install.sh's own `write_confine_hook`
-      // — no stub binary needed. The flag is read after the hook + settings
-      // registration have been written, so rollback exercises the real
-      // partial-state cleanup.
+
       target.env.CAS_FAIL_CONFINE_HOOK_WRITE = '1';
       break;
     case 'runs-dir-config':
-      // (F7 slice 5) Pure env-flagged branch in install.sh's own
-      // `configure_runs_dir` — no stub binary needed. The flag is read after
-      // BOTH the marker and the settings grant have been written, so rollback
-      // exercises the real partial-state cleanup of both.
+
       target.env.CAS_FAIL_RUNS_DIR_CONFIG = '1';
       break;
     case 'module-state-dir-config':
-      // (F8) Pure env-flagged branch in install.sh's own
-      // `configure_module_state_dir` — no stub binary needed. The flag is read
-      // after the marker has been written, so rollback exercises the real
-      // partial-state cleanup of the marker. No settings grant exists to undo
-      // (F8 parity-MINUS).
+
       target.env.CAS_FAIL_MODULE_STATE_DIR_CONFIG = '1';
       break;
     default: {
-      // exhaustiveness check
+
+      // Exhaustiveness guard: assigning `point` to `never` makes the compiler
+      // flag any FailurePoint added to the union but not handled above.
       const _never: never = point;
       void _never;
       throw new Error(`unknown failure point: ${String(point)}`);

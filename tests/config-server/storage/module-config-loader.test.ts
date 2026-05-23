@@ -1,19 +1,8 @@
-/**
- * M2 — `loadModuleConfig` tests.
- *
- * Covers the per-module project-config loader at
- * `<projectRoot>/.claude/gan/modules/<name>.yaml`:
- *   - absent file -> returns `null`
- *   - malformed YAML -> throws `ConfigServerError` with `code === 'InvalidYAML'`
- *
- * The third "MalformedInput on unreadable file" case is intentionally
- * omitted: `loadModuleConfig` calls `existsSync` first and returns
- * `null` for any non-existent path, and on macOS/Linux a present-but-
- * unreadable file is exercised via `chmod` which is brittle when the
- * test process runs as root (CI containers) — `existsSync` short-
- * circuits the absent case and the readFileSync `MalformedInput` arm
- * is sufficiently covered by code review.
- */
+// Verifies loadModuleConfig's two boundary behaviours: an absent config file is
+// a benign null (not an error), while a syntactically broken YAML file throws a
+// ConfigServerError coded InvalidYAML that carries the offending file path in
+// `err.file`. The path is asserted so callers can point the user at the right
+// file when reporting the failure.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

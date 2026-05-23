@@ -1,22 +1,14 @@
 /**
- * R-post sprint 6 — `gan stacks where [<name>]`.
+ * `gan stacks where [name]` — report *where* a stack would resolve from.
  *
- * No name → prints the absolute path to the framework's built-in stacks
- * directory (`<packageRoot>/stacks/`). Useful for users who want to know
- * "where does the framework keep its stacks?".
+ * Two modes, keyed on whether a name is given:
+ * - no name → print the built-in stacks *directory* path (project-independent).
+ * - a name → resolve that stack for the project and print its file path and
+ *   tier.
  *
- * Named → calls R1's `getStackResolution({projectRoot, name})` and prints
- * the resolved path with its tier provenance. Resolution follows C5's
- * four-tier order; the highest-priority tier wins.
- *
- * JSON shapes:
- *   - no name: `{kind: "builtin-directory", path}`.
- *   - named:   `{name, path, tier}`.
- *
- * Exit codes:
- *   - 0 on success;
- *   - 2 (validation bucket) when the named stack is missing in every tier
- *     (R1's `getStackResolution` raises `MissingFile`).
+ * Read-only (no writes). When the project root is displayed in an
+ * abbreviated/relative form, resolved paths under it are rewritten to match
+ * that display form so output stays consistent with what the user typed.
  */
 
 import path from 'node:path';
@@ -33,8 +25,10 @@ import type { ParsedArgs } from '../lib/args.js';
 import type { StackTier } from '../../config-server/resolution/stack-resolution.js';
 
 /**
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. Mirrors the
- *   helper in `stacks-available.ts`.
+ * Resolve the installed package's built-in `stacks/` directory.
+ *
+ * Honours `GAN_PACKAGE_ROOT_OVERRIDE` (test fixture seam) before the real
+ * package-root resolver. May throw if the underlying resolver throws.
  */
 function resolveBuiltinStacksDir(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -43,12 +37,26 @@ function resolveBuiltinStacksDir(): string {
   return path.join(root, 'stacks');
 }
 
+/**
+ * CLI entrypoint for `gan stacks where`.
+ *
+ * @param parsed parsed argv; the optional first positional is the stack name,
+ *   and `--json` / `--project-root` are honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data:
+ *   - no name + a package-root failure → a `MissingFile`-class error with its
+ *     mapped exit code;
+ *   - with a name, project-root resolution or stack resolution throwing →
+ *     mapped via {@link errorResult}.
+ *   On success, exit {@link EXIT_OK} with the directory path (no name) or the
+ *   resolved file path and tier (with a name) on `stdout`.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
   const name = parsed._[0];
 
-  // No name: print the built-in stacks directory and exit 0.
+  // No name → report the built-in stacks directory itself, independent of any
+  // project.
   if (name === undefined || name.length === 0) {
     let stacksDir: string;
     try {
@@ -77,7 +85,6 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: `${stacksDir}\n`, stderr: '', code: EXIT_OK };
   }
 
-  // Named: resolve via R1's stack resolver.
   let projectRoot: string;
   let projectRootDisplay: string;
   try {
@@ -90,6 +97,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
 
   let resolved: { path: string; tier: StackTier };
   try {
+    // Forward the package-root override into resolution so the test seam
+    // governs both the directory listing and per-stack resolution identically.
     const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
     const ctx =
       typeof override === 'string' && override.length > 0 ? { packageRoot: override } : undefined;
@@ -98,10 +107,9 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return errorResult(e, wantJson);
   }
 
-  // Display-form path: swap the canonical project-root prefix for the
-  // case-preserving form so output reads as `/Users/...` not `/users/...`
-  // on macOS. The resolver returns a canonical path; only the rendered
-  // version differs.
+  // Rewrite a resolved path that lives under the project root to use the
+  // root's display form, so the output matches how the user referred to the
+  // project rather than leaking the canonical absolute path.
   const resolvedPathDisplay =
     projectRoot !== projectRootDisplay && resolved.path.startsWith(projectRoot)
       ? projectRootDisplay + resolved.path.slice(projectRoot.length)

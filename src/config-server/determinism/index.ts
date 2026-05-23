@@ -1,11 +1,13 @@
 /**
- * Centralised determinism pins for the config server.
+ * Determinism primitives shared across the config-server.
  *
- * F3's determinism contract — picomatch glob, `realpathSync.native` path
- * canonicalisation, sorted-key JSON, locale-sensitive sort — is implemented
- * here and only here. Every other module imports from this entry point.
- * Duplicate implementations elsewhere are a regression and must be removed
- * via this module instead.
+ * Config resolution must be reproducible: the same inputs must always produce
+ * byte-identical output, regardless of filesystem iteration order, machine
+ * locale, or platform path casing. This module is the one home for the
+ * routines that enforce that — path canonicalisation, stable (key-sorted)
+ * JSON serialisation, locale-stable sorting, and deterministic globbing.
+ * Other modules must route through these rather than calling `JSON.stringify`,
+ * `Array.sort`, or raw `realpathSync` ad hoc.
  */
 
 import { realpathSync } from 'node:fs';
@@ -14,10 +16,15 @@ import path from 'node:path';
 import picomatch from 'picomatch';
 
 /**
- * Returns the subset of `candidates` matching `pattern` under the project's
- * pinned glob semantics (picomatch v4, default options). Output is
- * deterministic: matches are returned in `localeSort` order regardless of
- * input order.
+ * Match `pattern` against `candidates` and return the matches, sorted stably.
+ *
+ * @param pattern a glob pattern (picomatch syntax). `dot: true` so leading-dot
+ *   files like `.claude/...` are matched rather than skipped.
+ * @param candidates the paths to test (already `/`-separated, project-relative).
+ * @returns the matching subset, {@link localeSort}ed so the order does not
+ *   depend on the candidates' input order.
+ * @throws whatever `picomatch` throws when `pattern` is not a compilable glob;
+ *   callers (e.g. detection) catch this to flag a malformed pattern.
  */
 export function glob(pattern: string, candidates: string[]): string[] {
   const isMatch = picomatch(pattern, { dot: true });
@@ -26,20 +33,19 @@ export function glob(pattern: string, candidates: string[]): string[] {
 }
 
 /**
- * Canonicalise a filesystem path under F3's rules:
- * - resolve symlinks via `fs.realpathSync.native`
- * - strip a trailing slash (except for the filesystem root)
- * - lowercase the result on Darwin and Win32 (case-insensitive filesystems);
- *   leave bytes untouched on Linux
+ * Canonicalise a path into the stable key form used for cache keys and
+ * identity comparisons.
  *
- * If the path does not exist, falls back to `path.resolve` so callers can
- * canonicalise prospective paths (e.g. for path-escape checks) without
- * requiring the file on disk first.
+ * Resolves symlinks and relativity via `realpathSync.native`, falling back to
+ * `path.resolve` when the path does not exist on disk (so a not-yet-created
+ * project root still produces a deterministic key). A single trailing slash is
+ * trimmed, and on case-insensitive filesystems (macOS, Windows) the result is
+ * lower-cased so two spellings of the same directory collapse to one key.
  *
- * **Use this form for cache keys and equality checks.** For user-visible
- * output use {@link canonicalizePathForDisplay} which performs the same
- * `realpath` + slash-strip but preserves the original case so users on
- * macOS see `/Users/...` rather than the lowercased `/users/...`.
+ * @param p the path to canonicalise (absolute or relative).
+ * @returns the canonical form; intended as an opaque identity key, NOT for
+ *   display. Use {@link canonicalizePathForDisplay} when showing a path to a
+ *   user, since the lower-casing here would otherwise mangle their casing.
  */
 export function canonicalizePath(p: string): string {
   let resolved: string;
@@ -48,7 +54,7 @@ export function canonicalizePath(p: string): string {
   } catch {
     resolved = path.resolve(p);
   }
-  // Strip trailing slash unless this is the filesystem root.
+
   if (resolved.length > 1 && (resolved.endsWith('/') || resolved.endsWith('\\'))) {
     resolved = resolved.slice(0, -1);
   }
@@ -60,12 +66,13 @@ export function canonicalizePath(p: string): string {
 }
 
 /**
- * Display-form path canonicalisation: same `realpath` + trailing-slash strip
- * as {@link canonicalizePath}, but **without** the Darwin/Win32 case-folding.
- * Use this for paths that are rendered to the user (CLI stdout, log lines,
- * error messages). Cache keys and equality checks must continue to use
- * {@link canonicalizePath} so two paths that differ only in case still hit
- * the same cache slot on case-insensitive filesystems.
+ * Like {@link canonicalizePath} (symlink/relativity resolution, trailing-slash
+ * trim) but WITHOUT the case-folding step, so the path is suitable to show to
+ * a user on a case-insensitive filesystem. Never use this as a cache key — two
+ * spellings of the same directory would not collapse.
+ *
+ * @param p the path to resolve for display.
+ * @returns the resolved, original-cased path.
  */
 export function canonicalizePathForDisplay(p: string): string {
   let resolved: string;
@@ -81,15 +88,26 @@ export function canonicalizePathForDisplay(p: string): string {
 }
 
 /**
- * Stable JSON serialisation under F3's pin: keys sorted lexicographically at
- * every depth, two-space indent, trailing newline. `undefined` values and
- * function values are dropped (consistent with `JSON.stringify`).
+ * Serialise `value` to JSON with deterministic, byte-stable output: object
+ * keys are sorted recursively and `undefined`-valued keys are dropped, so two
+ * structurally-equal values always serialise identically regardless of key
+ * insertion order. This is the canonical form used for content hashing, on-disk
+ * state files, and log lines.
+ *
+ * @param value any JSON-serialisable value (non-JSON values follow
+ *   `JSON.stringify` semantics — functions/`undefined` dropped, etc.).
+ * @returns 2-space-indented JSON with a single trailing newline (the trailing
+ *   `\n` makes the output a well-formed text file / appendable log line).
  */
 export function stableStringify(value: unknown): string {
   const sorted = sortKeysDeep(value);
   return JSON.stringify(sorted, null, 2) + '\n';
 }
 
+// Recursively rebuild `value` with object keys in sorted order. Arrays keep
+// their order (position is meaningful); only mapping keys are reordered.
+// `undefined` values are dropped so they never appear in the output and an
+// optional-absent field never differs from an explicit-undefined one.
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((v) => sortKeysDeep(v));
@@ -109,9 +127,15 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 /**
- * Locale-sensitive sort under F3's pin: `localeCompare` with
- * `{ sensitivity: 'variant', numeric: false }`. Returns a new array; does not
- * mutate the input.
+ * Sort strings into a stable, locale-independent order.
+ *
+ * @param items the strings to sort (not mutated — a copy is sorted).
+ * @returns a new sorted array.
+ *
+ * The comparator pins `sensitivity: 'variant'` and `numeric: false` so the
+ * ordering does not vary with the host machine's default locale or with
+ * numeric-aware collation — the same inputs sort identically everywhere, which
+ * is the whole point of routing all ordering through here.
  */
 export function localeSort(items: readonly string[]): string[] {
   const copy = items.slice();

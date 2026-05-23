@@ -1,39 +1,29 @@
 /**
- * User-tier forbidden field check (per C3 lines 71-75).
+ * Enforces the fields that are forbidden specifically at the *user* overlay
+ * tier.
  *
- * A user overlay (`~/.claude/gan/user.md`) declaring any of the four
- * tier-forbidden fields is a hard error at load and at write time:
- *
- *  - `planner.additionalContext`
- *  - `proposer.additionalContext`
- *  - `stack.override`
- *  - `stack.cacheEnvOverride`
- *
- * The check is **key-presence** based — declaring the key with an empty
- * value still fires the issue. Each forbidden field present in `data`
- * produces one `MalformedInput` issue; multiple forbidden fields produce
- * multiple issues, in deterministic alphabetical order:
- *   `planner.additionalContext`,
- *   `proposer.additionalContext`,
- *   `stack.cacheEnvOverride`,
- *   `stack.override`.
- *
- * This invariant is owned by the schema-vs-tier separation rule (C3 + F3):
- * the JSON Schema permits these fields unconditionally; the tier gate is
- * upstream, in this loader-time check.
+ * The user overlay applies to every project the user touches, so settings
+ * whose meaning is inherently project-local (relative paths, per-project stack
+ * environments, detection overrides) must not be set there — they would either
+ * be meaningless or silently misbehave across unrelated projects. The schema
+ * cannot express this (the same fields are valid at the project tier), so it
+ * is a separate gate run only on the user tier, layered on top of normal
+ * schema validation.
  */
 
 import { type Issue } from './schema-check.js';
 
-/** Forbidden field paths in the canonical alphabetical order. */
+// The forbidden user-tier fields, each with the precise reason it is rejected
+// (surfaced verbatim to the user). `block`/`leaf` locate the field in the
+// parsed document; `field` is the dotted name shown in the message.
 const FORBIDDEN_FIELDS: ReadonlyArray<{
-  /** Canonical dotted path used in the issue's `field` and message. */
+
   field: string;
-  /** Top-level YAML key. */
+
   block: 'planner' | 'proposer' | 'stack';
-  /** Sub-key under the block. */
+
   leaf: 'additionalContext' | 'cacheEnvOverride' | 'override';
-  /** Per-field rationale (mirrors C3 lines 72-74). */
+
   reason: string;
 }> = [
   {
@@ -65,9 +55,21 @@ const FORBIDDEN_FIELDS: ReadonlyArray<{
 ];
 
 /**
- * Inspect a user-tier overlay's parsed data for tier-forbidden fields and
- * append one `MalformedInput` issue per declared field. The check is a
- * no-op if `data` is null, undefined, or not a plain object.
+ * Append an {@link Issue} for each forbidden field present in a *user*-tier
+ * overlay document. Call this only for the user tier — the same fields are
+ * legitimate at project tier.
+ *
+ * @param filePath absolute path of the user overlay, used in the issue's
+ *   `path` and message.
+ * @param data the parsed overlay body. A non-object (e.g. empty/null body) is
+ *   silently ignored — there is nothing to forbid.
+ * @param issues accumulator mutated in place; one issue is appended per
+ *   forbidden field found (code `MalformedInput`, severity `error`). Detection
+ *   is by mere *presence* of the leaf key, regardless of its value, so even an
+ *   empty list at a forbidden path is rejected.
+ *
+ * Does not throw and does not return a value — failures are reported only by
+ * pushing into `issues`.
  */
 export function checkUserOverlayForbiddenFields(
   filePath: string,
@@ -79,6 +81,8 @@ export function checkUserOverlayForbiddenFields(
   for (const entry of FORBIDDEN_FIELDS) {
     const block = data[entry.block];
     if (!isObject(block)) continue;
+    // Presence alone is the violation — `hasOwnProperty`, not a truthiness
+    // check — so declaring the field even with an empty value is rejected.
     if (!Object.prototype.hasOwnProperty.call(block, entry.leaf)) continue;
     issues.push({
       code: 'MalformedInput',
@@ -94,6 +98,8 @@ export function checkUserOverlayForbiddenFields(
   }
 }
 
+// Local plain-object guard: true only for non-null, non-array objects (the
+// shape of a parsed YAML mapping / overlay block).
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

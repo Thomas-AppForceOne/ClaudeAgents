@@ -1,58 +1,73 @@
+
+
 /**
- * R3 sprint 1 — thin output wrappers.
+ * Low-level output sinks plus the human-readable render of a successful write.
  *
- * `writeOut` and `writeErr` are the only sanctioned channels for the CLI to
- * emit text. Centralising them here means tests can spy on them in unit
- * coverage and means we never accidentally `console.log` (which appends a
- * newline we may not want, and goes via util.format which can re-encode).
- *
- * S3 adds `renderWriteResult` — the human-mode formatter for `gan config
- * set` and `gan stack update`. The JSON surface for the same writes flows
- * through `emitJson` directly (per the single-implementation rule); only
- * the human surface lives here.
+ * Commands never touch `process.stdout`/`process.stderr` directly; they go
+ * through {@link writeOut}/{@link writeErr} so the single point of contact with
+ * the streams stays here (and stays easy to intercept in tests). The
+ * write-result renderer lives alongside them because it produces the
+ * confirmation line printed after a mutating command succeeds.
  */
 
+/**
+ * Write `s` to stdout exactly as given — no trailing newline is appended, so
+ * the caller controls line breaks. The CLI's sole stdout sink.
+ *
+ * @param s the bytes to emit (rendered output or JSON).
+ */
 export function writeOut(s: string): void {
   process.stdout.write(s);
 }
 
+/**
+ * Write `s` to stderr exactly as given — no trailing newline appended. The
+ * CLI's sole stderr sink, used for error and usage text so it never pollutes
+ * the `--json` payload on stdout.
+ *
+ * @param s the bytes to emit (error or diagnostic text).
+ */
 export function writeErr(s: string): void {
   process.stderr.write(s);
 }
 
 /**
- * Inputs to the human write-result renderer. `tier` is the overlay tier
- * for `config set` and the literal `'project'` for `stack update` (stack
- * writes always land on the project-tier shadow per C5). `name` is set
- * only for `stack update` (the stack name); `path` is the dotted field
- * path the user supplied; `value` is the parsed value that was written.
+ * Describes a single successful field write, for rendering its confirmation.
+ *
+ * @property tier which overlay tier was written (`project` or `user`); shown
+ *   only for overlay writes (when `name` is absent).
+ * @property name the stack name when the write targeted a stack file; its
+ *   presence is the discriminator that selects the stack-phrasing branch in
+ *   {@link renderWriteResult}. Omit it for an overlay write.
+ * @property path the dotted field path that was set.
+ * @property value the value written; rendered compactly via `JSON.stringify`.
  */
 export interface WriteResultRenderInput {
-  /** Overlay tier or 'project' for stack-file writes. */
+
   tier: 'project' | 'user';
-  /** Stack name (for `stack update`); omitted for `config set`. */
+
   name?: string;
-  /** Dotted field path the user passed on the command line. */
+
   path: string;
-  /** Parsed value that was actually written. */
+
   value: unknown;
 }
 
 /**
- * Render the human-mode success line for a write subcommand.
+ * Render the one-line, newline-terminated confirmation printed after a
+ * successful overlay or stack field write.
  *
- * Format:
- *   `gan config set`:    Updated `<path>` to `<json-value>` in <tier> overlay.
- *   `gan stack update`:  Updated `<path>` on stack `<name>` to `<json-value>`.
+ * The phrasing branches on `input.name`: when absent the message names the
+ * overlay tier ("...in <tier> overlay."); when present it names the stack
+ * ("...on stack `<name>`."). `tier` is therefore only surfaced on the overlay
+ * branch.
  *
- * `<json-value>` is the compact single-line JSON form of the value (so
- * booleans/numbers/strings/arrays render unambiguously without indent
- * noise). Determinism: human-mode write output is one line, never
- * compared byte-for-byte across runs (callers wanting determinism use
- * `--json`), so the F3 sorted-keys pin is unnecessary here. We render
- * via `JSON.stringify` with no indent for compactness.
+ * @param input see {@link WriteResultRenderInput}.
+ * @returns the confirmation line, terminated with a trailing `\n`.
  */
 export function renderWriteResult(input: WriteResultRenderInput): string {
+  // Compact (not pretty) JSON: this is a single inline confirmation line, so
+  // the value must render on one line regardless of its shape.
   const compact = JSON.stringify(input.value);
   if (input.name === undefined) {
     return `Updated \`${input.path}\` to \`${compact}\` in ${input.tier} overlay.\n`;

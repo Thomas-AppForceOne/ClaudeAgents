@@ -1,15 +1,26 @@
 /**
- * R2 sprint 3 — `--uninstall` mode tests for `install.sh`.
+ * Coverage for `install.sh --uninstall`: removing what an install added while
+ * preserving everything it didn't.
  *
- * Covers S3-AC5..S3-AC7:
- *   AC5 — Uninstall removes what install added (symlinks, MCP entry);
- *         zones, `.claude/gan/`, and the once-per-machine backup are
- *         left intact; stdout has follow-up hints in backticks.
- *   AC6 — Uninstall is idempotent: running twice both exit 0 with no
- *         errors.
- *   AC7 — Uninstall against a clean HOME exits 0 with a helpful
- *         message and no errors.
+ * What this verifies:
+ * - S3-AC5: uninstall removes the framework's agent symlinks, the skill dir,
+ *   and the MCP entry from `~/.claude.json`, but LEAVES project zones
+ *   (`.gan-state` / `.gan-cache`), the project `.claude/gan/` overlay, the
+ *   single `.claude.json` backup, and the user's other `.claude.json` keys
+ *   intact; follow-up cleanup hints are emitted in backticks.
+ * - S3-AC6: uninstall is idempotent — two runs both exit 0 with no errors.
+ * - S3-AC7: uninstall against an already-clean HOME still exits 0 with a
+ *   helpful message.
+ * - builtin-stacks symlink: removed only when it points INTO the framework
+ *   install; a user-redirected symlink (pointing at their own dir) is left
+ *   alone, with a "points elsewhere; leaving alone" notice.
+ *
+ * What it guards (WHY): uninstall must be conservative — it deletes only
+ * framework-owned artifacts and never the user's data, project state, or a
+ * symlink the user repointed. The npm stubs answer `npm root -g` so the
+ * builtin-stacks target can be located; their shell bodies are DATA.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
@@ -72,21 +83,15 @@ describe('install.sh --uninstall', () => {
     const v = packageVersion();
     writeFakeConfigServer(tmp.bin, { version: v });
 
-    // Pre-seed an existing `~/.claude.json` so the install creates a
-    // backup; the uninstall must leave that backup alone.
     writeFileSync(path.join(tmp.home, '.claude.json'), '{"existing":true}\n');
 
-    // Pre-seed a `.claude/gan/` to assert it survives uninstall.
     const projectGanDir = path.join(cwd, '.claude', 'gan');
     mkdirSync(projectGanDir, { recursive: true });
     writeFileSync(path.join(projectGanDir, 'overlay.md'), 'project overlay\n');
 
-    // Install first.
     const r1 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r1.exitCode).toBe(0);
 
-    // Sanity: install created the skill directory (real, not symlink)
-    // and the registration entry.
     const skillTarget = path.join(tmp.home, '.claude', 'skills', 'gan');
     const skillStat = lstatSync(skillTarget);
     expect(skillStat.isSymbolicLink()).toBe(false);
@@ -96,31 +101,24 @@ describe('install.sh --uninstall', () => {
     };
     expect(cjBefore.mcpServers['claudeagents-config']).toBeDefined();
 
-    // Capture the once-per-machine backup file name.
     const backupsBefore = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.backup-'));
     expect(backupsBefore).toHaveLength(1);
 
-    // Sanity: zones exist before uninstall.
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(true);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(true);
 
-    // Uninstall.
     const r2 = await runInstall(['--uninstall'], { home: tmp.home, pathOverride, cwd });
     expect(r2.exitCode).toBe(0);
     expect(r2.stderr).not.toMatch(/error:/);
 
-    // Skill directory gone (uninstall removes the real-file copies, not
-    // just symlinks).
     expect(existsSync(skillTarget)).toBe(false);
-    // Agent files gone — neither symlinks nor regular files survive.
+
     const agentsDir = path.join(tmp.home, '.claude', 'agents');
     if (existsSync(agentsDir)) {
       const remaining = readdirSync(agentsDir).filter((name) => name.startsWith('gan-'));
       expect(remaining).toEqual([]);
     }
 
-    // MCP entry stripped from `~/.claude.json`; the rest of the file
-    // is preserved.
     const cjAfter = JSON.parse(readFileSync(path.join(tmp.home, '.claude.json'), 'utf8')) as {
       mcpServers?: Record<string, unknown>;
       existing?: boolean;
@@ -130,19 +128,15 @@ describe('install.sh --uninstall', () => {
       expect(cjAfter.mcpServers['claudeagents-config']).toBeUndefined();
     }
 
-    // Zones, `.claude/gan/`, and the once-per-machine backup intact.
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(true);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(true);
     expect(existsSync(projectGanDir)).toBe(true);
     expect(existsSync(path.join(projectGanDir, 'overlay.md'))).toBe(true);
+    // The backup created at install time must survive uninstall unchanged —
+    // it's the user's safety net, not framework debris to clean up.
     const backupsAfter = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.backup-'));
     expect(backupsAfter).toEqual(backupsBefore);
 
-    // The remaining left-in-place hint mentions per-project zone cleanup
-    // in backticks. The npm-package hint is no longer present in the
-    // success path because uninstall now actually runs `npm uninstall -g`
-    // (post symmetric-uninstall fix); it remains as a fallback warning
-    // only when the npm step fails.
     expect(r2.stdout).toMatch(/`rm -rf \.gan-state \.gan-cache`/);
   });
 
@@ -151,7 +145,6 @@ describe('install.sh --uninstall', () => {
     const v = packageVersion();
     writeFakeConfigServer(tmp.bin, { version: v });
 
-    // Install once to seed real artifacts.
     const r1 = await runInstall([], { home: tmp.home, pathOverride, cwd });
     expect(r1.exitCode).toBe(0);
 
@@ -169,8 +162,6 @@ describe('install.sh --uninstall', () => {
     const v = packageVersion();
     writeFakeConfigServer(tmp.bin, { version: v });
 
-    // Skip the install step entirely — uninstall must tolerate a
-    // never-installed HOME.
     const result = await runInstall(['--uninstall'], {
       home: tmp.home,
       pathOverride,
@@ -178,20 +169,20 @@ describe('install.sh --uninstall', () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toMatch(/error:/);
-    // The per-project zone-cleanup hint always appears; the npm-package
-    // hint appears only as a fallback when `npm uninstall -g` failed.
+
     expect(result.stdout).toMatch(/`rm -rf \.gan-state \.gan-cache`/);
   });
 
   it('removes builtin-stacks symlink when pointing into framework install', async () => {
-    // Set up a synthetic npm root and a symlink that points into it.
+
+    // Point the builtin-stacks symlink INTO the (faked) framework install, so
+    // uninstall recognises it as framework-owned and removes it.
     const tmp = makeTmpHome({ withRepo: true });
     cleanups.push(tmp);
     const npmRoot = path.join(tmp.root, 'npm-root');
     const fakeFrameworkStacks = path.join(npmRoot, '@claudeagents', 'config-server', 'stacks');
     mkdirSync(fakeFrameworkStacks, { recursive: true });
 
-    // Stub `npm root -g` to print our synthetic root.
     const escapedRoot = JSON.stringify(npmRoot);
     const escapedLog = JSON.stringify(npmInvocationLog(tmp.root));
     writeStubBin(
@@ -222,7 +213,6 @@ describe('install.sh --uninstall', () => {
     writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
     writeStubBin(tmp.bin, 'claude', 'exit 0');
 
-    // Pre-seed the symlink at the canonical user-tier location.
     const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
     mkdirSync(path.dirname(linkPath), { recursive: true });
     symlinkSync(fakeFrameworkStacks, linkPath);
@@ -236,19 +226,16 @@ describe('install.sh --uninstall', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stderr).not.toMatch(/error:/);
 
-    // Symlink removed.
     expect(existsSync(linkPath)).toBe(false);
   });
 
   it('leaves user-redirected builtin-stacks symlink alone', async () => {
-    // Symlink points OUTSIDE the framework install — uninstall must not
-    // remove it.
+
     const tmp = makeTmpHome({ withRepo: true });
     cleanups.push(tmp);
     const npmRoot = path.join(tmp.root, 'npm-root');
     mkdirSync(npmRoot, { recursive: true });
 
-    // Stub `npm root -g` to print our synthetic root.
     const escapedRoot = JSON.stringify(npmRoot);
     const escapedLog = JSON.stringify(npmInvocationLog(tmp.root));
     writeStubBin(
@@ -279,7 +266,9 @@ describe('install.sh --uninstall', () => {
     writeStubBin(tmp.bin, 'git', `exec /usr/bin/git "$@"\n`);
     writeStubBin(tmp.bin, 'claude', 'exit 0');
 
-    // Pre-seed the symlink pointing somewhere unrelated.
+    // Here the symlink points at the user's OWN directory, not the framework
+    // install, so uninstall must treat it as user-redirected and leave it
+    // untouched (asserted via readlink + the "points elsewhere" notice below).
     const userTarget = path.join(tmp.root, 'my-own-stacks-dir');
     mkdirSync(userTarget, { recursive: true });
     const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
@@ -293,10 +282,9 @@ describe('install.sh --uninstall', () => {
     });
     expect(r.exitCode).toBe(0);
 
-    // Symlink survived intact.
     expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(readlinkSync(linkPath)).toBe(userTarget);
-    // Stderr mentions the leave-alone case.
+
     expect(r.stderr).toMatch(/points elsewhere; leaving alone/);
   });
 });

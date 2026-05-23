@@ -1,134 +1,128 @@
 /**
- * Shared output formatter for R4 maintainer scripts.
+ * Report model and rendering for the `scripts/` CLIs.
  *
- * Every R4 script reports the same shape:
- *   - a one-line summary on stdout (e.g. `3 stacks checked, 1 failed`);
- *   - one line per failure on stderr, naming the absolute path, the
- *     issue code, and a human-readable message.
+ * Every script produces one {@link ScriptReport} — a discriminated union keyed
+ * on `kind` — and then renders it for one of two audiences: a human (via
+ * {@link formatReport}, which splits a one-line summary onto stdout and the
+ * per-failure detail onto stderr) or a machine (via {@link formatReportJson},
+ * a single canonical JSON document on stdout). Centralising the model here is
+ * what lets a CI gate consume any script's `--json` output with one shape.
  *
- * `formatReport` is the single point of implementation; future scripts
- * (`publish-schemas`, `pair-names`, `lint-no-stack-leak`, …) re-use it
- * by extending the discriminated `kind` union.
- *
- * `formatReportJson` returns the same data as a sorted-key,
- * two-space-indent JSON document with a trailing newline (per F3
- * determinism). The JSON shape is `{checked, failed, failures: [...]}`.
- *
- * Per anti-criterion AN5, `JSON.stringify` is forbidden inside
- * `scripts/`; this module relies on `stableStringify` from the
- * determinism module via `./json.js`.
+ * Two conventions hold across every renderer here:
+ * - The stdout summary counts *distinct files* that failed, not raw failure
+ *   rows, so multiple violations in one file read as one failed file. (The
+ *   leak/error-text variants instead report total hits — see those formatters.)
+ * - Both `formatReport` and `formatReportJson` end with a `never`-typed
+ *   exhaustiveness check, so adding a report `kind` without handling it is a
+ *   compile error rather than a silent passthrough.
  */
-
 import { stableStringify } from './json.js';
 
+/**
+ * One reported problem. Shared by every report variant so the renderers can
+ * format any failure uniformly.
+ *
+ * @property path the file (or pseudo-path like `<harness>`) the failure is
+ *   about; also the key used to count distinct failed files.
+ * @property code a stable, machine-readable identifier (e.g. `SchemaDrift`)
+ *   that tests and CI can match on without parsing the message.
+ * @property message human-readable detail, typically including remediation.
+ * @property field optional dotted/pointer location within the file; emitted to
+ *   JSON only when present (an absent field is omitted, not set to null).
+ */
 export interface ReportFailure {
-  /** Absolute filesystem path of the offending file. */
   path: string;
-  /** F2-shaped issue code (e.g. `ScaffoldBannerPresent`, `SchemaMismatch`). */
+
   code: string;
-  /** Human-readable description; F4 prose discipline applies. */
+
   message: string;
-  /**
-   * Optional structured field path (e.g. `/pairsWith`). Surfaced by
-   * invariant-driven scripts whose underlying `Issue` carries a `field`;
-   * omitted by checks that only have a file-level scope.
-   */
+
   field?: string;
 }
 
+/**
+ * Result of `lint-stacks`: stack `.md` files checked for the scaffold banner
+ * and schema conformance. `checked` is the number of files scanned.
+ */
 export interface LintStacksReport {
   kind: 'lint-stacks';
-  /** Number of stack files inspected. */
+
   checked: number;
-  /** Subset of inspected files that produced at least one failure. */
+
   failures: ReportFailure[];
 }
 
 /**
- * Report shape for `scripts/pair-names/`. Mirrors `LintStacksReport` —
- * the failure-counting rule (`failed` = unique-file count among
- * `failures`) is shared so the summary line stays consistent across
- * maintainer scripts.
+ * Result of `pair-names`: stack files checked against the `pairsWith`
+ * consistency invariant. `checked` is the number of stack files enumerated.
  */
 export interface PairNamesReport {
   kind: 'pair-names';
-  /** Number of stack files inspected (every row in the snapshot). */
+
   checked: number;
-  /** Subset of inspected files that produced at least one invariant failure. */
+
   failures: ReportFailure[];
 }
 
 /**
- * Report shape for `scripts/evaluator-pipeline-check/`. The script seeds
- * a deterministic-core golden per fixture and diffs the live
- * `validateAll` output against it; `checked` is the fixture count and
- * `failures` carries `GoldenMissing` / `GoldenDriftDetected` entries.
+ * Result of `evaluator-pipeline-check`: bootstrap fixtures whose evaluator
+ * plan was diffed against a committed golden. `checked` is the number of
+ * present fixtures actually run (missing fixtures surface as failures).
  */
 export interface EvaluatorPipelineCheckReport {
   kind: 'evaluator-pipeline-check';
-  /** Number of bootstrap fixtures inspected. */
+
   checked: number;
-  /** Subset of fixtures whose golden was missing or drifted. */
+
   failures: ReportFailure[];
 }
 
 /**
- * Report shape for `scripts/publish-schemas/`. The script reads each
- * published schema, parses it, re-emits it via `stableStringify`, and
- * compares the on-disk bytes to the canonical form. `checked` is the
- * total schema count; `failures` carries `SchemaMissing`,
- * `SchemaParseError`, and `SchemaDrift` entries; `rewritten` (write
- * mode only) reports how many on-disk schemas the script repaired in
- * place via `atomicWriteFile`.
+ * Result of `publish-schemas`: published JSON Schemas compared to their
+ * canonical serialisation. `checked` is the fixed schema count.
+ *
+ * @property rewritten how many schemas were repaired in place (write mode);
+ *   `0` or absent in `--dry-run`, where drift is reported as failures instead.
  */
 export interface PublishSchemasReport {
   kind: 'publish-schemas';
-  /** Number of schema files inspected. */
+
   checked: number;
-  /** Subset of schemas that were missing, unparseable, or drifted. */
+
   failures: ReportFailure[];
-  /**
-   * Optional: number of schemas re-written in canonical form. Populated
-   * in write mode (default); omitted in `--dry-run` mode.
-   */
+
   rewritten?: number;
 }
 
 /**
- * Report shape for `scripts/lint-no-stack-leak/`. The script walks a
- * fixed scan scope (`agents/*.md`, `skills/gan/SKILL.md`, recursive
- * `src/config-server/**\/*.ts`) looking for ecosystem-specific tokens
- * that would leak Node/npm-shaped vocabulary outside their owning stack
- * file. `checked` is the count of files inspected; `failures` carries
- * `LeakDetected` and `EmptyTransitionalEntry` entries.
+ * Result of `lint-no-stack-leak`: files scanned for forbidden ecosystem
+ * tokens leaking outside their owning stack. Here a failure is a single token
+ * *hit*, so the summary reports total hits rather than distinct files.
  */
 export interface LintNoStackLeakReport {
   kind: 'lint-no-stack-leak';
-  /** Number of files inspected. */
+
   checked: number;
-  /** Subset of inspected files (and allowlist entries) that produced a hit. */
+
   failures: ReportFailure[];
 }
 
 /**
- * Report shape for `scripts/lint-error-text/`. The script walks
- * `src/config-server/**\/*.ts` and `src/cli/**\/*.ts` looking for lines
- * that emit a user-facing message (matching one of the known emit-site
- * patterns) AND contain a forbidden ecosystem token. `checked` is the
- * count of files inspected; `failures` carries `ErrorTextLeakDetected`
- * entries.
+ * Result of `lint-error-text`: emit-site lines scanned for forbidden tokens in
+ * user-facing strings. Like the leak report, the summary counts total hits.
  */
 export interface LintErrorTextReport {
   kind: 'lint-error-text';
-  /** Number of files inspected. */
+
   checked: number;
-  /** Subset of inspected files that produced at least one emit-site hit. */
+
   failures: ReportFailure[];
 }
 
 /**
- * Discriminated union of every per-script report shape. New scripts add
- * their own `kind` arm and `formatReport` grows a new branch.
+ * Discriminated union of every script's report, keyed on `kind`. This is the
+ * single type the renderers accept; the `kind` tag both selects the formatter
+ * and drives the exhaustiveness checks that guard against an unhandled variant.
  */
 export type ScriptReport =
   | LintStacksReport
@@ -138,15 +132,26 @@ export type ScriptReport =
   | LintNoStackLeakReport
   | LintErrorTextReport;
 
+/**
+ * The two output streams a human-readable render produces. Kept separate so a
+ * script can route the summary to stdout and the failure detail to stderr,
+ * letting a clean run's stdout be machine-consumed or suppressed with
+ * `--quiet` while errors still reach the terminal.
+ */
 export interface FormattedReport {
   stdout: string;
   stderr: string;
 }
 
 /**
- * Render a report as `{stdout, stderr}`. Stdout always ends with a
- * single trailing newline. Stderr is empty on success and contains one
- * line per failure (each terminated by `\n`) on failure.
+ * Render a report for a human reader, splitting a one-line summary (stdout)
+ * from the per-failure detail lines (stderr). On a clean run `stderr` is the
+ * empty string. Pure: builds and returns strings with no I/O or mutation.
+ *
+ * @param input any {@link ScriptReport}; the `kind` tag selects the formatter.
+ * @returns the {@link FormattedReport} stdout/stderr pair.
+ * @remarks The trailing `never` assignment is an exhaustiveness guard — a new
+ *   report `kind` that is not handled above fails type-checking here.
  */
 export function formatReport(input: ScriptReport): FormattedReport {
   if (input.kind === 'lint-stacks') {
@@ -167,12 +172,18 @@ export function formatReport(input: ScriptReport): FormattedReport {
   if (input.kind === 'lint-error-text') {
     return formatLintErrorText(input);
   }
-  // Exhaustiveness guard. The `never` assignment forces a compile error
-  // if a new `kind` is added without a matching branch above.
+
+  // Unreachable at runtime; exists so the compiler proves every `kind` above
+  // is handled. Returning it keeps the function total without a real value.
   const _exhaustive: never = input;
   return _exhaustive;
 }
 
+// The per-kind formatters below share a template: a `"<n> <noun> checked,
+// <m> failed"` (or `"... hits"`) stdout line, and one `path: code: message`
+// line per failure on stderr. They differ only in the summary noun and in
+// whether they count distinct failed files or raw hits, so they are kept
+// separate (rather than parameterised) to keep each summary string literal.
 function formatLintStacks(input: LintStacksReport): FormattedReport {
   const failedCount = countFailedFiles(input.failures);
   const stdout = `${input.checked} stacks checked, ${failedCount} failed\n`;
@@ -208,11 +219,7 @@ function formatEvaluatorPipelineCheck(input: EvaluatorPipelineCheckReport): Form
 
 function formatPublishSchemas(input: PublishSchemasReport): FormattedReport {
   const failedCount = countFailedFiles(input.failures);
-  // The `rewritten` count is intentionally omitted from the stdout
-  // summary line — it is surfaced only via the JSON form for now. This
-  // keeps the one-liner consistent with the other R4 scripts; a
-  // human-readable `(N rewritten)` suffix can be added later without
-  // breaking the JSON shape.
+
   const stdout = `${input.checked} schemas checked, ${failedCount} failed\n`;
   if (input.failures.length === 0) {
     return { stdout, stderr: '' };
@@ -222,6 +229,9 @@ function formatPublishSchemas(input: PublishSchemasReport): FormattedReport {
   return { stdout, stderr };
 }
 
+// The two leak scanners report `failures.length` (total hits) rather than a
+// distinct-file count, because one file can legitimately leak several tokens
+// and each hit is independently actionable.
 function formatLintNoStackLeak(input: LintNoStackLeakReport): FormattedReport {
   const stdout = `${input.checked} files scanned, ${input.failures.length} hits\n`;
   if (input.failures.length === 0) {
@@ -242,6 +252,11 @@ function formatLintErrorText(input: LintErrorTextReport): FormattedReport {
   return { stdout, stderr };
 }
 
+/**
+ * Count how many *distinct* files appear across `failures`, deduplicating on
+ * `path`. This is what the human summaries report as "failed", so several
+ * violations in one file count once. Pure; does not mutate the input.
+ */
 function countFailedFiles(failures: readonly ReportFailure[]): number {
   const seen = new Set<string>();
   for (const f of failures) {
@@ -251,8 +266,12 @@ function countFailedFiles(failures: readonly ReportFailure[]): number {
 }
 
 /**
- * Render the same report as a sorted-key JSON document with a trailing
- * newline. Used by `--json` paths in maintainer scripts.
+ * Render a report as a single canonical JSON document for machine consumers
+ * (the `--json` mode). Pure; returns a string and performs no I/O.
+ *
+ * @param input any {@link ScriptReport}.
+ * @returns the deterministic JSON string (see {@link renderJson} for shape).
+ * @remarks Like {@link formatReport}, ends in a `never` exhaustiveness guard.
  */
 export function formatReportJson(input: ScriptReport): string {
   if (input.kind === 'lint-stacks') {
@@ -273,12 +292,25 @@ export function formatReportJson(input: ScriptReport): string {
   if (input.kind === 'lint-error-text') {
     return renderJson(input);
   }
-  // Exhaustiveness guard for the JSON path. Mirrors `formatReport` so
-  // adding a new `kind` flags both functions at once.
+
+  // Same exhaustiveness guard as formatReport: a new unhandled `kind` is a
+  // compile error here rather than silently producing no JSON.
   const _exhaustive: never = input;
   return _exhaustive;
 }
 
+/**
+ * Serialise a report to the canonical JSON shape `{ checked, failed,
+ * failures[] }`. Every variant funnels through this single shape so consumers
+ * can parse any script's output identically.
+ *
+ * `failed` is the distinct-file count from {@link countFailedFiles}, not the
+ * raw failure-array length, matching the human summary. Each failure entry
+ * carries `code`/`message`/`path`, and `field` only when present — an absent
+ * field is omitted entirely rather than emitted as `null`/`undefined`, keeping
+ * the JSON minimal and stable. {@link stableStringify} fixes key order so the
+ * bytes are reproducible across runs.
+ */
 function renderJson(input: ScriptReport): string {
   const failedCount = countFailedFiles(input.failures);
   const payload = {
@@ -290,6 +322,8 @@ function renderJson(input: ScriptReport): string {
         message: f.message,
         path: f.path,
       };
+      // Only attach `field` when it is actually a string, so the output omits
+      // the key rather than serialising a missing optional.
       if (typeof f.field === 'string') {
         entry['field'] = f.field;
       }

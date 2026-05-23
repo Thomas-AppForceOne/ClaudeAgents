@@ -1,27 +1,12 @@
 /**
- * R3 sprint 3 — `gan stack update <name> <field> <value> [--json] [--project-root DIR]`.
+ * `gan stack update <name> <dotted.path> <value>` — set a single field in a
+ * named stack file.
  *
- * Calls R1's `updateStackField({projectRoot, name, fieldPath, value})` in-
- * process. Stack writes have a different tier model than overlay writes
- * (per C5): the writes layer always lands the mutation on the resolved
- * stack file, which for the canonical update flow is the project-tier
- * shadow at `.claude/gan/stacks/<name>.md`. The CLI does not expose
- * `--tier` for `stack update`; doing so would invite users to attempt
- * built-in-tier writes (forbidden — repo-tier stacks are mutated by their
- * owners, not by the CLI).
- *
- * Value parsing follows `parseCliValue`: try JSON literal first, fall
- * back to the bare string. Same semantics as `gan config set`.
- *
- * Output:
- *   - human: `Updated <field> on stack <name> to <value>.` (stdout, exit 0)
- *   - JSON:  `{"name": "...", "path": "...", "tier": "project", "value": ..., "written": true}`
- *
- * Errors:
- *   - missing args                 → MalformedInput, exit 64.
- *   - unknown stack / missing file → MissingFile from R1, exit 2.
- *   - schema rejection             → first issue code maps via exitCodeFor.
- *   - library unreachable          → exit 5 with install.sh hint.
+ * Always targets the project-tier copy of the stack (the write is reported
+ * with `tier: 'project'`); the value argument is parsed from its CLI string
+ * form by {@link parseCliValue}. The actual write is delegated to
+ * {@link updateStackField}, which resolves the stack file and performs
+ * validate-then-write, so a rejected mutation never touches disk.
  */
 
 import { updateStackField } from '../../index.js';
@@ -40,6 +25,21 @@ import {
 import { EXIT_BAD_ARGS, EXIT_OK, exitCodeFor } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+/**
+ * CLI entrypoint for `gan stack update`.
+ *
+ * @param parsed parsed argv; positionals are the stack name, the dotted field
+ *   path, and the raw value, with `--json` / `--project-root` honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data, never
+ *   thrown:
+ *   - any missing positional → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - project-root resolution failure → mapped via {@link errorResult};
+ *   - the write rejected with schema `issues` (or an unresolvable stack folded
+ *     into issues) → first issue drives the error shape / {@link exitCodeFor};
+ *   - a soft `reason` arm → a `NotImplemented` fallback;
+ *   - a non-`ConfigServerError` throw → {@link unreachableResult}.
+ *   On success, exit {@link EXIT_OK} with a confirmation on `stdout`.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
@@ -77,12 +77,14 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return errorResult(e, wantJson);
   }
 
+  // Interpret the raw CLI string into its typed value before the write.
   const value = parseCliValue(rawValue);
 
   let result;
   try {
     result = updateStackField({ projectRoot, name, fieldPath, value });
   } catch (e) {
+    // Expected ConfigServerError → mapped; anything else → library unreachable.
     if (e instanceof ConfigServerError) {
       return errorResult(e, wantJson);
     }
@@ -108,6 +110,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   }
 
   if ('issues' in result) {
+    // First issue drives the exit code; the full list is attached for detail.
     const first = result.issues[0];
     const code = exitCodeFor(first?.code);
     const shape = first
@@ -126,6 +129,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(shape), code };
   }
 
+  // Defensive fallback: no stack-update path returns a soft `reason` today, so
+  // reaching here surfaces the unexpected reason rather than claiming success.
   const fallback = createError('NotImplemented', {
     message: `gan stack update: write was rejected (reason: ${result.reason}).`,
   });

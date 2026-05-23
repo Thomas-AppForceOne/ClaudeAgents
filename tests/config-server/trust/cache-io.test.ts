@@ -1,3 +1,23 @@
+// Verifies the on-disk trust-cache layer: where the cache lives, how it is
+// read defensively, how it is written securely, and the purity of its
+// in-memory transforms.
+//
+// The security-critical contracts here are:
+//  - readCache treats a tampered or unreadable cache as fatal: a permissive
+//    file mode (group/world readable) or any malformed JSON raises
+//    TrustCacheCorrupt rather than silently trusting it — a trust cache an
+//    attacker could edit must never be honoured.
+//  - writeCache always lands the file at mode 0600 (owner-only), on both first
+//    creation and subsequent rewrites, and writes exactly stableStringify's
+//    bytes so the file is reproducible and round-trips through readCache.
+//  - The pure helpers (lookup/upsert/removeApprovals) never mutate their input
+//    cache, canonicalise projectRoot before comparing (so a trailing-slash or
+//    symlinked query still matches the stored canonical entry), and keep the
+//    approvals list sorted/ordered deterministically.
+//
+// Each test uses a fresh temp `homeDir`, and several construct the cache file
+// by hand (mkdir + writeFile + chmod) to exercise readCache against states the
+// public writer would never produce — e.g. a 0644 file or `{not-json`.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   chmodSync,
@@ -36,6 +56,8 @@ describe('trust/cache-io', () => {
     rmSync(homeDir, { recursive: true, force: true });
   });
 
+  // Minimal valid approval record; overrides let each test vary just the field
+  // under test (projectRoot/hash/note) while the rest stay schema-valid.
   function sampleApproval(overrides: Partial<TrustApproval> = {}): TrustApproval {
     return {
       projectRoot: canonicalizePath(homeDir),
@@ -54,6 +76,8 @@ describe('trust/cache-io', () => {
 
   describe('readCache', () => {
     it('returns the empty cache for a missing file and does not write to disk', () => {
+      // A missing cache is a normal first-run state, not an error — read returns
+      // an empty cache and must NOT create the file as a side effect.
       const cache = readCache(homeDir);
       expect(cache).toEqual({ schemaVersion: 1, approvals: [] });
       expect(existsSync(getTrustCachePath(homeDir))).toBe(false);
@@ -63,6 +87,9 @@ describe('trust/cache-io', () => {
       const cachePath = getTrustCachePath(homeDir);
       mkdirSync(path.dirname(cachePath), { recursive: true });
       writeFileSync(cachePath, '{"schemaVersion":1,"approvals":[]}\n', 'utf8');
+      // 0644 is group/world readable: a file others could edit must not be
+      // trusted even though its contents are well-formed JSON. The chmod is the
+      // whole point of this test — the body is deliberately valid.
       chmodSync(cachePath, 0o644);
 
       let caught: unknown = null;
@@ -74,6 +101,8 @@ describe('trust/cache-io', () => {
       expect(caught).toBeInstanceOf(ConfigServerError);
       const err = caught as ConfigServerError;
       expect(err.code).toBe('TrustCacheCorrupt');
+      // Message hands the user the exact remediation ('chmod 0600') and names
+      // the file so they can fix the permission without guessing.
       expect(err.message).toContain('chmod 0600');
       expect(err.file).toBe(cachePath);
     });
@@ -82,6 +111,9 @@ describe('trust/cache-io', () => {
       const cachePath = getTrustCachePath(homeDir);
       mkdirSync(path.dirname(cachePath), { recursive: true });
       writeFileSync(cachePath, '{not-json', 'utf8');
+      // Mode is set 0600 here (and in the following shape tests) so the ONLY
+      // defect is the content — isolating the malformed-body path from the
+      // permission path checked above.
       chmodSync(cachePath, 0o600);
 
       let caught: unknown = null;
@@ -152,7 +184,10 @@ describe('trust/cache-io', () => {
       const cachePath = getTrustCachePath(homeDir);
       expect(existsSync(cachePath)).toBe(true);
       const stat = statSync(cachePath);
-      // Lower 9 bits should be 0o600.
+
+      // Mask off the type bits and compare the permission triad: must be exactly
+      // owner read/write, nothing for group/world. (See the read-side test that
+      // rejects 0644 — write must never produce such a file.)
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
@@ -162,8 +197,7 @@ describe('trust/cache-io', () => {
 
       const cachePath = getTrustCachePath(homeDir);
       const onDisk = readFileSync(cachePath, 'utf8');
-      // After upsertApproval the approvals would be sorted, but writeCache
-      // does not mutate; it serialises the exact `cache` argument.
+
       expect(onDisk).toBe(stableStringify(cache));
     });
 
@@ -239,12 +273,15 @@ describe('trust/cache-io', () => {
     });
 
     it('canonicalises the projectRoot lookup so non-canonical input still hits canonical entry', () => {
-      // Build an entry keyed off the canonical homeDir.
+
+      // The stored entry uses the canonical root; the query deliberately appends
+      // a trailing separator (a non-canonical but equivalent form). The lookup
+      // must canonicalise before comparing, or a user's trailing-slash path
+      // would silently miss their own approval.
       const canonical = canonicalizePath(homeDir);
       const entry = sampleApproval({ projectRoot: canonical, aggregateHash: 'sha256:abc' });
       const cache: TrustCache = { schemaVersion: 1, approvals: [entry] };
-      // Pass the un-canonicalised homeDir (with a trailing slash) — should
-      // still resolve to the canonical form and match.
+
       const queryWithSlash = homeDir.endsWith(path.sep) ? homeDir : homeDir + path.sep;
       expect(lookupApproval(cache, queryWithSlash, 'sha256:abc')).toEqual(entry);
     });
@@ -253,6 +290,9 @@ describe('trust/cache-io', () => {
   describe('upsertApproval', () => {
     it('does not mutate the input cache', () => {
       const cache: TrustCache = { schemaVersion: 1, approvals: [] };
+      // Snapshot via deep-clone, then assert the original is unchanged AND that
+      // both the returned cache and its approvals array are fresh references —
+      // upsert must be pure so callers can keep the prior value safely.
       const before = JSON.parse(JSON.stringify(cache));
       const next = upsertApproval(cache, sampleApproval({ projectRoot: '/x' }));
       expect(cache).toEqual(before);
@@ -270,6 +310,9 @@ describe('trust/cache-io', () => {
       expect(next.approvals.length).toBe(2);
     });
 
+    // Identity is the (projectRoot, aggregateHash) pair: a second upsert with
+    // the same pair replaces in place (length stays 1) and the newer approvedAt
+    // / note win — re-approving the same content updates rather than duplicates.
     it('replaces an existing entry (length stays) when (projectRoot, hash) match', () => {
       const a = sampleApproval({
         projectRoot: '/a',
@@ -289,6 +332,9 @@ describe('trust/cache-io', () => {
       expect(next.approvals[0].note).toBe('updated');
     });
 
+    // Inserted out of order (zzz, aaa, mmm) but read back sorted — upsert keeps
+    // the list ordered so the on-disk cache is reproducible regardless of the
+    // order approvals were granted in.
     it('sorts approvals by projectRoot+aggregateHash via localeSort', () => {
       let cache: TrustCache = { schemaVersion: 1, approvals: [] };
       cache = upsertApproval(
@@ -327,6 +373,8 @@ describe('trust/cache-io', () => {
       expect(next.approvals[0]).toEqual(b);
     });
 
+    // Removal is a filter, not a re-sort: the survivors keep their existing
+    // relative order (here x, y, z) with only the target dropped from the middle.
     it('preserves order of remaining entries', () => {
       const x = sampleApproval({ projectRoot: '/x', aggregateHash: 'sha256:x' });
       const y = sampleApproval({ projectRoot: '/y', aggregateHash: 'sha256:y' });

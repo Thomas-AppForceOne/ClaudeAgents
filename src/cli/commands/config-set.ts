@@ -1,34 +1,12 @@
 /**
- * R3 sprint 3 — `gan config set <path> <value> [--tier=project|user] [--json] [--project-root DIR]`.
+ * `gan config set <dotted.path> <value>` — set a single overlay field.
  *
- * Calls R1's `setOverlayField({projectRoot, tier, fieldPath, value})` in-
- * process (per the CLI-imports-library rule). The CLI only validates the
- * `--tier` flag locally; everything else (path well-formedness, schema
- * compliance, atomic write) is the writes layer's job.
- *
- * Tier validation:
- *   - default tier: `project`.
- *   - allowed: `project`, `user`.
- *   - explicitly rejected (exit 64): `repo`, `default`, anything else.
- *     Per C3, the overlay cascade has three tiers — `default`, `user`,
- *     `project` — but the writable surface is `user` and `project` only;
- *     `default` is the agent's bare default and is never user-writable.
- *
- * Value parsing follows `parseCliValue`: try JSON literal first, fall
- * back to the bare string on parse error. So `gan config set foo.bar 8`
- * writes the number 8, `gan config set foo.bar true` writes a boolean,
- * `gan config set foo.bar hello` writes the string `"hello"`.
- *
- * Output:
- *   - human: `Updated <path> to <value> in <tier> overlay.` (stdout, exit 0)
- *   - JSON:  `{"path": "...", "tier": "...", "value": ..., "written": true}`
- *
- * Errors:
- *   - missing args / invalid tier → MalformedInput, exit 64.
- *   - write returns issues       → first issue's code maps via exitCodeFor;
- *                                   typically exit 2 (ValidationFailed) or 4.
- *   - write throws ConfigServerError → mapped via exitCodeFor.
- *   - anything else (library unreachable) → exit 5 with install.sh hint.
+ * Writes to the `project` overlay by default, or the `user` overlay with
+ * `--tier`. The `default` tier is read-only and `repo` is not an overlay tier,
+ * so only `project`/`user` are accepted. The value argument is parsed from its
+ * CLI string form (numbers/booleans/JSON) by {@link parseCliValue} before being
+ * written. This delegates the actual write to {@link setOverlayField}, which
+ * performs validate-then-write and never leaves a partial overlay on disk.
  */
 
 import { setOverlayField } from '../../index.js';
@@ -48,17 +26,25 @@ import { EXIT_BAD_ARGS, EXIT_OK, exitCodeFor } from '../lib/exit-codes.js';
 import type { OverlayTier } from '../../index.js';
 import type { ParsedArgs } from '../lib/args.js';
 
-/** Allowed tier values for `gan config set`. */
+// The overlay tiers this command may write: `default` is read-only and `repo`
+// is not an overlay tier, so they are excluded at the type level.
 type WritableOverlayTier = Extract<OverlayTier, 'project' | 'user'>;
 
+// Single source of truth for the writable tier strings, used by readTier to
+// validate the untrusted --tier value without re-listing the literals.
 const ALLOWED_TIERS: ReadonlySet<WritableOverlayTier> = new Set<WritableOverlayTier>([
   'project',
   'user',
 ]);
 
 /**
- * Read and validate `--tier`. Returns the resolved tier (default `project`)
- * or a `ConfigServerError` describing the validation failure.
+ * Resolve the target overlay tier from the `--tier` flag.
+ *
+ * @param parsed parsed argv.
+ * @returns the chosen {@link WritableOverlayTier} (defaulting to `project` when
+ *   the flag is absent), or a `MalformedInput` {@link ConfigServerError} —
+ *   returned, not thrown — when the flag is present-but-valueless or names a
+ *   tier outside the writable set.
  */
 function readTier(parsed: ParsedArgs): WritableOverlayTier | ConfigServerError {
   const raw = parsed.flags['tier'];
@@ -84,6 +70,23 @@ function readTier(parsed: ParsedArgs): WritableOverlayTier | ConfigServerError {
   return raw as WritableOverlayTier;
 }
 
+/**
+ * CLI entrypoint for `gan config set`.
+ *
+ * @param parsed parsed argv; positionals are the dotted field path and the
+ *   raw value, with `--tier`, `--json`, and `--project-root` honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data, never
+ *   thrown:
+ *   - missing path or value, or a bad `--tier` → `MalformedInput`, exit
+ *     {@link EXIT_BAD_ARGS};
+ *   - project-root resolution failure → mapped via {@link errorResult};
+ *   - the write rejected with schema `issues` → the first issue drives the
+ *     error shape and {@link exitCodeFor} the exit code;
+ *   - a write that returns a soft `reason` (no overlay path does today) →
+ *     surfaced as a `NotImplemented` fallback;
+ *   - a non-`ConfigServerError` thrown by the write → {@link unreachableResult}.
+ *   On success, exit {@link EXIT_OK} with a confirmation on `stdout`.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
@@ -118,15 +121,17 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return errorResult(e, wantJson);
   }
 
+  // Interpret the raw CLI string (e.g. `8` → number, `true` → boolean, JSON
+  // literals) before handing it to the typed overlay write.
   const value = parseCliValue(rawValue);
 
   let result;
   try {
     result = setOverlayField({ projectRoot, tier, fieldPath, value });
   } catch (e) {
-    // Library throwing here (rather than returning issues) is a hard
-    // error path — typically the framework library being absent. Fall
-    // through to the unreachable surface.
+    // setOverlayField returns soft failures as data; a throw here is either an
+    // expected ConfigServerError (mapped) or an unexpected fault (treated as
+    // the library being unreachable).
     if (e instanceof ConfigServerError) {
       return errorResult(e, wantJson);
     }
@@ -150,15 +155,9 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     };
   }
 
-  // mutation rejected. Two shapes possible:
-  //   { mutated: false, issues: Issue[] }
-  //   { mutated: false, reason: string }
-  // The first is the validation-failed branch; the second is reserved for
-  // trust loud-stub responses (not reachable from setOverlayField in R1)
-  // but kept for forward-compatibility.
   if ('issues' in result) {
-    // Use the first issue's code for the exit code; render every issue
-    // so the user sees the full picture.
+    // Report against the first issue (its code drives the exit code) while
+    // still attaching the full issue list for callers that want detail.
     const first = result.issues[0];
     const code = exitCodeFor(first?.code);
     const shape = first
@@ -177,7 +176,9 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(shape), code };
   }
 
-  // `reason` branch — surface as a generic failure.
+  // Reached only if the write returns a soft `reason` arm. No overlay write
+  // path produces one today, so this is a defensive fallback that surfaces the
+  // unexpected reason rather than silently succeeding.
   const fallback = createError('NotImplemented', {
     message: `gan config set: write was rejected (reason: ${result.reason}).`,
   });

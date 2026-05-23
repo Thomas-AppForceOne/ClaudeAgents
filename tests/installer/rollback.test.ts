@@ -1,17 +1,28 @@
 /**
- * R2 sprint 3 — rollback tests for `install.sh`.
+ * Coverage for the S3 rollback path: when install.sh fails partway through, it
+ * must undo everything it had done so far and leave the system as it found it.
  *
- * Covers S3-AC1..S3-AC4:
- *   AC1 — npm fails after symlinks → exit non-zero; symlinks rolled
- *         back; ~/.claude.json byte-equivalent to pre-state; no zones.
- *   AC2 — JSON edit fails after npm install → symlinks rolled back;
- *         ~/.claude.json restored from preedit; npm package NOT
- *         uninstalled (rollback log mentions the manual command).
- *   AC3 — zone prep fails → all earlier state undone; ~/.claude.json
- *         restored; symlinks removed; partial zones removed.
- *   AC4 — Rollback never undoes pre-existing state: a symlink that
- *         existed before the run is still present after rollback.
+ * What this verifies, by where the failure is injected:
+ * - S3-AC1 (npm fails after symlinks): symlinks rolled back, `~/.claude.json`
+ *   byte-equal to its pre-state, no zones created, no temp stragglers.
+ * - S3-AC2 (JSON edit fails after npm install): symlinks gone, `.claude.json`
+ *   restored from the preedit snapshot, a manual `npm uninstall -g` HINT is
+ *   emitted (rollback does NOT itself run npm uninstall), no stragglers.
+ * - S3-AC3 (zone prep fails): all earlier state — symlinks, `.claude.json`,
+ *   partial zones — undone.
+ * - The builtin-stacks-symlink STATE_LOG kind: rollback (driven directly via a
+ *   sourced, main-stripped install.sh) removes the logged symlink and leaves
+ *   others alone.
+ * - S3-AC4: rollback never touches PRE-EXISTING state — an unrelated symlink
+ *   created before the install survives.
+ *
+ * What it guards (WHY): a failed install must be atomic-ish — no half-applied
+ * symlinks, no mangled user `.claude.json`, no orphaned zones — and crucially
+ * it must only undo what THIS run created, never pre-existing user artifacts.
+ * The driver scripts and their embedded `#`/`//` lines are DATA inside string
+ * literals.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
@@ -73,11 +84,9 @@ function packageVersion(): string {
   return (JSON.parse(raw) as { version: string }).version;
 }
 
-/**
- * List any framework-owned agent files (real files post copy migration,
- * symlinks pre migration). Used by rollback tests to assert the install
- * cleaned up every agent entry it created.
- */
+// List the framework's own agent entries (the `gan-` prefix scopes the search
+// to what install adds, so an unrelated pre-existing entry is ignored). Used to
+// assert these were rolled back to nothing on failure.
 function listAgentSymlinks(home: string): string[] {
   const dir = path.join(home, '.claude', 'agents');
   if (!existsSync(dir)) return [];
@@ -95,10 +104,7 @@ function listAgentSymlinks(home: string): string[] {
 describe('install.sh — S3 rollback on partial failure', () => {
   it('S3-AC1: npm fails after symlinks → exit non-zero, symlinks rolled back, ~/.claude.json byte-equivalent to pre-state, no zones', async () => {
     const { tmp, pathOverride, cwd } = baseSetup();
-    // Pre-seed `~/.claude.json` with a known byte-state so we can
-    // assert byte-equivalence after rollback. (The version-probe is
-    // missing — no fake config-server stub — so install_mcp_server is
-    // entered, which is where the failure fires.)
+
     const preState = '{\n  "preexisting": true\n}\n';
     writeFileSync(path.join(tmp.home, '.claude.json'), preState);
 
@@ -113,36 +119,26 @@ describe('install.sh — S3 rollback on partial failure', () => {
     });
     expect(result.exitCode).not.toBe(0);
 
-    // Symlinks rolled back: `~/.claude/agents/` is empty (or the dir
-    // does not even exist). The dir itself may remain — symlinks-only
-    // is what we assert.
     expect(listAgentSymlinks(tmp.home)).toEqual([]);
     const skillLink = path.join(tmp.home, '.claude', 'skills', 'gan');
     expect(existsSync(skillLink)).toBe(false);
 
-    // ~/.claude.json byte-equivalent to pre-state. (npm failed before
-    // register_mcp_in_claude_json was reached, so no edit happened —
-    // but the assertion is still byte-equivalence per the contract.)
     const postRaw = readFileSync(path.join(tmp.home, '.claude.json'), 'utf8');
     expect(postRaw).toBe(preState);
 
-    // No zones inside the repo.
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(false);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(false);
 
-    // No `.tmp.*` leftovers.
     const homeStragglers = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.tmp.'));
     expect(homeStragglers).toEqual([]);
   });
 
   it('S3-AC2: JSON edit fails after npm install → symlinks rolled back, ~/.claude.json restored from preedit, manual `npm uninstall -g` hint emitted', async () => {
-    // Force `install_mcp_server` to actually run by NOT writing a
-    // config-server stub (version-probe is empty → mismatch → install).
+
     const v = packageVersion();
     void v;
     const { tmp, pathOverride, cwd, npmLog } = baseSetup();
 
-    // Pre-seed `~/.claude.json` with a known byte-state.
     const preState = '{\n  "kept": true\n}\n';
     writeFileSync(path.join(tmp.home, '.claude.json'), preState);
 
@@ -157,31 +153,26 @@ describe('install.sh — S3 rollback on partial failure', () => {
     });
     expect(result.exitCode).not.toBe(0);
 
-    // Symlinks rolled back.
     expect(listAgentSymlinks(tmp.home)).toEqual([]);
     expect(existsSync(path.join(tmp.home, '.claude', 'skills', 'gan'))).toBe(false);
 
-    // ~/.claude.json restored to pre-state from the preedit copy.
     const postRaw = readFileSync(path.join(tmp.home, '.claude.json'), 'utf8');
     expect(postRaw).toBe(preState);
 
-    // No preedit copy left on disk.
     const preedits = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.preedit-'));
     expect(preedits).toEqual([]);
 
-    // No `.tmp.*` leftovers.
     const tmpStragglers = readdirSync(tmp.home).filter((e) => e.startsWith('.claude.json.tmp.'));
     expect(tmpStragglers).toEqual([]);
 
-    // npm package NOT uninstalled (we never invoke `npm uninstall`).
+    // Rollback must NOT auto-run `npm uninstall` (the global install may be
+    // shared / pre-existing); it only TELLS the user how to undo it. So the npm
+    // log must show no uninstall, while stderr carries the backticked hint.
     const npmRaw = existsSync(npmLog) ? readFileSync(npmLog, 'utf8') : '';
     expect(npmRaw).not.toMatch(/\buninstall\b/);
 
-    // Rollback log mentions the manual `npm uninstall -g` command in
-    // backticks (per F4: shell remediation, not Node remediation).
     expect(result.stderr).toMatch(/`npm uninstall -g @claudeagents\/config-server`/);
 
-    // No zones (zone prep happens after register_mcp; we failed earlier).
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(false);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(false);
   });
@@ -189,11 +180,9 @@ describe('install.sh — S3 rollback on partial failure', () => {
   it('S3-AC3: zone prep fails → all earlier state undone, ~/.claude.json restored, symlinks removed, partial zones removed', async () => {
     const v = packageVersion();
     const { tmp, pathOverride, cwd } = baseSetup();
-    // Make the version-probe match so npm install is skipped.
+
     writeFakeConfigServer(tmp.bin, { version: v });
 
-    // Pre-seed `~/.claude.json` so register_mcp_in_claude_json takes
-    // the preedit-copy path.
     const preState = '{\n  "anchor": "before"\n}\n';
     writeFileSync(path.join(tmp.home, '.claude.json'), preState);
 
@@ -208,19 +197,15 @@ describe('install.sh — S3 rollback on partial failure', () => {
     });
     expect(result.exitCode).not.toBe(0);
 
-    // Symlinks removed.
     expect(listAgentSymlinks(tmp.home)).toEqual([]);
     expect(existsSync(path.join(tmp.home, '.claude', 'skills', 'gan'))).toBe(false);
 
-    // ~/.claude.json restored from preedit (byte-equivalent).
     const postRaw = readFileSync(path.join(tmp.home, '.claude.json'), 'utf8');
     expect(postRaw).toBe(preState);
 
-    // Partial zones removed (any that were created before the failure).
     expect(existsSync(path.join(cwd, '.gan-state'))).toBe(false);
     expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(false);
 
-    // No tmp / preedit leftovers.
     const stragglers = readdirSync(tmp.home).filter(
       (e) => e.startsWith('.claude.json.tmp.') || e.startsWith('.claude.json.preedit-'),
     );
@@ -228,18 +213,10 @@ describe('install.sh — S3 rollback on partial failure', () => {
   });
 
   it('rollback handles builtin-stacks-symlink STATE_LOG kind: removes the logged symlink, leaves others alone', async () => {
-    // Direct-invoke the installer's `rollback` function with a
-    // synthetic STATE_LOG containing a `builtin-stacks-symlink` entry,
-    // by sourcing `install.sh` in a sub-shell. The function-level test
-    // is the only way to exercise this case statement — the install
-    // flow places `create_builtin_stacks_symlink` as the last state-
-    // creating step, so no later failure can trigger a real rollback
-    // through it.
+
     const { tmp } = baseSetup();
     const installScript = path.join(repoRootDir(), 'install.sh');
 
-    // Pre-seed a symlink that the synthetic STATE_LOG entry will
-    // reference.
     const linkPath = path.join(tmp.home, '.claude', 'gan', 'builtin-stacks');
     mkdirSync(path.dirname(linkPath), { recursive: true });
     const fakeTarget = path.join(tmp.root, 'fake-target');
@@ -247,10 +224,9 @@ describe('install.sh — S3 rollback on partial failure', () => {
     symlinkSync(fakeTarget, linkPath);
     expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
 
-    // Read install.sh, strip the trailing `main "$@"` so sourcing does
-    // not run the install flow, and source the trimmed copy from a
-    // tiny driver script. Then directly invoke `rollback` with a
-    // synthetic STATE_LOG.
+    // Source a main-stripped install.sh so the driver can seed STATE_LOG with a
+    // single `builtin-stacks-symlink` entry and call `rollback` directly — a
+    // unit-level test of one rollback kind, without running a full install.
     const installRaw = readFileSync(installScript, 'utf8');
     const trimmed = installRaw.replace(/\nmain "\$@"\s*$/, '\n');
     const trimmedPath = path.join(tmp.root, 'install-no-main.sh');
@@ -279,17 +255,15 @@ describe('install.sh — S3 rollback on partial failure', () => {
     });
     expect(result.status).toBe(0);
 
-    // Symlink removed by rollback.
     expect(existsSync(linkPath)).toBe(false);
   });
 
   it('S3-AC4: rollback never undoes pre-existing state — a pre-created symlink survives rollback', async () => {
     const { tmp, pathOverride, cwd } = baseSetup();
 
-    // Pre-create a symlink the installer would NOT create — its target
-    // does not start with `$REPO_ROOT/agents/`. The contract says
-    // rollback only removes entries it logged; pre-existing entries
-    // are never touched.
+    // Plant an unrelated symlink BEFORE the install runs. Because rollback only
+    // undoes what this run created, this one must still point at its original
+    // target after the (failed) install rolls back.
     mkdirSync(path.join(tmp.home, '.claude', 'agents'), { recursive: true });
     const preexisting = path.join(tmp.home, '.claude', 'agents', 'unrelated.md');
     const preexistingTargetDir = path.join(tmp.root, 'unrelated');
@@ -298,7 +272,6 @@ describe('install.sh — S3 rollback on partial failure', () => {
     writeFileSync(preexistingTarget, 'unrelated agent\n');
     symlinkSync(preexistingTarget, preexisting);
 
-    // Force a failure at npm install.
     const env = makeFailureEnv();
     injectFailureAt(env, 'npm-install');
 
@@ -310,7 +283,6 @@ describe('install.sh — S3 rollback on partial failure', () => {
     });
     expect(result.exitCode).not.toBe(0);
 
-    // Pre-existing symlink still present.
     expect(lstatSync(preexisting).isSymbolicLink()).toBe(true);
     expect(readlinkSync(preexisting)).toBe(preexistingTarget);
   });

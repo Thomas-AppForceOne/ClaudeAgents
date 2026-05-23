@@ -1,6 +1,13 @@
-/**
- * R-post sprint 6 — `gan stacks customize` spawn-based tests.
- */
+// End-to-end tests for `gan stacks customize`, spawning the built CLI. The
+// command copies a built-in stack into a writable tier so the user can edit it.
+// They lock: the copy lands at the right per-tier path (project under the
+// project root, user under userHome) and is byte-identical to the source; the
+// no-overwrite-without-`--force` guard (exit 1, target untouched) and that
+// `--force` overwrites; the argument-error contracts (missing name → 64,
+// invalid --tier → 64, missing source built-in → exit 2 MissingFile); and the
+// deterministic `--json` success object including its `forced` flag and fixed
+// key order.
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,6 +16,7 @@ import path from 'node:path';
 import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
+// Temp dirs (package roots, project roots, fake homes) created per test.
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -21,12 +29,14 @@ afterEach(() => {
   }
 });
 
+// A fresh temp dir with a descriptive prefix, registered for teardown.
 function makeTmpDir(prefix: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(dir);
   return dir;
 }
 
+// Minimal schema-valid built-in stack body, used as the copy source.
 const STACK_BODY = (name: string) =>
   [
     '---',
@@ -44,6 +54,8 @@ const STACK_BODY = (name: string) =>
     '',
   ].join('\n');
 
+// Seed a built-in stack at `<packageRoot>/stacks/<name>.md`; returns its path
+// so tests can read it back and assert the copy is byte-identical.
 function seedBuiltin(packageRoot: string, name: string): string {
   const dir = path.join(packageRoot, 'stacks');
   mkdirSync(dir, { recursive: true });
@@ -78,7 +90,7 @@ describe('gan stacks customize — project tier (default)', () => {
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     seedBuiltin(pkg, 'web-foo');
-    // Pre-seed an existing customisation.
+
     const projDir = path.join(canonicalizePathForDisplay(proj), '.claude', 'gan', 'stacks');
     mkdirSync(projDir, { recursive: true });
     const target = path.join(projDir, 'web-foo.md');
@@ -128,14 +140,11 @@ describe('gan stacks customize — user tier', () => {
   });
 
   it('writes to <userHome>/.claude/gan/stacks/<unique>.md when --tier=user is set', async () => {
-    // Companion of the "user tier" success case above; uses a unique
-    // stack name to avoid colliding with any leftover customisation in
-    // the dev machine's real $HOME (the harness inherits HOME by
-    // default; we explicitly reroute via GAN_USER_HOME so the user
-    // tier targets a fresh tmp dir).
     const pkg = makeTmpDir('gan-test-customize-pkg-');
     const proj = makeTmpDir('gan-test-customize-proj-');
     const home = makeTmpDir('gan-test-customize-home-');
+    // Timestamped name so the user-tier target is provably fresh — no leftover
+    // file from a prior run could make this pass spuriously.
     const uniqueName = `web-unique-${Date.now()}`;
     seedBuiltin(pkg, uniqueName);
     const r = await runGan(

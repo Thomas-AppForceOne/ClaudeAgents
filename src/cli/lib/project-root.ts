@@ -1,14 +1,12 @@
+
+
 /**
- * R3 sprint 1 — `--project-root` resolution.
+ * Resolution and validation of the project root every command operates on.
  *
- * Defaults to the canonicalised form of `process.cwd()` per F3's path
- * canonicalisation rule. Centralised determinism lives in
- * `src/config-server/determinism/` (R1-locked); we import it directly
- * rather than reimplementing.
- *
- * Trust-mutating subcommands (R5) require `--project-root` explicitly;
- * R3 only surfaces the flag — the explicitness check sits in those
- * commands when they ship.
+ * The root comes either from an explicit `--project-root` flag or, when that is
+ * absent, from the current working directory. This module turns that raw input
+ * into a validated, canonicalised root once, so the rest of the CLI can assume
+ * the directory exists and is canonical and never has to re-check.
  */
 
 import { existsSync, statSync } from 'node:fs';
@@ -19,36 +17,45 @@ import {
 } from '../../config-server/determinism/index.js';
 import { createError } from '../../config-server/errors.js';
 
+/**
+ * The validated project root, in two canonical forms.
+ *
+ * @property path the canonical absolute path, used as the key for resolution
+ *   and caching (so symlinks/relative inputs collapse to one stable identity).
+ * @property displayPath the canonical-for-display form, used in user-facing
+ *   output where readability matters more than the canonical-for-keying form.
+ * @property explicit `true` when the root came from a non-empty
+ *   `--project-root` flag, `false` when it defaulted to the cwd; lets callers
+ *   tailor messaging (e.g. "in the current directory" vs. the given path).
+ */
 export interface ResolvedProjectRoot {
-  /**
-   * Canonicalised path (per F3 determinism — symlinks resolved, trailing
-   * slash stripped, lowercased on Darwin/Win32). Use for cache keys,
-   * equality checks, and any internal lookup.
-   */
+
   path: string;
-  /**
-   * Display-form canonical path (same `realpath` + slash-strip as `path`
-   * but **without** the Darwin/Win32 case-folding). Use whenever a path
-   * is rendered to the user — CLI stdout, log lines, error messages —
-   * so users on macOS see `/Users/…` rather than the lowercased
-   * `/users/…`. The two forms differ only on case-insensitive
-   * filesystems; on Linux they are byte-identical.
-   */
+
   displayPath: string;
-  /** Whether `--project-root` was explicitly supplied. */
+
   explicit: boolean;
 }
 
 /**
- * Resolve a project-root value. If `flag` is undefined, falls back to
- * `process.cwd()`. Returns both the canonical (cache-key) and display
- * (case-preserving) forms; pick the one matching the consumer's purpose.
+ * Resolve, validate, and canonicalise the project root for a command.
  *
- * Throws `Error` with a clear message if the path does not exist or is
- * not a directory. The dispatcher catches this and surfaces it via the
- * structured-error path with exit code 64.
+ * When `flag` is a non-empty string it is used as the root (and `explicit` is
+ * `true`); otherwise the process cwd is used (`explicit` is `false`). The
+ * chosen path is then checked to exist and to be a directory before being
+ * canonicalised.
+ *
+ * @param flag the raw `--project-root` value, or `undefined` when not given.
+ *   An empty string is treated as "not given" and falls back to the cwd.
+ * @returns the {@link ResolvedProjectRoot} on success.
+ * @throws a `MissingFile` `ConfigServerError` when the path does not exist, or
+ *   a `MalformedInput` `ConfigServerError` when it exists but is not a
+ *   directory. Both are thrown (not returned), so the caller's error path
+ *   handles them; both carry the offending `path`.
  */
 export function resolveProjectRoot(flag: string | undefined): ResolvedProjectRoot {
+  // Treat an empty-string flag the same as an omitted one: only a non-empty
+  // value counts as an explicit root, otherwise default to the cwd.
   const explicit = flag !== undefined && flag.length > 0;
   const raw = explicit ? flag! : process.cwd();
   if (!existsSync(raw)) {

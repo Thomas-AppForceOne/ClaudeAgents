@@ -1,40 +1,19 @@
-/**
- * F7 slice 1 — central run-data store resolution and repo keying.
- *
- * Run *data* (per-run directories holding `progress.json`, sprint artifacts,
- * `trace/`, `telemetry/`) moves out of the project tree's gitignored
- * `.gan-state/runs/` into a central, repo-keyed store outside any worktree.
- * Relocating it there is what makes a run's data survive `git worktree remove`
- * of the worktree it was started from, and what lets every linked worktree of
- * one repo discover the same runs (they share one `git-common-dir`, so they
- * key to the same store sub-directory).
- *
- * Layout (per the F7 spec §1):
- *
- *   <store-root>/
- *     <repo-key>/                       one directory per repo
- *       run.lock                        repo-level serialization lock (O2 owns)
- *       runs/
- *         <run-id>/                     <YYYYMMDDTHHMMSS>-<4 hex>, O2 owns layout
- *
- * This module owns only the *location* resolution — store-root precedence,
- * repo-key derivation, and the run-directory path. The per-run internal layout
- * and the worktree-aware execution model (cases 1a/1b/1c), confinement-hook
- * path export, recovery/lock re-anchoring, and install-time configuration are
- * out of scope for this slice (later F7 slices / O2 own them).
- *
- * Determinism: the main-worktree path is canonicalised through the centralised
- * determinism module's case-folding {@link canonicalizePath} before hashing, so
- * two linked worktrees (and two spellings of one path differing only by case or
- * a trailing slash) key to the SAME store directory on case-insensitive
- * filesystems. This module never re-implements realpath / lowercasing /
- * trailing-slash stripping — it imports the single pinned implementation.
- *
- * Subprocess safety: the one git invocation (`git rev-parse --git-common-dir`)
- * goes through `execFileSync` with an argv array and a `cwd`; no path or env
- * value is ever interpolated into a shell command line.
- */
 
+
+/**
+ * Path resolution and identifiers for the run store — the central,
+ * per-repository directory tree where `/gan` runs live (run dirs, the run lock,
+ * progress).
+ *
+ * Like the module-state store, runs are keyed by *repository* (via
+ * {@link computeRepoKey} over the main worktree root) so all of a repo's
+ * worktrees share one store; the store root is resolved by the standard
+ * precedence (env → marker → home default), specialised here with the
+ * `GAN_RUNS_DATA` env var and `.gan-runs-data` default. This module also owns
+ * the run-id format and the regexes used to recognise run ids and repo-key
+ * hash tails elsewhere. Everything here is pure path/string computation plus
+ * (for the worktree root) a git read; no run files are read or written.
+ */
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -43,47 +22,38 @@ import { canonicalizePath } from '../determinism/index.js';
 import { mainWorktreeRoot as deriveMainWorktreeRoot, type GitExec } from './git-exec.js';
 import { resolveStoreRootByPrecedence, type StoreEnv } from './store-common.js';
 
-// The home/env injection seam is shared across every central store; re-export
-// it from here so existing F7 callers keep importing `StoreEnv` from run-store.
 export type { StoreEnv } from './store-common.js';
 
-/** Default store-root directory name under the user's home directory. */
+/** Default run-store directory name under the user's home, when neither the env
+ * var nor a marker file overrides the location. */
 export const DEFAULT_STORE_DIRNAME = '.gan-runs-data';
 
-/**
- * Install-time marker file (relative to the user's home directory) recording
- * the configured store root. `install.sh` writes it (a later F7 slice); the
- * orchestrator reads it here. `GAN_RUNS_DATA` overrides it per-run.
- */
+/** Home-relative path of the marker file that redirects the run-store root to
+ * the path it contains. */
 export const STORE_MARKER_RELPATH = path.join('.claude', 'gan', 'runs-data-dir');
 
-/** Environment variable that overrides the store root for a single run. */
+/** Environment variable that takes top precedence for the run-store root. */
 export const STORE_ROOT_ENV = 'GAN_RUNS_DATA';
 
-/** Length of the hex hash segment appended to the repo-key basename. */
+/** Number of hex chars of the path hash kept in a repo key. Twelve is enough to
+ * make collisions between distinct repo paths negligible while keeping the key
+ * short. */
 export const REPO_KEY_HASH_LENGTH = 12;
 
-/** Validates a generated/supplied run-id against the O2 grammar. */
+/** Shape of a run id: `YYYYMMDDThhmmss-<4 hex>` (UTC timestamp + random
+ * suffix). Used to recognise run directories among other store entries. */
 export const RUN_ID_PATTERN = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$/;
 
-/** Matches the trailing `-<hash12>` segment of a well-formed repo key. */
+/** Matches the trailing `-<12 hex>` hash a repo key ends with; used elsewhere
+ * to strip/recognise the hash portion of a repo key. */
 export const REPO_KEY_HASH_TAIL = /-[0-9a-f]{12}$/;
 
 /**
- * Resolve the store root, highest precedence first:
- *   1. `GAN_RUNS_DATA` environment variable (single-run override; testing / CI).
- *   2. The path recorded at install time in `~/.claude/gan/runs-data-dir`.
- *   3. Default `<homedir>/.gan-runs-data`.
+ * Resolve the run-store root by precedence: `GAN_RUNS_DATA` env var → marker
+ * file → `~/.gan-runs-data`.
  *
- * The returned path is always absolute with the home directory expanded — never
- * a literal `~`. The default form joins `os.homedir()` so the result starts
- * with the home directory. The env/marker forms are resolved to absolute paths
- * (relative to the home directory if not already absolute) so callers always
- * receive an absolute store root.
- *
- * Delegates to the shared {@link resolveStoreRootByPrecedence} ladder — the
- * SAME implementation F8's module-state store uses — passing only the knobs
- * that differ for run data (env var, marker relpath, default dirname).
+ * @param deps optional environment seams (`homedir`/`env`) for tests.
+ * @returns the absolute store root directory.
  */
 export function resolveStoreRoot(deps?: StoreEnv): string {
   return resolveStoreRootByPrecedence(
@@ -97,43 +67,38 @@ export function resolveStoreRoot(deps?: StoreEnv): string {
 }
 
 /**
- * Resolve the repo's **main-worktree root** — the parent of
- * `git rev-parse --git-common-dir`, NOT `git rev-parse --show-toplevel`. All
- * linked worktrees of a repo share one git-common-dir, so from inside any
- * linked worktree this resolves to the original main checkout, not the
- * worktree directory. That shared anchor is what makes the repo key (and
- * therefore the central store directory) identical across all worktrees.
+ * Resolve the repository's main worktree root from `fromDir`.
  *
- * The git invocation uses `execFileSync` with an argv array and a `cwd`; no
- * path or env value is interpolated into a shell command line.
- *
- * @param fromDir directory inside the repo (worktree or main checkout) to run
- *   git from. Defaults to `process.cwd()`.
- * @param exec    injectable for tests; defaults to `execFileSync`.
+ * @param fromDir a directory inside the repo; defaults to `process.cwd()`.
+ * @param exec the `execFileSync` to run git through; defaults to the real one,
+ *   overridable in tests.
+ * @returns the absolute main worktree root.
+ * @throws when `fromDir` is not inside a git repository (propagated from
+ *   {@link deriveMainWorktreeRoot}).
  */
 export function resolveMainWorktreeRoot(
   fromDir: string = process.cwd(),
   exec: typeof execFileSync = execFileSync,
 ): string {
-  // Adapt the execFileSync-style seam to the shared `GitExec` seam and delegate
-  // to the single git-common-dir → main-root derivation (one implementation,
-  // shared with the worktree resolver, including the empty-output guard).
+  // Adapt the injectable execFileSync into the GitExec shape the shared
+  // worktree-root helper expects (argv form, stdout-only capture).
   const git: GitExec = (args, cwd) =>
     exec('git', [...args], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
   return deriveMainWorktreeRoot(git, fromDir);
 }
 
 /**
- * Compute the repo key for a given main-worktree root path: `<basename>-<hash12>`.
+ * Derive the stable per-repository key from a main worktree root.
  *
- *   - `basename` is the main-worktree directory name (for human browsability).
- *   - `hash12` is the first 12 lowercase hex characters of the SHA-256 of the
- *     **canonical** main-worktree path (case-folding {@link canonicalizePath}),
- *     so two linked worktrees — and two spellings differing only by case or a
- *     trailing slash on a case-insensitive filesystem — produce the same key.
+ * The key is `<basename>-<hash>` where the hash is the first
+ * {@link REPO_KEY_HASH_LENGTH} hex chars of `sha256(canonicalPath)`. The path is
+ * canonicalised first so the same repo always hashes identically regardless of
+ * symlinks/case; the basename prefix keeps the on-disk store directory
+ * human-recognisable while the hash guarantees uniqueness between repos that
+ * share a basename.
  *
- * The basename is derived from the canonical (case-folded on darwin/win32) path
- * so the human-facing prefix stays stable alongside the hash for the same repo.
+ * @param mainWorktreeRoot the repo's main worktree root.
+ * @returns the repo key. Pure.
  */
 export function computeRepoKey(mainWorktreeRoot: string): string {
   const canonical = canonicalizePath(mainWorktreeRoot);
@@ -143,9 +108,8 @@ export function computeRepoKey(mainWorktreeRoot: string): string {
 }
 
 /**
- * Convenience: derive the repo key directly from a directory inside the repo
- * (worktree or main checkout). Resolves the main-worktree root via
- * `git rev-parse --git-common-dir` then keys it.
+ * Convenience: resolve the repo key directly from `fromDir` (worktree root →
+ * key). See {@link resolveMainWorktreeRoot} and {@link computeRepoKey}.
  */
 export function resolveRepoKey(
   fromDir: string = process.cwd(),
@@ -154,57 +118,68 @@ export function resolveRepoKey(
   return computeRepoKey(resolveMainWorktreeRoot(fromDir, exec));
 }
 
-/** The per-repo store directory: `<store-root>/<repo-key>/`. */
+/** The per-repository store directory: `<storeRoot>/<repoKey>`. */
 export function resolveRepoStoreDir(storeRoot: string, repoKey: string): string {
   return path.join(storeRoot, repoKey);
 }
 
-/** The repo-level serialization lock path: `<store-root>/<repo-key>/run.lock` (O2 owns its use). */
+/** Path of the repo's single run lock: `<storeRoot>/<repoKey>/run.lock`. */
 export function resolveRunLockPath(storeRoot: string, repoKey: string): string {
   return path.join(resolveRepoStoreDir(storeRoot, repoKey), 'run.lock');
 }
 
-/** The repo's runs container: `<store-root>/<repo-key>/runs/`. */
+/** The directory holding all run dirs for a repo:
+ * `<storeRoot>/<repoKey>/runs`. */
 export function resolveRunsRoot(storeRoot: string, repoKey: string): string {
   return path.join(resolveRepoStoreDir(storeRoot, repoKey), 'runs');
 }
 
-/**
- * The per-run directory: `<store-root>/<repo-key>/runs/<run-id>/`. This is the
- * relocation target — it replaces `<projectRoot>/.gan-state/runs/<run-id>/`.
- * The per-run *internal* layout is unchanged (O2 owns it).
- */
+/** A single run's directory: `<storeRoot>/<repoKey>/runs/<runId>`. */
 export function resolveRunDir(storeRoot: string, repoKey: string, runId: string): string {
   return path.join(resolveRunsRoot(storeRoot, repoKey), runId);
 }
 
-/** All resolved store paths for a run, in one object. */
+/**
+ * Every resolved run-store location for one run.
+ *
+ * @property storeRoot the resolved store root.
+ * @property repoKey the per-repository key.
+ * @property mainWorktreeRoot the worktree root the key derives from.
+ * @property repoStoreDir the repo's store directory.
+ * @property runLockPath the repo's run lock path.
+ * @property runsRoot the repo's runs directory.
+ * @property runDir this run's directory.
+ */
 export interface ResolvedRunStore {
-  /** The resolved store root (env > marker > default), absolute. */
+
   storeRoot: string;
-  /** `<basename>-<hash12>` for the repo. */
+
   repoKey: string;
-  /** The main-worktree root the key was derived from, resolved absolute. */
+
   mainWorktreeRoot: string;
-  /** `<store-root>/<repo-key>/`. */
+
   repoStoreDir: string;
-  /** `<store-root>/<repo-key>/run.lock`. */
+
   runLockPath: string;
-  /** `<store-root>/<repo-key>/runs/`. */
+
   runsRoot: string;
-  /** `<store-root>/<repo-key>/runs/<run-id>/`. */
+
   runDir: string;
 }
 
 /**
- * One-shot resolution of every central-store path for a run. Resolves the
- * store root by precedence, derives the main-worktree root (and therefore the
- * repo key) from the invocation directory's git-common-dir, and assembles the
- * per-run directory.
+ * Resolve all run-store locations for a given run in one call.
+ *
+ * @param opts.runId the run whose `runDir` to compute.
+ * @param opts.fromDir directory inside the repo; defaults to `process.cwd()`.
+ * @param opts.deps environment seams for the store root.
+ * @param opts.exec git executor override for the worktree root.
+ * @returns a {@link ResolvedRunStore}. Pure path computation plus one git read.
+ * @throws when `fromDir` is not inside a git repository.
  */
 export function resolveRunStore(opts: {
   runId: string;
-  /** Directory inside the repo to resolve the key from. Defaults to cwd. */
+
   fromDir?: string;
   deps?: StoreEnv;
   exec?: typeof execFileSync;
@@ -224,9 +199,15 @@ export function resolveRunStore(opts: {
 }
 
 /**
- * Generate a fresh run-id in the O2 grammar `<YYYYMMDDTHHMMSS>-<4 hex>` (UTC).
- * The form is unchanged from O2; this slice only relocates the directory the
- * id names.
+ * Generate a fresh run id of the form `YYYYMMDDThhmmss-<4 hex>`.
+ *
+ * The timestamp is in UTC (so ids sort chronologically regardless of the
+ * machine's timezone) and a 2-byte random suffix disambiguates ids generated
+ * within the same second. Conforms to {@link RUN_ID_PATTERN}.
+ *
+ * @param now clock seam; defaults to the current time. Injected in tests for a
+ *   deterministic timestamp.
+ * @returns the run id string.
  */
 export function generateRunId(now: Date = new Date()): string {
   const ts =

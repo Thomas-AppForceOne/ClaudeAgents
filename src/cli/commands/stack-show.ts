@@ -1,14 +1,10 @@
 /**
- * R3 sprint 2 — `gan stack show <name> [--json] [--project-root DIR]`.
+ * `gan stack show <name>` — print the resolved contents of a single named
+ * stack: which tier it resolved from, its on-disk path, and its data body.
  *
- * Calls R1's `getStack({projectRoot, name})` in-process. The response
- * shape (per `src/config-server/tools/reads.ts`):
- *
- *   { data, prose: { before, after }, sourceTier, sourcePath }
- *
- * Tier provenance (`sourceTier` / `sourcePath`) is included in both
- * surfaces per the contract: human format prints a header line that names
- * the tier and the resolved path; `--json` emits the response verbatim.
+ * Read-only. The required stack-name argument is validated here (a bad-args
+ * error if absent); everything else — project-root resolution, `--json`
+ * handling, and error mapping — is delegated to {@link runRead}.
  */
 
 import { getStack } from '../../index.js';
@@ -20,6 +16,16 @@ import { readSharedFlags, runRead } from '../lib/run-helpers.js';
 import type { CommandResult } from '../lib/run-helpers.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+/**
+ * Shape returned by `getStack`.
+ *
+ * @property data the stack's parsed data body (arbitrary YAML mapping).
+ * @property prose the markdown prose surrounding the data block, split into
+ *   the text `before` and `after` it.
+ * @property sourceTier which tier the stack resolved from (`project` and
+ *   `user` customizations win over the `builtin` default).
+ * @property sourcePath the absolute path of the file that supplied it.
+ */
 interface StackResponse {
   data: unknown;
   prose: { before: string; after: string };
@@ -27,22 +33,37 @@ interface StackResponse {
   sourcePath: string;
 }
 
+/**
+ * Render a resolved stack for human (non-JSON) output.
+ *
+ * @param resp the resolved stack.
+ * @returns the source tier and path, then a `data:` block holding the
+ *   deterministically-serialised data body indented two spaces (trailing
+ *   newline). Prose is intentionally omitted from the human view.
+ */
 function renderHuman(resp: StackResponse): string {
   const lines: string[] = [];
   lines.push(`source tier: ${resp.sourceTier}`);
   lines.push(`source path: ${resp.sourcePath}`);
   lines.push('');
   lines.push('data:');
-  // Reuse the deterministic JSON shape for the data block so structured
-  // values (arrays, nested objects) render identically across runs and
-  // align byte-for-byte with the `--json` surface. Routes through R1's
-  // `stableStringify` (sorted keys + two-space indent, per F3 determinism);
-  // trim the trailing newline since we're embedding mid-output.
+
+  // stableStringify for determinism; indent every line two spaces to nest it
+  // under the `data:` header.
   const dataJson = stableStringify(resp.data).trimEnd();
   for (const ln of dataJson.split('\n')) lines.push(`  ${ln}`);
   return lines.join('\n') + '\n';
 }
 
+/**
+ * CLI entrypoint for `gan stack show`.
+ *
+ * @param parsed parsed argv; the first positional is the required stack name,
+ *   and `--json` / `--project-root` are honoured.
+ * @returns a {@link CommandResult}. A missing/empty name is `MalformedInput`
+ *   with exit {@link EXIT_BAD_ARGS}; otherwise {@link runRead} resolves the
+ *   stack and maps any failure (e.g. unknown stack) to an error result.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson } = readSharedFlags(parsed);
   const name = parsed._[0];

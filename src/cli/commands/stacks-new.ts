@@ -1,24 +1,11 @@
 /**
- * R3 sprint 4 — `gan stacks new <name> [--tier=project] [--project-root DIR]`.
+ * `gan stacks new <name>` — scaffold a brand-new stack file from a template.
  *
- * Scaffolds a DRAFT-bannered stack file. `--tier=project` (the default)
- * writes to `<root>/.claude/gan/stacks/<name>.md`; `--tier=user` writes to
- * `<userHome>/.claude/gan/stacks/<name>.md` (the user-tier path per C5).
- * Any other value — including the legacy `repo`, `builtin`, or unknown
- * strings — exits 64 with a structured `MalformedInput` error whose
- * message names both supported values. There is no end-user-facing
- * builtin/repo scaffold target: built-in stacks ship inside the published
- * npm package and are surfaced via `gan stacks customize`.
- *
- * Refuses to overwrite an existing file (the scaffold-no-overwrite rule):
- * exits 1 with a clear stderr message naming the absolute path. The CLI
- * never exposes a `--force` flag in v1.
- *
- * Persistence flows through R1's `atomicWriteFile` so the write is
- * atomic-by-rename. Bytes written equal `buildScaffold(name, tier)`
- * byte-for-byte; tests assert that property.
- *
- * Exit codes flow through `lib/exit-codes.ts`; no numeric literals here.
+ * Writes a DRAFT scaffold (TODO placeholders) into the project tier by default
+ * or the user tier with `--tier`. It refuses to clobber an existing file: an
+ * occupied target is an error, not an overwrite, so the user must delete it
+ * first. Compare {@link buildScaffold} (fresh template) with `gan stacks
+ * customize`, which instead copies a built-in stack's real body.
  */
 
 import { existsSync } from 'node:fs';
@@ -40,36 +27,32 @@ import {
 import { EXIT_BAD_ARGS, EXIT_GENERIC, EXIT_OK } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+// The tiers a scaffold may be written to; `--tier` is validated against this.
 const ALLOWED_TIERS: ReadonlySet<ScaffoldTier> = new Set<ScaffoldTier>([
   'project',
   'user',
 ]);
 
 /**
- * Read and validate `--tier`. Returns the resolved tier (default `project`)
- * or a `ConfigServerError` describing the failure (rendered as exit 64).
+ * Resolve the target tier from the `--tier` flag.
  *
- * Both `project` and `user` are supported (R6 slice 2). Any other value —
- * including the legacy/deprecated `repo`/`builtin` tiers and unknown
- * strings, as well as the value-less / bare-boolean forms of `--tier` —
- * flows through the same `MalformedInput` rejection path, whose message
- * names BOTH supported values. There is no end-user-facing builtin/repo
- * scaffold target: built-in stacks ship inside the npm package (per E2's
- * distribution model) and are surfaced via `gan stacks customize`.
+ * @param parsed parsed argv.
+ * @returns the chosen {@link ScaffoldTier} (default `project`), or a
+ *   `MalformedInput` {@link ConfigServerError} — returned, not thrown — when
+ *   `--tier` is present without a value or names an unsupported tier.
  */
 function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
   if (raw === true) {
-    // Bare `--tier` with no value. The arg parser normally intercepts this
-    // (the flag is registered as value-requiring), but defend it here too.
+
     return createError('MalformedInput', {
       field: '--tier',
       message: "--tier requires a value: 'project' or 'user'.",
     });
   }
   if (typeof raw !== 'string' || raw.length === 0) {
-    // `--tier=` with an empty value: "got ''" is accurate here.
+
     return createError('MalformedInput', {
       field: '--tier',
       message: "--tier must be 'project' or 'user' (got '').",
@@ -85,10 +68,14 @@ function readTier(parsed: ParsedArgs): ScaffoldTier | ConfigServerError {
 }
 
 /**
- * Resolve the absolute target path for the named stack at the given tier.
- * Project tier resolves under `projectRoot`; user tier resolves under the
- * user home `.claude/gan/stacks` directory (C5 user-tier path), independent
- * of `--project-root`.
+ * Compute the absolute target path for the new stack file.
+ *
+ * @param projectRoot the resolved project root (used for the `project` tier).
+ * @param tier which tier the file belongs to.
+ * @param name the stack name (becomes `<name>.md`).
+ * @returns the `<root>/.claude/gan/stacks/<name>.md` path, or a
+ *   `MalformedInput` {@link ConfigServerError} when `tier` is `user` but no
+ *   user home can be resolved.
  */
 function targetPathFor(
   projectRoot: string,
@@ -108,6 +95,10 @@ function targetPathFor(
   return path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`);
 }
 
+/**
+ * Render the success notice for human (non-JSON) output, including the
+ * reminder to fill in the scaffold before committing.
+ */
 function renderHumanSuccess(name: string, tier: ScaffoldTier, target: string): string {
   return [
     `Scaffolded stack \`${name}\` at ${target} (tier: ${tier}).`,
@@ -117,13 +108,29 @@ function renderHumanSuccess(name: string, tier: ScaffoldTier, target: string): s
 }
 
 /**
- * Build the JSON success surface via the central deterministic emitter
- * (sorted keys, two-space indent, trailing newline).
+ * Render the success payload for `--json` output (`written: true` plus the
+ * name, tier, and target path).
  */
 function renderJsonSuccess(name: string, tier: ScaffoldTier, target: string): string {
   return emitJson({ name, tier, path: target, written: true });
 }
 
+/**
+ * CLI entrypoint for `gan stacks new`.
+ *
+ * @param parsed parsed argv; the first positional is the required stack name,
+ *   with `--tier`, `--json`, and `--project-root` honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data:
+ *   - missing name or bad `--tier` → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - `--tier=user` with no resolvable home → `MalformedInput`, exit
+ *     {@link EXIT_BAD_ARGS};
+ *   - project-root resolution failure → mapped via {@link errorResult};
+ *   - target already exists → refusal to overwrite, exit {@link EXIT_GENERIC};
+ *   - a write throw → {@link errorResult} (ConfigServerError) or
+ *     {@link unreachableResult}.
+ *   Side effect on success: atomically writes the scaffold file; exit
+ *   {@link EXIT_OK}.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
@@ -155,9 +162,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(target), code: EXIT_BAD_ARGS };
   }
 
-  // No-overwrite rule: refuse to clobber an existing file. Exit code is the
-  // canonical "generic failure" so scripts can distinguish overwrite
-  // refusal from validation failures.
+  // Never clobber: an existing target is a refusal, so the user can't lose an
+  // edited stack to a stray `stacks new`.
   if (existsSync(target)) {
     const err = createError('MalformedInput', {
       file: target,

@@ -1,86 +1,89 @@
 /**
- * T1 Sprint 2 — the load-bearing hash boundary (F2.3) and content hashing.
+ * Deterministic content hashing for trace refs.
  *
- * `promptRef` / `inputDigest` (and the content hashes that back payload refs
- * in hashed mode) are SHA-256, hex-encoded lowercase, exactly 64 chars, with
- * NO `sha256:` prefix — bare 64-hex per T1's "Field encodings". This is
- * deliberately different from `src/config-server/trust/hash.ts`, which
- * prepends `sha256:` for the trust cache. We follow the same `node:crypto`
- * `createHash('sha256').digest('hex')` pattern but emit the bare form.
- *
- * The hash boundary identifies "the same logical request to the model" so
- * cache-hit and cross-run comparison are honest (T2/V1). The boundary is:
- *
- *   IN  the hash: system prompt, user prompt, full message history, tool
- *       definitions, model name.
- *   OUT of the hash: temperature, top-p, top-k, seed, max-tokens, run-id,
- *       timestamps, and any per-run-varying field.
- *
- * Determinism is achieved by hashing a CANONICAL serialisation of exactly the
- * in-boundary fields, in a fixed order, via the repo's `stableStringify`
- * (sorted keys at every depth). Out-of-boundary fields never enter the
- * pre-image, so varying them cannot change the hash.
+ * Trace events reference payloads (and identify LLM requests) by SHA-256 hex
+ * digest rather than by storing bodies inline. The shared guarantee this
+ * module provides: identical logical content always hashes to the identical
+ * digest. That holds because every hash is taken over a {@link stableStringify}
+ * canonical form (key order normalised), so two requests/inputs that differ
+ * only in property order collapse to one digest — which is what makes a
+ * prompt ref usable as a cache key.
  */
 
 import { createHash } from 'node:crypto';
 
 import { stableStringify } from '../config-server/determinism/index.js';
 
+// Lowercase 64-hex-char SHA-256, used by isSha256Hex to validate refs.
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-/** One message in the request's message history. */
+/** One message in an LLM request's history. `content` is opaque to hashing. */
 export interface TraceMessage {
   role: string;
   content: unknown;
 }
 
-/** One tool definition exposed to the model for the request. */
+/**
+ * A tool offered to the model. `description`/`inputSchema` are optional and, in
+ * the prompt-ref preimage, normalised to `null` when absent so a present-vs-
+ * absent field is distinguishable yet stable.
+ */
 export interface TraceToolDefinition {
   name: string;
   description?: string;
-  /** The tool's input schema (JSON Schema or equivalent). */
+
   inputSchema?: unknown;
 }
 
 /**
- * The logical identity of an LLM request. Exactly the IN-boundary fields.
- * Out-of-boundary knobs (temperature, top-p, top-k, seed, max-tokens) and
- * per-run-varying fields (run-id, timestamps) are intentionally absent from
- * this type so they cannot be folded into the pre-image by accident.
+ * The full identity of an LLM request — everything that, if changed, should
+ * change the prompt ref. Hashing all of these together is what lets the ref
+ * double as a request-level cache key.
+ *
+ * @property systemPrompt the system prompt text.
+ * @property userPrompt the user prompt text.
+ * @property messageHistory prior turns; only `role`/`content` are hashed.
+ * @property toolDefinitions available tools; name + description + input schema.
+ * @property model the model identifier (different models → different refs).
  */
 export interface LlmRequestIdentity {
-  /** The system prompt. */
+
   systemPrompt: string;
-  /** The user prompt. */
+
   userPrompt: string;
-  /** The full message history, in order. */
+
   messageHistory: TraceMessage[];
-  /** The tool definitions exposed to the model. */
+
   toolDefinitions: TraceToolDefinition[];
-  /** The model name. */
+
   model: string;
 }
 
 /**
- * Compute the bare lowercase 64-hex SHA-256 of an arbitrary string. The single
- * primitive every other hash in this module folds through.
+ * SHA-256 of a string, as lowercase hex. The single hashing primitive the rest
+ * of the module builds on. Hashes the UTF-8 encoding of `content`.
  */
 export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 /**
- * Compute the `promptRef` for an LLM request: the bare 64-hex SHA-256 over a
- * canonical serialisation of EXACTLY the in-boundary fields, in a fixed
- * order. Order-deterministic: two requests built from equal in-boundary
- * content produce byte-identical hashes; varying any out-of-boundary field
- * leaves the hash unchanged because it never enters the pre-image.
+ * Compute the deterministic prompt ref (SHA-256 hex) identifying an LLM
+ * request. Same request → same ref, so the ref is safe to use as a cache key.
+ *
+ * @param identity the request's full identity; every field below feeds the hash.
+ * @returns the 64-char lowercase hex digest.
+ *
+ * The preimage is built deliberately, not by hashing `identity` directly:
+ * - a `boundary` tag (`llmRequest/v1`) domain-separates this hash from other
+ *   uses of {@link sha256Hex} and lets the preimage format be versioned;
+ * - only the fields that define request identity are projected (e.g. messages
+ *   contribute role+content, not incidental object identity);
+ * - optional tool fields are coerced to `null` so their absence is stable and
+ *   cannot collide with a literal value the caller supplied.
  */
 export function computePromptRef(identity: LlmRequestIdentity): string {
-  // Fixed key order is enforced by stableStringify (sorted at every depth),
-  // so the literal order of the object below does not matter — but we still
-  // pin only the in-boundary fields. Message history order is preserved
-  // because arrays are not reordered by stableStringify.
+
   const preimage = stableStringify({
     boundary: 'llmRequest/v1',
     model: identity.model,
@@ -100,16 +103,22 @@ export function computePromptRef(identity: LlmRequestIdentity): string {
 }
 
 /**
- * Compute the `inputDigest` for an agent attempt: the bare 64-hex SHA-256 of
- * the canonical serialisation of the inputs fed to the agent. Same encoding
- * as `promptRef`; the caller supplies whatever input bundle defines the
- * attempt's logical identity.
+ * Compute a deterministic digest of arbitrary agent-attempt inputs. The inputs
+ * are canonicalised via {@link stableStringify} before hashing, so two
+ * structurally-equal inputs (any property order) produce the same digest —
+ * which is what lets a retry with identical inputs be recognised.
+ *
+ * @param inputs any JSON-shaped value.
+ * @returns the 64-char lowercase hex digest.
  */
 export function computeInputDigest(inputs: unknown): string {
   return sha256Hex(stableStringify(inputs));
 }
 
-/** True iff `value` is a bare lowercase 64-char hex SHA-256 (no prefix). */
+/**
+ * Type guard: `true` iff `value` is a string matching a lowercase 64-char
+ * SHA-256 hex digest. Used to validate refs read back from disk or input.
+ */
 export function isSha256Hex(value: unknown): value is string {
   return typeof value === 'string' && SHA256_HEX.test(value);
 }

@@ -1,12 +1,31 @@
 /**
- * H1 sprint 4 — `gan hooks status` smoke coverage.
+ * End-to-end tests for `gan hooks status` (acceptance criteria A8/A9, F7).
  *
- * Spawns the built CLI bin against a sandboxed $HOME and tmp project cwd so
- * the test never reads or writes the developer's real `~/.claude/`. Covers
- * the AC-A8 / AC-A9 surfaces, the absent-hook graceful path, the `--json`
- * round-trip, and the untrusted-content robustness posture. The full
- * matrix lands with sprint 5; this is the smoke + contract-critical layer.
+ * `hooks status` inspects the PreToolUse confinement hook (`gan-confine.sh`) at
+ * two tiers — the user-tier hook (under HOME) and an optional project-tier
+ * override (under the cwd) — and reports their presence, the framework version
+ * each was authored against, which takes precedence, and the active-run
+ * confinement zones derived from GAN_* env vars.
+ *
+ * What the suite guards:
+ * - dispatch: bare `gan hooks` and unknown inner subcommands are usage errors
+ *   (64) with a help pointer, while `gan hooks status` reaches the handler;
+ * - reporting (A8/A9): user-tier-only vs both-tiers, the precedence note, and
+ *   the legacy-deletion hint that fires only when a project hook references the
+ *   retired `.gan/` path (a current `.gan-state/...` hook must NOT trigger it);
+ * - robustness: this command reads files written by who-knows-what, so it must
+ *   never execute their contents. The shell-injection-bait test is the
+ *   security-critical one — it seeds a project hook full of `$(...)`/backtick
+ *   command substitutions and asserts a sentinel file is never created, proving
+ *   the hook body is classified as inert text, not run. Oversized (5 MiB) and
+ *   binary/NUL content must likewise classify and continue, never crash;
+ * - F7 run zones: GAN_WORKTREE / GAN_RUN_DIR / GAN_RUN_ID are surfaced when set
+ *   and reported as unset (never crashing) when absent or partial.
+ *
+ * Every test uses isolated temp HOME and cwd dirs so tier resolution sees only
+ * the hooks this test seeded.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,13 +45,16 @@ afterEach(() => {
   }
 });
 
+// Make a throwaway temp dir under the given prefix and register it for teardown.
+// Tests use separate dirs for HOME (user tier) and cwd (project tier).
 function makeTmpDir(prefix: string): string {
   const d = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(d);
   return d;
 }
 
-/** Seed a hook file at <root>/.claude/hooks/gan-confine.sh with `content`. */
+// Write a hook at `<root>/.claude/hooks/gan-confine.sh` with arbitrary content.
+// `root` is a HOME dir for the user-tier hook or a cwd for the project-tier one.
 function seedHook(root: string, content: string): string {
   const dir = path.join(root, '.claude', 'hooks');
   mkdirSync(dir, { recursive: true });
@@ -41,12 +63,18 @@ function seedHook(root: string, content: string): string {
   return p;
 }
 
+// The framework version from package.json, used to author "current" user-tier
+// hooks and to assert the command recognises them as up to date.
 const CURRENT_VERSION = (
   JSON.parse(readFileSync(path.join(repoRootDir(), 'package.json'), 'utf8')) as {
     version: string;
   }
 ).version;
 
+// Build the canonical user-tier hook body for a given framework version. The
+// returned string is fixture DATA: its `#`-prefixed lines are the hook's own
+// banner (notably the "Source of truth: ... version <version>" line the
+// command parses to detect authored-version), not comments in this test file.
 function userHookHeader(version: string): string {
   return (
     '#!/bin/bash\n' +
@@ -58,9 +86,15 @@ function userHookHeader(version: string): string {
   );
 }
 
+// Fixture DATA — a project-tier hook that references the retired `.gan/` path.
+// The `.gan/` token inside this string is what triggers the legacy-deletion
+// hint; it is hook content, not a comment.
 const LEGACY_PROJECT_HOOK =
   '#!/bin/bash\n# legacy project hook\nif [[ "$path" == *.gan/* ]]; then\n  exit 0\nfi\nexit 1\n';
 
+// Fixture DATA — a current project-tier hook using the modern `.gan-state/...`
+// path. It must NOT trip the legacy hint, so it is the negative control paired
+// with LEGACY_PROJECT_HOOK above.
 const CURRENT_PROJECT_HOOK =
   '#!/bin/bash\n# current project hook\nWORKTREE=".gan-state/runs/$GAN_RUN_ID/worktree"\nexit 0\n';
 
@@ -183,17 +217,25 @@ describe('gan hooks status', () => {
     expect(r.stdout.endsWith('\n')).toBe(true);
     expect(r.stdout).toContain('\n  "');
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
-    // Top-level keys are sorted.
+
     const keys = Object.keys(parsed);
     expect(keys).toEqual([...keys].sort());
-    // Idempotent re-emit through the same path.
+
     const again = await runGan(['hooks', 'status', '--json'], { cwd, extraEnv: { HOME: home } });
     expect(again.stdout).toBe(r.stdout);
   });
 
+  // Security-critical: `hooks status` must treat hook files as inert text, never
+  // execute them. The bait hook contains command substitutions that would
+  // `touch` a sentinel if the body were ever evaluated by a shell; the test
+  // both asserts the sentinel was NOT created (no code execution) and that the
+  // embedded `.gan/` token still drives the legacy hint (classification by
+  // string match, not by running the file).
   it('robustness: shell-injection-bait + .gan/ token → legacy hint, no side-effect, no crash', async () => {
     const home = makeTmpDir('gan-hooks-home-');
     const cwd = makeTmpDir('gan-hooks-cwd-');
+    // Sentinel path lives in its own temp dir; its (non-)existence is the proof
+    // of whether the bait ran.
     const sentinel = path.join(makeTmpDir('gan-hooks-sentinel-'), 'pwned');
     seedHook(home, userHookHeader(CURRENT_VERSION));
     const bait =
@@ -203,6 +245,7 @@ describe('gan hooks status', () => {
     seedHook(cwd, bait);
     const r = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
     expect(r.exitCode).toBe(0);
+    // The load-bearing assertion: the bait's `touch` never ran.
     expect(existsSync(sentinel)).toBe(false);
     expect(r.stdout).toContain('rm .claude/hooks/gan-confine.sh');
   });
@@ -211,7 +254,8 @@ describe('gan hooks status', () => {
     const home = makeTmpDir('gan-hooks-home-');
     seedHook(home, userHookHeader(CURRENT_VERSION));
 
-    // 5 MB of repeated text plus a .gan/ token.
+    // 5 MiB hook body: stresses the reader/classifier against a pathologically
+    // large file (with a trailing `.gan/` line so it still classifies as legacy).
     const bigCwd = makeTmpDir('gan-hooks-cwd-');
     const big = 'x'.repeat(5 * 1024 * 1024) + '\nif [[ "$p" == *.gan/* ]]; then :; fi\n';
     seedHook(bigCwd, big);
@@ -219,7 +263,9 @@ describe('gan hooks status', () => {
     expect(bigR.exitCode).toBe(0);
     expect(bigR.stderr).toBe('');
 
-    // Binary / NUL-byte content.
+    // Binary/NUL-byte hook body: must be read and classified as a present
+    // project hook without choking on non-UTF-8 bytes. Written via a raw Buffer
+    // (not seedHook) so the NUL/high bytes reach disk verbatim.
     const binCwd = makeTmpDir('gan-hooks-cwd-');
     const binDir = path.join(binCwd, '.claude', 'hooks');
     mkdirSync(binDir, { recursive: true });
@@ -233,6 +279,9 @@ describe('gan hooks status', () => {
     expect(binR.stdout).toContain('Project-tier override:');
   });
 
+  // A hook present but missing the "Source of truth: ... version" line must
+  // report present=true with authoredVersion=null (unknown) rather than throwing
+  // on the absent version.
   it('corrupted header: present user-tier hook with no version line → unknown, not a crash', async () => {
     const home = makeTmpDir('gan-hooks-home-');
     const cwd = makeTmpDir('gan-hooks-cwd-');
@@ -245,10 +294,6 @@ describe('gan hooks status', () => {
     expect(parsed.userTier.present).toBe(true);
     expect(parsed.userTier.authoredVersion).toBe(null);
   });
-
-  // ---------------------------------------------------------------------
-  // F7 slice 3 — Active-run confinement zones (GAN_WORKTREE / GAN_RUN_DIR).
-  // ---------------------------------------------------------------------
 
   it('F7: with GAN_WORKTREE / GAN_RUN_DIR set, the human surface reports the resolved zones', async () => {
     const home = makeTmpDir('gan-hooks-home-');
@@ -302,7 +347,7 @@ describe('gan hooks status', () => {
     const home = makeTmpDir('gan-hooks-home-');
     const cwd = makeTmpDir('gan-hooks-cwd-');
     seedHook(home, userHookHeader(CURRENT_VERSION));
-    // No GAN_* vars in the env.
+
     const r = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
@@ -319,6 +364,9 @@ describe('gan hooks status', () => {
     expect(parsed.runZones.runDir).toBe(null);
   });
 
+  // Partial run env: GAN_RUN_ID set but the worktree/run-dir vars absent. The
+  // run id is surfaced while the two unset zones report null — a partial
+  // environment must degrade gracefully, not crash.
   it('F7: a run-id with the zone vars unset reports the run id but unset zones (no crash)', async () => {
     const home = makeTmpDir('gan-hooks-home-');
     const cwd = makeTmpDir('gan-hooks-cwd-');

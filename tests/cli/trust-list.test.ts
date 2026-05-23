@@ -1,9 +1,17 @@
 /**
- * R5 sprint 4 — `gan trust list`.
+ * End-to-end tests for `gan trust list`.
  *
- * Verifies the empty-cache human surface, the JSON shape, and the
- * approve-then-list end-to-end.
+ * `trust list` enumerates every approved project from the trust cache. These
+ * tests verify the empty-cache surface ("No trust approvals found." / an empty
+ * `approvals` array), that an approval made via `trust approve` then appears in
+ * the listing with its hash and timestamp, that the human surface renders each
+ * entry's projectRoot/hash/approved-at, and that the `--json` form is
+ * byte-deterministic across runs.
+ *
+ * Isolation: each test uses a throwaway HOME so the cache it lists is its own,
+ * independent of other tests and of the developer's real ~/.claude.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,6 +34,7 @@ afterEach(() => {
   }
 });
 
+// Isolated HOME per test so the listed trust cache starts empty.
 function makeTmpHome(): string {
   const d = mkdtempSync(path.join(tmpdir(), 'gan-cli-trust-list-home-'));
   tmpDirs.push(d);
@@ -91,6 +100,8 @@ describe('gan trust list', () => {
     });
     const r = await runGan(['trust', 'list'], { extraEnv: { HOME: home } });
     expect(r.exitCode).toBe(0);
+    // `/m` (multiline) so `^- ` matches a bullet at the start of any line, not
+    // only the first — the listing renders one bulleted entry per approval.
     expect(r.stdout).toMatch(/^- /m);
     expect(r.stdout).toMatch(/hash:\s+sha256:/);
     expect(r.stdout).toMatch(/approved at:/);

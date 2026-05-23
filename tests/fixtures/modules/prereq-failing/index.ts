@@ -5,5 +5,4 @@
  * check fails first and the loader throws. The file exists so the
  * fixture's directory shape mirrors the real module layout.
  */
-
 export const sentinel = 'prereq-failing/index.ts loaded' as const;

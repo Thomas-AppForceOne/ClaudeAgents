@@ -1,18 +1,17 @@
+
+
 /**
- * R3 sprint 1 — F2 error code → CLI exit code map.
+ * The CLI's process-exit-code vocabulary and the mapping from internal error
+ * codes to it.
  *
- * The map is locked in PROJECT_CONTEXT.md (R3-locked CLI exit-code map):
+ * Exit codes are part of the CLI's contract with scripts and CI, so the set is
+ * fixed and meaningful: callers branch on them without parsing output. This
+ * module owns the numeric constants and the single translation table from a
+ * `ConfigServerError.code` (a string) to the exit code it should produce, so
+ * every command surfaces the same failure as the same code.
  *
- *   0    success
- *   1    generic failure
- *   2    validation failure (config issues; structured report on stdout)
- *   3    SchemaMismatch
- *   4    InvariantViolation
- *   5    API/server unreachable (R1 dependency missing or unreadable)
- *   64   bad CLI arguments
- *
- * Per the project conventions, unmapped error codes default to 1 (generic
- * failure) so a future F2 error never accidentally surfaces as 0.
+ * The values follow convention: 0 success, 1 generic, 2–5 specific failure
+ * classes, and 64 (`EX_USAGE` from sysexits) for bad CLI arguments.
  */
 
 export const EXIT_OK = 0;
@@ -23,14 +22,19 @@ export const EXIT_INVARIANT_VIOLATION = 4;
 export const EXIT_API_UNREACHABLE = 5;
 export const EXIT_BAD_ARGS = 64;
 
+// Maps each known internal error code to its exit code. Several distinct error
+// codes intentionally collapse onto one exit code (e.g. PathEscape and
+// CacheEnvConflict both surface as EXIT_INVARIANT_VIOLATION): the exit code
+// classifies the *kind* of failure for scripts, while the error code carries
+// the specific reason in the printed/JSON payload. Frozen so it cannot be
+// mutated at runtime, and module-private — exitCodeFor is the only reader.
 const TABLE: Readonly<Record<string, number>> = Object.freeze({
   ValidationFailed: EXIT_VALIDATION,
   SchemaMismatch: EXIT_SCHEMA_MISMATCH,
   InvariantViolation: EXIT_INVARIANT_VIOLATION,
-  // API unreachable / library missing. R1 surfaces this as a thrown error
-  // when its package.json cannot be read; the dispatcher maps it here.
+
   ApiUnreachable: EXIT_API_UNREACHABLE,
-  // F2-cataloged codes that map to known buckets.
+
   CacheEnvConflict: EXIT_INVARIANT_VIOLATION,
   PathEscape: EXIT_INVARIANT_VIOLATION,
   UnknownStack: EXIT_VALIDATION,
@@ -45,8 +49,16 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
 });
 
 /**
- * Return the exit code for a given F2 error code (or `undefined` for "no
- * error → 0"). Unknown codes return `EXIT_GENERIC` per the locked rule.
+ * Translate an internal error code into the process exit code to return.
+ *
+ * @param errorCode a `ConfigServerError.code` string, or `undefined` for the
+ *   no-error case.
+ * @returns `EXIT_OK` when `errorCode` is `undefined`; the mapped code when the
+ *   code is in {@link TABLE}; otherwise `EXIT_GENERIC` — an unrecognised code
+ *   is deliberately treated as a generic failure rather than thrown, so a new
+ *   or unmapped error never crashes the dispatcher. `hasOwnProperty` is used
+ *   (not `in`) so a code colliding with an inherited `Object` property name
+ *   cannot accidentally match.
  */
 export function exitCodeFor(errorCode: string | undefined): number {
   if (errorCode === undefined) return EXIT_OK;
@@ -57,10 +69,11 @@ export function exitCodeFor(errorCode: string | undefined): number {
 }
 
 /**
- * F2-shaped issue, narrowed to the fields this module needs. We re-declare
- * the interface here (rather than importing from `validation/schema-check`)
- * so this file stays a leaf module: it owns the exit-code table without
- * pulling in any validation runtime.
+ * Minimal shape of a validation issue this module needs to classify it.
+ *
+ * @property code the issue's error code (e.g. `InvariantViolation`).
+ * @property severity `error` or `warning`; when omitted it is treated as
+ *   `error` (the conservative default — see {@link exitCodeForIssues}).
  */
 export interface IssueLike {
   code: string;
@@ -68,27 +81,16 @@ export interface IssueLike {
 }
 
 /**
- * Map a list of issues from `validateAll()` to a single CLI exit code.
+ * Reduce a list of validation issues to a single exit code.
  *
- * The rules below match the contract for `gan validate`:
+ * Only `error`-severity issues affect the result; `warning`s never fail the
+ * process. An absent `severity` is treated as `error`.
  *
- *   - empty list                  → `EXIT_OK` (0)
- *   - any `InvariantViolation`    → `EXIT_INVARIANT_VIOLATION` (4)
- *   - any other issue (incl. SchemaMismatch) → `EXIT_VALIDATION` (2)
- *
- * `InvariantViolation` wins because invariant failures are a strict
- * superset of "this project will not work" — a project that violates an
- * invariant always has a more important problem than one that merely has
- * a schema mismatch in one file.
- *
- * Note: `EXIT_SCHEMA_MISMATCH` (3) is reserved for non-issue paths — e.g.
- * a `schemaVersion` mismatch surfacing as a `ConfigServerError` from the
- * library. Per-file `SchemaMismatch` issues from `validateAll()` flow
- * through the validation bucket because the report on stdout already
- * names the offending file and field.
- *
- * Issues with `severity === 'warning'` are ignored for exit-code purposes:
- * warnings are advisory (per C2's empty-scope rule, dispatch invariants).
+ * @param issues the issues produced by a validation run.
+ * @returns `EXIT_OK` when there are no error-severity issues; otherwise
+ *   `EXIT_INVARIANT_VIOLATION` if any error is an `InvariantViolation` (the
+ *   more severe class is reported when both are present), else
+ *   `EXIT_VALIDATION`.
  */
 export function exitCodeForIssues(issues: readonly IssueLike[]): number {
   const errors = issues.filter((i) => (i.severity ?? 'error') === 'error');

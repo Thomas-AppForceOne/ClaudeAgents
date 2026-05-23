@@ -1,3 +1,11 @@
+// Verifies atomicWriteFile's crash-safety contract: it writes via a temp file
+// plus rename so a reader never sees a half-written file, creates missing
+// parent dirs, replaces existing files in place, and — the key invariant —
+// leaves NO `*.tmp.*` sibling behind, whether the write succeeds or fails.
+// The failure cases (unwritable target, uncreatable parent, rename onto a
+// directory) assert that on error the original content survives untouched and
+// no temp turd is orphaned. The POSIX-permission cases are skipped on win32
+// where chmod semantics differ.
 import { describe, expect, it, afterEach } from 'vitest';
 import {
   chmodSync,
@@ -25,7 +33,8 @@ function makeTmp(): string {
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) {
     try {
-      // Restore directory perms in case a test removed write access.
+      // Restore writable perms first: some tests chmod the dir to 0o555 to
+      // force a write failure, and rmSync cannot recurse into a read-only dir.
       chmodSync(d, 0o755);
     } catch {
       // Ignore.
@@ -66,6 +75,8 @@ describe('atomicWriteFile', () => {
     const dir = makeTmp();
     const target = path.join(dir, 'sibling.md');
     atomicWriteFile(target, 'data\n');
+    // The temp file used during the write must have been renamed away, not
+    // left lying next to the target.
     const remaining = readdirSync(dir);
     expect(remaining).toContain('sibling.md');
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
@@ -73,13 +84,14 @@ describe('atomicWriteFile', () => {
 
   it('throws ConfigServerError when the target path itself is unwritable', () => {
     if (platform() === 'win32') {
-      // POSIX permission semantics; skip.
+      // POSIX dir-permission trick does not apply on Windows; skip.
       return;
     }
     const dir = makeTmp();
     const target = path.join(dir, 'cant-write.md');
     writeFileSync(target, 'original\n', 'utf8');
-    // Drop write permission on the directory: rename will fail.
+
+    // Read-only dir blocks creating the temp file / renaming over the target.
     chmodSync(dir, 0o555);
 
     let threw = false;
@@ -91,11 +103,13 @@ describe('atomicWriteFile', () => {
     }
     expect(threw).toBe(true);
 
-    // Restore perms so the cleanup hook can read the dir.
+    // Re-enable writes so the assertions below (and cleanup) can read the dir.
     chmodSync(dir, 0o755);
-    // Original file is intact.
+
+    // Crash-safety: the original content is intact (no partial overwrite) and
+    // no temp file leaked.
     expect(readFileSync(target, 'utf8')).toBe('original\n');
-    // No temp leftovers.
+
     const remaining = readdirSync(dir);
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });
@@ -113,16 +127,15 @@ describe('atomicWriteFile', () => {
       expect(e).toBeInstanceOf(ConfigServerError);
     }
     expect(threw).toBe(true);
-    // Restore so cleanup can recurse.
+
     chmodSync(dir, 0o755);
   });
 
   it('on rename failure (target is a directory, not a file) leaves original intact + no temp leftovers', async () => {
     const dir = makeTmp();
-    // The "target" we hand in is actually a directory. `renameSync(tmp,
-    // target)` will fail because Node refuses to replace a non-empty
-    // directory. We pre-populate the target directory so the failure mode
-    // is a rename error rather than a directory-replacement.
+
+    // Target path is an existing directory, so the final rename(tmp -> target)
+    // fails. A sentinel file inside proves the directory was not clobbered.
     const target = path.join(dir, 'block-dir');
     const { mkdirSync } = await import('node:fs');
     mkdirSync(target);
@@ -137,10 +150,8 @@ describe('atomicWriteFile', () => {
     }
     expect(threw).toBe(true);
 
-    // Original directory still has its sentinel file intact.
     expect(readFileSync(path.join(target, 'sentinel'), 'utf8')).toBe('sentinel\n');
 
-    // No `*.tmp.*` leftovers in the parent dir.
     const remaining = readdirSync(dir);
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });

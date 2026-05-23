@@ -1,22 +1,14 @@
-/**
- * Per-module project-config loader (M2).
- *
- * Modules expose project-specific config via
- * `<projectRoot>/.claude/gan/modules/<name>.yaml`. This loader parses
- * that file (when present) into a plain object so the resolved-config
- * layer can spread its fields onto `ResolvedConfig.modules.<name>`.
- *
- * The format is plain YAML (not the `---`-bracketed YAML block used by
- * stack/overlay markdown files), so we use the `yaml` package directly
- * rather than the `yaml-block-parser` helper. The package is already
- * a project dependency (used by `yaml-block-parser`); this loader adds
- * no new runtime dependency.
- *
- * Returns `null` when the file does not exist (the module simply has
- * no project-tier config). Throws via the central error factory when
- * the file is unreadable or fails to parse.
- */
 
+
+/**
+ * Locate and load a module's per-project YAML config.
+ *
+ * Module config lives under `<projectRoot>/.claude/gan/modules/<name>.yaml` and
+ * is optional: a module with no config file is a normal state (the absence
+ * returns `null`, not an error). Distinct from module *state* (which the
+ * framework writes) and the module *manifest* (which ships with the module) —
+ * this is user-authored config the module reads at runtime.
+ */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -24,16 +16,30 @@ import YAML from 'yaml';
 
 import { createError } from '../errors.js';
 
-/** Resolve the on-disk per-module config path for a module name. */
+/**
+ * Build the absolute path to module `name`'s project config file. Pure path
+ * construction — does not check existence.
+ *
+ * @param projectRoot the project directory.
+ * @param name the module name (used as the YAML filename stem).
+ * @returns `<projectRoot>/.claude/gan/modules/<name>.yaml`.
+ */
 export function moduleConfigPath(projectRoot: string, name: string): string {
   return path.join(projectRoot, '.claude', 'gan', 'modules', `${name}.yaml`);
 }
 
 /**
- * Load and parse `<projectRoot>/.claude/gan/modules/<name>.yaml`. Returns
- * `null` when the file is absent. Returns the parsed YAML body
- * otherwise. Throws `MalformedInput` / `InvalidYAML` on read or parse
- * failure (no silent swallowing).
+ * Load and parse module `name`'s project config.
+ *
+ * @param projectRoot the project directory.
+ * @param name the module name.
+ * @returns the parsed YAML value (any YAML-representable shape), or `null` when
+ *   no config file exists — an absent file is a supported, non-error state.
+ *
+ * Failure modes (THROWN as `ConfigServerError`, never returned): a read error
+ * on an existing file → code `MalformedInput`; content that is not valid YAML →
+ * code `InvalidYAML`. Both fold the underlying error text into the message and
+ * carry the offending `file` path.
  */
 export function loadModuleConfig(projectRoot: string, name: string): unknown {
   const file = moduleConfigPath(projectRoot, name);

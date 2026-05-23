@@ -1,23 +1,14 @@
-/**
- * F8 Sprint 2 — prune-on-load reclamation (spec §3).
- *
- * A shared registry outlives the worktrees it tracks, so it accumulates
- * entries for worktrees that have been removed. On every load, entries
- * whose keyed worktree path no longer exists on disk are pruned and their
- * host ports freed — reusing M2's existing "release the entry" deletion
- * path — so the freed port becomes re-allocatable.
- *
- * These tests assert: given a registry holding one entry whose worktree
- * directory was removed and one whose directory still exists, a load
- *   (a) prunes ONLY the absent-worktree entry,
- *   (b) leaves the live entry untouched, and
- *   (c) lets the pruned entry's port be registered for a DIFFERENT
- *       worktree without a PortInUse error.
- *
- * Worktree existence is exercised both through the injectable probe (for
- * deterministic control) and through the real filesystem (default probe),
- * so the reclamation is proven end-to-end.
- */
+// F8 prune-on-load: constructing a PortRegistry reclaims ports held by worktrees that
+// no longer exist on disk, so a deleted worktree cannot strand its port forever. The
+// suite verifies the prune is surgical and durable: only the absent-worktree entry is
+// dropped (the live one is untouched), the freed port can immediately be re-registered,
+// the prune is persisted back to disk (not just held in memory), and — critically —
+// when every worktree still exists there is NO mutation (the on-disk bytes must be
+// unchanged, guarding against a spurious rewrite on every load). One test injects a
+// `worktreeExists` probe for determinism; another exercises the real filesystem probe
+// by actually rm-ing a worktree directory.
+//
+// Staged fake install + temp module-state store keep the registry in a sandbox.
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -41,6 +32,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
+// Stage a throwaway install: real package.json (for package-root detection) plus a
+// docker manifest declaring the port-registry state key, so the registry resolves.
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'f8-prune-modroot-'));
   writeFileSync(
@@ -103,20 +96,18 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     mkdirSync(liveWt, { recursive: true });
     mkdirSync(goneWt, { recursive: true });
 
-    // Seed both entries with the real-filesystem registry (both dirs exist).
     const seed = new PortRegistry(scratch);
     seed.register(liveWt, 8080, 'live-app');
     seed.register(goneWt, 8081, 'gone-app');
 
-    // Now simulate goneWt's worktree being removed: a probe that reports
-    // every path present EXCEPT goneWt's canonical key.
+    // Inject a probe that reports every path as existing EXCEPT goneWt's canonical key,
+    // so the prune is deterministic without having to delete a real directory. The probe
+    // is keyed by canonical path because that is how entries are stored.
     const goneKey = canonicalizePath(goneWt);
     const reg = new PortRegistry(scratch, {
       worktreeExists: (p) => p !== goneKey,
     });
 
-    // First load triggers the prune. The live entry survives; the gone
-    // entry is removed.
     expect(reg.lookup(liveWt)).toEqual({ port: 8080, containerName: 'live-app' });
     expect(reg.lookup(goneWt)).toBeNull();
 
@@ -124,13 +115,14 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     expect(all).toHaveLength(1);
     expect(all[0].worktreePath).toBe(canonicalizePath(liveWt));
 
-    // The freed port (8081) is now re-allocatable to a different worktree
-    // without a PortInUse error.
+    // Port 8081 was freed by the prune, so a brand-new worktree may now claim it
+    // without colliding — the whole point of reclaiming absent-worktree ports.
     const otherWt = path.join(scratch, 'other-worktree');
     mkdirSync(otherWt, { recursive: true });
     expect(() => reg.register(otherWt, 8081, 'other-app')).not.toThrow();
     expect(reg.lookup(otherWt)).toEqual({ port: 8081, containerName: 'other-app' });
-    // The live entry is still intact and unchanged after the re-allocation.
+
+    // The live entry survived the prune and the subsequent re-registration unscathed.
     expect(reg.lookup(liveWt)).toEqual({ port: 8080, containerName: 'live-app' });
   });
 
@@ -144,16 +136,15 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     seed.register(liveWt, 9000, 'live-app');
     seed.register(goneWt, 9001, 'gone-app');
 
-    // Genuinely remove the gone worktree's directory from disk.
+    // No injected probe here: physically delete goneWt so the DEFAULT filesystem
+    // existence check is what drives the prune on the next construction.
     rmSync(goneWt, { recursive: true, force: true });
     expect(existsSync(goneWt)).toBe(false);
 
-    // Default probe (no injection): a fresh load prunes the absent entry.
     const reg = new PortRegistry(scratch);
     expect(reg.lookup(goneWt)).toBeNull();
     expect(reg.lookup(liveWt)).toEqual({ port: 9000, containerName: 'live-app' });
 
-    // The freed port is re-allocatable.
     const otherWt = path.join(scratch, 'other-worktree');
     mkdirSync(otherWt, { recursive: true });
     expect(() => reg.register(otherWt, 9001, 'other-app')).not.toThrow();
@@ -171,10 +162,10 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
 
     rmSync(goneWt, { recursive: true, force: true });
 
-    // Trigger the prune via a load.
+    // Construct + getAll() to trigger the load-time prune, then discard the instance;
+    // the reclaim must be flushed to disk, so we re-read the file rather than the object.
     new PortRegistry(scratch).getAll();
 
-    // The on-disk file no longer contains the pruned entry.
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
     const onDisk = JSON.parse(readFileSync(filePath, 'utf8')) as {
       entries: Record<string, unknown>;
@@ -198,7 +189,9 @@ describe('F8 prune-on-load frees absent-worktree ports', () => {
     const filePath = moduleStatePath(scratch, 'docker', 'port-registry');
     const before = readFileSync(filePath, 'utf8');
 
-    // A load with all worktrees present must not rewrite the file.
+    // Both worktrees still exist, so a load must NOT rewrite the file — comparing the
+    // full text before/after catches a spurious re-serialisation that prune-on-load
+    // could otherwise introduce on every construction.
     new PortRegistry(scratch).getAll();
 
     expect(readFileSync(filePath, 'utf8')).toBe(before);

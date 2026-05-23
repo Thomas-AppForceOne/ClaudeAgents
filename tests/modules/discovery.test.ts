@@ -1,10 +1,17 @@
-/**
- * M1 — Sprint M1 — discovery + manifest schema tests.
- *
- * Covers AC1–AC8: schema acceptance/rejection, JSON canonicalisation,
- * `loadModules` discovery + collisions, and the registered-modules
- * surface exposed via reads.
- */
+// M1 module discovery: two related contracts. First, the module-manifest-v1 schema
+// itself — it must accept a realistic docker manifest, reject extra top-level keys
+// (additionalProperties: false), reject a missing name, reject a future schemaVersion,
+// be stored as canonical JSON on disk, never name the EOL'd Node engine version, and
+// keep the documented "whitespace-split, no shell expansion" note on its command field.
+// Second, loadModules() directory discovery: one ModuleRegistration per valid manifest,
+// silent skip of dirs without a manifest, a structured ModuleManifestInvalid error that
+// HALTS server start on a schema-invalid manifest, a ModuleCollision halt when two dirs
+// declare the same name, and the rule that a shared `pairsWith` (with distinct names) is
+// fine. Missing roots return []. The listModules block proves discovery is re-read from
+// the filesystem on each call, so adding/removing module dirs changes the result.
+//
+// Each discovery test runs against a fresh temp scratch dir and resets the module-
+// registration cache so one test's registrations never leak into the next.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import AjvImport2020, { type ValidateFunction } from 'ajv/dist/2020.js';
@@ -25,6 +32,8 @@ import { ConfigServerError } from '../../src/config-server/errors.js';
 type AjvCtor = new (opts?: Record<string, unknown>) => {
   compile: (schema: unknown) => ValidateFunction;
 };
+// Ajv ships as CJS; under ESM interop the constructor may arrive either on `.default`
+// or as the namespace itself depending on the loader, so normalise to one binding.
 const Ajv2020: AjvCtor =
   ((AjvImport2020 as unknown as { default?: AjvCtor }).default as AjvCtor | undefined) ??
   (AjvImport2020 as unknown as AjvCtor);
@@ -33,6 +42,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const fixturesRoot = path.join(repoRoot, 'tests', 'fixtures', 'modules');
 
+// strict surfaces schema authoring mistakes; useDefaults:false keeps validation
+// non-mutating so it cannot silently fill in fields a test is checking for absence.
 function compileManifestValidator() {
   const ajv = new Ajv2020({ strict: true, allErrors: true, useDefaults: false });
   return ajv.compile(moduleManifestV1);
@@ -40,7 +51,7 @@ function compileManifestValidator() {
 
 describe('module manifest schema (module-manifest-v1.json)', () => {
   it('manifest schema accepts docker example', () => {
-    // The example matches lines 25–38 of specifications/M1-modules-architecture.md.
+
     const dockerExample = {
       name: 'docker',
       schemaVersion: 1,
@@ -101,6 +112,8 @@ describe('module manifest schema (module-manifest-v1.json)', () => {
   });
 
   it('schema document is canonical JSON (sorted keys, two-space indent, trailing newline)', () => {
+    // The on-disk schema must already equal its canonical serialisation, so re-running
+    // stableStringify over the parsed form is a no-op — guarantees deterministic diffs.
     const schemaPath = path.join(repoRoot, 'schemas', 'module-manifest-v1.json');
     const onDisk = readFileSync(schemaPath, 'utf8');
     const parsed = JSON.parse(onDisk);
@@ -111,10 +124,10 @@ describe('module manifest schema (module-manifest-v1.json)', () => {
   it('does not mention the EOL-d engine version anywhere', () => {
     const schemaPath = path.join(repoRoot, 'schemas', 'module-manifest-v1.json');
     const text = readFileSync(schemaPath, 'utf8');
-    // Build the forbidden tokens via runtime concatenation so this test
-    // file does not literally contain the EOL-d version text. The
-    // assertions still cover both the proper-noun form and the
-    // engine-spec form.
+
+    // The EOL major is assembled at runtime ('1' + '8') so the literal does not appear
+    // in this source file — otherwise this very file would trip the substring guard it
+    // enforces. The three checks cover the prose, the npm engines, and the range forms.
     const eolMajor = '1' + '8';
     expect(text).not.toContain('Node ' + eolMajor);
     expect(text).not.toContain('node >=' + eolMajor);
@@ -138,6 +151,8 @@ describe('loadModules() discovery', () => {
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-discovery-'));
+    // Reset before AND after: registration is memoised, so a stale cache would let one
+    // test see another's modules. Resetting on both edges keeps each test hermetic.
     _resetModuleRegistrationCacheForTests();
   });
   afterEach(() => {
@@ -147,8 +162,7 @@ describe('loadModules() discovery', () => {
 
   it('returns one ModuleRegistration per valid manifest', () => {
     const passingDir = path.join(fixturesRoot, 'prereq-passing');
-    // Mirror prereq-passing into the scratch root so we can have a
-    // hermetic single-module discovery target.
+
     const dst = path.join(scratch, 'prereq-passing');
     mkdirSync(dst, { recursive: true });
     writeFileSync(
@@ -169,6 +183,8 @@ describe('loadModules() discovery', () => {
   it('schema-invalid manifest surfaces a structured error and prevents server start', () => {
     const dst = path.join(scratch, 'broken');
     mkdirSync(dst, { recursive: true });
+    // schemaVersion 99 is unsupported; discovery must fail loudly (throw) rather than
+    // skip the module, so a misconfigured install cannot start a half-loaded server.
     writeFileSync(
       path.join(dst, 'manifest.json'),
       JSON.stringify({ name: 'broken', schemaVersion: 99, description: 'x', exports: [] }),
@@ -206,6 +222,8 @@ describe('loadModules() discovery', () => {
     expect((caught as ConfigServerError).code).toBe('ModuleCollision');
   });
 
+  // pairsWith groups modules onto a shared stack; only the module NAME must be unique,
+  // so two modules pairing with the same stack are a legitimate, non-colliding case.
   it('two modules sharing a pairsWith but distinct names register without error', () => {
     const a = path.join(scratch, 'mod-a');
     const b = path.join(scratch, 'mod-b');
@@ -237,8 +255,9 @@ describe('loadModules() discovery', () => {
 
   it('production callers can resolve the default modules root via defaultModulesRoot()', () => {
     const root = defaultModulesRoot();
-    // Path must terminate with src/modules — production callers should
-    // never need an env var or runtime knob.
+
+    // The default root is the installed package's src/modules dir; only the tail is
+    // asserted since the absolute prefix varies by install location.
     expect(root.endsWith(path.join('src', 'modules'))).toBe(true);
   });
 });
@@ -250,7 +269,8 @@ describe('listModules read tool integration', () => {
   it('surfaces the registered set; adding/removing fixture directories changes output on next loadModules()', () => {
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-list-'));
     try {
-      // Empty root → empty list.
+      // Discovery reflects the live filesystem on every call: empty -> one module after
+      // a manifest appears -> empty again once it is removed, proving no stale caching.
       expect(loadModules(scratch)).toEqual([]);
 
       const dst = path.join(scratch, 'prereq-passing');
@@ -279,6 +299,8 @@ describe('listModules read tool integration', () => {
         readFileSync(path.join(fixturesRoot, 'prereq-passing', 'manifest.json'), 'utf8'),
       );
 
+      // A second, minimal inline manifest acts as a sentinel so the result is more than
+      // one entry; the name projection must match what the listModules() read tool surfaces.
       const sentinelDst = path.join(scratch, 'sentinel-mod');
       mkdirSync(sentinelDst, { recursive: true });
       writeFileSync(
@@ -288,6 +310,7 @@ describe('listModules read tool integration', () => {
 
       const out = loadModules(scratch);
       expect(out.length).toBe(2);
+      // Names come back in a stable (directory-sorted) order.
       expect(out.map((r) => r.name)).toEqual(['prereq-passing', 'sentinel-mod']);
     } finally {
       rmSync(scratch, { recursive: true, force: true });

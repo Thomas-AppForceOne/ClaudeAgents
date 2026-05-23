@@ -1,6 +1,12 @@
-/**
- * R-post sprint 6 — `gan stacks available` spawn-based tests.
- */
+// End-to-end tests for `gan stacks available`, spawning the built CLI against a
+// fake package root seeded with built-in stack files. They lock the human
+// surface (a NAME/VERSION/DESCRIPTION table, the "(no built-in stacks)" empty
+// message, locale-order sorting, and the skip-malformed-with-warning behaviour)
+// and the `--json` surface (a `{ stacks: [...] }` document with deterministic
+// per-entry key order). They also pin the exit-code contract: 0 on success
+// including the empty case, but 2 with a MissingFile error when the stacks
+// directory does not exist (absent dir is an error; present-but-empty is not).
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,6 +14,7 @@ import path from 'node:path';
 
 import { runGan } from '../helpers/spawn.js';
 
+// Temp package roots created per test, removed in teardown.
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -20,18 +27,23 @@ afterEach(() => {
   }
 });
 
+// A fresh empty package root; tests pass it via GAN_PACKAGE_ROOT_OVERRIDE so the
+// CLI reads built-in stacks from here instead of the real install.
 function makeFakePackageRoot(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'gan-test-stacks-available-'));
   tmpDirs.push(dir);
   return dir;
 }
 
+// Write a stack file into `<packageRoot>/stacks/`, creating the dir on demand.
 function writeStack(packageRoot: string, fileName: string, body: string): void {
   const stacksDir = path.join(packageRoot, 'stacks');
   mkdirSync(stacksDir, { recursive: true });
   writeFileSync(path.join(stacksDir, fileName), body, 'utf8');
 }
 
+// Build a schema-valid stack file body (frontmatter + a conventions heading).
+// Factored out so each test seeds a known-good stack and varies only name/desc.
 const VALID_STACK = (name: string, description: string) =>
   [
     '---',
@@ -87,7 +99,10 @@ describe('gan stacks available — human surface', () => {
   it('skips malformed entries and emits a stderr warning', async () => {
     const pkg = makeFakePackageRoot();
     writeStack(pkg, 'good.md', VALID_STACK('good', 'fine'));
-    // Malformed: missing closing marker.
+
+    // Deliberately malformed: an unterminated frontmatter block (no closing
+    // `---`). One bad file must not abort the listing — the good entry still
+    // prints and the bad one is reported as a warning, not a hard failure.
     writeStack(pkg, 'broken.md', '---\nname: broken\nschemaVersion: 1\n');
     const r = await runGan(['stacks', 'available'], {
       extraEnv: { GAN_PACKAGE_ROOT_OVERRIDE: pkg },
@@ -108,6 +123,9 @@ describe('gan stacks available — human surface', () => {
       extraEnv: { GAN_PACKAGE_ROOT_OVERRIDE: pkg },
     });
     expect(r.exitCode).toBe(0);
+    // Drop the header row (slice(1)), then take the first whitespace-delimited
+    // token of each line as the name. Output order must be locale-sorted by
+    // name, independent of the on-disk filenames (z.md/a.md/m.md here).
     const lines = r.stdout
       .split('\n')
       .slice(1)
@@ -134,7 +152,9 @@ describe('gan stacks available --json', () => {
     expect(parsed.stacks[0]!.schemaVersion).toBe(1);
     expect(parsed.stacks[0]!.description).toBe('desc-a');
     expect(path.isAbsolute(parsed.stacks[0]!.path)).toBe(true);
-    // Sorted keys: description, name, path, schemaVersion.
+
+    // Per-entry keys must serialise in a fixed, sorted order so the JSON is
+    // byte-stable for machine consumers — compare the literal key sequence.
     const firstEntry = JSON.stringify(Object.keys(parsed.stacks[0]!));
     expect(firstEntry).toBe(JSON.stringify(['description', 'name', 'path', 'schemaVersion']));
   });

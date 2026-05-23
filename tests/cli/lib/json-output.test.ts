@@ -1,18 +1,10 @@
-/**
- * R3 sprint 2 — `emitJson` unit test.
- *
- * Locks the F3 determinism contract for the CLI's single JSON emitter:
- *   - sorted keys at every depth;
- *   - two-space indent;
- *   - trailing newline;
- *   - the helper imports R1's `stableStringify` (no second sorted-key
- *     serialiser anywhere in `src/cli/`).
- *
- * The single-implementation rule is also enforced by the contract's
- * `grep` checks (`grep -rn "stableStringify" src/cli/` ≥ 1) but we
- * verify here that the helper does in fact route through that import
- * by comparing its output to the underlying primitive.
- */
+// Tests for `emitJson`, the CLI's `--json` serializer. The contract: byte-for-
+// byte deterministic output (recursively sorted keys, two-space indent, a single
+// trailing newline) so machine consumers and golden-file comparisons are stable.
+// The load-bearing test is the byte-identity check against `stableStringify`:
+// `emitJson` must *be* the determinism pin, not a second JSON formatter that
+// could drift from it.
+
 import { describe, expect, it } from 'vitest';
 import { emitJson } from '../../../src/cli/lib/json-output.js';
 import { stableStringify } from '../../../src/config-server/determinism/index.js';
@@ -20,10 +12,13 @@ import { stableStringify } from '../../../src/config-server/determinism/index.js
 describe('emitJson', () => {
   it('produces sorted keys at every depth', () => {
     const out = emitJson({ z: 1, a: 2, m: { y: 1, x: 2 } });
-    // Top level: a < m < z.
+
+    // Assert ordering by substring position rather than re-parsing: the point is
+    // the literal text order, which is what a machine consumer diffs against.
     expect(out.indexOf('"a"')).toBeLessThan(out.indexOf('"m"'));
     expect(out.indexOf('"m"')).toBeLessThan(out.indexOf('"z"'));
-    // Nested: x < y.
+
+    // Nested keys are sorted too, not just the top level.
     expect(out.indexOf('"x"')).toBeLessThan(out.indexOf('"y"'));
   });
 

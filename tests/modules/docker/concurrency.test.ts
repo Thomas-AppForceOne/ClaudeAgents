@@ -1,15 +1,13 @@
-/**
- * M2 — concurrency test (AC13).
- *
- * Spawn 2 in-process clients writing to the same port-registry against
- * a shared registry root, with controlled scheduling (interleaved
- * awaits). Asserts:
- *   (a) writes serialise — the final on-disk JSON contains both
- *       entries.
- *   (b) two entries cannot share a port — PortRegistry refuses
- *       duplicate-port registration with a structured error from the
- *       central factory.
- */
+// Concurrency and uniqueness guarantees for PortRegistry. Two regressions are
+// guarded here: (1) two independent registry instances writing DIFFERENT worktrees
+// interleaved must not lose either write — both entries must survive a reload,
+// proving the read-modify-write persistence does not clobber a sibling's entry;
+// and (2) registering a host port that is already allocated to another worktree
+// must be rejected with a structured PortInUse error, which is the invariant that
+// keeps two worktrees from racing onto the same host port.
+//
+// Tests run against a staged fake install plus a temp module-state store so the
+// shared registry file lives in a sandbox keyed by the scratch repo root.
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -29,12 +27,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 
-/**
- * Stage a fake package root with the docker module's manifest so the
- * M3 `stateKeys` allowlist gate finds `port-registry` as a declared
- * state key. Without this, every PortRegistry write would reject with
- * `UnknownStateKey`.
- */
+// Stage a throwaway install: real package.json (for package-root detection) plus a
+// docker manifest declaring the port-registry state key, so the registry resolves.
 function stageDockerModuleRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'm2-conc-modroot-'));
   writeFileSync(
@@ -68,8 +62,9 @@ describe('PortRegistry concurrency', () => {
 
   beforeEach(() => {
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm2-concurrency-'));
-    // F8: repo-keyed module-state store — `scratch` must be a real repo and
-    // writes go to a throwaway store root.
+
+    // Repo root keys the state path; override package root at the staged install and
+    // reset the memoised caches so the override + manifest take effect.
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     savedOverride = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -93,6 +88,8 @@ describe('PortRegistry concurrency', () => {
   });
 
   it('two clients writing distinct worktrees both land on disk', async () => {
+    // Two separate registry instances (distinct in-memory copies of the state) model
+    // two clients sharing one on-disk file.
     const regA = new PortRegistry(scratch);
     const regB = new PortRegistry(scratch);
 
@@ -101,8 +98,9 @@ describe('PortRegistry concurrency', () => {
     mkdirSync(wtA, { recursive: true });
     mkdirSync(wtB, { recursive: true });
 
-    // Interleaved scheduling: each register is a sync operation, but we
-    // spawn two micro-tasks that both write before the other reads.
+    // The leading `await Promise.resolve()` yields the microtask queue so the two
+    // registrations interleave rather than running strictly in source order —
+    // exercising the read-modify-write path under contention.
     const taskA = (async () => {
       await Promise.resolve();
       regA.register(wtA, 8001, 'app-a');
@@ -113,8 +111,8 @@ describe('PortRegistry concurrency', () => {
     })();
     await Promise.all([taskA, taskB]);
 
-    // The disk state must contain both entries (last writer wins on
-    // conflict, but the keys differ here so both survive).
+    // A third, fresh instance reloads from disk: both writes must be present, so
+    // neither client's persist overwrote the other's entry.
     const reg = new PortRegistry(scratch);
     const all = reg.getAll();
     expect(all).toHaveLength(2);
@@ -128,6 +126,7 @@ describe('PortRegistry concurrency', () => {
     const wtB = path.join(scratch, 'wt-b');
     mkdirSync(wtA, { recursive: true });
     mkdirSync(wtB, { recursive: true });
+    // wtA claims 8080; a second worktree claiming the same host port must be refused.
     reg.register(wtA, 8080, 'app-a');
     let caught: unknown = null;
     try {

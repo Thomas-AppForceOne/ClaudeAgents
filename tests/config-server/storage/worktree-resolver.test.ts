@@ -1,23 +1,24 @@
-/**
- * F7 slice 2 — worktree-aware execution (cases 1a / 1b / 1c).
- *
- * Covers the sprint-2 contract criteria:
- *   - slug-derivation-deterministic
- *   - branch-terminal-component-match
- *   - resolver-1a-reuse-in-place
- *   - resolver-1b-clean-wrap
- *   - resolver-1b-dirty-refuses
- *   - resolver-1c-create
- *   - new-worktree-flag-forces-1c
- *   - progress-workspace-fields-persisted
- *   - default-branch-source-resolved
- *   - git-subprocess-argv-safety
- *
- * Unit tests use the injectable git exec seam (a scriptable fake that records
- * every argv it is handed); a separate integration suite exercises 1b/1c with
- * real `git worktree`. The static half of the security criterion greps the
- * slice's source files at the bottom of this file.
- */
+// Covers workspace resolution — how a /gan run picks (or creates) the git
+// worktree it will work in for a given subject. The resolution cases:
+//   1a (reuse in place): the current checkout already sits on the matching task
+//      branch in a dedicated dir → reuse it, createdByGan false, no new
+//      worktree;
+//   1b (clean wrap): the matching branch is checked out in the MAIN checkout
+//      and the tree is clean → free it by switching main to the default branch
+//      (or detaching when that branch is occupied elsewhere) and wrap the task
+//      branch in a run-scoped worktree;
+//   1c (create): no matching branch → create a fresh task branch + run-scoped
+//      worktree;
+//   plus the dirty-tree refusal (1b with uncommitted changes throws, mutates
+//   nothing, and the message guides the user toward commit/stash/worktree
+//   without leaking implementation names), and --new-worktree forcing 1c.
+// Also pins slug derivation (deterministic, case-insensitive, shell-meta
+// stripped), branch terminal-component matching, default-branch resolution
+// order (origin/HEAD > init.defaultBranch > develop > main > master), and that
+// the recorded workspace path is canonical and prototype-pollution-safe.
+// The behavioural + static-source safety cases pin that hostile subjects reach
+// git as single literal argv elements and that no `worktree add --force` or
+// shell-string exec is ever used.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -59,26 +60,23 @@ afterEach(() => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// A scriptable fake git seam. Each test provides a map from a stable argv-key
-// to a handler returning stdout (or throwing to mimic a non-zero exit). Every
-// call's argv array is captured so tests can assert what git was asked to do.
-// ---------------------------------------------------------------------------
-
 interface FakeGit {
   git: GitExec;
-  /** Every argv array, in call order. */
+
   calls: string[][];
 }
 
+// Builds a fake GitExec that dispatches on the joined argv string. Handlers are
+// keyed by the exact argv (e.g. 'status --porcelain'); an unmatched argv is a
+// hard error so a test can never silently exercise an unstubbed git call. Every
+// invocation is recorded in `calls` for argv-level assertions.
 function makeFakeGit(handlers: Record<string, (args: string[]) => string>): FakeGit {
   const calls: string[][] = [];
   const git: GitExec = (args, _cwd) => {
     const argv = [...args];
     calls.push(argv);
     const key = argv.join(' ');
-    // Find the first handler whose key is a prefix of the joined argv, so a
-    // handler keyed `worktree list --porcelain` matches that exact call.
+
     const handler = handlers[key] ?? prefixMatch(handlers, key);
     if (handler === undefined) {
       throw new Error(`fake git: no handler for argv: ${key}`);
@@ -88,6 +86,8 @@ function makeFakeGit(handlers: Record<string, (args: string[]) => string>): Fake
   return { git, calls };
 }
 
+// Falls back from exact-match to longest-prefix match so a handler keyed on
+// e.g. 'worktree add' answers any 'worktree add <args...>' invocation.
 function prefixMatch(
   handlers: Record<string, (args: string[]) => string>,
   key: string,
@@ -98,16 +98,16 @@ function prefixMatch(
   return undefined;
 }
 
+// Simulates a non-zero git exit (the way the real seam signals "ref/branch
+// absent"), used by handlers that should report a candidate as missing.
 function throwExit(): never {
   throw new Error('git exited non-zero');
 }
 
-/** Argv keys that, if present in `calls`, indicate a mutation we forbid in 1b-dirty. */
+// True if any recorded git invocation matches the predicate.
 function hasArgv(calls: string[][], predicate: (argv: string[]) => boolean): boolean {
   return calls.some(predicate);
 }
-
-// ---- slug derivation ------------------------------------------------------
 
 describe('slugify — deterministic + case-insensitive', () => {
   it('slug-derivation-deterministic: same subject twice → byte-equal', () => {
@@ -125,11 +125,13 @@ describe('slugify — deterministic + case-insensitive', () => {
     expect(slugify('Add Export!')).toBe('add-export');
     expect(slugify('  Add   Export  ')).toBe('add-export');
     expect(slugify('feature/add-export')).toBe('feature-add-export');
-    // Underscores are preserved (hyphen-or-underscore-safe).
+
     expect(slugify('add_export feature')).toBe('add_export-feature');
   });
 
   it('collapses shell metacharacters into hyphens (defence in depth)', () => {
+    // Even before argv-level safety, the slug itself strips shell syntax, so a
+    // derived branch name can never carry an injection payload.
     expect(slugify('add; rm -rf .')).toBe('add-rm-rf');
     expect(slugify('$(whoami)')).toBe('whoami');
     expect(slugify('`id`')).toBe('id');
@@ -139,8 +141,8 @@ describe('slugify — deterministic + case-insensitive', () => {
 describe('branchMatchesSlug — terminal-component match', () => {
   it('branch-terminal-component-match: matches against the slugified terminal component', () => {
     expect(branchMatchesSlug('feature/add-export', 'add-export')).toBe(true);
-    expect(branchMatchesSlug('FEATURE/ADD-EXPORT', 'add-export')).toBe(true); // case-insensitive
-    expect(branchMatchesSlug('add-export', 'add-export')).toBe(true); // bare, no slash
+    expect(branchMatchesSlug('FEATURE/ADD-EXPORT', 'add-export')).toBe(true);
+    expect(branchMatchesSlug('add-export', 'add-export')).toBe(true);
     expect(branchMatchesSlug('feature/add-export-2', 'add-export')).toBe(false);
     expect(branchMatchesSlug('feature/other', 'add-export')).toBe(false);
   });
@@ -152,16 +154,15 @@ describe('branchMatchesSlug — terminal-component match', () => {
   });
 });
 
-// ---- 1a: reuse in place ---------------------------------------------------
-
 describe('resolver — case 1a (reuse in place)', () => {
   it('resolver-1a-reuse-in-place: matching branch + dedicated cwd → no new worktree, createdByGan false', () => {
+    // cwd is a dedicated worktree (its own dir, distinct from the main checkout
+    // at /repos/myapp) already on the matching branch, so resolution reuses it.
     const cwd = '/repos/myapp-add-export';
     const fake = makeFakeGit({
       'symbolic-ref --quiet --short HEAD': () => 'feature/add-export\n',
       'rev-parse --show-toplevel': () => `${cwd}\n`,
-      // git-common-dir parent = /repos/myapp (the main checkout) — the cwd is a
-      // distinct *linked* worktree dedicated to the task branch → 1a.
+
       'rev-parse --git-common-dir': () => '/repos/myapp/.git\n',
       'worktree list --porcelain': () =>
         [
@@ -187,20 +188,22 @@ describe('resolver — case 1a (reuse in place)', () => {
     expect(ws.resolutionCase).toBe('1a');
     expect(ws.createdByGan).toBe(false);
     expect(ws.branch).toBe('feature/add-export');
-    // The resolved worktree is the current worktree (display/realpath form —
-    // a usable, case-preserving recovery anchor; the persisted progress.json
-    // field is the case-folded canonical form, asserted in recordWorkspace).
+
     expect(ws.worktreePath).toBe(canonicalizePathForDisplay(cwd));
-    // No `git worktree add` was issued.
+
+    // The defining assertion for 1a: no new worktree was created.
     expect(hasArgv(fake.calls, (a) => a[0] === 'worktree' && a[1] === 'add')).toBe(false);
   });
 });
 
-// ---- 1b: clean wrap -------------------------------------------------------
-
 describe('resolver — case 1b (clean wrap)', () => {
+  // Stubs the 1b scenario: the matching branch is checked out in the MAIN
+  // checkout with a clean tree. `defaultBranchOccupied` adds a second worktree
+  // already holding `develop`, which forces the detach fallback below. The
+  // default-branch probes resolve to develop only (origin/HEAD and
+  // init.defaultBranch are absent), so develop is the chosen base.
   function clean1bGit(defaultBranchOccupied = false): FakeGit {
-    // Branch matches; cwd is the main checkout (NOT dedicated to the branch).
+
     const main = '/repos/myapp';
     const otherWtForDevelop = '/repos/myapp-develop';
     const worktreeList = [
@@ -220,11 +223,11 @@ describe('resolver — case 1b (clean wrap)', () => {
     return makeFakeGit({
       'symbolic-ref --quiet --short HEAD': () => 'feature/add-export\n',
       'rev-parse --show-toplevel': () => `${main}\n`,
-      // git-common-dir parent = main checkout → cwd IS the main checkout → 1b.
+
       'rev-parse --git-common-dir': () => `${main}/.git\n`,
       'worktree list --porcelain': () => worktreeList.join('\n'),
       'status --porcelain': () => '', // clean
-      // default-branch resolution: no origin/HEAD, no init.defaultBranch local
+
       'symbolic-ref --quiet --short refs/remotes/origin/HEAD': () => throwExit(),
       'config --get init.defaultBranch': () => throwExit(),
       'rev-parse --verify --quiet refs/heads/develop': () => 'ok\n', // develop exists
@@ -258,22 +261,22 @@ describe('resolver — case 1b (clean wrap)', () => {
     );
     expect(ws.worktreePath).toBe(canonicalizePathForDisplay(runScoped));
 
-    // (1) the current checkout was switched to the default branch `develop`.
+    // Main checkout is freed onto develop, then the task branch is wrapped in
+    // the run-scoped worktree — and never with --force.
     expect(hasArgv(fake.calls, (a) => a[0] === 'checkout' && a[1] === 'develop')).toBe(true);
 
-    // (2) a `git worktree add` (no -b, the branch already exists) placed the
-    //     task branch under the run-scoped path.
     const add = fake.calls.find((a) => a[0] === 'worktree' && a[1] === 'add');
     expect(add).toBeDefined();
     expect(add).toContain('feature/add-export');
     expect(add).toContain(runScoped);
 
-    // (no --force anywhere)
     expect(hasArgv(fake.calls, (a) => a.includes('--force'))).toBe(false);
   });
 
   it('default-branch-source-resolved: detaches HEAD as fallback when default branch is occupied', () => {
-    const fake = clean1bGit(true); // develop is checked out in another worktree
+    // develop is held by another worktree, so main cannot check it out; the
+    // resolver detaches HEAD instead of switching to develop.
+    const fake = clean1bGit(true);
     const ws = resolveWorkspace({
       subject: 'Add Export',
       runId: '20260522T180000-9c4f',
@@ -282,13 +285,11 @@ describe('resolver — case 1b (clean wrap)', () => {
       git: fake.git,
     });
     expect(ws.resolutionCase).toBe('1b');
-    // Fallback: HEAD detached rather than checking out the occupied default.
+
     expect(hasArgv(fake.calls, (a) => a[0] === 'checkout' && a[1] === '--detach')).toBe(true);
     expect(hasArgv(fake.calls, (a) => a[0] === 'checkout' && a[1] === 'develop')).toBe(false);
   });
 });
-
-// ---- 1b: dirty refuses ----------------------------------------------------
 
 describe('resolver — case 1b dirty (refuses)', () => {
   it('resolver-1b-dirty-refuses: throws, issues no mutation, names commit/stash/dedicated-worktree', () => {
@@ -319,27 +320,24 @@ describe('resolver — case 1b dirty (refuses)', () => {
       threw = e;
     }
 
-    // (1) the resolver refused.
     expect(threw).toBeInstanceOf(Error);
     const message = (threw as Error).message;
 
-    // (3) the message names committing / stashing / dedicated worktree.
+    // The refusal guidance must name the three remedies the user can take.
     expect(message.toLowerCase()).toMatch(/commit/);
     expect(message.toLowerCase()).toMatch(/stash/);
     expect(message.toLowerCase()).toMatch(/worktree/);
 
-    // F4 prose-discipline: shell remediation, no Node/npm tokens.
+    // …but must not leak internal implementation/runtime names (npm/node/MCP)
+    // unless they are quoted in backticks — this is a user-facing message.
     expect(/(?<!`)\b(npm|node|Node|MCP server)\b(?!`)/.test(message)).toBe(false);
 
-    // (2) no branch switch / detach / stash / worktree-add was issued after
-    //     dirtiness was detected.
+    // Refuse means refuse: no checkout, stash, or worktree-add side effects.
     expect(hasArgv(fake.calls, (a) => a[0] === 'checkout')).toBe(false);
     expect(hasArgv(fake.calls, (a) => a[0] === 'stash')).toBe(false);
     expect(hasArgv(fake.calls, (a) => a[0] === 'worktree' && a[1] === 'add')).toBe(false);
   });
 });
-
-// ---- 1c: create -----------------------------------------------------------
 
 describe('resolver — case 1c (create)', () => {
   function nonMatchingGit(): FakeGit {
@@ -380,17 +378,18 @@ describe('resolver — case 1c (create)', () => {
     );
     expect(ws.worktreePath).toBe(canonicalizePathForDisplay(runScoped));
 
-    // `git worktree add -b feature/add-export <run-scoped>`.
+    // 1c creates the branch in one step via `worktree add -b <branch> <path>`,
+    // never with --force.
     const add = fake.calls.find((a) => a[0] === 'worktree' && a[1] === 'add');
     expect(add).toEqual(['worktree', 'add', '-b', 'feature/add-export', runScoped]);
     expect(add).not.toContain('--force');
   });
 });
 
-// ---- --new-worktree forces 1c ---------------------------------------------
-
 describe('resolver — --new-worktree forces 1c', () => {
   it('new-worktree-flag-forces-1c: forces 1c in a context that would match 1a', () => {
+    // This setup (dedicated dir already on the matching branch) would normally
+    // resolve as 1a; --new-worktree overrides that and creates a fresh one.
     const cwd = '/repos/myapp-add-export';
     const fake = makeFakeGit({
       'symbolic-ref --quiet --short HEAD': () => 'feature/add-export\n',
@@ -437,14 +436,13 @@ describe('resolver — --new-worktree forces 1c', () => {
 
     expect(ws.resolutionCase).toBe('1c');
     expect(ws.createdByGan).toBe(true);
-    // 1c does not free a branch — no checkout/detach issued.
+
+    // Forcing 1c skips the 1b "free the branch" dance entirely — no checkout.
     expect(hasArgv(fake.calls, (a) => a[0] === 'checkout')).toBe(false);
     const add = fake.calls.find((a) => a[0] === 'worktree' && a[1] === 'add');
     expect(add).toContain('-b');
   });
 });
-
-// ---- default-branch resolution (unit) -------------------------------------
 
 describe('resolveDefaultBranch — not hardcoded', () => {
   it('default-branch-source-resolved: prefers origin/HEAD when present', () => {
@@ -465,6 +463,8 @@ describe('resolveDefaultBranch — not hardcoded', () => {
   });
 
   it('default-branch-source-resolved: falls back to develop > main > master', () => {
+    // No origin/HEAD, no init.defaultBranch, and develop is absent, so the
+    // ordered fallback lands on main (master is never probed once main hits).
     const fake = makeFakeGit({
       'symbolic-ref --quiet --short refs/remotes/origin/HEAD': () => throwExit(),
       'config --get init.defaultBranch': () => throwExit(),
@@ -487,15 +487,14 @@ describe('resolveDefaultBranch — not hardcoded', () => {
   });
 });
 
-// ---- progress.json workspace persistence ----------------------------------
-
 describe('recordWorkspace — workspace fields in progress.json', () => {
   it('progress-workspace-fields-persisted: writes all three fields, canonical worktreePath', () => {
     const runDir = makeTmp('cas-progress-');
     const progressPath = path.join(runDir, 'progress.json');
-    const worktreePath = makeTmp('cas-wt-canon-'); // exists on disk → realpath works
+    const worktreePath = makeTmp('cas-wt-canon-');
 
-    // 1a → createdByGan false.
+    // First write into a non-existent progress.json: the workspace record is
+    // created with a canonical, absolute worktreePath and the three fields.
     recordWorkspace(progressPath, {
       worktreePath,
       branch: 'feature/add-export',
@@ -509,7 +508,8 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
     expect(json.workspace.branch).toBe('feature/add-export');
     expect(json.workspace.createdByGan).toBe(false);
 
-    // 1b → createdByGan true (overwrites prior, preserving other keys).
+    // Second write merges into an existing progress.json: the unrelated runId
+    // is preserved while the workspace block is overwritten in place.
     writeFileSync(progressPath, JSON.stringify({ runId: 'keep-me', workspace: 'old' }), 'utf8');
     recordWorkspace(progressPath, {
       worktreePath,
@@ -518,10 +518,9 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
       resolutionCase: '1b',
     });
     json = JSON.parse(readFileSync(progressPath, 'utf8'));
-    expect(json.runId).toBe('keep-me'); // pre-existing field preserved
+    expect(json.runId).toBe('keep-me');
     expect(json.workspace.createdByGan).toBe(true);
 
-    // 1c → createdByGan true.
     const r = buildWorkspaceRecord({
       worktreePath,
       branch: 'feature/other',
@@ -537,6 +536,8 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
     const runDir = makeTmp('cas-progress-pp-');
     const progressPath = path.join(runDir, 'progress.json');
     const worktreePath = makeTmp('cas-wt-pp-');
+    // The pre-existing file carries a __proto__ payload; recordWorkspace must
+    // not let it pollute Object.prototype while merging.
     writeFileSync(progressPath, '{"__proto__":{"polluted":true},"keep":1}', 'utf8');
     recordWorkspace(progressPath, {
       worktreePath,
@@ -544,6 +545,8 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
       createdByGan: true,
       resolutionCase: '1c',
     });
+    // A brand-new plain object has no `polluted` inherited property, proving the
+    // prototype was not contaminated. The benign `keep` field still survives.
     const obj: Record<string, unknown> = {};
     expect((obj as Record<string, unknown>)['polluted']).toBeUndefined();
     const json = JSON.parse(readFileSync(progressPath, 'utf8'));
@@ -551,16 +554,13 @@ describe('recordWorkspace — workspace fields in progress.json', () => {
   });
 });
 
-// ---- security: argv safety with a hostile subject -------------------------
-
 describe('git-subprocess-argv-safety (behavioural)', () => {
   it('a subject with shell metacharacters reaches git as a single literal argv element', () => {
-    // A crafted subject containing `;`, `$(...)`, and backticks. Through slug
-    // derivation it becomes a clean token, but the test asserts the branch
-    // name is passed to git as ONE argv element with no shell expansion.
+    // A subject loaded with injection payloads: slugify must strip every shell
+    // metacharacter, and the resulting branch must reach git as one argv slot.
     const hostile = 'pwn; rm -rf .; $(touch /tmp/EVIL); `id`';
     const slug = slugify(hostile);
-    // Derivation strips the metacharacters entirely.
+
     expect(slug).not.toContain(';');
     expect(slug).not.toContain('$');
     expect(slug).not.toContain('`');
@@ -584,21 +584,21 @@ describe('git-subprocess-argv-safety (behavioural)', () => {
 
     const add = fake.calls.find((a) => a[0] === 'worktree' && a[1] === 'add');
     expect(add).toBeDefined();
-    // The branch name is one argv element (`-b` then the branch); the slug
-    // contains no metacharacter, and even if it did it is a single element.
+
     const branchArg = add![add!.indexOf('-b') + 1];
     expect(branchArg).toBe(`feature/${slug}`);
-    // No EVIL side effect could have run — the seam never builds a shell string.
+
+    // The injection payload never executed: the EVIL marker file is absent.
     expect(existsSync('/tmp/EVIL')).toBe(false);
   });
 });
 
-// ---- integration: real git worktree ---------------------------------------
-
+// Argv-array git runner for the real-git integration cases below.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
 }
 
+// Real repo with `develop` as the base branch (matching this project's flow).
 function initRepo(): string {
   const repo = makeTmp('cas-int-repo-');
   git(repo, ['init', '-q', '-b', 'develop']);
@@ -611,11 +611,14 @@ function initRepo(): string {
   return repo;
 }
 
+// Returns the checked-out branch name of a worktree, or '' when HEAD is
+// detached (symbolic-ref fails) — used to assert which branch each worktree
+// ends up on after resolution.
 function currentBranchOf(cwd: string): string {
   try {
     return git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim();
   } catch {
-    return ''; // detached
+    return '';
   }
 }
 
@@ -637,15 +640,19 @@ describe('integration — real git worktree (1c then 1b)', () => {
 
     const runScoped = path.join(repo, '.gan-state', 'runs', runId, 'worktree');
     expect(existsSync(runScoped)).toBe(true);
-    // The run worktree is checked out to the task branch.
+
+    // The new branch lives in the run-scoped worktree; the origin checkout is
+    // left untouched on develop.
     expect(currentBranchOf(runScoped)).toBe('feature/add-export');
-    // The original checkout is untouched (still on develop).
+
     expect(currentBranchOf(repo)).toBe('develop');
   });
 
   it('resolver-1b-clean-wrap (real git): frees the matching branch onto develop, wraps it', () => {
     const repo = initRepo();
-    // Put the matching task branch in the MAIN checkout (non-dedicated for it).
+
+    // Put the main checkout on the matching branch (clean tree) so resolution
+    // must free it onto develop before wrapping — the 1b path.
     git(repo, ['checkout', '-q', '-b', 'feature/add-export']);
     expect(currentBranchOf(repo)).toBe('feature/add-export');
 
@@ -663,17 +670,18 @@ describe('integration — real git worktree (1c then 1b)', () => {
 
     const runScoped = path.join(repo, '.gan-state', 'runs', runId, 'worktree');
     expect(existsSync(runScoped)).toBe(true);
-    // The task branch ends up in the run-scoped worktree…
+
     expect(currentBranchOf(runScoped)).toBe('feature/add-export');
-    // …and the original checkout was freed to the default branch `develop`.
+
     expect(currentBranchOf(repo)).toBe('develop');
   });
 
   it('resolver-1b-clean-wrap (real git): detaches when develop is occupied elsewhere', () => {
     const repo = initRepo();
-    // Move the main checkout onto the task branch first (freeing `develop`),
-    // then occupy `develop` in a separate worktree so the resolver's fallback
-    // path — detach instead of checkout develop — must fire.
+
+    // Main is on the matching branch AND develop is checked out in another
+    // worktree, so the resolver cannot move main to develop and must detach
+    // HEAD instead (asserted as '' for the origin checkout below).
     git(repo, ['checkout', '-q', '-b', 'feature/add-export']);
     const developWt = path.join(makeTmp('cas-int-dev-'), 'dev');
     git(repo, ['worktree', 'add', '-q', developWt, 'develop']);
@@ -689,13 +697,16 @@ describe('integration — real git worktree (1c then 1b)', () => {
     expect(ws.resolutionCase).toBe('1b');
     const runScoped = path.join(repo, '.gan-state', 'runs', runId, 'worktree');
     expect(currentBranchOf(runScoped)).toBe('feature/add-export');
-    // The origin checkout is now detached (develop was occupied).
+
     expect(currentBranchOf(repo)).toBe('');
   });
 });
 
-// ---- static security check: git-subprocess-argv-safety --------------------
-
+// Source-text greps over the resolver + its helpers. They pin discipline a
+// behaviour test cannot see: every git call is execFileSync with an argv array
+// (no exec/execSync command strings, no `shell:true`), `worktree add --force`
+// is never used (it could clobber a user's tree), and canonicalisation is
+// delegated to the determinism module rather than re-implemented.
 describe('git-subprocess-argv-safety (static source check)', () => {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(here, '..', '..', '..');
@@ -706,36 +717,33 @@ describe('git-subprocess-argv-safety (static source check)', () => {
 
   it('uses execFileSync (argv array), never exec/execSync/shell:true', () => {
     expect(combined).toContain('execFileSync');
-    // No bare `exec`/`execSync` command-string APIs imported or called.
+
     expect(/\bexec\b\s*,/.test(combined)).toBe(false);
     expect(/\bexecSync\b/.test(combined)).toBe(false);
     expect(/child_process['"]\)?\.exec\s*\(/.test(combined)).toBe(false);
     expect(/shell\s*:\s*true/.test(combined)).toBe(false);
-    // No template-literal command string is fed to a subprocess API.
+
     expect(/exec\w*\(\s*`/.test(combined)).toBe(false);
   });
 
   it('passes git argv as arrays and never uses worktree add --force', () => {
-    // The default seam invokes `execFileSync('git', [...args], ...)`.
+
     expect(/execFileSync\(\s*['"]git['"]\s*,\s*\[/.test(combined)).toBe(true);
-    // No `--force` token appears anywhere in the slice's source.
+
     expect(combined.includes('--force')).toBe(false);
   });
 
   it('canonicalises the recorded path through the determinism module, not a re-implementation', () => {
-    // The recorded `worktreePath` goes through the centralised determinism
-    // module; this slice never re-implements realpath / path case-folding.
-    // (`slugify` lowercases the run *subject*, not a path — that is the only
-    // `.toLowerCase()` and it lives in worktree-resolver.ts, asserted below.)
+
     const progressSrc = readFileSync(
       path.join(repoRoot, 'src', 'config-server', 'storage', 'run-progress.ts'),
       'utf8',
     );
     expect(progressSrc).toContain("from '../determinism/index.js'");
     expect(progressSrc).toContain('canonicalizePath');
-    // No path-canonicalisation re-implementation in either source file.
+
     expect(/realpathSync/.test(combined)).toBe(false);
-    // The only `.toLowerCase()` is on the subject inside slugify (not a path).
+
     expect(/\.toLowerCase\s*\(/.test(progressSrc)).toBe(false);
   });
 });

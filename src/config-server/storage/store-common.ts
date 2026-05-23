@@ -1,50 +1,55 @@
-/**
- * Shared store-root resolution primitives for the central, repo-keyed stores.
- *
- * F7's run-data store (`run-store.ts`) and F8's module-state store
- * (`module-state-store.ts`) resolve their roots by the SAME ladder —
- * env override → install-time marker → default dir under home — with the
- * SAME tilde/relative absolutization and the SAME empty-value fall-through.
- * Those primitives live here, in ONE implementation, so the two stores share
- * the behaviour rather than each carrying a near-identical copy (PROJECT_CONTEXT
- * reuse-don't-duplicate). Each store supplies only what genuinely differs: its
- * env-var name, marker relpath, and default dirname.
- *
- * Determinism / safety: this module does no subprocess work and no path
- * canonicalisation; case-folding lives in the determinism module and git lives
- * in `git-exec.ts`. It only expands `~`/relative paths against the home dir.
- */
 
+
+/**
+ * Shared store-root resolution used by both the run store and the module-state
+ * store.
+ *
+ * Each store decides its on-disk root by a single, consistent precedence
+ * ({@link resolveStoreRootByPrecedence}): an explicit environment variable, then
+ * a marker file under the user's home pointing at a directory, then a default
+ * directory under home. Centralising it here keeps the two stores' behaviour
+ * identical and makes the home/env dependencies injectable ({@link StoreEnv})
+ * for hermetic tests.
+ */
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 /**
- * Optional dependency seam so tests can isolate `os.homedir` / `process.env`.
- * Shared by every central store so the home/env injection style is identical
- * across `run-store` and `module-state-store`.
+ * Injectable environment seams for store resolution.
+ *
+ * @property homedir override for the user's home-directory lookup; defaults to
+ *   `os.homedir`.
+ * @property env override for the process environment; defaults to `process.env`.
  */
 export interface StoreEnv {
-  /** Defaults to `os.homedir()`. */
+
   homedir?: () => string;
-  /** Defaults to `process.env`. */
+
   env?: NodeJS.ProcessEnv;
 }
 
-/** Resolve the home directory through the seam (defaults to `os.homedir`). */
+/** Resolve the user's home directory, honouring an injected `homedir` seam. */
 export function resolveHomedir(deps?: StoreEnv): string {
   return (deps?.homedir ?? os.homedir)();
 }
 
-/** Resolve the environment through the seam (defaults to `process.env`). */
+/** Resolve the process environment, honouring an injected `env` seam. */
 export function resolveEnv(deps?: StoreEnv): NodeJS.ProcessEnv {
   return deps?.env ?? process.env;
 }
 
 /**
- * Expand a configured store path to an absolute form. A leading `~` is expanded
- * to the home directory (never left as a literal `~`); a relative path is
- * resolved against the home directory; an absolute path is normalised.
+ * Turn a configured path into an absolute, normalised one, expanding a leading
+ * `~`.
+ *
+ * @param p the configured path; may be `~`, `~/...` (or `~\\...` on Windows), an
+ *   absolute path, or a relative path.
+ * @param home the home directory `~` expands to, and the base relative paths
+ *   resolve against.
+ * @returns the absolute normalised path. A relative `p` is resolved relative to
+ *   `home` (not cwd) so store locations are stable regardless of where the
+ *   process was launched.
  */
 export function absolutize(p: string, home: string): string {
   let expanded = p;
@@ -60,12 +65,12 @@ export function absolutize(p: string, home: string): string {
 }
 
 /**
- * Read an install-time marker file's contents, or `undefined` if it is absent
- * or empty after trimming. The marker's single line is the configured
- * store-root path. Trailing whitespace/newline is stripped; an all-whitespace
- * marker is treated as absent.
+ * Read a store marker file (under home) whose contents redirect a store root.
  *
- * @param markerRelpath path of the marker relative to the user's home dir.
+ * @param markerRelpath the marker path relative to home.
+ * @param deps environment seams.
+ * @returns the trimmed marker contents, or `undefined` when the marker is
+ *   absent, unreadable, or empty/whitespace-only. Never throws.
  */
 export function readStoreMarker(markerRelpath: string, deps?: StoreEnv): string | undefined {
   const markerPath = path.join(resolveHomedir(deps), markerRelpath);
@@ -78,26 +83,34 @@ export function readStoreMarker(markerRelpath: string, deps?: StoreEnv): string 
   }
 }
 
-/** The differing knobs each central store supplies to the shared ladder. */
+/**
+ * The three inputs that distinguish one store's root resolution from another.
+ *
+ * @property envVar the environment variable consulted first.
+ * @property markerRelpath the home-relative marker file consulted second.
+ * @property defaultDirname the directory under home used as the fallback.
+ */
 export interface StoreRootSpec {
-  /** Environment variable that overrides the store root (highest precedence). */
+
   envVar: string;
-  /** Install-time marker relpath under home (middle precedence). */
+
   markerRelpath: string;
-  /** Default directory name under home (lowest precedence). */
+
   defaultDirname: string;
 }
 
 /**
- * Resolve a store root by the shared precedence ladder, highest first:
- *   1. The `spec.envVar` environment variable, when non-empty after trimming
- *      (an empty/whitespace value is treated as absent and falls through).
- *   2. The path recorded in the install-time marker at `spec.markerRelpath`.
- *   3. Default `<home>/<spec.defaultDirname>`.
+ * Resolve a store root by precedence: env var → marker file → home default.
  *
- * The returned path is always absolute with the home directory expanded — never
- * a literal `~`. The env and marker forms are absolutized (relative to home if
- * not already absolute); the default form joins `os.homedir()`.
+ * The env var wins only when set to a non-blank value; an empty/whitespace env
+ * var is treated as unset and falls through to the marker, so an accidentally
+ * blank export does not silently relocate the store to home root. Both the env
+ * value and the marker value are run through {@link absolutize} (so `~` and
+ * relative forms work); the default is joined under home directly.
+ *
+ * @param spec the store's {@link StoreRootSpec}.
+ * @param deps environment seams.
+ * @returns the absolute store root directory. Never throws.
  */
 export function resolveStoreRootByPrecedence(spec: StoreRootSpec, deps?: StoreEnv): string {
   const home = resolveHomedir(deps);

@@ -1,3 +1,23 @@
+/**
+ * One positive smoke test per read tool (the S2 read surface). This is the
+ * "every reader works and returns its documented shape" baseline — deliberately
+ * shallow per tool, broad across the whole catalogue, so that a reader silently
+ * breaking or changing its result shape is caught even if no deeper suite
+ * exercises it.
+ *
+ * Run mostly against the clean `js-ts-minimal` fixture, so the expected answers
+ * are the empty/default forms (no active stacks, empty overlay merge, no module
+ * state). A few tools need richer setup, kept local to their test:
+ *   - getTrustState runs against a throwaway temp home so it reports the
+ *     unapproved-but-hash-present state without reading the real trust cache;
+ *   - getTrustDiff is still a deferred stub — the test pins its stub shape AND
+ *     asserts it logs exactly one warning tagged with the tool name (the spy
+ *     logger captures structured log entries for that assertion);
+ *   - getModuleState is checked for both an unknown module and an undeclared
+ *     key, both of which must return null (consistent no-file semantics, never
+ *     a throw).
+ */
+
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +47,9 @@ interface RecordedEntry {
   meta?: Record<string, unknown>;
 }
 
+// Capturing logger: records every structured log call so a test can assert on
+// level, message, and metadata. Used by the getTrustDiff test to prove the
+// stub emits exactly one warning tagged with its tool name.
 function makeSpyLogger(): { logger: Logger; entries: RecordedEntry[] } {
   const entries: RecordedEntry[] = [];
   const logger: Logger = {
@@ -45,20 +68,17 @@ describe('S2 read tools (one positive test per tool)', () => {
   });
 
   it('getResolvedConfig returns the full F2 shape', async () => {
-    // Reset the cache to make this test order-independent.
+
     const { clearResolvedConfigCache } =
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
     const result = await getResolvedConfig({ projectRoot: jsTsMinimal });
     expect(result.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(result.schemaVersions).toEqual({ stack: 1, overlay: 1 });
-    // js-ts-minimal has no package.json/tsconfig.json on disk, so detection
-    // produces an empty active set (no `generic` stack ships either).
+
     expect(result.stacks.active).toEqual([]);
     expect(result.stacks.byName).toEqual({});
-    // Overlay is the cascaded view; js-ts-minimal's project overlay only
-    // declares schemaVersion (which is filtered out), so the merged
-    // overlay is empty.
+
     expect(result.overlay).toEqual({});
     expect(result.discarded).toEqual([]);
     expect(result.additionalContext.planner).toEqual([]);
@@ -77,7 +97,7 @@ describe('S2 read tools (one positive test per tool)', () => {
     const { clearResolvedConfigCache } =
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
-    // js-ts-minimal has no package.json on disk; detection returns empty.
+
     const result = getActiveStacks({ projectRoot: jsTsMinimal });
     expect(result.active).toEqual([]);
   });
@@ -95,8 +115,7 @@ describe('S2 read tools (one positive test per tool)', () => {
       await import('../../../src/config-server/resolution/cache.js');
     clearResolvedConfigCache();
     const result = getMergedSplicePoints({ projectRoot: jsTsMinimal });
-    // The js-ts-minimal fixture's project overlay has only schemaVersion;
-    // the cascade therefore returns an empty merged view.
+
     expect(result.mergedSplicePoints).toEqual({});
   });
 

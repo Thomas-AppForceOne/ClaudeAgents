@@ -1,11 +1,12 @@
 /**
- * Shared helpers for the R4 maintainer scripts.
+ * Public barrel for the shared `scripts/lib` helpers.
  *
- * Every script under `scripts/<name>/` imports from this barrel rather
- * than reaching into individual helper files. Subsequent R4 sprints
- * (`publish-schemas`, `evaluator-pipeline-check`, `pair-names`,
- * `lint-no-stack-leak`) extend this surface; the module names here are
- * load-bearing.
+ * Every CLI entrypoint under `scripts/` imports from here rather than reaching
+ * into the individual modules, so this file is the single import surface the
+ * scripts depend on. It re-exports the report formatters, the argument parser,
+ * the exit-code contract, and deterministic JSON — bundling the four concerns
+ * a script needs to parse its argv, do its work, and emit a report. Re-exports
+ * only; no logic lives here.
  */
 export { formatReport, formatReportJson } from './report.js';
 export type {

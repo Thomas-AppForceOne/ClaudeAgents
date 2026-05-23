@@ -1,24 +1,24 @@
 /**
- * R3 sprint 1 — placeholder dispatcher arms for subcommands that ship in
- * a later sprint (and the trust subcommand surface that ships with R5).
+ * Placeholder command handlers for subcommands that are routed but not yet
+ * implemented in the current sprint.
  *
- * S2 (read subcommands) and S3 (write subcommands) replaced their stub
- * arms with real handlers:
- *   - `gan config print`, `gan config get`, `gan config set`
- *   - `gan stacks list`
- *   - `gan stack show`, `gan stack update`
- *   - `gan modules list`
- *
- * The remaining stubs surface the not-yet-implemented `stacks new` (S4)
- * and `validate` (S4) arms — plus R5's `trust` surface. Each stub prints
- * a short stderr message and exits 1. The trust stub names R5 explicitly;
- * the S4 stubs use the canonical "not yet implemented in this sprint"
- * wording.
+ * Each stub honours the standard command contract — it returns a
+ * {@link CommandResult} rather than throwing — so the router can wire it in
+ * exactly like a real handler. Every stub writes its notice to `stderr` (never
+ * `stdout`) and exits non-zero, so a stub is never mistaken for a successful
+ * no-op by a script consuming `stdout`.
  */
 
 import { EXIT_GENERIC } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+/**
+ * Result contract shared by every CLI command handler.
+ *
+ * @property stdout text for standard output (the command's real result).
+ * @property stderr text for standard error (diagnostics / notices).
+ * @property code the process exit code.
+ */
 interface CommandResult {
   stdout: string;
   stderr: string;
@@ -26,9 +26,14 @@ interface CommandResult {
 }
 
 /**
- * Build a "not yet implemented in this sprint" stub for an S2-S4 command.
- * Includes the *full* user-typed command string so the message is
- * unambiguous when `gan stack update <field> <value>` lands in S3 etc.
+ * Build a "not yet implemented" handler for a specific command.
+ *
+ * @param fullCommand the user-facing command name to name in the notice (e.g.
+ *   `gan foo bar`), so the message points at the exact command invoked.
+ * @returns an async handler that ignores its parsed args and resolves to a
+ *   {@link CommandResult} whose `stderr` carries the not-implemented notice
+ *   and whose exit code is {@link EXIT_GENERIC}. Never throws; never writes
+ *   `stdout`.
  */
 export function makeNotYetStub(
   fullCommand: string,
@@ -43,9 +48,12 @@ export function makeNotYetStub(
 }
 
 /**
- * Stub for `gan trust *`. Trust subcommands are R5's territory (per the
- * R3 spec and PROJECT_CONTEXT.md). The stub prints the R5 pointer and
- * exits 1.
+ * Stub handler for the `gan trust` command family, which is scheduled to ship
+ * with the R5 milestone.
+ *
+ * @param _parsed parsed argv (ignored).
+ * @returns a {@link CommandResult} announcing the R5 ship target on `stderr`
+ *   with exit code {@link EXIT_GENERIC}. Never throws.
  */
 export async function trustStub(_parsed: ParsedArgs): Promise<CommandResult> {
   return {

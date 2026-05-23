@@ -1,18 +1,13 @@
-/**
- * M2 — ContainerHealth tests.
- *
- * Covers AC8:
- *   - Happy path: server returns expectStatus -> waitForHealthy resolves
- *     to `true`.
- *   - Timeout path: hung/wrong-status server -> TimeoutError with
- *     diagnostic detail.
- *   - Per-poll abort: at least 2 poll attempts within a 5s budget
- *     against a slow-responding server (verifies the per-poll
- *     `Math.min(2000, remaining)` bound).
- *
- * The tests inject a `fetchImpl` shim so we exercise the polling logic
- * without binding sockets.
- */
+// Behavioural contract for ContainerHealth.waitForHealthy — the poll-until-ready
+// helper a worktree's container probe uses before traffic is sent. The suite
+// guards three invariants: (1) it resolves true the moment a poll returns the
+// expected status; (2) on a never-healthy endpoint it throws a TimeoutError
+// whose diagnostic surfaces the last observed status, so a failed startup is
+// actionable rather than opaque; and (3) each poll is independently abortable,
+// so one hung request cannot consume the entire timeout budget — the loop must
+// fire repeated attempts within the window. A final source-shape guard pins the
+// implementation to AbortController + the platform fetch, preventing a
+// regression that reintroduces a node-fetch dependency.
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -62,11 +57,15 @@ describe('ContainerHealth.waitForHealthy', () => {
 
   it('per-poll abort: at least 2 poll attempts within a 5s budget against a slow server', async () => {
     let attempts = 0;
+    // A server that hangs forever: the only way the promise ever settles is via
+    // the per-poll AbortSignal. If polls were not individually time-boxed, the
+    // first hung request would eat the whole 5s budget and attempts would stay 1.
     const fetchImpl: typeof fetch = async (_url, init) => {
       attempts += 1;
-      // Mimic a "hung" fetch: resolve only when the AbortSignal fires
-      // (so the per-poll timeout bound is exercised).
+
       return new Promise<Response>((resolve, reject) => {
+        // Reject when (and only when) the implementation aborts this poll —
+        // proving each attempt carries its own AbortSignal.
         const sig = (init as RequestInit | undefined)?.signal as AbortSignal | undefined;
         if (sig) {
           sig.addEventListener('abort', () =>
@@ -89,9 +88,11 @@ describe('ContainerHealth.waitForHealthy', () => {
     }
     expect(caught).toBeTruthy();
     expect((caught as { code?: string }).code).toBe('TimeoutError');
-    // The per-poll bound is min(2000, remaining); a 5s budget gives
-    // at least 2 polls.
+
+    // The load-bearing assertion: more than one attempt fired, so the loop kept
+    // re-polling after aborting the stalled request rather than blocking on it.
     expect(attempts).toBeGreaterThanOrEqual(2);
+    // Generous per-test timeout so the real-time 5s health budget can elapse.
   }, 10000);
 
   it('source uses AbortController and stdlib fetch (no node-fetch dependency)', () => {

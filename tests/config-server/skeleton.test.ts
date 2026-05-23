@@ -89,14 +89,14 @@ describe('determinism module', () => {
     const parsed = JSON.parse(out);
     expect(Object.keys(parsed)).toEqual(['a', 'b', 'nested']);
     expect(Object.keys(parsed.nested)).toEqual(['x', 'y']);
-    // 2-space indent: lines after the opening brace start with 2 spaces.
+
     const lines = out.split('\n');
     expect(lines[1].startsWith('  ')).toBe(true);
   });
 
   it('localeSort uses variant-sensitivity, non-numeric ordering', () => {
     const sorted = localeSort(['file10', 'file2', 'file1']);
-    // numeric:false → '10' < '2' lexicographically
+
     expect(sorted).toEqual(['file1', 'file10', 'file2']);
   });
 });
@@ -117,9 +117,7 @@ describe('logger', () => {
     const contents = readFileSync(expected, 'utf8');
     expect(contents).toContain('"msg": "hello"');
     expect(contents).toContain('"tool": "getApiVersion"');
-    // Sorted keys: lexicographically 'code' < 'level' < 'msg' < 'tool' < 'ts'.
-    // Each field appears on its own line under stableStringify's 2-space
-    // indent; assert positional order across the full payload.
+
     const idxCode = contents.indexOf('"code"');
     const idxLevel = contents.indexOf('"level"');
     const idxMsg = contents.indexOf('"msg"');
@@ -169,20 +167,14 @@ describe('schemas-bundled', () => {
 
 describe('buildToolList', () => {
   it('omits the NotImplemented stubs (F5 slice 1 filter)', () => {
-    // F5 slice 1: `tools/list` advertises only tools whose runtime
-    // dispatch is wired. `getOverlayField` and `getStackConventions`
-    // remain `NotImplemented` stubs in v1.0 and must be absent from the
-    // advertised list — the assertion is behavioural, not implementation-
-    // coupled: any future wiring that picks them up would land them in
-    // the list automatically.
+
     const names = buildToolList().map((t) => t.name);
     expect(names).not.toContain('getOverlayField');
     expect(names).not.toContain('getStackConventions');
   });
 
   it('every advertised tool is a known F2 tool', () => {
-    // Sanity check that the filter narrows F2_TOOL_NAMES rather than
-    // synthesising names from elsewhere.
+
     const advertised = new Set(buildToolList().map((t) => t.name));
     for (const name of advertised) {
       expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
@@ -202,9 +194,7 @@ describe('MCP handshake (subprocess)', () => {
   it('responds to tools/list with every wired F2 tool name (F5 slice 1)', async () => {
     const distEntry = path.join(repoRoot, 'dist', 'config-server', 'index.js');
     if (!existsSync(distEntry)) {
-      // The build is the discriminator's job; skip if it has not yet run.
-      // Vitest reports skipped as pass, which is fine for sprint 1's
-      // local-iteration loop. The discriminator runs `npm run build` first.
+
       return;
     }
     const child = spawn(process.execPath, [distEntry], {
@@ -273,10 +263,10 @@ describe('MCP handshake (subprocess)', () => {
     );
     expect(listResp).toBeTruthy();
     const names = listResp!.result.tools.map((t) => t.name);
-    // Behavioural assertion: the two NotImplemented stubs are absent.
+
     expect(names).not.toContain('getOverlayField');
     expect(names).not.toContain('getStackConventions');
-    // Every advertised name is a known F2 tool.
+
     for (const name of names) {
       expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
     }

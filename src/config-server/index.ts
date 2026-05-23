@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * @claudeagents/config-server — MCP server bootstrap.
+ * Entry point and MCP wiring for the config-server.
  *
- * Registers handlers for every F2 tool name. Reads are wired in S2 — see
- * `tools/reads.ts`. The three validate tools (`validateAll`,
- * `validateStack`, `validateOverlay`) were wired in S3 — see
- * `tools/validate.ts`. Writes are wired in S6 — see `tools/writes.ts`.
- * The two reads deferred past S2 (`getStackConventions`,
- * `getOverlayField`) still throw `NotImplemented` via the central error
- * factory; they ship in a later sprint. Trust writes ship as OQ1
- * loud-stubs (R5 lands real trust); module writes are no-ops (M1 lands
- * real modules).
+ * This module is the boundary between the Model Context Protocol transport and
+ * the read/write/validate tool implementations. It owns:
+ * - the canonical list of tool names ({@link F2_TOOL_NAMES}/{@link R5_TOOL_NAMES});
+ * - a dispatch table ({@link TOOL_HANDLERS}) mapping each tool name to its
+ *   required args and a handler that validates input then calls the impl;
+ * - the MCP `Server` that exposes those tools, plus a small CLI
+ *   (`--version`, `--validate-all`, or stdio MCP mode).
+ *
+ * Boundary guarantees stated once here:
+ * - Every fault that reaches the MCP layer becomes a JSON error response
+ *   ({@link errorResponse}) rather than crashing the server; only a
+ *   {@link ConfigServerError} keeps its code, everything else is reported as
+ *   `NotImplemented` with the original message.
+ * - Tool arguments are anonymised before logging ({@link anonymiseToolArgs})
+ *   so config values, state, manifests, and trust hashes never reach a log.
  */
 
 import { realpathSync } from 'node:fs';
@@ -62,9 +68,14 @@ import {
   updateStackField as runUpdateStackField,
 } from './tools/writes.js';
 
-/** F2 tool names. The list is deliberately exhaustive; see `apiToolsV1`. */
+/**
+ * The tool names introduced by feature set F2 — the core read, write, and
+ * validate surface. This is the advertised tool list (filtered to those with a
+ * registered handler in {@link buildToolList}). Order is the catalogue order
+ * shown to clients.
+ */
 export const F2_TOOL_NAMES: readonly string[] = [
-  // Reads
+
   'getApiVersion',
   'getResolvedConfig',
   'getStack',
@@ -78,7 +89,7 @@ export const F2_TOOL_NAMES: readonly string[] = [
   'getTrustDiff',
   'getModuleState',
   'listModules',
-  // Writes
+
   'setOverlayField',
   'appendToOverlayField',
   'removeFromOverlayField',
@@ -91,37 +102,44 @@ export const F2_TOOL_NAMES: readonly string[] = [
   'appendToModuleState',
   'removeFromModuleState',
   'registerModule',
-  // Validate
+
   'validateAll',
   'validateStack',
   'validateOverlay',
 ] as const;
 
 /**
- * R5 sprint 4 dispatch additions. `trustList` is a new MCP tool that
- * post-dates F2's tool-list freeze; it is dispatched but not part of
- * the F2 schema (which the JSON schema document at `schemas/api-tools-
- * v1.json` codifies). Keeping the two lists separate preserves the
- * F2-schema-vs-MCP-dispatch invariant while still routing `trustList`
- * through the wrapper.
+ * Tool names introduced by feature set R5 (read-side trust listing), kept
+ * separate from {@link F2_TOOL_NAMES} so the two feature sets remain
+ * distinguishable, but unioned for dispatch.
  */
 export const R5_TOOL_NAMES: readonly string[] = ['trustList'] as const;
 
-/** Union of every dispatchable tool name (F2 + R5 additions). */
+/**
+ * Every tool name the dispatcher will accept (F2 ∪ R5). A `tools/call` for a
+ * name outside this set is rejected as an unknown tool. Note this is a superset
+ * of the *advertised* list — advertising additionally requires a registered
+ * handler (see {@link buildToolList}).
+ */
 export const DISPATCH_TOOL_NAMES: readonly string[] = [...F2_TOOL_NAMES, ...R5_TOOL_NAMES];
 
+// The slice of package.json this server cares about (name + version).
 interface PackageMeta {
   name: string;
   version: string;
 }
 
+// Process-lifetime memo: package.json does not change while the server runs,
+// so it is read and parsed at most once.
 let cachedMeta: PackageMeta | null = null;
 
 /**
- * Read the package.json at build/runtime to recover the server's name and
- * semver. Reads from the package root located via the shared `packageRoot()`
- * helper (which walks up from `import.meta.url` and verifies the package
- * name).
+ * Read the package `name` and `version` from the resolved package root.
+ *
+ * @returns the memoised {@link PackageMeta}; the first call reads and parses
+ *   `package.json`, later calls return the cache.
+ * @throws if `package.json` cannot be read or is not valid JSON (a broken
+ *   install — there is no sensible fallback).
  */
 export async function readPackageMeta(): Promise<PackageMeta> {
   if (cachedMeta) return cachedMeta;
@@ -132,45 +150,46 @@ export async function readPackageMeta(): Promise<PackageMeta> {
   return cachedMeta;
 }
 
-/** Direct library entry point for `getApiVersion`. */
+/**
+ * The `getApiVersion` tool: report the server's API version (its package
+ * version).
+ *
+ * @returns `{ apiVersion }` — the package version string.
+ */
 export async function getApiVersion(): Promise<{ apiVersion: string }> {
   const meta = await readPackageMeta();
   return { apiVersion: meta.version };
 }
 
 /**
- * One entry in the introspection list. Carries both the schema's
- * `inputSchema` (the documented contract) and the runtime's `required`
- * declaration (the dispatched contract). F5 § Parameter-shape
- * consistency uses the pair to assert alignment: a contract test
- * (see `tests/config-server/integration/f5-coherence.test.ts`) iterates
- * this list and asserts `entry.required` matches
- * `entry.inputSchema.required` for every advertised tool — without
- * needing any export that exists only to support tests.
+ * One advertised tool's metadata.
+ *
+ * @property name the tool name.
+ * @property description human-facing description shown to MCP clients.
+ * @property required the input keys the tool requires (from its handler spec).
+ * @property inputSchema the JSON Schema for the tool's input, sourced from the
+ *   bundled api-tools schema (or a permissive empty-object schema as fallback).
  */
 export interface ToolListEntry {
   name: string;
   description: string;
-  /** Runtime-required input fields per the dispatch handler's spec. */
+
   required: readonly string[];
-  /** Schema-declared input shape from `schemas/api-tools-v1.json`. */
+
   inputSchema: Record<string, unknown>;
 }
 
 /**
- * Build the introspection list of every wired tool. Returns one entry
- * per F2 tool whose runtime dispatch is actually implemented — tools
- * that ship as `NotImplemented` stubs in this release are simply absent
- * from `TOOL_HANDLERS` and therefore absent from the returned list.
+ * Build the advertised tool catalogue.
  *
- * F5 slice 1 contract: the filter is keyed off `TOOL_HANDLERS`. When a
- * future release wires a previously-NotImplemented tool by adding a
- * handler spec, the tool appears in this list (and therefore in MCP
- * `tools/list`) with no other code change required.
+ * Iterates {@link F2_TOOL_NAMES} in order but includes only names that have a
+ * registered handler in {@link TOOL_HANDLERS} — so a name listed but not yet
+ * wired is silently omitted from advertisement rather than advertised and then
+ * failing on call. Each entry's `inputSchema` comes from the bundled
+ * api-tools-v1 schema; a missing/ill-shaped schema entry falls back to a
+ * permissive empty-object schema.
  *
- * The MCP `tools/list` payload is a strict projection of this result:
- * see `createMcpServer` for the `{name, description, inputSchema}`
- * subset MCP clients receive.
+ * @returns the list of advertisable {@link ToolListEntry}s.
  */
 export function buildToolList(): ToolListEntry[] {
   const props = (apiToolsV1.properties ?? {}) as Record<string, { inputSchema?: unknown }>;
@@ -191,7 +210,21 @@ export function buildToolList(): ToolListEntry[] {
   });
 }
 
-/** Construct and return a configured MCP `Server` ready to be connected. */
+/**
+ * Construct and wire the MCP `Server`.
+ *
+ * Registers two request handlers: `ListTools` (returns the
+ * {@link buildToolList} catalogue) and `CallTool` (validates the name against
+ * {@link DISPATCH_TOOL_NAMES}, logs an anonymised start record, dispatches via
+ * {@link dispatchRead}, and maps success/failure to MCP responses).
+ *
+ * @returns the configured (but not yet connected) server.
+ *
+ * Error handling: an unknown tool, a thrown {@link ConfigServerError}, or any
+ * other thrown value all become a JSON error response — the handler never lets
+ * an exception escape to the transport. A tool that the dispatcher reports as
+ * unhandled is surfaced as `NotImplemented`.
+ */
 export async function createMcpServer(): Promise<Server> {
   const meta = await readPackageMeta();
   const server = new Server(
@@ -209,10 +242,7 @@ export async function createMcpServer(): Promise<Server> {
   const logger = getLogger();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    // MCP `tools/list` payload only needs the client-facing fields;
-    // the runtime-`required` declaration on each entry is internal to
-    // the framework's introspection surface. (It rides inside
-    // `inputSchema.required` for clients that validate.)
+
     const tools = buildToolList().map(({ name, description, inputSchema }) => ({
       name,
       description,
@@ -224,6 +254,8 @@ export async function createMcpServer(): Promise<Server> {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
 
+    // Reject unknown tools up front so the dispatch table is only ever invoked
+    // for a recognised name.
     if (!DISPATCH_TOOL_NAMES.includes(toolName)) {
       const err = createError('MalformedInput', {
         tool: toolName,
@@ -235,6 +267,7 @@ export async function createMcpServer(): Promise<Server> {
 
     try {
       const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      // Log only the anonymised argument shape — never raw values/state/hashes.
       logger.info('tools/call: start', {
         tool: toolName,
         anonymisedArgs: anonymiseToolArgs(args),
@@ -244,11 +277,12 @@ export async function createMcpServer(): Promise<Server> {
         logger.info('tools/call: ok', { tool: toolName, code: 'OK' });
         return successResponse(result);
       }
-
-      // Tools not yet wired (getStackConventions, getOverlayField) remain
-      // `NotImplemented` until their owning sprints land.
+      // Recognised name but no handler ran: treat as not-yet-implemented.
       throw createError('NotImplemented', { tool: toolName });
     } catch (e) {
+      // Map any throw to an error response: a ConfigServerError passes through
+      // with its code intact; anything else is wrapped as NotImplemented so the
+      // original message is preserved without leaking a stack to the client.
       const err =
         e instanceof ConfigServerError
           ? e
@@ -264,6 +298,8 @@ export async function createMcpServer(): Promise<Server> {
   return server;
 }
 
+// Wrap a tool's return value as a successful MCP text-content response (the
+// value is JSON-encoded into a single text block).
 function successResponse(value: unknown): {
   content: Array<{ type: 'text'; text: string }>;
 } {
@@ -272,6 +308,9 @@ function successResponse(value: unknown): {
   };
 }
 
+// Wrap an error as an MCP error response. The error is serialised via
+// `toJSON()` so the client receives the stable code + context, not the live
+// Error (name/stack are dropped).
 function errorResponse(err: ConfigServerError): {
   content: Array<{ type: 'text'; text: string }>;
   isError: true;
@@ -282,57 +321,38 @@ function errorResponse(err: ConfigServerError): {
   };
 }
 
-/** Sentinel returned by `dispatchRead` when the named tool is not handled. */
+// Sentinel returned by dispatchRead when no handler exists for a (recognised)
+// tool name. A unique Symbol so it can never collide with a real tool result,
+// including `undefined`/`null`.
 const UNHANDLED = Symbol('unhandled');
 type Unhandled = typeof UNHANDLED;
 
-/** Per-dispatch context passed to every handler. */
+// Per-call context threaded into every handler. Currently just the logger, so
+// trust-related tools can emit through the same sink.
 interface HandlerContext {
   logger: ReturnType<typeof getLogger>;
 }
 
-/**
- * One wired tool: takes the raw arguments dict (validated inside the
- * handler via the `require*` helpers) plus a logger context, returns
- * the tool's structured result. Handlers may be sync or async; the
- * dispatch wrapper awaits them uniformly.
- */
+// A tool handler: validates/extracts its args and invokes the implementation.
+// May be sync or async; the dispatcher awaits the result either way.
 type ToolHandler = (
   args: Record<string, unknown>,
   ctx: HandlerContext,
 ) => Promise<unknown> | unknown;
 
-/**
- * A single tool's full dispatch spec — the runtime contract co-located
- * with the runtime implementation. `required` lists the input fields
- * the handler will reject as missing (via the `require*` helpers); it
- * is the authoritative answer to "what does the runtime require?", and
- * `buildToolList` surfaces it on every entry so the documented schema
- * (`schemas/api-tools-v1.json`) can be verified against the same
- * structure that drives dispatch.
- */
+// One dispatch-table entry: the required input keys (advertised in the tool
+// list) plus the handler to run.
 interface ToolHandlerSpec {
   readonly required: readonly string[];
   readonly handler: ToolHandler;
 }
 
 /**
- * The single source of truth for which F2 / R5 tools the MCP server
- * actually serves. F5 slice 1: a tool's presence in this table ⇔
- * `tools/list` advertises it AND `dispatchRead` honours it. A tool
- * whose runtime is not implemented yet is absent here; `buildToolList`
- * filters it out automatically (so MCP clients never see a tool they
- * cannot call) and `dispatchRead` returns `UNHANDLED` for it, which
- * the MCP wrapper converts to `NotImplemented`. When v1.1 ships
- * `getOverlayField` or `getStackConventions`, the only change required
- * is adding the matching entry here — no edits in `buildToolList`, no
- * denylist to maintain.
- *
- * Each entry carries its `required` field list alongside its handler;
- * the two are co-located so the runtime contract cannot drift from the
- * implementation. `buildToolList` exposes the `required` declaration
- * on every entry so the schema-runtime parity test can read both
- * sides from the same surface.
+ * The dispatch table: tool name → its required args and handler. Each handler
+ * pulls its inputs from the raw `args` via the `require*`/`optional*` helpers
+ * (which throw `MalformedInput` on bad input) before calling the corresponding
+ * read/write/validate implementation. This table is the single source of truth
+ * for what each tool needs and does.
  */
 const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
   getApiVersion: {
@@ -535,10 +555,7 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       const key = requireStateKey(args, 'appendToModuleState');
       const fieldPath = requireFieldPath(args, 'appendToModuleState');
       const value = requirePresentValue(args, 'appendToModuleState', 'value');
-      // The library's `appendToModuleState` validates `duplicatePolicy`
-      // itself (throws `MalformedInput` on unknown strings) so the
-      // dispatcher passes the raw value through and the validation stays
-      // single-sourced.
+
       const duplicatePolicy = optionalDuplicatePolicy(args) as
         | 'error'
         | 'skip'
@@ -575,14 +592,10 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
   },
 };
 
-/**
- * Dispatch a tool call. Returns the wired handler's result, or the
- * `UNHANDLED` sentinel for any tool name that has no entry in
- * `TOOL_HANDLERS`. The MCP wrapper turns `UNHANDLED` into a
- * `NotImplemented` error. Input validation throws via
- * `createError('MalformedInput', …)` from inside each handler and is
- * caught upstream.
- */
+// Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
+// sentinel when no handler is registered (the caller then reports
+// NotImplemented). Despite the `Read` name it dispatches every tool kind
+// (read/write/validate).
 async function dispatchRead(
   toolName: string,
   args: Record<string, unknown>,
@@ -593,7 +606,8 @@ async function dispatchRead(
   return spec.handler(args, { logger });
 }
 
-/** Validate that `fieldPath` is a non-empty string; throw `MalformedInput` otherwise. */
+// Extract a required non-empty `fieldPath` string, or throw MalformedInput
+// (tagged with the tool name and field) so the caller sees a precise error.
 function requireFieldPath(args: Record<string, unknown>, tool: string): string {
   const fp = args['fieldPath'];
   if (typeof fp !== 'string' || fp.length === 0) {
@@ -606,12 +620,7 @@ function requireFieldPath(args: Record<string, unknown>, tool: string): string {
   return fp;
 }
 
-/**
- * Validate that `key` is a non-empty string; throw `MalformedInput`
- * otherwise. Used by the four module-state tools (M3 per-key
- * contract). The allowlist gate against the manifest's `stateKeys`
- * happens downstream — this helper only checks shape.
- */
+// Extract a required non-empty module-state `key`, or throw MalformedInput.
 function requireStateKey(args: Record<string, unknown>, tool: string): string {
   const k = args['key'];
   if (typeof k !== 'string' || k.length === 0) {
@@ -624,13 +633,7 @@ function requireStateKey(args: Record<string, unknown>, tool: string): string {
   return k;
 }
 
-/**
- * Validate that `entryKey` is a non-empty string; throw
- * `MalformedInput` otherwise. Used by `removeFromModuleState`'s
- * keyed-lookup contract (M3): the function removes by map property
- * name (for map-shaped state) or by `key` field (for list-of-`{key,
- * …}`-shaped state). The on-disk shape check happens downstream.
- */
+// Extract a required non-empty `entryKey`, or throw MalformedInput.
 function requireEntryKey(args: Record<string, unknown>, tool: string): string {
   const k = args['entryKey'];
   if (typeof k !== 'string' || k.length === 0) {
@@ -643,18 +646,17 @@ function requireEntryKey(args: Record<string, unknown>, tool: string): string {
   return k;
 }
 
+// Read an optional argument as-is, without presence/type validation
+// (defaults to the `value` key). Used for payloads the impl validates itself,
+// e.g. a module manifest.
 function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
   return args[key];
 }
 
-/**
- * Validate that a payload field (`value`, `state`, etc.) is present in
- * the input. Distinct from `readValue` because the write-class tools
- * MUST receive a payload — passing `undefined` would otherwise
- * silently propagate into the on-disk shape. Throws `MalformedInput`
- * with a structured `field` so callers (including the schema-runtime
- * parity test) can match the missing field by name.
- */
+// Require that `fieldName` is present (own key) and not `undefined`, returning
+// its value, or throw MalformedInput. Unlike a type check this permits any
+// value — including `null`/`false`/`0`/`""` — so a deliberate falsy payload is
+// accepted; only a truly missing/undefined one is rejected.
 function requirePresentValue(
   args: Record<string, unknown>,
   tool: string,
@@ -670,34 +672,26 @@ function requirePresentValue(
   return args[fieldName];
 }
 
-/**
- * Read an optional `duplicatePolicy` argument and pass through any
- * recognised string verbatim. Unknown strings (and non-string
- * values) are returned as-is so the downstream library function
- * can throw `MalformedInput` consistently — keeping the validation
- * single-sourced inside `appendToModuleState`. `undefined` (the
- * absent-key case) is returned untouched so the library default
- * applies.
- */
+// Read the optional `duplicatePolicy` argument. Returns undefined when absent
+// (the impl applies its own default); the raw value is passed through
+// unvalidated for the impl to range-check.
 function optionalDuplicatePolicy(args: Record<string, unknown>): unknown {
   if (!Object.prototype.hasOwnProperty.call(args, 'duplicatePolicy')) return undefined;
   return args['duplicatePolicy'];
 }
 
 /**
- * Build an anonymised view of the tool's input arguments suitable for the
- * per-call start log. Per F4 + the centralised log-routing rule, we never
- * echo `value` payloads, overlay contents, trust hashes, or `manifest`
- * blobs. We log only field *names* (the safe metadata) plus identifiers
- * the user already shares (`projectRoot`, `name`, `tier`, `fieldPath`).
+ * Redact tool arguments to a log-safe summary.
  *
- * The forbidden-key set in `logger.sanitiseMeta` only strips *top-level*
- * meta keys (e.g. a stray `value` passed alongside `tool`), so we
- * deliberately rebrand the anonymised slots here: the redacted
- * description is keyed under `valueShape` / `manifestShape` / etc., never
- * `value` / `manifest` / `state` / `trustHash` / `contentHash`. This way
- * even if a downstream consumer flattens the anonymisedArgs dict, the
- * redacted entries cannot collide with the forbidden top-level names.
+ * Sensitive payloads (`value`, `state`, `manifest`) are reduced to a shape
+ * descriptor; secret-bearing keys (`contentHash`/`trustHash`/`hash`, plus
+ * `key`/`entryKey`, which can themselves be sensitive identifiers) become mere
+ * presence booleans; only the non-sensitive routing args
+ * (`projectRoot`/`name`/`tier`/`fieldPath`) are logged verbatim. Any other key
+ * is summarised by shape. This is the mechanism behind the module-level
+ * guarantee that no config content reaches a log.
+ *
+ * @returns a new object safe to embed in a log entry.
  */
 function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -719,17 +713,12 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       continue;
     }
     if (k === 'key') {
-      // Module-state `key` is user-defined (declared in a module's
-      // manifest `stateKeys` allowlist). Treat it as opaque in logs —
-      // a module author may legitimately name keys after internal
-      // namespaces, and the per-run log line should not echo those
-      // strings. Echo presence only, never the raw value.
+
       out['keyPresent'] = typeof args[k] === 'string';
       continue;
     }
     if (k === 'entryKey') {
-      // Same reasoning as `key`: caller-supplied string used to address
-      // a slot within module state. Echo presence only.
+
       out['entryKeyPresent'] = typeof args[k] === 'string';
       continue;
     }
@@ -737,13 +726,15 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       out[k] = args[k];
       continue;
     }
-    // Unknown keys: echo presence only, never the raw value. Rename to
-    // `<key>Shape` so this branch can never resurrect a forbidden name.
+
     out[`${k}Shape`] = describeRedactedShape(args[k]);
   }
   return out;
 }
 
+// Describe a value's shape for logging without revealing its contents: null /
+// undefined are named, arrays report only their length, everything else
+// reports its `typeof`. Never emits the actual value.
 function describeRedactedShape(v: unknown): string {
   if (v === null) return 'null';
   if (v === undefined) return 'undefined';
@@ -751,22 +742,31 @@ function describeRedactedShape(v: unknown): string {
   return typeof v;
 }
 
+// Read the optional `contentHash` argument (string only, else undefined). Note
+// the write impl recomputes the hash from disk and does not trust this value;
+// it is accepted for callers that wish to assert the hash they observed.
 function optionalContentHash(args: Record<string, unknown>): string | undefined {
   const v = args['contentHash'];
   return typeof v === 'string' ? v : undefined;
 }
 
+// Read the optional trust-approval `note` (non-empty string only). An empty
+// string is treated as absent so a blank note is never persisted.
 function optionalNote(args: Record<string, unknown>): string | undefined {
   const v = args['note'];
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
-/** Run the server over stdio. Resolves when stdin closes. */
+/**
+ * Run the server in MCP stdio mode: create the server, connect it over
+ * stdin/stdout, and resolve only when stdin closes/ends (i.e. the client
+ * disconnects), keeping the process alive for the session in between.
+ */
 export async function runStdio(): Promise<void> {
   const server = await createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // Resolve cleanly when stdin ends, so the process exits.
+
   await new Promise<void>((resolve) => {
     process.stdin.on('close', () => resolve());
     process.stdin.on('end', () => resolve());
@@ -774,17 +774,12 @@ export async function runStdio(): Promise<void> {
 }
 
 /**
- * CLI dispatch. With no recognised flag, runs as an MCP server over
- * stdio. Recognised short-circuits:
- *
- *   --version        Print the package version and exit 0.
- *   --validate-all   Run the full validation pipeline against `cwd` and
- *                    exit 0 (no issues) or 1 (one or more issues).
- *
- * `install.sh` invokes both as short-circuit probes; their absence here
- * caused the binary to enter MCP mode and block on stdin, which appeared
- * as an install hang on TTY (see install.sh `version_probe_mcp` /
- * `run_validate_all_best_effort`).
+ * CLI entry point. Dispatches on argv:
+ * - `--version` → print the package version and return.
+ * - `--validate-all` → validate the cwd; print issues and `process.exit(1)`
+ *   when any exist (so the command is usable as a CI gate), else print a clean
+ *   line and return.
+ * - otherwise → fall through to {@link runStdio} (MCP server mode).
  */
 export async function runCli(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -813,18 +808,17 @@ export async function runCli(): Promise<void> {
   await runStdio();
 }
 
+// True when this module is the process entry point (run directly as the bin),
+// as opposed to being imported by another module or a test. Computed once at
+// load time by comparing this module's own file to argv[1]. Both sides are
+// passed through realpathSync so a symlinked bin (the common npm install shape)
+// still matches its real target; if either realpath fails the pre-resolved
+// path is used as the fallback. Guards the auto-run block below so importing
+// the module never starts the server.
 const invokedAsBin = (() => {
   if (typeof process.argv[1] !== 'string') return false;
   try {
-    // `process.argv[1]` may be a symlink (npm bin shims always are), so
-    // `path.resolve` alone is not enough — Node's module loader resolves
-    // `import.meta.url` to the realpath, which means a naive
-    // path-equality check returns `false` for every symlinked invocation
-    // and the server silently exits without ever starting. `realpathSync`
-    // on both sides equalises the comparison.
-    //
-    // If realpath fails (file missing, permissions), fall back to the
-    // path.resolve form — it's no worse than the original.
+
     const here = fileURLToPath(import.meta.url);
     let entry = path.resolve(process.argv[1]);
     try {
@@ -844,6 +838,9 @@ const invokedAsBin = (() => {
   }
 })();
 
+// Auto-run only when invoked as the bin. A fatal error is reported as a single
+// JSON line on stderr and exits non-zero, so even startup failures are
+// machine-readable rather than an unhandled rejection.
 if (invokedAsBin) {
   runCli().catch((e) => {
     process.stderr.write(

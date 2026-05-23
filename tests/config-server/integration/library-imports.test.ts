@@ -1,17 +1,17 @@
 /**
- * R1 sprint 7 integration test — library import surface.
+ * Public-API surface guard for the package's library entrypoint
+ * (`src/index.ts`). The config-server is consumable two ways — as an MCP
+ * subprocess and as an imported library — and this suite locks the second
+ * contract: every read, write, and validate tool must be re-exported by name
+ * and be a callable function, and a representative call from each category must
+ * actually work end to end through the library barrel (not just be present).
  *
- * Confirms that every public API function the spec promises is reachable
- * via `from '../../../src/index.ts'` (the package's `main` entry point).
- * Each function is asserted to be a function (typeof === 'function');
- * one read function is invoked end to end as a smoke test to ensure the
- * re-export wiring runs.
- *
- * The list below is the union of F2 reads (minus the two deferred past
- * S2 — `getStackConventions` / `getOverlayField`), F2 writes, and the
- * three validate functions. If a future sprint exports a new function
- * via `src/index.ts`, this test should be updated to cover it.
+ * The three name lists mirror the tool taxonomy; if a tool is renamed, dropped,
+ * or a new one is added without wiring it into the barrel, the corresponding
+ * `typeof fn === 'function'` assertion fails — making accidental API breakage
+ * a test failure rather than a downstream consumer's runtime crash.
  */
+
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

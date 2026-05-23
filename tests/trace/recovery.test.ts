@@ -1,17 +1,31 @@
 /**
- * T1 Sprint 3 — recovery continuation (F3.8).
+ * Recovery-state reconstruction suite — proves a `--recover` resume can be
+ * driven entirely from the event files, with no external counter/state file.
  *
- * Covers contract criteria:
- *  - recovery_sequence_continuation_and_attempt_reconstruction
- *  - web_node_prototype_pollution (the recovery fold reuses scanEvents' guard)
+ * Sequence continuation (gaplessness): for a trace ending at sequence N,
+ * reconstructRecoveryState / nextRecoverySequence return N+1, and a TraceEmitter
+ * started at that resume point continues with no gap and no collision — the
+ * combined on-disk sequence stays a contiguous run. An empty/never-started
+ * trace resumes at 0.
  *
- * Two reconstructions, both purely from the existing trace (no external
- * counter file):
- *  (a) the resume sequence is one more than the highest present sequence, and
- *      a TraceEmitter constructed with that startSequence continues gaplessly;
- *  (b) per-role attempt-counter state equals the count (and highest
- *      attemptNumber) of agentAttempt events for that role.
+ * Attempt-counter reconstruction: per-role attemptCount and highestAttemptNumber
+ * are derived purely from the agentAttempt events (no counter file), a trace
+ * with none yields an empty per-role map, and an emitter-produced trace
+ * round-trips to the same counts.
+ *
+ * Prototype-pollution guard (recovery reuses the scan's guard): an adversarial
+ * `__proto__` event file is dropped by the scan and must not pollute
+ * Object.prototype, the counter map, or admit a phantom role; the reconstructed
+ * counter map is itself a null-prototype object.
+ *
+ * Forward-compat: recovery resumes PAST an unknown-class event that holds the
+ * highest sequence (the resume point still advances to N+1 gaplessly) while
+ * attributing attempt counts only to the known agentAttempt events.
+ *
+ * writeRawEvent plants event files directly (bypassing the emitter) so tests
+ * can construct mixed-class, malformed, and unknown-class traces by hand.
  */
+
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -81,7 +95,7 @@ function milestone(seq: number): Record<string, unknown> {
 describe('recovery sequence continuation', () => {
   it('resumes at N+1 for a trace ending at sequence N (mixed event classes)', () => {
     const root = makeRoot();
-    // A trace ending at sequence 5, with a mix of classes.
+
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
     writeRawEvent(root, 2, milestone(2));
@@ -117,7 +131,8 @@ describe('recovery sequence continuation', () => {
     expect(ev3.sequenceNumber).toBe(3);
     expect(ev4.sequenceNumber).toBe(4);
 
-    // Gapless, no collision: 0..4 all present exactly once.
+    // The pre-existing 0..2 and the resumed 3..4 form one contiguous run —
+    // this is the gaplessness invariant a resume must preserve.
     const { events } = scanEvents(root);
     expect(events.map((e) => e.sequenceNumber)).toEqual([0, 1, 2, 3, 4]);
   });
@@ -133,8 +148,10 @@ describe('recovery sequence continuation', () => {
 describe('attempt-counter reconstruction (no external counter file)', () => {
   it('reconstructs per-role attempt count and highest attemptNumber from agentAttempt events', () => {
     const root = makeRoot();
-    // gan-generator: attempts 1, 2, 3 (count 3, highest 3).
-    // gan-evaluator: attempt 1 (count 1, highest 1).
+
+    // gan-generator attempts three times (seq 1,3,4) interleaved with one
+    // gan-evaluator attempt — so per-role counts must be attributed by role,
+    // not by total agentAttempt count.
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
     writeRawEvent(root, 2, agentAttempt(2, 'gan-evaluator', 1));
@@ -150,7 +167,7 @@ describe('attempt-counter reconstruction (no external counter file)', () => {
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
-    // No counter file exists on disk; the state came purely from the events.
+
     expect(state.nextSequence).toBe(5);
   });
 
@@ -193,9 +210,7 @@ describe('web_node_prototype_pollution (recovery fold reuses the guard)', () => 
   it('a malformed adversarial event is dropped by the scan and does not pollute the counter map or Object.prototype', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, agentAttempt(0, 'gan-generator', 1));
-    // An adversarial archived event carrying a __proto__ key. scanEvents (which
-    // reconstructRecoveryState reuses) guards against prototype pollution and
-    // classifies the file malformed rather than folding it in.
+
     const dir = eventsDir(root);
     writeFileSync(
       path.join(dir, eventFilename(1)),
@@ -204,16 +219,16 @@ describe('web_node_prototype_pollution (recovery fold reuses the guard)', () => 
     );
 
     const state = reconstructRecoveryState(root);
-    // The polluted key never reached any prototype chain.
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(({} as any).polluted).toBeUndefined();
     expect(Object.getPrototypeOf(state.attemptStateByRole)).toBeNull();
-    // Only the well-formed attempt was folded in.
+
     expect(state.attemptStateByRole['gan-generator']).toEqual({
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
-    // The malformed file did not contribute a counter for a forbidden key.
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((state.attemptStateByRole as any).polluted).toBeUndefined();
   });
@@ -241,20 +256,20 @@ describe('forward-compat: recovery past an unknown event class', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, milestone(0));
     writeRawEvent(root, 1, agentAttempt(1, 'gan-generator', 1));
-    // The trace ends with an event class this v1 reader does not know. It must
-    // still count for sequence continuation, or recovery would reuse seq 2.
+
+    // The highest-sequence event is an unknown class; the resume point must
+    // still advance past it (to 3) even though recovery can't interpret it.
     writeRawEvent(root, 2, unknownClass(2));
 
     const state = reconstructRecoveryState(root);
     expect(state.nextSequence).toBe(3);
     expect(nextRecoverySequence(root)).toBe(3);
-    // The unknown class is not folded into the known-class attempt counters.
+
     expect(state.attemptStateByRole['gan-generator']).toEqual({
       attemptCount: 1,
       highestAttemptNumber: 1,
     });
 
-    // A TraceEmitter resuming at the reconstructed sequence continues gaplessly.
     const emitter = new TraceEmitter(
       { traceRoot: root, runId: RUN_ID, startSequence: state.nextSequence },
       fixedClock(),

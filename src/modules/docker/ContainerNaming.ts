@@ -1,22 +1,16 @@
 /**
- * ContainerNaming — deterministic, container-safe names derived from
- * worktree paths.
+ * ContainerNaming — derive a stable, Docker-safe container name from a
+ * worktree path.
  *
- * **Algorithm (pinned).** Given a `worktreePath`:
- *
- *   1. Take the **last path segment** of `worktreePath`.
- *   2. **Lowercase** it.
- *   3. Replace any character outside `[a-z0-9_.-]` with `-`.
- *   4. **Collapse runs of `-`** into a single `-`.
- *   5. **Trim leading characters** until the first `[a-z0-9]`.
- *   6. Append `-<4-hex>` where `<4-hex>` is
- *      `crypto.createHash('sha256').update(<canonical worktree path>)
- *       .digest('hex').slice(0, 4)`.
- *
- * The canonical worktree path is computed via the project's central
- * canonicalisation helper (`canonicalizePath` from
- * `src/config-server/determinism/`). The hash is therefore stable across
- * symlinks and (on case-insensitive filesystems) case differences.
+ * A `/gan` run wants a container name that is both human-recognisable (so a
+ * `docker ps` listing is readable) and collision-resistant (so two worktrees
+ * whose basenames coincide do not fight over one container). The name this
+ * module produces satisfies both: a sanitised, readable "core" taken from the
+ * worktree's basename, plus a short hash suffix derived from the *canonical*
+ * full path. Two distinct worktrees therefore always get distinct names even
+ * when their last path segment is identical, and the same worktree always maps
+ * to the same name (deterministic — the hash is over the canonical path, not
+ * the raw input).
  */
 
 import { createHash } from 'node:crypto';
@@ -25,34 +19,49 @@ import path from 'node:path';
 import { canonicalizePath } from '../../config-server/determinism/index.js';
 
 /**
- * Reserved for future knobs; v1 uses none. Kept on the signature so
- * callers compile without changes when knobs land. We use a record
- * type rather than an empty interface to satisfy the project's
- * `@typescript-eslint/no-empty-object-type` lint rule.
+ * Options bag for {@link nameForWorktree}. Currently empty (`Record<string,
+ * never>`) — it exists so future knobs can be added without changing the
+ * call signature.
  */
 export type NameForWorktreeOptions = Record<string, never>;
 
 /**
- * Build the deterministic container name for `worktreePath`. See the
- * algorithm in the file-level doc comment — this is the single
- * implementation; do not duplicate the steps elsewhere.
+ * Build the Docker container name for a worktree.
+ *
+ * @param worktreePath the worktree's path; both its basename (for the readable
+ *   core) and its canonical form (for the disambiguating hash) are used.
+ * @param _options reserved for future use; currently ignored.
+ * @returns `<sanitised-core>-<4-hex>`, deterministic for a given worktree.
+ *
+ * Determinism note: the hash is taken over {@link canonicalizePath} of the
+ * input, so symlinked/relative spellings of the same worktree collapse to the
+ * same suffix. The 4-hex (16-bit) suffix only disambiguates basename
+ * collisions; it is not a cryptographic identifier.
  */
 export function nameForWorktree(
   worktreePath: string,
   _options: NameForWorktreeOptions = {},
 ): string {
-  // Step 1: last path segment.
+
+  // Prefer the basename for readability; fall back to the whole path when the
+  // basename is empty (e.g. a trailing-slash root).
   const last = path.basename(worktreePath) || worktreePath;
-  // Step 2: lowercase.
+
+  // Docker names are case-insensitive and restricted; lowercase first.
   let core = last.toLowerCase();
-  // Step 3: replace non-[a-z0-9_.-] with '-'.
+
+  // Replace any character outside the Docker-name-safe set with a hyphen.
   core = core.replace(/[^a-z0-9_.\-]/g, '-');
-  // Step 4: collapse runs of '-' into a single '-'.
+
+  // Collapse hyphen runs (from the substitution above) into a single hyphen.
   core = core.replace(/-+/g, '-');
-  // Step 5: trim leading characters until the first [a-z0-9].
+
+  // Docker names must begin with an alphanumeric, so strip a leading
+  // non-alphanumeric prefix.
   core = core.replace(/^[^a-z0-9]+/, '');
 
-  // Step 6: append '-<4-hex>' from sha256(canonical worktree path).
+  // Suffix derives from the canonical path (not `core`) so basename collisions
+  // disambiguate; first 4 hex chars are enough to separate worktrees readably.
   const canonical = canonicalizePath(worktreePath);
   const hex = createHash('sha256').update(canonical).digest('hex').slice(0, 4);
 

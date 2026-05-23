@@ -1,39 +1,26 @@
-/**
- * Module loader (M1).
- *
- * Discovery + registration for the M1 modules surface. Replaces R1's
- * "module surface no-op contract" with real machinery so M2 (and future
- * module specs) can plug in without further architectural work.
- *
- * Responsibilities:
- *
- *  1. **Discovery.** `loadModules(modulesRoot)` scans
- *     `<modulesRoot>/<name>/manifest.json`, validates each manifest
- *     against `schemas/module-manifest-v1.json` (ajv), and returns one
- *     `ModuleRegistration` per valid manifest. A directory without a
- *     `manifest.json` is silently skipped (the directory may be a
- *     work-in-progress module, an `__shared__` helper subtree, etc.).
- *
- *  2. **Registration.** Two modules sharing the same `manifest.name`
- *     halt server start with a `ModuleCollision` structured error. Two
- *     modules sharing a `pairsWith` value but distinct `name`s register
- *     without error (the invariant enforces consistency at validate
- *     time, not at registration).
- *
- *  3. **Lifecycle.** Each manifest's `prerequisites[].command` is
- *     executed via `child_process.execFileSync`. The command is
- *     whitespace-split, no shell expansion: the first token is the
- *     executable, remaining tokens are arguments. Exit 0 means pass;
- *     non-zero (or missing binary) means fail. Failure throws via
- *     the central error factory; the manifest's `errorHint` is
- *     reachable via `error.message` and `error.details.errorHint`.
- *
- * Production callers in `tools/reads.ts` / `tools/writes.ts` resolve
- * `modulesRoot` to the package's `src/modules/` directory via
- * `defaultModulesRoot()`. Tests pass a fixture path. There is no env
- * var or runtime knob for module discovery — the resolver is the API.
- */
 
+
+/**
+ * The module registry and module-state I/O for the config-server.
+ *
+ * A "module" is an installable extension that ships a `manifest.json` declaring
+ * its name, exports, optional prerequisites, and the `stateKeys` it is allowed
+ * to persist. This module discovers modules from a directory tree, validates
+ * each manifest against the bundled JSON schema, enforces name uniqueness, runs
+ * declared prerequisite commands, and exposes read access to per-module state
+ * plus the allowlist gate that write tools call before persisting state.
+ *
+ * Two cross-cutting guarantees:
+ * - Discovery is deterministic: directory entries are locale-sorted and the
+ *   final registration list is name-sorted, so the registry order does not
+ *   depend on filesystem iteration order.
+ * - State-key writes are allowlisted: {@link assertStateKeyAllowed} is the
+ *   single gate, and a key absent from the manifest's `stateKeys` is rejected
+ *   (THROWN `UnknownStateKey`) before any path or file is created.
+ *
+ * The registry is process-cached (keyed by modules root) for the lifetime of
+ * the process; {@link _resetModuleRegistrationCacheForTests} clears it.
+ */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -52,18 +39,20 @@ import {
   resolveRepoModuleStateDir,
 } from './module-state-store.js';
 
-// Ajv2020 ships as CJS; under TS NodeNext + esModuleInterop the default
-// import is the constructor at runtime but the namespace at type-check
-// time. Re-cast via `unknown` so the call site stays a single
-// `new Ajv2020(...)`.
 type AjvCtor = new (opts?: Record<string, unknown>) => {
   compile: (schema: unknown) => ValidateFunction;
 };
+// Ajv's ESM/CJS interop ships the constructor either as the module's `default`
+// export or as the module object itself depending on the loader; pick whichever
+// is present so this works under both module systems.
 const Ajv2020: AjvCtor =
   ((AjvImport2020 as unknown as { default?: AjvCtor }).default as AjvCtor | undefined) ??
   (AjvImport2020 as unknown as AjvCtor);
 
+// Compiling an Ajv schema is comparatively expensive, so the manifest validator
+// is built once on first use and reused for every manifest in the run.
 let manifestValidator: ValidateFunction | null = null;
+/** Lazily compile (and memoise) the module-manifest schema validator. */
 function getManifestValidator(): ValidateFunction {
   if (manifestValidator !== null) return manifestValidator;
   const ajv = new Ajv2020({ strict: true, allErrors: true, useDefaults: false });
@@ -72,10 +61,20 @@ function getManifestValidator(): ValidateFunction {
 }
 
 /**
- * Manifest shape after schema validation. Only fields the loader cares
- * about are typed strictly; unknown additional fields are forbidden by
- * `additionalProperties: false` in the schema, so this interface is the
- * complete surface.
+ * The validated shape of a module's `manifest.json`. Matches the bundled
+ * `moduleManifestV1` JSON schema; a parsed manifest is only cast to this type
+ * after passing validation.
+ *
+ * @property name unique module name (registry key).
+ * @property schemaVersion manifest schema version; pinned to `1`.
+ * @property description human-readable summary.
+ * @property exports the symbols/files the module contributes.
+ * @property pairsWith optional name of a companion module.
+ * @property prerequisites optional commands that must succeed before the module
+ *   loads, each paired with an `errorHint` shown if it fails.
+ * @property stateKeys optional allowlist of keys the module may persist state
+ *   under; a key not listed here cannot be written.
+ * @property configKey optional key under which the module reads project config.
  */
 export interface ModuleManifest {
   name: string;
@@ -88,7 +87,14 @@ export interface ModuleManifest {
   configKey?: string;
 }
 
-/** A registered module: validated manifest + the absolute path it loaded from. */
+/**
+ * A discovered, validated module.
+ *
+ * @property name the module's name (copied from the manifest for convenience).
+ * @property manifestPath absolute path to the `manifest.json` it was loaded
+ *   from.
+ * @property manifest the parsed, schema-valid manifest.
+ */
 export interface ModuleRegistration {
   name: string;
   manifestPath: string;
@@ -96,8 +102,10 @@ export interface ModuleRegistration {
 }
 
 /**
- * Persisted module-state record. The storage layer treats state as an
- * opaque JSON blob keyed by module name; structure is defined per module.
+ * A module's persisted state for one key.
+ *
+ * @property name the owning module.
+ * @property state the parsed JSON state value (any shape the module stored).
  */
 export interface ModuleStateRecord {
   name: string;
@@ -105,31 +113,30 @@ export interface ModuleStateRecord {
 }
 
 /**
- * Resolve the production modules root: `<packageRoot>/src/modules/`.
- * Tests pass an explicit `modulesRoot` and avoid this helper.
+ * The default root under which bundled modules live: `<packageRoot>/src/modules`.
+ * Resolved relative to the installed package, so it points at the framework's
+ * own modules regardless of the consuming project's cwd.
  */
 export function defaultModulesRoot(): string {
   return path.join(resolvePackageRoot(), 'src', 'modules');
 }
 
 /**
- * Discover and register every module under `modulesRoot`.
+ * Discover and validate every module under `modulesRoot`.
  *
- * Pipeline per directory entry:
+ * Scans each immediate subdirectory for a `manifest.json`, validates it,
+ * runs its prerequisites, and collects a registration. Entries that are not
+ * directories or lack a manifest are skipped silently (not every directory is a
+ * module). Directory listing is locale-sorted for deterministic processing
+ * order, and the returned list is sorted by module name.
  *
- *   1. Skip if not a directory.
- *   2. Skip if it has no `manifest.json` (no error — discovery is opt-in).
- *   3. Read + JSON-parse the manifest.
- *   4. Validate against `module-manifest-v1`. Failure = `ModuleManifestInvalid`.
- *   5. Run each `prerequisites[].command` via `execFileSync`. Failure =
- *      `ModulePrerequisiteFailed` whose message includes the manifest's
- *      `errorHint`.
- *   6. Append a `ModuleRegistration`.
+ * @param modulesRoot directory containing one subdirectory per module.
+ * @returns the registrations, name-sorted; an empty array if `modulesRoot` does
+ *   not exist or cannot be read.
  *
- * After the loop runs, `name` collisions raise `ModuleCollision`.
- *
- * Output is sorted by `name` (locale sort) so registry iteration order
- * is deterministic.
+ * Failure modes (all THROWN as `ConfigServerError`): an invalid/unreadable
+ * manifest → `ModuleManifestInvalid`; a failed prerequisite →
+ * `ModulePrerequisiteFailed`; two modules sharing a name → `ModuleCollision`.
  */
 export function loadModules(modulesRoot: string): ModuleRegistration[] {
   if (!existsSync(modulesRoot)) return [];
@@ -141,6 +148,9 @@ export function loadModules(modulesRoot: string): ModuleRegistration[] {
   }
 
   const registrations: ModuleRegistration[] = [];
+  // Locale-sort up front so manifest reading, prerequisite execution, and the
+  // collision check all observe a deterministic order independent of the OS's
+  // directory iteration order.
   const sortedEntries = localeSort(entries);
 
   for (const entry of sortedEntries) {
@@ -163,15 +173,20 @@ export function loadModules(modulesRoot: string): ModuleRegistration[] {
 
   detectCollisions(registrations);
 
-  // Sort by name so consumer iteration is deterministic.
+  // Final sort by module name gives callers a stable, name-keyed registry order
+  // regardless of how the directories were laid out on disk.
   registrations.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return registrations;
 }
 
 /**
- * Read + parse + ajv-validate a manifest file. Throws via the central
- * error factory on any failure (file unreadable, invalid JSON, schema
- * violation). Per AC5 a schema-invalid manifest prevents server start.
+ * Read, JSON-parse, and schema-validate a single `manifest.json`.
+ *
+ * @param manifestPath absolute path to the manifest file.
+ * @returns the validated manifest (safe to cast to {@link ModuleManifest}).
+ * @throws `ConfigServerError('ModuleManifestInvalid')` when the file cannot be
+ *   read, is not valid JSON, or fails schema validation — the schema errors are
+ *   joined into the message so the author sees exactly what is wrong.
  */
 function readAndValidateManifest(manifestPath: string): ModuleManifest {
   let raw: string;
@@ -214,17 +229,24 @@ function readAndValidateManifest(manifestPath: string): ModuleManifest {
 }
 
 /**
- * Run every prerequisite command for a manifest. Each command is
- * whitespace-split (no shell expansion) and dispatched via
- * `execFileSync`. Non-zero exit, missing binary, or any spawn error
- * counts as failure and throws `ModulePrerequisiteFailed`. The thrown
- * error's `message` includes the manifest's `errorHint`, and a
- * `details.errorHint` field carries the same string for callers that
- * prefer structured access.
+ * Run a module's declared prerequisite commands, failing the load if any does.
+ *
+ * Each prerequisite is a whitespace-delimited command run with `execFileSync`
+ * (no shell, so the command string is not subject to shell interpretation).
+ * The author-supplied `errorHint` is appended to the thrown message so the user
+ * gets actionable guidance (e.g. "install Docker").
+ *
+ * @param manifest the module whose `prerequisites` to run; a manifest with none
+ *   is a no-op.
+ * @param manifestPath path attached to thrown errors for context.
+ * @throws `ConfigServerError('ModulePrerequisiteFailed')` when a command is
+ *   empty after splitting, or exits non-zero / cannot be spawned.
  */
 function runPrerequisites(manifest: ModuleManifest, manifestPath: string): void {
   if (!manifest.prerequisites) return;
   for (const prereq of manifest.prerequisites) {
+    // Split into argv tokens (file + args) so the command runs without a shell;
+    // an all-whitespace command yields zero tokens and is rejected below.
     const tokens = prereq.command.split(/\s+/).filter((t) => t.length > 0);
     if (tokens.length === 0) {
       throw createError('ModulePrerequisiteFailed', {
@@ -251,10 +273,12 @@ function runPrerequisites(manifest: ModuleManifest, manifestPath: string): void 
 }
 
 /**
- * Halt server start when two registered modules share a `name`. Names
- * are the registration key; `pairsWith` collisions are NOT rejected
- * here (the `pairs-with-consistency` invariant decides whether a
- * `pairsWith` value is allowed).
+ * Enforce module-name uniqueness across all discovered registrations.
+ *
+ * @param registrations the full set being registered.
+ * @throws `ConfigServerError('ModuleCollision')` naming both manifest paths the
+ *   first time two modules claim the same name. Module names are the registry
+ *   keys, so a duplicate would make lookups ambiguous and must be a hard error.
  */
 function detectCollisions(registrations: ModuleRegistration[]): void {
   const seen = new Map<string, string>();
@@ -272,29 +296,16 @@ function detectCollisions(registrations: ModuleRegistration[]): void {
   }
 }
 
-// ---- module state I/O (zone 2) -------------------------------------------
-
 /**
- * Resolve the on-disk state file for a module + state key under the central,
- * repo-keyed module-state store:
- * `<module-state-root>/<repo-key>/<name>/<key>.json` (M3-locked per-key layout).
+ * Compute the on-disk path of a module's state file for `key`. Thin wrapper
+ * over {@link resolveModuleStatePath} kept here so callers in this layer have a
+ * single import surface for module state.
  *
- * F8 relocates module state out of `<projectRoot>/.gan-state/modules/<name>/`
- * into the repo-wide store so all worktrees of a repo share one tree and it
- * survives `git worktree remove`. `projectRoot` is no longer joined into the
- * path; it is now a *directory inside the repo* from which F7's repo-key is
- * derived (via git-common-dir), so two worktrees of the same repo resolve here
- * to the SAME file. Resolution is delegated to `module-state-store.ts` (the
- * repo-key, store-root precedence, and determinism are all reused from F7,
- * never re-implemented).
- *
- * Each declared `stateKeys` entry persists to its own file; the manifest's
- * `stateKeys` array is the authoritative allowlist enforced on writes (see
- * `assertStateKeyAllowed`). The path stays deterministic and exclusive to this
- * module (per F1's zone-2 ownership, preserved at the new location).
- *
- * @param opts optional home/env and git injection seams forwarded to the store
- *   (tests inject these; production passes nothing and uses the real seams).
+ * @param projectRoot the project (used to derive the repo-keyed store dir).
+ * @param name owning module.
+ * @param key the state key.
+ * @param opts optional store overrides (deps/exec seams) for tests.
+ * @returns the absolute `<...>/<name>/<key>.json` path. Pure; no I/O.
  */
 export function moduleStatePath(
   projectRoot: string,
@@ -306,15 +317,17 @@ export function moduleStatePath(
 }
 
 /**
- * Load a module's persisted state for the given `key`. Returns `null`
- * when the file is absent (no error — modules may have never written
- * state for this key). Read failures and JSON parse failures throw
- * via the factory so callers can distinguish "no state" from "corrupt
- * state".
+ * Load a module's persisted state for `key`.
  *
- * No allowlist enforcement here: reads against undeclared keys also
- * return `null` (consistent with "no file"). The write-path helpers
- * own the allowlist gate.
+ * @param name owning module.
+ * @param key the state key.
+ * @param projectRoot the project whose store is consulted.
+ * @param opts optional store overrides.
+ * @returns a {@link ModuleStateRecord} wrapping the parsed state, or `null` when
+ *   no state file exists for this `(module, key)` — an absent file is a normal
+ *   "no state yet" condition, not an error.
+ * @throws `ConfigServerError('MalformedInput')` when an existing file cannot be
+ *   read, or its contents are not valid JSON.
  */
 export function loadModuleState(
   name: string,
@@ -350,10 +363,11 @@ export function loadModuleState(
 }
 
 /**
- * Resolve the manifest-declared `stateKeys` array for a registered
- * module. Returns `[]` when the module is not registered or its
- * manifest omits `stateKeys` (which means "no keys allowed" per the
- * M3 contract — the module cannot persist any state).
+ * The allowlisted state keys a module may write, taken from its manifest.
+ *
+ * @param name the module to look up.
+ * @returns the manifest's `stateKeys`, or an empty array when the module is
+ *   unregistered or declares none. An empty result means *no* key is writable.
  */
 export function getModuleStateKeys(name: string): string[] {
   const registry = getRegisteredModules();
@@ -363,16 +377,15 @@ export function getModuleStateKeys(name: string): string[] {
 }
 
 /**
- * Allowlist gate for module-state writes. Throws `UnknownStateKey`
- * when `key` is not declared in the named module's manifest
- * `stateKeys` array. The error message names both the module and the
- * offending key (per M3-locked contract). Modules whose manifest
- * omits `stateKeys` always reject — they cannot persist any state.
+ * Gate a module-state write: assert that `key` is in module `name`'s declared
+ * `stateKeys` allowlist. Write tools call this *first*, before any path
+ * resolution or I/O, so a disallowed key can never produce a side effect.
  *
- * Used by `setModuleState` / `appendToModuleState` /
- * `removeFromModuleState` before any I/O. `getModuleState` does NOT
- * call this — undeclared-key reads return `null` consistently with
- * "no file".
+ * @param name owning module.
+ * @param key the key being written.
+ * @throws `ConfigServerError('UnknownStateKey')` when `key` is not allowlisted;
+ *   the message lists the declared keys (or `(none)`) and how to permit it.
+ *   Returns nothing on success.
  */
 export function assertStateKeyAllowed(name: string, key: string): void {
   const allowed = getModuleStateKeys(name);
@@ -389,18 +402,16 @@ export function assertStateKeyAllowed(name: string, key: string): void {
 }
 
 /**
- * List installed module names by scanning the per-repo module-state directory
- * `<module-state-root>/<repo-key>/<name>/` for module sub-directories. This is
- * the *state-side* listing (which modules have written persistent state), not
- * the *registration-side* listing (which manifests the loader knows about).
- * Callers usually want the latter (`loadModules()`); this helper is preserved
- * for the durable-state surface.
+ * List the modules that have state persisted for this project — i.e. the
+ * subdirectory names under the project's repo-keyed module-state directory.
  *
- * F8: the scan root is the repo-wide store keyed by F7's repo-key (derived from
- * `projectRoot` via git-common-dir), not `<projectRoot>/.gan-state/modules`, so
- * every worktree of a repo sees the same installed-module set.
+ * This reflects what has actually written state on disk, which may differ from
+ * the registered-modules set. The result is locale-sorted for determinism.
  *
- * @param opts optional home/env and git injection seams forwarded to the store.
+ * @param projectRoot the project whose state store is scanned.
+ * @param opts optional store overrides (deps/exec seams).
+ * @returns the sorted module-directory names; empty when the store directory is
+ *   absent or unreadable. Never throws — unreadable entries are skipped.
  */
 export function listInstalledModules(
   projectRoot: string,
@@ -428,19 +439,22 @@ export function listInstalledModules(
   return localeSort(out);
 }
 
-// ---- registration cache --------------------------------------------------
-
+// Process-lifetime cache of the registry, plus the root it was loaded from so a
+// changed root invalidates it. Module discovery touches the filesystem and runs
+// prerequisite commands, so it is done once and reused.
 let cachedRegistrations: ModuleRegistration[] | null = null;
 let cachedRoot: string | null = null;
 
 /**
- * Cached production view of the registered modules. Delegates to
- * `loadModules(defaultModulesRoot())` and memoises the result for the
- * server-process lifetime so the read-side tools do not pay the
- * scan + ajv cost on every call.
+ * Return the registered modules, loading and caching them on first call.
  *
- * Tests should NOT use this; they pass `modulesRoot` explicitly through
- * `loadModules` to keep state isolated.
+ * Uses {@link defaultModulesRoot} as the source. The cache is keyed by that
+ * root: if the root changes between calls the registry is reloaded. Subsequent
+ * calls with the same root return the cached list without re-touching disk.
+ *
+ * @returns the name-sorted registrations (possibly empty).
+ * @throws propagates any error from {@link loadModules} (invalid manifest,
+ *   failed prerequisite, name collision) on the load path.
  */
 export function getRegisteredModules(): ModuleRegistration[] {
   const root = defaultModulesRoot();
@@ -451,20 +465,23 @@ export function getRegisteredModules(): ModuleRegistration[] {
 }
 
 /**
- * Wrap `loadModules` in a guard that returns `[]` when the production
- * modules root does not exist on disk (e.g. tests running before any
- * concrete module ships). Manifest errors and collisions still throw.
+ * Load modules from `root`, treating a non-existent root as "no modules"
+ * (empty) rather than an error — installations without bundled modules are
+ * valid. Manifest/prerequisite/collision errors from a present root still throw.
  */
 function safeLoadModules(root: string): ModuleRegistration[] {
   if (!existsSync(root)) return [];
   return loadModules(root);
 }
 
-/** Reset the registration cache. Test-only. */
+/**
+ * Clear the process-level registry cache. Test-only seam (the `_` prefix marks
+ * it as such) so each test can start from a fresh registry rather than one
+ * polluted by a prior test's modules root.
+ */
 export function _resetModuleRegistrationCacheForTests(): void {
   cachedRegistrations = null;
   cachedRoot = null;
 }
 
-/** Re-export the structured-error class so callers can `instanceof` check. */
 export { ConfigServerError };

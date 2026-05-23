@@ -1,25 +1,24 @@
 /**
- * T1 Sprint 3 — the real-time stderr progress surface (F3.5, F3.6, F3.7).
+ * Human-readable progress strings derived from trace data.
  *
- * Three PURE formatting functions that produce the exact stderr lines the
- * spec pins. They are metadata-only by construction: each reads operational
- * fields (role, token counts, latency, cache-hit status, counts/sums) and
- * NEVER touches payload content (no prompt/response text, no hashes). The
- * orchestrator wires these to stderr (the live wiring is documented in
- * `skills/gan/SKILL.md`); here they are unit-testable string builders with
- * no I/O.
- *
- * Logging hygiene (spec "Logging hygiene" / "Stderr emission"): the progress
- * surface must never emit payload content. These functions accept only the
- * metadata fields, so a payload value cannot reach the output even by mistake.
+ * These helpers turn raw metrics and event streams into the one-line status
+ * messages a `/gan` run prints to the user (heartbeats, per-call summaries,
+ * end-of-sprint roll-ups). They are presentation-only: pure functions with no
+ * I/O and no side effects, so they are trivially testable and safe to call from
+ * anywhere. The aggregation here is deliberately tolerant of partial/empty
+ * input — a roll-up over zero events yields a well-formed zero summary rather
+ * than throwing.
  */
 
 import type { AgentAttemptEvent, LlmCallEvent, TraceEvent } from './events.js';
 
 /**
- * The metadata an `llmCall` summary line reads. A structural subset of
- * `LlmCallEvent` so a caller can pass either a full event or just the metric
- * fields — and so the type system forbids passing payload references in.
+ * Per-call metrics for a single LLM call summary line.
+ *
+ * @property role the agent role that made the call.
+ * @property tokensInput / tokensOutput / tokensCached token accounting.
+ * @property latencyMs call duration in milliseconds.
+ * @property cacheHit whether the call hit the prompt cache.
  */
 export interface LlmCallMetrics {
   role: string;
@@ -30,33 +29,22 @@ export interface LlmCallMetrics {
   cacheHit: boolean;
 }
 
-/**
- * Render the latency in the spec's documented seconds form: `latencyMs/1000`
- * with one decimal place (e.g. 2500 -> `2.5`, 8341 -> `8.3`). The trailing
- * `s` is appended by the caller's format string.
- */
+// Render a millisecond duration as fixed one-decimal seconds (e.g. 1500 → "1.5").
 function renderSeconds(latencyMs: number): string {
   return (latencyMs / 1000).toFixed(1);
 }
 
 /**
- * F3.5 — the agent-attempt heartbeat line, EXACTLY `[<role>] thinking...`.
- * Metadata-only: it carries the role and nothing else (no tokens, no
- * latency, no payload). Emitted once per attempt, before the first LLM call.
+ * The "still working" heartbeat line for a role, e.g. `[gan-generator]
+ * thinking...`. Pure; takes no metrics.
  */
 export function formatHeartbeat(role: string): string {
   return `[${role}] thinking...`;
 }
 
 /**
- * F3.6 — the per-LLM-call summary line, EXACTLY:
- *   `[<role>] <tokensInput> in / <tokensOutput> out / <tokensCached> cached / <latencyMs/1000>s [hit|miss]`
- *
- * The trailing bracket is `[hit]` when `cacheHit` is true and `[miss]` when
- * false, matching the spec's worked examples (e.g.
- * `[gan-planner] 4827 in / 612 out / 3201 cached / 8.3s [hit]`). Reads only the
- * metric fields of an `llmCall` event; the `promptRef`/`responseRef` content is
- * never consulted.
+ * Format a one-line summary of a completed LLM call: role, token in/out/cached
+ * counts, latency in seconds, and a `[hit]`/`[miss]` cache marker. Pure.
  */
 export function formatLlmCallSummary(metrics: LlmCallMetrics): string {
   const cache = metrics.cacheHit ? 'hit' : 'miss';
@@ -67,10 +55,9 @@ export function formatLlmCallSummary(metrics: LlmCallMetrics): string {
 }
 
 /**
- * Render an elapsed wall-clock duration in the spec's `<wallclock>` style
- * (e.g. `4m23s`). Whole seconds; minutes shown only when at least one minute
- * has elapsed. Sub-minute durations render as `<seconds>s` (e.g. `42s`);
- * durations of an hour or more render as `<h>h<m>m<s>s`.
+ * Format an elapsed duration as a compact wall-clock string, omitting
+ * higher units that are zero: `5s`, `2m5s`, or `1h2m5s`. A negative input is
+ * clamped to `0s`, so callers need not guard against clock skew.
  */
 export function formatWallclock(elapsedMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
@@ -82,28 +69,41 @@ export function formatWallclock(elapsedMs: number): string {
   return `${seconds}s`;
 }
 
-/** The aggregate a sprint-end summary line reports. */
+/**
+ * Roll-up totals across a sprint's events.
+ *
+ * @property calls number of LLM-call events.
+ * @property agents number of agent-attempt events.
+ * @property tokensInput / tokensOutput / tokensCached summed token counts
+ *   across all LLM calls.
+ * @property elapsedMs span between the first and last timestamped event; `0`
+ *   when fewer than two timestamps are present.
+ */
 export interface SprintSummaryAggregate {
-  /** Count of `llmCall` events. */
+
   calls: number;
-  /** Count of distinct agent attempts (`agentAttempt` events). */
+
   agents: number;
-  /** Summed `tokensInput` across the `llmCall` events. */
+
   tokensInput: number;
-  /** Summed `tokensOutput` across the `llmCall` events. */
+
   tokensOutput: number;
-  /** Summed `tokensCached` across the `llmCall` events. */
+
   tokensCached: number;
-  /** Elapsed wall-clock across the trace, in milliseconds. */
+
   elapsedMs: number;
 }
 
 /**
- * Aggregate the sprint-end metrics from a set of trace events: count the
- * `llmCall` events, count the `agentAttempt` events, sum the three token
- * metrics across the LLM calls, and compute the elapsed wall-clock as the
- * span between the earliest and latest event timestamps. Pure: it reads only
- * operational metadata (counts, sums, timestamps), never payload content.
+ * Fold an event stream into a {@link SprintSummaryAggregate}: count LLM calls
+ * and agent attempts, sum token usage, and compute the wall-clock span from the
+ * earliest to latest parseable timestamp.
+ *
+ * @param events the run's events (read-only); order does not matter.
+ * @returns the aggregate; an empty stream yields all-zero totals (never throws).
+ *
+ * Non-parseable timestamps are skipped for the span calculation, so one
+ * malformed event cannot collapse `elapsedMs` to a bogus value.
  */
 export function aggregateSprintSummary(events: readonly TraceEvent[]): SprintSummaryAggregate {
   let calls = 0;
@@ -127,7 +127,10 @@ export function aggregateSprintSummary(events: readonly TraceEvent[]): SprintSum
       tokensOutput += call.tokensOutput;
       tokensCached += call.tokensCached;
     } else if (ev.eventType === 'agentAttempt') {
-      // Count one per agentAttempt event (one per agent invocation, F2.2).
+
+      // We only count agent attempts, none of their fields feed the aggregate.
+      // The narrowing cast + void documents that the type was checked while
+      // making the deliberate non-use explicit (satisfies no-unused-expressions).
       void (ev as AgentAttemptEvent);
       agents += 1;
     }
@@ -138,12 +141,8 @@ export function aggregateSprintSummary(events: readonly TraceEvent[]): SprintSum
 }
 
 /**
- * F3.7 — the sprint-end cumulative summary line, EXACTLY:
- *   `[sprint-summary] <calls>/<agents> LLM calls / <in> in / <out> out / <cached> cached / <wallclock>`
- *
- * Accepts a pre-computed aggregate so the formatting stays a pure string
- * builder; callers typically pipe `aggregateSprintSummary(events)` straight
- * in. Dollar cost is NOT surfaced (deferred to T2).
+ * Format a pre-computed {@link SprintSummaryAggregate} into the one-line
+ * `[sprint-summary] …` roll-up. Pure.
  */
 export function formatSprintSummary(aggregate: SprintSummaryAggregate): string {
   return (
@@ -154,8 +153,8 @@ export function formatSprintSummary(aggregate: SprintSummaryAggregate): string {
 }
 
 /**
- * Convenience: aggregate a set of trace events and render the sprint-end
- * summary line in one call.
+ * Convenience composition: aggregate `events` and format the roll-up in one
+ * call. Equivalent to `formatSprintSummary(aggregateSprintSummary(events))`.
  */
 export function formatSprintSummaryFromEvents(events: readonly TraceEvent[]): string {
   return formatSprintSummary(aggregateSprintSummary(events));

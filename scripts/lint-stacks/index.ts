@@ -1,38 +1,19 @@
 #!/usr/bin/env node
 /**
- * R4 sprint 1 — `lint-stacks` maintainer script.
+ * `lint-stacks` CLI — validates a project's stack `.md` files.
  *
- * Walks `<projectRoot>/stacks/*.md` and applies two checks per file:
+ * Walks `<project-root>/stacks/*.md` and flags two failure classes per file:
+ * an unreplaced scaffold DRAFT banner (a file committed while still a
+ * half-finished template), and any violation of the published stack-v1 schema.
+ * It reuses the same `parseYamlBlock` + `validateStackBodyAgainstSchema` path
+ * the runtime uses, so a file that passes this lint is one the runtime accepts.
  *
- *   1. ScaffoldBannerPresent — the first non-blank prose line after the
- *      YAML block must NOT match the canonical DRAFT banner string.
- *      (The banner is a deliberate `gan stacks new` artefact; leaving
- *      it in is the framework's signal that the file is a half-finished
- *      scaffold.) The check imports the same `DRAFT_BANNER` constant
- *      that `gan stacks new` writes, so the two stay in lockstep.
- *
- *   2. SchemaMismatch — the YAML body parses against `stack-v1.json`
- *      (delegated to `validateStackBodyAgainstSchema`). All ajv errors
- *      are collected; the script does not short-circuit on the first
- *      violation.
- *
- * Per the single-implementation rule, both checks delegate to existing
- * code: the YAML parser, the schema validator, and the banner constant
- * are imported from `src/config-server/`. The script itself owns no
- * parsing or validation logic.
- *
- * Exit codes (per `SCRIPT_EXIT`):
- *   - 0 on a clean run (no failures);
- *   - 1 when one or more files fail either check;
- *   - 64 when the caller passed an unknown flag.
- *
- * Output:
- *   - default: one-line summary on stdout, one line per failure on
- *     stderr (path + code + message).
- *   - `--json`: a sorted-key two-space-indent JSON document on stdout
- *     with the failure list embedded.
+ * Output and exit codes follow the shared `scripts/lib` contract: a
+ * {@link RunResult} carrying stdout/stderr plus an exit code (`0` clean, `1`
+ * at least one failure, `64` usage error). `run` is exported and pure w.r.t.
+ * process state (it only reads files) so tests can drive it directly; `main`
+ * owns argv parsing and process I/O.
  */
-
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -50,8 +31,12 @@ import {
   type ReportFailure,
 } from '../lib/index.js';
 
+// Issue code emitted when a stack file still shows the scaffold DRAFT banner.
+// Defined as a named constant so the value is stated once and matched on by
+// tests/CI rather than duplicating the literal at the emit site.
 const SCAFFOLD_BANNER_CODE = 'ScaffoldBannerPresent';
 
+/** Build the `--help` text. Pure; returns the usage block as a single string. */
 function renderHelp(): string {
   return [
     'Usage: lint-stacks [--project-root <path>] [--json] [--quiet] [--help]',
@@ -76,21 +61,38 @@ function renderHelp(): string {
   ].join('\n');
 }
 
+/** What {@link run} returns: the text for each stream plus the process exit code. */
 interface RunResult {
   stdout: string;
   stderr: string;
   code: number;
 }
 
+/**
+ * Resolved options for {@link run}, produced by {@link main} from parsed argv.
+ *
+ * @property projectRoot canonical root whose `stacks/` directory is scanned.
+ * @property json emit the report as JSON instead of the human summary.
+ * @property quiet suppress the stdout summary on a clean run (failures still
+ *   print to stderr).
+ */
 interface RunOptions {
-  /** Pre-canonicalised project root. */
   projectRoot: string;
-  /** Emit the report as JSON instead of summary + per-failure stderr. */
+
   json: boolean;
-  /** Suppress the success-path stdout summary. */
+
   quiet: boolean;
 }
 
+/**
+ * List the stack files to check: `<projectRoot>/stacks/*.md`, sorted for
+ * deterministic output.
+ *
+ * Returns `[]` (not an error) when `stacks/` is absent or is not a directory —
+ * a project with no stacks legitimately has nothing to lint. Individual
+ * entries that cannot be `stat`ed are skipped silently, mirroring the
+ * runtime's own tolerance of unreadable entries. Only reads the filesystem.
+ */
 function listStackFiles(projectRoot: string): string[] {
   const stacksDir = path.join(projectRoot, 'stacks');
   let entries: string[];
@@ -99,9 +101,7 @@ function listStackFiles(projectRoot: string): string[] {
     if (!stat.isDirectory()) return [];
     entries = readdirSync(stacksDir);
   } catch {
-    // Missing `stacks/` directory is a clean state, not an error: a
-    // brand-new project root with zero stack files is "0 checked, 0
-    // failed".
+
     return [];
   }
   const files: string[] = [];
@@ -117,12 +117,17 @@ function listStackFiles(projectRoot: string): string[] {
       // same behaviour.
     }
   }
-  // Sort lexicographically so per-fixture test output is deterministic
-  // without depending on filesystem enumeration order.
+
   files.sort();
   return files;
 }
 
+/**
+ * Return the first line of `text` that is not blank/whitespace-only, with
+ * trailing whitespace trimmed, or `null` if every line is blank. Used to find
+ * the file's first prose line for the banner comparison, so leading blank
+ * lines before the banner do not hide it.
+ */
 function firstNonBlankLine(text: string): string | null {
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
@@ -132,6 +137,19 @@ function firstNonBlankLine(text: string): string | null {
   return null;
 }
 
+/**
+ * Check a single stack file and return its failures (empty array = clean).
+ *
+ * Runs three gates in order, each producing a {@link ReportFailure} keyed by a
+ * stable `code`: the file is read (`MissingFile` if unreadable, and the file
+ * is then skipped), its YAML block is parsed (the parser's own `code`, or
+ * `InvalidYAML`, on failure — again short-circuiting), then the parsed body is
+ * checked for the scaffold banner ({@link SCAFFOLD_BANNER_CODE}) and against
+ * the stack schema (one failure per schema {@link Issue}). Never throws:
+ * read/parse errors are caught and converted into failures. Only reads disk.
+ *
+ * @param absPath absolute path to the stack `.md` file.
+ */
 function checkFile(absPath: string): ReportFailure[] {
   const failures: ReportFailure[] = [];
   let text: string;
@@ -160,7 +178,6 @@ function checkFile(absPath: string): ReportFailure[] {
     return failures;
   }
 
-  // Banner check: first non-blank line of the prose AFTER the YAML block.
   const banner = firstNonBlankLine(parsed.prose.after);
   if (banner === DRAFT_BANNER) {
     failures.push({
@@ -174,7 +191,6 @@ function checkFile(absPath: string): ReportFailure[] {
     });
   }
 
-  // Schema check.
   const issues: Issue[] = [];
   validateStackBodyAgainstSchema(absPath, parsed.data, issues);
   for (const issue of issues) {
@@ -188,6 +204,17 @@ function checkFile(absPath: string): ReportFailure[] {
   return failures;
 }
 
+/**
+ * Lint every stack file under `opts.projectRoot` and render the result.
+ *
+ * Aggregates each file's {@link checkFile} failures, then renders either JSON
+ * (`opts.json`) or the human summary. The exit code in the returned
+ * {@link RunResult} is `SUCCESS` when there are no failures, else `FAILURE` —
+ * `BAD_ARGS` is never produced here (that is purely a `main`/argv concern).
+ * Side-effect-free apart from reading the stack files.
+ *
+ * @param opts resolved {@link RunOptions}.
+ */
 export function run(opts: RunOptions): RunResult {
   const files = listStackFiles(opts.projectRoot);
   const failures: ReportFailure[] = [];
@@ -218,9 +245,15 @@ export function run(opts: RunOptions): RunResult {
 }
 
 /**
- * Bin entry. Tests invoke the compiled output via
- * `child_process.spawn`, so this code path runs whenever the file is
- * the script's bin target.
+ * CLI entrypoint: parse argv, dispatch to {@link run}, and write its output.
+ *
+ * Returns the exit code rather than calling `process.exit`, so it is testable
+ * in-process. `--help` short-circuits with `SUCCESS` before any work; an
+ * unknown flag or unexpected positional returns `BAD_ARGS` without running the
+ * lint. Otherwise the {@link run} result's streams are written and its code
+ * returned. The only side effects are writing to stdout/stderr.
+ *
+ * @param argv argument tokens, typically `process.argv.slice(2)`.
  */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
@@ -259,6 +292,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   return result.code;
 }
 
+// Module-level invocation: run as a script and translate the resolved exit
+// code into the actual process exit. The rejection arm is the last-resort net
+// for an *unexpected* throw (everything anticipated is already returned as a
+// failure report); it prints a `fatal:` line and exits FAILURE so an
+// uncaught error can never masquerade as success.
 main(process.argv.slice(2)).then(
   (code) => {
     process.exit(code);

@@ -1,26 +1,12 @@
 /**
- * R-post sprint 6 — `gan stacks customize <name> [--tier=project|user] [--force]`.
+ * `gan stacks customize <name>` — start customizing a built-in stack by
+ * copying its full body into a tier-specific override file.
  *
- * Copies a built-in stack file (`<packageRoot>/stacks/<name>.md`) into a
- * customisation tier so the user can edit it. Source is always the
- * built-in file directly; we deliberately do NOT route through
- * `getStackResolution` because resolution would prefer an existing
- * higher-tier copy — the customisation flow wants the framework's
- * default as the seed, even if a stale customisation already exists.
- *
- * Tiers:
- *   - `--tier=project` (default) → `<projectRoot>/.claude/gan/stacks/<name>.md`
- *   - `--tier=user`              → `<userHome>/.claude/gan/stacks/<name>.md`
- *
- * Refuses overwrite without `--force`. With `--force`, the existing copy
- * is replaced atomically via `atomicWriteFile`.
- *
- * Exit codes (per `lib/exit-codes.ts`):
- *   - 0 on success;
- *   - 1 (generic) on overwrite refusal (matches `gan stacks new` semantics);
- *   - 2 (validation) when the source built-in file is missing;
- *   - 64 on bad CLI arguments (missing name, invalid `--tier`, missing user
- *     home for `--tier=user`).
+ * Unlike `gan stacks new` (a TODO scaffold), this copies the *real* built-in
+ * stack so the user edits from a working baseline. The built-in must exist
+ * (else a `MissingFile` error). It refuses to clobber an existing override
+ * unless `--force` is given, so an in-progress customization is never silently
+ * overwritten.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -42,13 +28,15 @@ import {
 import { EXIT_BAD_ARGS, EXIT_GENERIC, EXIT_OK, exitCodeFor } from '../lib/exit-codes.js';
 import type { ParsedArgs } from '../lib/args.js';
 
+// The tiers a customization may be written to.
 type CustomizeTier = 'project' | 'user';
 
 const ALLOWED_TIERS: ReadonlySet<CustomizeTier> = new Set<CustomizeTier>(['project', 'user']);
 
 /**
- * @internal test-only env var: `GAN_PACKAGE_ROOT_OVERRIDE`. Lets tests
- *   stage a tmp directory containing a built-in `stacks/` tree.
+ * Resolve the installed package's built-in `stacks/` directory (the *source*
+ * of the copy). Honours `GAN_PACKAGE_ROOT_OVERRIDE` before the real resolver;
+ * may throw if the resolver throws.
  */
 function resolveBuiltinStacksDir(): string {
   const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
@@ -57,6 +45,14 @@ function resolveBuiltinStacksDir(): string {
   return path.join(root, 'stacks');
 }
 
+/**
+ * Resolve the target tier from the `--tier` flag.
+ *
+ * @param parsed parsed argv.
+ * @returns the chosen {@link CustomizeTier} (default `project`), or a
+ *   `MalformedInput` {@link ConfigServerError} — returned, not thrown — when
+ *   `--tier` is present without a value or names an unsupported tier.
+ */
 function readTier(parsed: ParsedArgs): CustomizeTier | ConfigServerError {
   const raw = parsed.flags['tier'];
   if (raw === undefined || raw === false) return 'project';
@@ -81,6 +77,16 @@ function readTier(parsed: ParsedArgs): CustomizeTier | ConfigServerError {
   return raw as CustomizeTier;
 }
 
+/**
+ * Compute the absolute *destination* path for the customization copy.
+ *
+ * @param tier which tier to write into.
+ * @param name the stack name.
+ * @param projectRoot the resolved project root (used for the `project` tier).
+ * @param userHome the resolved user home, or `null` (consulted for `user`).
+ * @returns the `<root>/.claude/gan/stacks/<name>.md` path, or a
+ *   `MalformedInput` {@link ConfigServerError} for `--tier=user` with no home.
+ */
 function targetPathFor(
   tier: CustomizeTier,
   name: string,
@@ -99,6 +105,10 @@ function targetPathFor(
   return path.join(userHome, '.claude', 'gan', 'stacks', `${name}.md`);
 }
 
+/**
+ * Render the success notice for human (non-JSON) output, pointing the user at
+ * the file to edit and the `gan stacks reset` undo.
+ */
 function renderHumanSuccess(name: string, tier: CustomizeTier, target: string): string {
   return [
     `Customized stack '${name}' at ${target} (tier: ${tier}).`,
@@ -107,6 +117,13 @@ function renderHumanSuccess(name: string, tier: CustomizeTier, target: string): 
   ].join('\n');
 }
 
+/**
+ * Render the success payload for `--json` output.
+ *
+ * @param forced whether `--force` was used to overwrite an existing override;
+ *   surfaced so callers can tell a fresh copy from a forced replacement.
+ * @param source the built-in stack file that was copied from.
+ */
 function renderJsonSuccess(
   name: string,
   tier: CustomizeTier,
@@ -117,6 +134,22 @@ function renderJsonSuccess(
   return emitJson({ forced, name, path: target, source, tier, written: true });
 }
 
+/**
+ * CLI entrypoint for `gan stacks customize`.
+ *
+ * @param parsed parsed argv; the first positional is the required stack name,
+ *   with `--tier`, `--force`, `--json`, and `--project-root` honoured.
+ * @returns a {@link CommandResult}. Failure modes are returned as data:
+ *   - missing name or bad `--tier` → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - `--tier=user` with no home → `MalformedInput`, exit {@link EXIT_BAD_ARGS};
+ *   - project-root resolution failure → mapped via {@link errorResult};
+ *   - built-in stacks directory unresolvable / source built-in absent →
+ *     `MissingFile` with its mapped exit code;
+ *   - target exists without `--force` → refusal, exit {@link EXIT_GENERIC};
+ *   - a read/write throw → {@link errorResult} or {@link unreachableResult}.
+ *   Side effect on success: atomically writes the copied body to the target;
+ *   exit {@link EXIT_OK}.
+ */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
   const force = parsed.flags['force'] === true;
@@ -153,11 +186,9 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(targetOrErr), code: EXIT_BAD_ARGS };
   }
   const target = targetOrErr;
-  // Build the display-form target by swapping the canonical project-root
-  // prefix for the display-form one. This preserves the user's case (so
-  // "/Users/thak/..." doesn't read as "/users/thak/...") in the rendered
-  // success line while keeping `target` itself canonical for any
-  // internal use.
+
+  // Present the destination under the project root's display form when the
+  // canonical and display roots differ, so the path matches what the user typed.
   const targetDisplay =
     projectRoot !== projectRootDisplay && target.startsWith(projectRoot)
       ? projectRootDisplay + target.slice(projectRoot.length)
@@ -179,6 +210,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(err), code: exitCodeFor(err.code) };
   }
 
+  // The built-in must exist to copy from — there is nothing to customize
+  // otherwise.
   const source = path.join(stacksDir, `${name}.md`);
   if (!existsSync(source)) {
     const err = createError('MissingFile', {
@@ -189,6 +222,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     return { stdout: '', stderr: renderError(err), code: exitCodeFor(err.code) };
   }
 
+  // Refuse to clobber an existing override unless --force; protects an
+  // in-progress customization from being reset to the pristine built-in.
   if (existsSync(target) && !force) {
     const err = createError('MalformedInput', {
       file: targetDisplay,

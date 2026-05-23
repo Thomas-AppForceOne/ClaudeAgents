@@ -3,7 +3,9 @@
     { "path": "activeStacks", "by": "name" },
     { "path": "secretsScans", "by": ["stack", "extension"] },
     { "path": "auditCommands", "by": "stack" },
+    { "path": "docLintInvocations", "by": "stack" },
     { "path": "securitySurfacesInstantiated", "by": ["stack", "id"] },
+    { "path": "documentationSurfacesInstantiated", "by": ["stack", "id"] },
     { "path": "evaluatorAdditionalChecks", "by": "command" }
   ],
   "sortInPlace": [
@@ -11,6 +13,9 @@
     "securitySurfacesInstantiated[*].triggerEvidence.scopeMatched",
     "securitySurfacesInstantiated[*].triggerEvidence.keywordsHit",
     "securitySurfacesInstantiated[*].appliesToFiles",
+    "documentationSurfacesInstantiated[*].triggerEvidence.scopeMatched",
+    "documentationSurfacesInstantiated[*].triggerEvidence.keywordsHit",
+    "documentationSurfacesInstantiated[*].appliesToFiles",
     "activeStacks[*].scope"
   ],
   "stripPrefixes": [".gan-state/runs/[a-z0-9-]+/", ".gan-cache/[a-z0-9-]+/"]

@@ -1,23 +1,15 @@
 /**
- * Library entry point for `@claudeagents/config-server`.
+ * Top-level public API barrel for the ClaudeAgents framework package.
  *
- * Public, dual-callable surface (per the dual-callable surface rule in
- * PROJECT_CONTEXT.md): every function below is also reachable via the MCP
- * tool wrapper in `config-server/index.ts`. Library consumers (E1, R3,
- * R4) import them directly without spawning the server subprocess.
- *
- * Exports are grouped by category:
- *   - reads (13 functions, plus `getApiVersion` from the bootstrap entry)
- *   - writes (12 functions, including R1's loud-stub trust + module no-ops)
- *   - validate (3 functions)
- *   - shared types (`Issue`, `ResolvedConfig`, `OverlayTier`, etc.)
- *
- * The two reads `getStackConventions` and `getOverlayField` are still
- * `NotImplemented` until their owning sprints land; they are intentionally
- * not exported here.
+ * This is the single module external consumers import from; it aggregates the
+ * stable surface of every internal subsystem — the config-server API version,
+ * the read/write/validate config tools, the run-store and worktree resolution
+ * layer, run locking and recovery, run enumeration and cleanup planning, the
+ * trace subsystem, and the shared result/config types. Everything re-exported
+ * here is intended public API; anything reachable only by deep import is
+ * internal and may change. Pure re-exports — this file holds no logic of its
+ * own, so the grouping below mirrors the subsystem boundaries.
  */
-
-// ---- read tools ----------------------------------------------------------
 
 export { getApiVersion } from './config-server/index.js';
 
@@ -35,8 +27,6 @@ export {
   trustList,
 } from './config-server/tools/reads.js';
 
-// ---- write tools ---------------------------------------------------------
-
 export {
   appendToModuleState,
   appendToOverlayField,
@@ -52,11 +42,7 @@ export {
   updateStackField,
 } from './config-server/tools/writes.js';
 
-// ---- validate tools ------------------------------------------------------
-
 export { validateAll, validateOverlay, validateStack } from './config-server/tools/validate.js';
-
-// ---- F7 central run-data store resolution --------------------------------
 
 export {
   resolveStoreRoot,
@@ -79,8 +65,6 @@ export {
 
 export type { StoreEnv, ResolvedRunStore } from './config-server/storage/run-store.js';
 
-// ---- F7 worktree-aware execution (1a/1b/1c resolver) ---------------------
-
 export {
   slugify,
   terminalSlug,
@@ -99,8 +83,6 @@ export type {
 export { buildWorkspaceRecord, recordWorkspace } from './config-server/storage/run-progress.js';
 
 export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
-
-// ---- F7 slice 4: recovery + serialization (re-anchored to central store) --
 
 export {
   acquireRunLock,
@@ -150,8 +132,6 @@ export type {
   RmDir,
 } from './config-server/storage/cleanup-planner.js';
 
-// ---- T1 run-trace emission library --------------------------------------
-
 export {
   TraceEmitter,
   computePromptRef,
@@ -168,7 +148,7 @@ export {
   eventsDir,
   payloadsDir,
   indexPath,
-  // Sprint 3 helpers
+
   reconstructRecoveryState,
   nextRecoverySequence,
   buildTrustEventBody,
@@ -191,7 +171,7 @@ export type {
   TraceEvent,
   TraceIndex,
   PayloadClass,
-  // Sprint 3 helper types
+
   RecoveryState,
   RoleAttemptState,
   TrustResolution,
@@ -207,8 +187,6 @@ export type {
   ContractCriterionLike,
   BundleCriterion,
 } from './trace/index.js';
-
-// ---- shared types --------------------------------------------------------
 
 export type { Issue } from './config-server/validation/schema-check.js';
 export type {

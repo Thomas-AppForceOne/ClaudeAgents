@@ -1,44 +1,23 @@
-/**
- * F8 slice 1 — central, repo-keyed module-state store resolution.
- *
- * Durable cross-run **module state** (notably M2's Docker `port-registry.json`)
- * moves out of the project tree's gitignored `<projectRoot>/.gan-state/modules/`
- * into a central, repo-keyed store outside any worktree. That relocation makes
- * the store survive `git worktree remove` of the worktree it was first written
- * from, and — because every linked worktree of one repo shares a single
- * git-common-dir — it makes all worktrees of a repo resolve to the SAME store
- * sub-directory, which is what finally makes M2's cross-worktree non-collision
- * guarantee hold (the central correctness fix F8 exists for).
- *
- * Layout (per the F8 spec §1):
- *
- *   <module-state-root>/
- *     <repo-key>/                        one directory per repo (F7's key)
- *       docker/
- *         port-registry.json             M2 registry, now shared repo-wide
- *
- * Kept deliberately SEPARATE from F7's run-data store: run data is per-run,
- * agent-written, and cleaned by `--cleanup`; module state is durable cross-run,
- * server-written, and never cleaned. The two roots are siblings under home
- * (`~/.gan-module-state` vs `~/.gan-runs-data`) but never the same path, and
- * their env overrides differ (`GAN_MODULE_STATE` vs `GAN_RUNS_DATA`).
- *
- * REUSE-OR-JUSTIFY: this module deliberately does NOT re-implement the F7
- * derivation it depends on. The repo-key (`<basename>-<hash12>` of the canonical
- * main-worktree root), the git-common-dir → main-worktree-root resolution, the
- * SHA-256 keying, and the case-folding all come from `run-store.ts` /
- * `git-exec.ts` / the determinism module. The store-root precedence ladder,
- * tilde/relative absolutization, and marker reading come from the shared
- * `store-common.ts` (the same primitives `run-store.ts`'s `resolveStoreRoot`
- * uses). The only F8-specific additions here are the env-var name, marker
- * relpath, default dirname, and the per-module/per-key path tail.
- *
- * Subprocess safety (`shell_and_subprocess_safety`): the single git invocation
- * behind repo-key derivation runs through the shared `GitExec` argv-array seam
- * (`execFileSync('git', argv, { cwd })`); no worktree path or env value is ever
- * interpolated into a shell command line.
- */
 
+
+/**
+ * Path resolution for the module-state store — the central, per-repository
+ * directory where modules persist their state across `/gan` runs.
+ *
+ * Module state is keyed by *repository*, not by worktree: every linked worktree
+ * of a repo shares one state directory, identified by the repo key derived from
+ * the main worktree root (see {@link computeRepoKey}). The store root itself is
+ * resolved by the shared precedence rule (env var → marker file → default
+ * dirname under home), which this module specialises for module state with the
+ * `GAN_MODULE_STATE` env var and `.gan-module-state` default.
+ *
+ * This module mirrors {@link import('./run-store.js')} (run store) but for
+ * module state, and re-exports the repo-key primitives from there so callers
+ * have a single import surface.
+ *
+ * All functions here are pure path computation plus (cached) git reads to find
+ * the main worktree root; none of them read or write state files.
+ */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -50,41 +29,28 @@ import {
 } from './run-store.js';
 import { resolveStoreRootByPrecedence, type StoreEnv } from './store-common.js';
 
-// Re-export the F7 repo-key derivation so module-state callers depend on this
-// store as their single entry point without reaching back into run-store for
-// the key. These are the SAME functions F7 ships — re-exported, not copied.
-// (`resolveModuleRepoKey` below is a thin memoising wrapper over F7's
-// `resolveRepoKey`, not a re-implementation.)
 export { REPO_KEY_HASH_LENGTH, REPO_KEY_HASH_TAIL, computeRepoKey, resolveMainWorktreeRoot };
 export type { StoreEnv } from './store-common.js';
 
-/**
- * Process-lifetime memo of the git-derived main-worktree-root, keyed on the
- * `fromDir` it was derived from. The main-worktree root (and therefore the
- * `<repo-key>`) is invariant for a directory over a process's lifetime, so the
- * single `git` subprocess behind it (in F7's `resolveMainWorktreeRoot`) runs
- * once per `fromDir` and its result is reused by every later module-state path
- * resolution. Without the memo, a long-lived config server and a multi-operation
- * consumer like the Docker `PortRegistry` (which loads then persists, each
- * resolving the path) would re-spawn git on every module-state read/write.
- *
- * Consulted/populated ONLY for the default (real) git seam — see
- * {@link moduleMainWorktreeRoot}. The cache holds only the git-derived part;
- * store-root/`GAN_MODULE_STATE` resolution stays per-call so an env override is
- * always honoured.
- */
+// Cache of fromDir → main-worktree-root. Resolving the main worktree shells out
+// to git; module-state paths are computed often, so the result is memoised per
+// starting directory. Only used for the default (non-injected) executor.
 const mainWorktreeRootCache = new Map<string, string>();
 
-/** For tests only: clears the main-worktree-root memo. */
+/**
+ * Clear the main-worktree-root cache. Test-only (`_` prefix): tests that move
+ * or recreate repositories between cases must drop stale cached roots.
+ */
 export function _resetModuleRepoKeyCacheForTests(): void {
   mainWorktreeRootCache.clear();
 }
 
 /**
- * Resolve the repo's main-worktree root for `fromDir`, memoising the git
- * derivation. When a custom `exec` seam is injected (tests), the cache is
- * bypassed entirely so each injected stub is honoured and there is no
- * cross-test leakage — mirroring the env-override bypass in `package-root.ts`.
+ * Resolve the main worktree root for `fromDir`, caching the result.
+ *
+ * When a custom `exec` is supplied (tests), the cache is bypassed entirely —
+ * the injected executor's behaviour may differ per call, so caching it would
+ * leak one test's git stub into another. The production path (no `exec`) caches.
  */
 function moduleMainWorktreeRoot(fromDir: string, exec?: typeof execFileSync): string {
   if (exec !== undefined) return resolveMainWorktreeRoot(fromDir, exec);
@@ -97,11 +63,14 @@ function moduleMainWorktreeRoot(fromDir: string, exec?: typeof execFileSync): st
 }
 
 /**
- * The F7 repo-key (`<basename>-<hash12>`) for `fromDir`, with the git
- * derivation memoised (see {@link moduleMainWorktreeRoot}). Behaviourally
- * identical to F7's `resolveRepoKey` — `computeRepoKey(mainWorktreeRoot)` — but
- * caches the one subprocess call. `computeRepoKey` itself (the cheap SHA-256
- * keying) is reused from F7, never re-implemented.
+ * Compute the repo key (stable per-repository identity) used to namespace
+ * module state, starting from `fromDir`.
+ *
+ * @param fromDir a directory inside the repo; defaults to `process.cwd()`.
+ * @param exec optional git executor override (tests); bypasses the root cache.
+ * @returns the repo key (`<basename>-<hash>`), shared across the repo's
+ *   worktrees.
+ * @throws propagates if the main worktree root cannot be resolved (not a repo).
  */
 export function resolveModuleRepoKey(
   fromDir: string = process.cwd(),
@@ -110,39 +79,24 @@ export function resolveModuleRepoKey(
   return computeRepoKey(moduleMainWorktreeRoot(fromDir, exec));
 }
 
-/**
- * Default module-state store-root directory name under the user's home
- * directory. Deliberately DISTINCT from run-store's `DEFAULT_STORE_DIRNAME`
- * (`.gan-runs-data`): the two are siblings under home, never the same path.
- */
+/** Default module-state directory name under the user's home, when neither the
+ * env var nor a marker file overrides the location. */
 export const DEFAULT_MODULE_STATE_DIRNAME = '.gan-module-state';
 
-/**
- * Install-time marker file (relative to the user's home directory) recording
- * the configured module-state root. `install.sh` writes it (a later F8 slice);
- * the config server reads it here. `GAN_MODULE_STATE` overrides it.
- *
- * Distinct from run-store's `STORE_MARKER_RELPATH` (`.claude/gan/runs-data-dir`)
- * — module state has its own marker because it has its own lifecycle.
- */
+/** Home-relative path of the marker file that, if present, redirects the
+ * module-state store root to the path it contains. */
 export const MODULE_STATE_MARKER_RELPATH = path.join('.claude', 'gan', 'module-state-dir');
 
-/** Environment variable that overrides the module-state root. */
+/** Environment variable that, when set, takes top precedence for the
+ * module-state store root. */
 export const MODULE_STATE_ROOT_ENV = 'GAN_MODULE_STATE';
 
 /**
- * Resolve the module-state store root, highest precedence first:
- *   1. `GAN_MODULE_STATE` environment variable (override; testing / CI).
- *      An empty or whitespace-only value is treated as absent and falls
- *      through to the next source.
- *   2. The path recorded at install time in `~/.claude/gan/module-state-dir`.
- *   3. Default `<homedir>/.gan-module-state`.
+ * Resolve the module-state store root by the standard precedence:
+ * `GAN_MODULE_STATE` env var → marker file → `~/.gan-module-state`.
  *
- * The returned path is always absolute with the home directory expanded — never
- * a literal `~`; a leading `~`/`~/` expands to home, a relative path resolves
- * against home, an absolute path is normalised. Delegates to the SAME shared
- * {@link resolveStoreRootByPrecedence} ladder F7's run-store uses, passing only
- * the module-state knobs.
+ * @param deps optional environment seams (`homedir`/`env`) for tests.
+ * @returns the absolute store root directory.
  */
 export function resolveModuleStateRoot(deps?: StoreEnv): string {
   return resolveStoreRootByPrecedence(
@@ -155,43 +109,42 @@ export function resolveModuleStateRoot(deps?: StoreEnv): string {
   );
 }
 
-/** The per-repo module-state directory: `<module-state-root>/<repo-key>/`. */
+/** The per-repository module-state directory: `<storeRoot>/<repoKey>`. */
 export function resolveRepoModuleStateDir(storeRoot: string, repoKey: string): string {
   return path.join(storeRoot, repoKey);
 }
 
-/**
- * The per-module directory: `<module-state-root>/<repo-key>/<module>/`. This is
- * the relocation target — it replaces `<projectRoot>/.gan-state/modules/<name>/`.
- * `listInstalledModules` scans the parent of these directories.
- */
+/** The per-module directory within a repo's state dir:
+ * `<storeRoot>/<repoKey>/<name>`. */
 export function resolveModuleDir(storeRoot: string, repoKey: string, name: string): string {
   return path.join(resolveRepoModuleStateDir(storeRoot, repoKey), name);
 }
 
-/** Optional injection seam for the path resolvers below. */
+/**
+ * Injection seams for module-state path resolution.
+ *
+ * @property deps environment seams (`homedir`/`env`) used to resolve the store
+ *   root.
+ * @property exec git executor override used to resolve the repo key (bypasses
+ *   the worktree-root cache).
+ */
 export interface ModuleStateStoreOptions {
-  /** Home/env seam, forwarded to {@link resolveModuleStateRoot}. */
+
   deps?: StoreEnv;
-  /** Git exec seam, forwarded to the F7 repo-key derivation; defaults to `execFileSync`. */
+
   exec?: typeof execFileSync;
 }
 
 /**
- * Resolve the on-disk state file for a module + state key:
- * `<module-state-root>/<repo-key>/<name>/<key>.json`.
+ * Resolve the absolute path of a module's state file for one key:
+ * `<storeRoot>/<repoKey>/<name>/<key>.json`.
  *
- * `<repo-key>` is F7's `<basename>-<hash12>` derived from the canonical
- * main-worktree root, resolved from `fromDir` via the F7 git-common-dir helper
- * (reused, not re-derived). All linked worktrees of one repo therefore resolve
- * to the SAME path, and two spellings of the main-worktree root differing only
- * by case or a trailing slash key to the same directory.
- *
- * @param name    the module name (its own sub-directory).
- * @param key     the state key (its own file; `<key>.json`).
- * @param fromDir a directory inside the repo used to derive the repo-key.
- *                Defaults to `process.cwd()`.
- * @param opts    optional home/env and git injection seams (tests).
+ * @param name owning module.
+ * @param key the state key (filename stem).
+ * @param fromDir directory inside the repo; defaults to `process.cwd()`.
+ * @param opts optional store/repo-key seams.
+ * @returns the absolute file path. Pure path computation (plus a git read to
+ *   find the repo key); no file is created or read.
  */
 export function resolveModuleStatePath(
   name: string,
@@ -204,26 +157,37 @@ export function resolveModuleStatePath(
   return path.join(resolveModuleDir(storeRoot, repoKey, name), `${key}.json`);
 }
 
-/** All resolved module-state paths for a repo, in one object. */
+/**
+ * The fully-resolved module-state store locations for a repository.
+ *
+ * @property storeRoot the resolved store root directory.
+ * @property repoKey the per-repository key.
+ * @property mainWorktreeRoot the repo's main worktree root the key derives from.
+ * @property repoModuleStateDir `<storeRoot>/<repoKey>`, the repo's state dir.
+ */
 export interface ResolvedModuleStateStore {
-  /** The resolved store root (env > marker > default), absolute. */
+
   storeRoot: string;
-  /** `<basename>-<hash12>` for the repo (F7's key). */
+
   repoKey: string;
-  /** The main-worktree root the key was derived from, resolved absolute. */
+
   mainWorktreeRoot: string;
-  /** `<module-state-root>/<repo-key>/`. */
+
   repoModuleStateDir: string;
 }
 
 /**
- * One-shot resolution of the repo-level module-state paths: resolves the store
- * root by precedence and derives the main-worktree root (and therefore the
- * repo key) from `fromDir`'s git-common-dir. Per-module / per-key paths are then
- * cheap joins (or use {@link resolveModuleStatePath} directly).
+ * Resolve every module-state store location for a repository in one call.
+ *
+ * @param opts.fromDir directory inside the repo; defaults to `process.cwd()`.
+ * @param opts.deps environment seams for the store root.
+ * @param opts.exec git executor override for the repo key.
+ * @returns a {@link ResolvedModuleStateStore} bundling root, key, main worktree
+ *   root, and the repo state dir.
+ * @throws propagates if the main worktree root cannot be resolved.
  */
 export function resolveModuleStateStore(opts: {
-  /** Directory inside the repo to resolve the key from. Defaults to cwd. */
+
   fromDir?: string;
   deps?: StoreEnv;
   exec?: typeof execFileSync;

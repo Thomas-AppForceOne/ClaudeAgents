@@ -1,18 +1,19 @@
+
+
 /**
- * R3 sprint 2 — shared helpers for read-subcommand entrypoints.
+ * Shared scaffolding for command implementations.
  *
- * Every read subcommand (`config print|get`, `stacks list`, `stack show`,
- * `modules list`) follows the same shape:
+ * Read-style commands (`config print`, `stack show`, `modules list`, …) all
+ * share the same envelope: read the common flags, resolve the project root,
+ * run the command body, then render the result as either human text or JSON
+ * and turn any thrown error into a {@link CommandResult} with the right exit
+ * code. That envelope lives here once, in {@link runRead}, plus the error
+ * helpers it relies on, so individual commands carry only their own logic.
  *
- *   1. Read `--json` and `--project-root` from `parsed.flags`.
- *   2. Resolve project root via the F3-canonicalised helper.
- *   3. Call an R1 library function with the resolved root.
- *   4. Render success (human or JSON) / errors (human or JSON) per the
- *      `--json` round-trip rule (PROJECT_CONTEXT.md).
- *   5. Map every error to an exit code via `exitCodeFor`.
- *
- * `runRead` factors steps (2)+(4)+(5) so each command only owns its
- * library call and its human renderer.
+ * Shared guarantee: every function here returns failures as a
+ * {@link CommandResult} (a value with stdout/stderr/code) — they never throw
+ * to the caller. The `--json` vs. human choice is honoured uniformly on both
+ * the success and failure paths.
  */
 
 import { ConfigServerError } from '../../config-server/errors.js';
@@ -22,6 +23,11 @@ import { EXIT_API_UNREACHABLE, EXIT_OK, exitCodeFor } from './exit-codes.js';
 import { resolveProjectRoot } from './project-root.js';
 import type { ParsedArgs } from './args.js';
 
+/**
+ * The uniform return shape of every command: text destined for stdout, text
+ * destined for stderr, and the process exit code. The dispatcher writes the
+ * streams and exits with `code`.
+ */
 export interface CommandResult {
   stdout: string;
   stderr: string;
@@ -29,8 +35,13 @@ export interface CommandResult {
 }
 
 /**
- * Read `--json` and `--project-root` from the parsed args. Centralised so
- * each command can keep its body focused on the library call.
+ * Extract the two flags every command shares from already-parsed args.
+ *
+ * @param parsed the parsed CLI args.
+ * @returns `wantJson` — `true` only when `--json` was set to the boolean
+ *   `true`; and `rootFlag` — the `--project-root` value when it is a string,
+ *   else `undefined` (so a missing or non-string flag uniformly means "use the
+ *   cwd" downstream).
  */
 export function readSharedFlags(parsed: ParsedArgs): {
   wantJson: boolean;
@@ -45,10 +56,16 @@ export function readSharedFlags(parsed: ParsedArgs): {
 }
 
 /**
- * Build the "library unreachable" CommandResult per the F-AC6 contract.
- * Stderr surface (no `--json`) carries the human remediation; stdout under
- * `--json` carries an F2-shaped error object (`code: ApiUnreachable`) so
- * `gan ... --json | jq` parses cleanly even on the unreachable path.
+ * Build the canonical "framework library unreachable" result.
+ *
+ * This is the outcome when the bundled config-server library cannot be loaded
+ * at all — i.e. a non-`ConfigServerError` escaped the command body, which is
+ * treated as the install being broken rather than a per-command failure. The
+ * remediation (run `install.sh`) is baked into both the JSON and human forms.
+ *
+ * @param wantJson render the error as JSON (stdout) when `true`, else as human
+ *   text (stderr).
+ * @returns a {@link CommandResult} with code `EXIT_API_UNREACHABLE`.
  */
 export function unreachableResult(wantJson: boolean): CommandResult {
   if (wantJson) {
@@ -72,13 +89,18 @@ export function unreachableResult(wantJson: boolean): CommandResult {
 }
 
 /**
- * Map a thrown value to a CommandResult under the R3 error-output rules.
+ * Convert a caught error into a rendered {@link CommandResult}.
  *
- *   - `ConfigServerError` → use `exitCodeFor(err.code)`.
- *   - anything else → treat as "library unreachable" (exit 5).
+ * Only a {@link ConfigServerError} is treated as a structured, expected
+ * failure: its `code` is mapped to an exit code via {@link exitCodeFor} and it
+ * is rendered (JSON or human) accordingly. Anything else is taken to mean the
+ * framework library could not be reached and is funnelled to
+ * {@link unreachableResult} — the assumption being that a non-`ConfigServerError`
+ * escaping a command body indicates a broken install, not a normal failure.
  *
- * `--json` puts the structured error on stdout; without `--json` we render
- * human text on stderr.
+ * @param err the caught value (any type).
+ * @param wantJson choose JSON vs. human rendering.
+ * @returns the rendered failure result; never throws.
  */
 export function errorResult(err: unknown, wantJson: boolean): CommandResult {
   if (!(err instanceof ConfigServerError)) {
@@ -92,12 +114,23 @@ export function errorResult(err: unknown, wantJson: boolean): CommandResult {
 }
 
 /**
- * Drive a read subcommand: resolve the project root, then call `body` with
- * the resolved canonical path. The body returns the success payload (any
- * value); `humanRenderer` formats it for stdout when `--json` is unset.
+ * Run a read-only command end to end with the shared envelope.
  *
- * The `wantJson` branch always emits via `emitJson` so every JSON output
- * goes through one call site (the single-implementation rule).
+ * Steps, in order: read the shared flags, resolve the project root (a failure
+ * here short-circuits to an error result), invoke `body` with the canonical
+ * root, then render its return value as JSON or via `humanRenderer`. Any error
+ * thrown either by root resolution or by `body` is funnelled through
+ * {@link errorResult}, so the function itself never throws.
+ *
+ * @param parsed the parsed CLI args for this command.
+ * @param body the command's work; receives the canonical project-root path and
+ *   resolves to the value to render. May throw — a thrown `ConfigServerError`
+ *   becomes a structured failure, any other throw becomes "unreachable".
+ * @param humanRenderer renders `body`'s value to human-readable text; used only
+ *   when `--json` was not requested.
+ * @returns the {@link CommandResult}: success carries the rendered value on
+ *   stdout with `EXIT_OK`; failure carries the rendered error and its mapped
+ *   exit code.
  */
 export async function runRead<T>(
   parsed: ParsedArgs,
@@ -106,6 +139,8 @@ export async function runRead<T>(
 ): Promise<CommandResult> {
   const { wantJson, rootFlag } = readSharedFlags(parsed);
 
+  // Resolve (and validate) the root before running the body so an invalid
+  // --project-root fails fast with its own structured error, before any work.
   let projectRoot: string;
   try {
     projectRoot = resolveProjectRoot(rootFlag).path;

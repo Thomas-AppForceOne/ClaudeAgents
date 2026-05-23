@@ -1,11 +1,21 @@
 /**
- * M1 — Sprint M1 — ValidationSnapshot.modules / ResolvedConfig.modules
- * shape integration test (AC8 + AC15).
+ * Shape contract for the `modules` collection as it appears in two parallel
+ * outputs: the validation snapshot (`ValidationSnapshot.modules`, an array) and
+ * the resolved config (`ResolvedConfig.modules`, an object keyed by name). Both
+ * must expose the *same* per-module rows carrying exactly the allowed fields —
+ * `name`, `manifestPath`, and an optional `pairsWith` — and nothing more.
  *
- * Registers two fixture modules via an injected modulesRoot, calls both
- * `validateAll` and `getResolvedConfig`, asserts both surfaces include
- * a `modules` array whose rows expose exactly `name`, `manifestPath`,
- * and (when present) `pairsWith` — no extras, no rename.
+ * The fixture stages two manifests in a scratch modules-root: `mod-alpha` (with
+ * a `pairsWith`) and `mod-beta` (without), so the suite proves both the
+ * present-and-absent `pairsWith` cases. The tightest assertions enumerate the
+ * exact key set per row (`Object.keys(...).sort()`) and reject any key outside
+ * the allowlist — this is the guard against the snapshot leaking extra manifest
+ * fields (e.g. exports, description) into the public shape. A final test reads
+ * each row's `manifestPath` back off disk to confirm it points at the real
+ * manifest whose `name` matches the row.
+ *
+ * Uses the `_runPhase1ForTests` seam to inspect the snapshot directly without
+ * running the whole validation pipeline.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,7 +43,6 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
     mkdirSync(modulesScratch, { recursive: true });
     mkdirSync(projectScratch, { recursive: true });
 
-    // Stage two fixture modules under the modulesScratch.
     const stagedA = path.join(modulesScratch, 'mod-alpha');
     mkdirSync(stagedA, { recursive: true });
     writeFileSync(
@@ -49,7 +58,7 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
 
     const stagedB = path.join(modulesScratch, 'mod-beta');
     mkdirSync(stagedB, { recursive: true });
-    // Beta carries no pairsWith so we exercise the omitted-field branch.
+
     writeFileSync(
       path.join(stagedB, 'manifest.json'),
       JSON.stringify({
@@ -68,7 +77,7 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
   });
 
   it('validateAll snapshot exposes modules with exactly {name, manifestPath, pairsWith?}', () => {
-    // Use _runPhase1ForTests to inspect the snapshot directly.
+
     const snapshot = _runPhase1ForTests(projectScratch, { modulesRoot: modulesScratch });
     expect(snapshot.modules).toHaveLength(2);
     const names = snapshot.modules.map((m) => m.name).sort();
@@ -77,13 +86,18 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
     const beta = snapshot.modules.find((m) => m.name === 'mod-beta');
     expect(alpha).toBeDefined();
     expect(beta).toBeDefined();
-    // Alpha: keys must be exactly {name, manifestPath, pairsWith}.
+
+    // Exact key set per row: alpha carries the optional pairsWith, beta omits
+    // it entirely (not present-as-undefined). Enumerating keys this strictly is
+    // what catches the snapshot leaking other manifest fields into the shape.
     expect(Object.keys(alpha!).sort()).toEqual(['manifestPath', 'name', 'pairsWith']);
     expect(alpha!.pairsWith).toBe('alpha-stack');
     expect(typeof alpha!.manifestPath).toBe('string');
-    // Beta: keys must be exactly {name, manifestPath} (pairsWith omitted).
+
     expect(Object.keys(beta!).sort()).toEqual(['manifestPath', 'name']);
-    // No `manifest`, `description`, `exports`, etc. leak through.
+
+    // Belt-and-braces allowlist sweep across every row, so an extra field on
+    // any future module is rejected even if it is not alpha/beta.
     for (const m of snapshot.modules) {
       const allowed = new Set(['name', 'manifestPath', 'pairsWith']);
       for (const k of Object.keys(m)) {
@@ -97,7 +111,7 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
       { projectRoot: projectScratch },
       { modulesRoot: modulesScratch },
     );
-    // No invariant fires (no stack files at all in projectScratch).
+
     expect(result.issues).toEqual([]);
   });
 
@@ -106,9 +120,9 @@ describe('ValidationSnapshot.modules / ResolvedConfig.modules shape', () => {
       apiVersion: '0.0.0-test',
       modulesRoot: modulesScratch,
     });
-    // M2 keys modules by name (object) so per-module config is
-    // accessible via `r.modules.<name>.<field>`. The module-registration
-    // surface (name, manifestPath, pairsWith) lives on the same row.
+
+    // Resolved config keys modules by name (an object), not as an array — the
+    // counterpart shape to the snapshot's array, carrying the same rows.
     expect(Array.isArray(r.modules)).toBe(false);
     expect(typeof r.modules).toBe('object');
     const names = Object.keys(r.modules).sort();

@@ -1,44 +1,19 @@
-/**
- * F7 slice 4 — one-active-run-per-repo serialization lock, re-anchored to the
- * central store (over O2 §8).
- *
- * O2's serialization lock was anchored on `<projectRoot>/.gan-state/run.lock`.
- * Because two linked worktrees of one repo each resolve their own
- * `<projectRoot>` to the worktree toplevel, that lock would NOT serialize
- * concurrent runs across worktrees of the same repo. F7 re-anchors it to the
- * central, repo-keyed store at `<store-root>/<repo-key>/run.lock` (slice-1
- * {@link resolveRunLockPath}). All linked worktrees of a repo key to the same
- * `<repo-key>`, so they contend on the SAME lock file — one active `/gan` run
- * per repo, repo-wide.
- *
- * Mechanism (the portable POSIX advisory-lock equivalent). The exclusive guard
- * is an atomic exclusive-create on the lock path: the contents
- * `{ runId, pid, startedAt, hostname }` are first written to a sibling temp file
- * and then linked into place with `O_EXCL` (`fs.linkSync`), so only one of N
- * racing acquirers can win — there is no window in which two processes both
- * believe they hold the lock. (`flock(LOCK_EX|LOCK_NB)` is unavailable as a
- * Node syscall and the `flock` binary is not present on every supported
- * platform; the exclusive-create-on-rename discipline gives the same
- * mutual-exclusion contract O2 §8 specifies, with the documented
- * `{ runId, pid, startedAt, hostname }` contents written atomically.) On
- * release the lock file is unlinked.
- *
- * Contention -> holder liveness. When the create fails because the lock already
- * exists, the holder's `pid` is probed for liveness (`kill -0`, surfaced here
- * via the injectable {@link IsAlive} seam defaulting to `process.kill(pid, 0)`).
- * A LIVE holder => hard refuse with a structured `ConcurrentRunInProgress`
- * error naming the holder's `runId`, `pid`, and `startedAt`. A DEAD holder
- * (stale lock from a hard-killed previous run) => break the stale lock, warn,
- * and acquire fresh.
- *
- * Subprocess / determinism safety: this module spawns no subprocess at all (it
- * uses Node fs primitives + `process.kill(pid, 0)`), so there is no shell line
- * for any untrusted value to reach. The liveness probe takes a numeric pid, not
- * a string; the injectable seam exists purely so the dead/alive branches are
- * unit-testable without a real process. Nothing here reads or writes the
- * module-state store, `.claude/gan/`, or `.gan-cache/`.
- */
 
+
+/**
+ * Single-active-run mutual exclusion for a repository.
+ *
+ * At most one `/gan` run may be active per repository at a time, across all of
+ * its worktrees. That invariant is enforced by a `run.lock` file in the repo's
+ * central store, created via an atomic `link(2)` so two processes racing to
+ * acquire it cannot both win — `link` fails with `EEXIST` for the loser.
+ *
+ * The lock is *self-healing* against crashed holders: a lock whose recorded pid
+ * is no longer alive (or whose contents are unreadable) is "stale" and is
+ * broken and re-acquired, so a process that died without releasing its lock
+ * does not wedge the repository forever. A lock held by a *live* process is
+ * honoured and acquisition throws.
+ */
 import { linkSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,66 +21,102 @@ import path from 'node:path';
 import { createError } from '../errors.js';
 import { readJsonObjectFile } from './json-read.js';
 
-/** Parsed contents of the run lock file. */
+/**
+ * The persisted contents of a `run.lock`, identifying the holder.
+ *
+ * @property runId the run that holds the lock.
+ * @property pid the holder's process id (probed for liveness).
+ * @property startedAt ISO-8601 time the lock was taken (informational, shown in
+ *   conflict messages).
+ * @property hostname the holder's host (informational).
+ */
 export interface RunLockContents {
-  /** The run id holding the lock. */
+
   runId: string;
-  /** The pid of the process holding the lock. */
+
   pid: number;
-  /** ISO-8601 UTC timestamp the lock was acquired at. */
+
   startedAt: string;
-  /** Hostname the holder runs on (advisory; not used for cross-host checks). */
+
   hostname: string;
 }
 
-/**
- * Liveness probe seam. Returns `true` when a process with `pid` is alive.
- * Defaults to `process.kill(pid, 0)` — sending signal `0` performs the
- * permission/existence check without delivering a signal (the `kill -0`
- * idiom). Injected in tests so the dead-holder (stale-lock) branch is
- * exercisable deterministically.
- */
+/** Liveness probe: returns whether `pid` is a running process. Injectable so
+ * tests can simulate live vs. dead holders. */
 export type IsAlive = (pid: number) => boolean;
 
-/** Default liveness probe: `process.kill(pid, 0)` — the `kill -0` idiom. */
+/**
+ * Production {@link IsAlive}: probes via signal 0 (`process.kill(pid, 0)`),
+ * which checks existence without delivering a signal.
+ *
+ * Returns `false` for non-positive/non-integer pids up front. An `EPERM` from
+ * the probe is treated as ALIVE: the process exists but is owned by another
+ * user, so we may not signal it — but it is running, which is what matters for
+ * the lock. Any other error (notably `ESRCH`, no such process) means dead.
+ */
 export const defaultIsAlive: IsAlive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    // ESRCH => no such process (dead). EPERM => exists but not ours (alive).
+    // EPERM => process exists but is not ours to signal: still alive.
     return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
 };
 
-/** A held lock handle — pass to {@link releaseRunLock} to release it. */
+/**
+ * A held lock, returned by {@link acquireRunLock} and passed to
+ * {@link releaseRunLock}.
+ *
+ * @property lockPath the lock file path.
+ * @property contents the contents written into it.
+ */
 export interface RunLockHandle {
-  /** The lock file path that was created. */
+
   lockPath: string;
-  /** The contents written into the lock. */
+
   contents: RunLockContents;
 }
 
-/** Options for {@link acquireRunLock}. */
+/**
+ * Options for {@link acquireRunLock}.
+ *
+ * @property lockPath where to create the lock.
+ * @property runId the acquiring run's id, written into the lock.
+ * @property pid the acquiring pid; defaults to `process.pid`.
+ * @property startedAt acquisition time; defaults to now (ISO-8601).
+ * @property hostname the acquiring host; defaults to `os.hostname()`.
+ * @property isAlive liveness probe for an existing holder; defaults to
+ *   {@link defaultIsAlive}.
+ * @property warn sink for stale-lock-broken notices; defaults to `stderr`.
+ */
 export interface AcquireRunLockOptions {
-  /** The lock path — pass slice-1 `resolveRunLockPath(storeRoot, repoKey)`. */
+
   lockPath: string;
-  /** The acquiring run's id. */
+
   runId: string;
-  /** The acquiring process pid. Defaults to `process.pid`. */
+
   pid?: number;
-  /** ISO-8601 UTC start time. Defaults to `new Date().toISOString()`. */
+
   startedAt?: string;
-  /** Hostname. Defaults to `os.hostname()`. */
+
   hostname?: string;
-  /** Liveness probe seam (tests). Defaults to {@link defaultIsAlive}. */
+
   isAlive?: IsAlive;
-  /** Sink for the stale-lock-broken warning. Defaults to `console.error`. */
+
   warn?: (line: string) => void;
 }
 
-/** Read and parse the lock file, or `undefined` if absent / unparseable. */
+/**
+ * Read and minimally validate a `run.lock`.
+ *
+ * @param lockPath the lock file path.
+ * @returns the parsed {@link RunLockContents}, or `undefined` when the file is
+ *   absent or unreadable, or lacks a string `runId` and numeric `pid` (the two
+ *   fields that make a lock meaningful). `startedAt`/`hostname` default to empty
+ *   strings when missing — they are informational only. Never throws.
+ */
 export function readRunLock(lockPath: string): RunLockContents | undefined {
   const obj = readJsonObjectFile(lockPath);
   if (obj === undefined) return undefined;
@@ -121,15 +132,22 @@ export function readRunLock(lockPath: string): RunLockContents | undefined {
 }
 
 /**
- * Acquire the repo-wide run lock at `lockPath` exclusively.
+ * Acquire the repository's run lock, breaking a stale one if needed.
  *
- * On success returns a {@link RunLockHandle}. On contention with a LIVE holder,
- * throws a structured `ConcurrentRunInProgress` error (mapped onto F2's
- * `InvariantViolation` code with a `reason: 'ConcurrentRunInProgress'` field
- * and the holder's `runId`/`pid`/`startedAt`). A stale lock (dead holder) is
- * broken with a warning and acquisition proceeds.
+ * Tries to create the lock atomically; on contention it inspects the current
+ * holder. An unreadable lock or a holder whose pid is dead is broken and
+ * acquisition retried (once). A live holder makes acquisition fail.
  *
- * @throws ConfigServerError when a live holder already holds the lock.
+ * Side effects: creates the lock's parent directory and the lock file; may
+ * delete (break) a stale lock; emits warnings via `opts.warn` when it breaks a
+ * lock.
+ *
+ * @param opts see {@link AcquireRunLockOptions}.
+ * @returns a {@link RunLockHandle} for the held lock.
+ * @throws `ConfigServerError('InvariantViolation', reason:
+ *   'ConcurrentRunInProgress')` when the lock is held by a live run, or when it
+ *   could not be acquired after breaking a stale one (lost a concurrent race).
+ *   The message names the conflicting run/pid and how to resolve it.
  */
 export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
   const isAlive = opts.isAlive ?? defaultIsAlive;
@@ -143,17 +161,17 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
 
   mkdirSync(path.dirname(opts.lockPath), { recursive: true });
 
-  // Two attempts at most: the second only runs after a confirmed stale-lock
-  // break, so a live holder can never be silently overwritten.
+  // Two attempts: the first may find a stale lock and break it; the second
+  // then re-creates it. More than one retry is unnecessary — a second loss is
+  // a genuine concurrent acquirer, handled as a hard conflict after the loop.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (tryCreateLock(opts.lockPath, contents)) {
       return { lockPath: opts.lockPath, contents };
     }
 
-    // The lock already exists. Inspect the holder.
     const holder = readRunLock(opts.lockPath);
     if (holder === undefined) {
-      // Unparseable/partial lock from a crashed acquirer; treat as stale.
+      // Lock exists but is unreadable/garbage: treat as stale, break, retry.
       breakStaleLock(opts.lockPath);
       warn(`Broke an unreadable run.lock at ${opts.lockPath}; acquiring fresh.`);
       continue;
@@ -178,7 +196,8 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
       });
     }
 
-    // Dead holder => stale lock. Break it, warn, and retry the create.
+    // Holder's process is dead: the previous run crashed without releasing.
+    // Break the abandoned lock and retry rather than wedging the repo forever.
     breakStaleLock(opts.lockPath);
     warn(
       `Broke a stale run.lock at ${opts.lockPath} held by run '${holder.runId}' ` +
@@ -186,7 +205,8 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
     );
   }
 
-  // Both attempts lost a race against another acquirer; surface as contention.
+  // Reached only when both attempts lost the race: another acquirer recreated
+  // the lock between our break and our retry. That is a genuine concurrent run.
   const holder = readRunLock(opts.lockPath);
   throw createError('InvariantViolation', {
     reason: 'ConcurrentRunInProgress',
@@ -201,9 +221,9 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
 }
 
 /**
- * Release a previously-acquired lock by unlinking the file. Idempotent and
- * best-effort: a missing file (already released, or broken as stale by another
- * acquirer) is not an error.
+ * Release a held lock by deleting its file. Idempotent: a missing file (already
+ * released or broken by another acquirer) is ignored, so double-release and
+ * release-after-break are both safe.
  */
 export function releaseRunLock(handle: RunLockHandle): void {
   try {
@@ -214,12 +234,17 @@ export function releaseRunLock(handle: RunLockHandle): void {
 }
 
 /**
- * Atomically create the lock file with `contents`, failing if it already
- * exists. Writes to a sibling temp file then `link`s it into place under
- * `O_EXCL` semantics — `linkSync` fails with `EEXIST` when the target exists,
- * giving us exclusive create even on filesystems where `writeFileSync(...,
- * { flag: 'wx' })` would race. Returns `true` on a clean acquire, `false` when
- * the lock already existed.
+ * Attempt to atomically create the lock file with `contents`.
+ *
+ * Writes a uniquely-named temp file, then `link(2)`s it onto `lockPath`. `link`
+ * is the atomicity primitive: it fails with `EEXIST` if the target already
+ * exists, which is how concurrent acquirers are serialised — exactly one link
+ * succeeds. The temp is always unlinked in `finally` (the link created a second
+ * name for the same inode; the temp name is no longer needed whether the link
+ * won or lost).
+ *
+ * @returns `true` if the lock was created, `false` if it already existed.
+ * @throws any non-`EEXIST` link error (an unexpected I/O fault).
  */
 function tryCreateLock(lockPath: string, contents: RunLockContents): boolean {
   const tmp = `${lockPath}.tmp.${process.pid}.${Math.floor(Math.random() * 0xffffff).toString(16)}`;
@@ -241,7 +266,11 @@ function tryCreateLock(lockPath: string, contents: RunLockContents): boolean {
   }
 }
 
-/** Remove a stale lock file, ignoring a concurrent removal. */
+/**
+ * Remove an abandoned lock so it can be re-acquired. Best-effort: a concurrent
+ * acquirer may have removed it first, so a missing-file error is ignored rather
+ * than treated as a failure.
+ */
 function breakStaleLock(lockPath: string): void {
   try {
     unlinkSync(lockPath);

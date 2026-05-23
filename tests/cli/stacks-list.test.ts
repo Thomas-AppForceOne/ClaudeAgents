@@ -1,14 +1,15 @@
 /**
- * R3 sprint 2 — `gan stacks list`.
+ * End-to-end tests for `gan stacks list` (acceptance criterion F-AC5).
  *
- * Covers contract criterion F-AC5: the CLI's view of the active set
- * agrees with R1's `getActiveStacks()` library call. Verified against
- * two fixtures:
- *   - `js-ts-minimal/` — empty active set (no `package.json` at root,
- *     no `stack.override`).
- *   - `polyglot-webnode-synthetic/` — both `web-node` and
- *     `synthetic-second` activate (multi-stack guard rail).
+ * Verifies the active-stack listing in both modes against fixtures with a known
+ * active set: the human surface prints one stack name per line, `--json` emits
+ * the verbatim `getActiveStacks` response as sorted-key JSON, and the empty set
+ * renders as `(none)` / `{"active":[]}`. The CLI-vs-library parity test is the
+ * load-bearing one — it asserts the CLI's active set is identical to a direct
+ * `getActiveStacks()` call, guarding against the CLI and the library it wraps
+ * computing activation differently.
  */
+
 import { describe, expect, it } from 'vitest';
 import { runGan } from './helpers/spawn.js';
 import { stackFixturePath } from './helpers/fixtures.js';
@@ -21,7 +22,7 @@ describe('gan stacks list', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
     const lines = r.stdout.trim().split('\n');
-    // Multi-stack fixture: both stacks must be present.
+
     expect(lines).toContain('web-node');
     expect(lines).toContain('synthetic-second');
   });
@@ -39,10 +40,13 @@ describe('gan stacks list', () => {
 
   it('F-AC5: CLI active set matches R1.getActiveStacks() programmatically (polyglot)', async () => {
     const fixture = stackFixturePath('polyglot-webnode-synthetic');
+    // Compute the active set two ways — directly via the library and via the
+    // spawned CLI — and require exact equality. This is the parity guarantee:
+    // the CLI must be a faithful wrapper, never re-deriving activation itself.
     const lib = getActiveStacks({ projectRoot: fixture });
     const cli = await runGan(['stacks', 'list', '--project-root', fixture, '--json']);
     const parsed = JSON.parse(cli.stdout) as { active: string[] };
-    // Library and CLI agree byte-for-byte on the active list.
+
     expect(parsed.active).toEqual(lib.active);
   });
 

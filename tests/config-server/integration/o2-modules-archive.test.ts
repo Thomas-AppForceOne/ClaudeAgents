@@ -1,25 +1,21 @@
 /**
- * M1 — Sprint M1 — O2 archive non-interference (AC14).
+ * O2 non-interference guard: repo-keyed module-state bytes on disk are
+ * inviolate. The invariant is blunt — reading config, listing modules, reading
+ * unrelated state, attempting an unrelated write, or probing registration must
+ * NEVER touch the bytes of an existing, unrelated module-state file.
  *
- * Per F1 + O2: the recovery flow must never touch
- * `.gan-state/modules/<name>/` durable state. R1 ships no archive
- * implementation yet (recovery semantics live alongside O2's recovery
- * code, which is post-M1 work), so the strongest guard we can run today
- * is: every module-touching API surface (validateAll, listModules,
- * setModuleState, registerModule probe) and the closest the framework
- * has to a "recovery flow" against a project must leave the bytes
- * under `.gan-state/modules/` untouched.
+ * Mechanism: a 4 KiB random "probe" file is written into the module-state tree
+ * and its sha256 captured. Each test exercises one config-server surface
+ * against an *unrelated* module/key, then re-hashes the probe and asserts it is
+ * byte-identical. The final test runs the whole sequence back to back to catch
+ * any cumulative or ordering-dependent corruption.
  *
- * Test pipeline:
- *
- *   1. Create a scratch project root.
- *   2. Write random bytes to
- *      `<scratch>/.gan-state/modules/<fixture>/probe.bin`.
- *   3. Compute SHA-256 of the probe bytes.
- *   4. Run every module-related read/write surface against the scratch
- *      root, plus a `validateAll` pass.
- *   5. Compute SHA-256 again.
- *   6. Assert byte-identical pre/post.
+ * Why the random bytes and the hash (not an equality on contents): a fixed
+ * payload could coincidentally match a buggy rewrite; random bytes + digest
+ * make any mutation — even a same-length one — overwhelmingly detectable.
+ * `setModuleState` for an unregistered module is expected to throw under M3, so
+ * its call is wrapped in try/catch — the point is that the throw leaves disk
+ * untouched, not that it succeeds.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -56,10 +52,7 @@ describe('O2 archive non-interference: repo-keyed module-state bytes are inviola
     _resetModuleRegistrationCacheForTests();
     clearResolvedConfigCache();
     scratch = mkdtempSync(path.join(os.tmpdir(), 'm1-o2-archive-'));
-    // F8: durable module state now lives in the repo-keyed store, not under
-    // `<scratch>/.gan-state/modules`. Make `scratch` a real repo, scope the
-    // store, and write the probe at the relocated module-state location so the
-    // byte-inviolate guard targets the live durable home.
+
     initGitRepo(scratch);
     store = useTempModuleStateStore();
     probePath = moduleStatePath(scratch, 'fixture-probe', 'probe');
@@ -92,10 +85,7 @@ describe('O2 archive non-interference: repo-keyed module-state bytes are inviola
   });
 
   it('setModuleState for an unrelated module does not mutate the probe bytes', () => {
-    // M3 allowlist gate: `unrelated-module` is not registered so the
-    // call rejects with `UnknownStateKey` before any I/O. The probe
-    // bytes are unaffected either way — guarding the throw here keeps
-    // the surface assertion (no probe-byte mutation) intact.
+
     try {
       setModuleState({
         projectRoot: scratch,

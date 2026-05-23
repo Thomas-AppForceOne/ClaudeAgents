@@ -1,28 +1,30 @@
-/**
- * Shared git subprocess seam for the F7 storage modules.
- *
- * `GitExec` is the single injectable seam every storage module uses to run git:
- * production passes {@link defaultGitExec} (`execFileSync('git', argv, { cwd })`,
- * argv-only — never a shell string), tests pass a stub. Centralised here so the
- * seam and the `git rev-parse --git-common-dir` → main-worktree-root derivation
- * have ONE implementation rather than a per-module copy.
- *
- * Subprocess safety (`shell_and_subprocess_safety`): implementations MUST treat
- * `args` as a literal argv array. Untrusted values (slugs, branch names, paths)
- * appear only as discrete argv elements, never interpolated into a command line.
- */
 
+
+/**
+ * The low-level git seam shared by the run/worktree storage layer.
+ *
+ * It defines the {@link GitExec} function type (so every git-touching module
+ * accepts an injectable executor and can be tested without a real repository),
+ * the production executor {@link defaultGitExec}, and the one primitive used
+ * across worktrees: locating the repository's main worktree root.
+ */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 /**
- * Injectable git exec seam. Returns the command's stdout; throws on a non-zero
- * exit (matching `execFileSync` semantics) so callers can branch on git
- * failures. Implementations MUST treat `args` as a literal argv array (no shell).
+ * A synchronous git command executor. Implementations run `git <args>` with
+ * working directory `cwd` and return captured stdout as a string. The argv form
+ * (no shell) is intentional — arguments are passed literally, so a value
+ * containing shell metacharacters cannot be reinterpreted as a command.
  */
 export type GitExec = (args: readonly string[], cwd: string) => string;
 
-/** Default git exec seam: `execFileSync('git', argv, { cwd })`, argv-only, no shell. */
+/**
+ * Production {@link GitExec}: invokes the `git` binary with `execFileSync` (no
+ * shell), inheriting `cwd`. stdin and stderr are ignored; only stdout is
+ * captured and returned. A non-zero exit throws (the standard `execFileSync`
+ * behaviour), which callers either translate or catch.
+ */
 export const defaultGitExec: GitExec = (args, cwd) =>
   execFileSync('git', [...args], {
     cwd,
@@ -30,18 +32,21 @@ export const defaultGitExec: GitExec = (args, cwd) =>
   }).toString();
 
 /**
- * Resolve the repo's **main-worktree root** — the parent of
- * `git rev-parse --git-common-dir`, NOT `git rev-parse --show-toplevel`. All
- * linked worktrees of a repo share one git-common-dir, so from inside any
- * linked worktree this resolves to the original main checkout, not the worktree
- * directory. That shared anchor is what makes the repo key (and therefore the
- * central store directory) identical across all worktrees, and what
- * distinguishes the main checkout (→ 1b for a matching branch) from a linked
- * task worktree (→ 1a).
+ * Resolve the filesystem root of a repository's *main* worktree, starting from
+ * any directory inside it (including a linked worktree).
  *
- * @param git     the injectable git seam.
- * @param fromDir directory inside the repo (worktree or main checkout) to run
- *   git from.
+ * It asks git for `--git-common-dir` — which always points at the main
+ * worktree's `.git` directory even when run from a linked worktree — resolves
+ * it relative to `fromDir`, and returns that directory's parent (the working
+ * tree root). This is the stable identity used to key per-repository state, so
+ * every worktree of a repo maps to the same root.
+ *
+ * @param git executor to run git through (injectable for tests).
+ * @param fromDir a directory inside the repository.
+ * @returns the absolute path of the main worktree's root.
+ * @throws a plain `Error` when `--git-common-dir` comes back empty (i.e.
+ *   `fromDir` is not inside a git repository). This is a THROW, not a returned
+ *   value; a non-zero git exit also surfaces as a throw from `git`.
  */
 export function mainWorktreeRoot(git: GitExec, fromDir: string): string {
   const out = git(['rev-parse', '--git-common-dir'], fromDir).trim();
@@ -50,9 +55,9 @@ export function mainWorktreeRoot(git: GitExec, fromDir: string): string {
       `Could not resolve the repository's git-common-dir from ${fromDir}; is this a git repository?`,
     );
   }
-  // `--git-common-dir` may be relative to `fromDir` (e.g. `.git` in the main
-  // checkout) or absolute (e.g. `/path/to/main/.git` from a linked worktree).
-  // Resolve against the invocation directory, then take the parent.
+
+  // `--git-common-dir` may be relative to fromDir (e.g. ".git"); resolve it,
+  // then take the parent so we return the working-tree root, not the .git dir.
   const commonDir = path.resolve(fromDir, out);
   return path.dirname(commonDir);
 }

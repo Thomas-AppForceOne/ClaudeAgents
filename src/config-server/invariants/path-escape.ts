@@ -1,29 +1,19 @@
 /**
- * `path.escape` invariant (F3 catalog; sourced from F4).
+ * Invariant `path.escape`: no overlay `additionalContext` entry may resolve to
+ * a location outside the project root.
  *
- * Surfaces filesystem path escapes under the F2 `PathEscape` error code.
- * R5 introduced this dedicated invariant; the post-R audit deduplication
- * collapsed an earlier duplicate (which fired the same rule under
- * `InvariantViolation`) into this file, leaving a single implementation.
+ * This is a security boundary, not a typo check — the framework only ever reads
+ * files beneath the project root, so a path that escapes (via an absolute path,
+ * a `..` chain, or a symlink that points out of the tree) is rejected as an
+ * `error` with the dedicated `PathEscape` code. Comparison is done on
+ * canonicalised paths so symlink targets and `..` are fully resolved before the
+ * containment test; an entry that cannot be canonicalised at all is treated as
+ * benign here (returns no issue) and left to other checks.
  *
- * The check walks every overlay tier and inspects the path-bearing
- * splice points (`planner.additionalContext`, `proposer.additionalContext`).
- * For each candidate it resolves against the project root, canonicalises
- * via F3's `canonicalizePath`, and checks descendant-of-root. A path
- * that does not exist on disk is *not* an issue here — that case is
- * owned by `additional-context.path_resolves` (a warning). Non-existent
- * paths are skipped, not double-reported.
- *
- * Issues are emitted with:
- *   - `code: 'PathEscape'` (per F2)
- *   - `severity: 'error'`
- *   - `path: entry` — the original (un-resolved) path string from the
- *     overlay, so users can grep for it
- *   - `field: '/planner/additionalContext'` or `/proposer/additionalContext`
- *   - `message`: built via `createError('PathEscape', ...)` so the wording
- *     funnels through the central factory.
- *
- * The check never throws.
+ * Counterpart to `additionalContext.path_resolves`: that invariant reports
+ * missing in-tree files, this one reports out-of-tree paths. The two are
+ * mutually exclusive per entry by construction (the resolves-check skips
+ * escaping entries).
  */
 
 import path from 'node:path';
@@ -33,6 +23,8 @@ import { createError } from '../errors.js';
 import type { Issue } from '../validation/schema-check.js';
 import type { SnapshotOverlayRow, ValidationSnapshot } from '../tools/validate.js';
 
+// The overlay locations that carry context file paths (planner/proposer
+// `additionalContext`); a new path-bearing field is added here once.
 const PATH_BEARING_FIELDS: Array<{
   block: 'planner' | 'proposer';
   field: 'additionalContext';
@@ -41,6 +33,19 @@ const PATH_BEARING_FIELDS: Array<{
   { block: 'proposer', field: 'additionalContext' },
 ];
 
+/**
+ * Flag every additionalContext entry, across all overlay tiers, that resolves
+ * outside the (canonicalised) project root.
+ *
+ * Canonicalises the project root once and reads only `snapshot.overlays`; no
+ * disk writes, and it never throws on a normal outcome (per-entry
+ * canonicalisation failures are caught in {@link evaluateEntry}).
+ *
+ * @param snapshot the validation snapshot; `projectRoot` and `overlays` are
+ *   consulted.
+ * @returns one `PathEscape` {@link Issue} per escaping entry; empty when every
+ *   entry stays within the project.
+ */
 export function checkPathEscape(snapshot: ValidationSnapshot): Issue[] {
   const issues: Issue[] = [];
   const canonicalRoot = canonicalizePath(snapshot.projectRoot);
@@ -65,6 +70,26 @@ export function checkPathEscape(snapshot: ValidationSnapshot): Issue[] {
   return issues;
 }
 
+/**
+ * Resolve and containment-check a single entry, returning the escape issue or
+ * `null` when the entry is safe.
+ *
+ * A relative entry is resolved against the raw project root; the result is then
+ * canonicalised so symlinks/`..` are followed before the containment test. A
+ * canonicalisation failure (e.g. a path that cannot be realpath-ed) returns
+ * `null` rather than throwing — this invariant only asserts "stays inside",
+ * and an unresolvable path is not proven to escape.
+ *
+ * @param row the source overlay (for the reported location).
+ * @param block / @param field which entry list this came from (for the
+ *   pointer/message).
+ * @param entry the raw path string from the overlay.
+ * @param canonicalRoot the pre-canonicalised project root.
+ * @param snapshot used only for the raw `projectRoot` when resolving a relative
+ *   entry.
+ * @returns a `PathEscape` issue, or `null` when the entry resolves inside the
+ *   root or cannot be canonicalised.
+ */
 function evaluateEntry(
   row: SnapshotOverlayRow,
   block: 'planner' | 'proposer',
@@ -74,11 +99,7 @@ function evaluateEntry(
   snapshot: ValidationSnapshot,
 ): Issue | null {
   const absolute = path.isAbsolute(entry) ? entry : path.resolve(snapshot.projectRoot, entry);
-  // `canonicalizePath` falls back to `path.resolve` when the file is
-  // missing, so it does not throw; defensively wrap it anyway so a
-  // future change can never escalate a missing-path case into a thrown
-  // exception (the `path_resolves` invariant owns missing-path
-  // reporting).
+
   let canonical: string;
   try {
     canonical = canonicalizePath(absolute);
@@ -89,6 +110,12 @@ function evaluateEntry(
   return buildIssue(row, block, field, entry, canonical, canonicalRoot);
 }
 
+/**
+ * True when `canonical` is the root itself or sits beneath it. Both paths are
+ * already canonical. The `+ sep` boundary stops a sibling prefix (`/proj-x`)
+ * from passing as a child of `/proj`, and the alternate separator is also
+ * accepted so the judgment is OS-independent.
+ */
 function isDescendantOfRoot(canonical: string, canonicalRoot: string): boolean {
   if (canonical === canonicalRoot) return true;
   const sep = path.sep;
@@ -98,6 +125,21 @@ function isDescendantOfRoot(canonical: string, canonicalRoot: string): boolean {
   return false;
 }
 
+/**
+ * Build the `PathEscape` issue, including the resolved canonical target and the
+ * project root in the message so the user sees exactly where the entry pointed.
+ *
+ * The inner `createError('PathEscape', …)` is used only to obtain the
+ * framework-formatted message string; the returned {@link Issue} carries the
+ * same `PathEscape` code, the raw `entry` as its `path`, and the `/block/field`
+ * pointer.
+ *
+ * @param row the source overlay (reported location).
+ * @param block / @param field the entry's location within the overlay.
+ * @param entry the raw path string as written.
+ * @param canonical the resolved canonical path that escaped.
+ * @param canonicalRoot the project root it escaped from.
+ */
 function buildIssue(
   row: SnapshotOverlayRow,
   block: 'planner' | 'proposer',
@@ -128,6 +170,11 @@ function buildIssue(
   };
 }
 
+/**
+ * Pull the string paths out of `data[block][field]`, accepting both the plain
+ * array form and the provenance-wrapped `{ value: [...] }` form, and dropping
+ * non-string members. Returns `[]` for any missing or non-list shape.
+ */
 function extractPaths(
   data: unknown,
   block: 'planner' | 'proposer',
@@ -146,6 +193,7 @@ function extractPaths(
   return [];
 }
 
+/** Narrow to a non-null, non-array object (a YAML mapping). */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

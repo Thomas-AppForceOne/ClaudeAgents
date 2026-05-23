@@ -1,3 +1,9 @@
+// Verifies loadStack against fixtures: it resolves and parses a stack file
+// (reporting its source tier + path and the parsed data) and throws MissingFile
+// when the named stack exists in no tier. The invalid-schemaVersion case pins a
+// deliberate separation of concerns: the loader PARSES but does not VALIDATE —
+// a schemaVersion of 999 loads without crashing because schema validation is
+// owned by a later stage (S3), not the loader.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +38,9 @@ describe('loadStack', () => {
     const result = loadStack('web-node', invalidFixture);
     expect(result.sourceTier).toBe('builtin');
     const data = result.data as Record<string, unknown>;
-    // S2 loader must not enforce schemaVersion; it just round-trips.
+
+    // The out-of-range schemaVersion is loaded verbatim, not rejected: the
+    // loader's job is to parse, and validation is deferred to S3.
     expect(data.schemaVersion).toBe(999);
   });
 

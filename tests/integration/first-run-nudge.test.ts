@@ -1,26 +1,19 @@
 /**
- * E1 invariant — first-run nudge (verbatim contract).
+ * End-to-end contract test for the first-run nudge defined by E1 spec line 22.
  *
- * E1 line 22 specifies the exact non-suppressible startup-log line the
- * orchestrator emits when the active stack set resolves to
- * `stacks/generic.md` only. The orchestrator itself is the `/gan`
- * skill's markdown prompt (`skills/gan/SKILL.md`), so the verbatim
- * string is exercised at runtime by Claude Code, not by a TypeScript
- * function call. This integration test stands as the regression
- * backstop for the contract:
+ * The nudge is the line the startup log must emit when no real ecosystem stack
+ * matches and resolution falls back to `stacks/generic.md` only. Its exact
+ * wording is authored once, in the E1 spec, and the shipped `skills/gan/
+ * SKILL.md` must carry that same string verbatim. This suite guards two halves
+ * of that contract end-to-end:
+ *  1. the generic-fallback fixture really does resolve to generic-only, and
+ *  2. SKILL.md contains the nudge string lifted straight from the spec.
  *
- *   1. The `tests/fixtures/stacks/generic-fallback/` fixture activates
- *      ONLY the `generic` stack — confirming the precondition the nudge
- *      hangs off.
- *   2. The verbatim nudge string from `specifications/E1-agent-integration.md`
- *      (line 22) appears unchanged inside `skills/gan/SKILL.md`. The
- *      string is loaded from disk at test runtime; the test itself
- *      never inlines the literal nudge text.
- *
- * Together these guarantee that an authoring drift in either the spec
- * or SKILL.md surfaces as a test failure. The fixture-side check
- * additionally guards detection from regressing.
+ * Regression guarded: the spec wording and the SKILL.md copy drifting apart —
+ * if either side is reworded without the other, this fails rather than letting
+ * a stale nudge ship.
  */
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,32 +25,26 @@ import { clearResolvedConfigCache } from '../../src/config-server/resolution/cac
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const fixturePath = path.join(repoRoot, 'tests', 'fixtures', 'stacks', 'generic-fallback');
-// Literal spec path under `specifications/E1-agent-integration.md` — kept
-// as a single string here so static auditing of this test sees the path
-// as one token. The actual readFileSync uses `path.join` for portability.
+
 const E1_SPEC_RELATIVE = 'specifications/E1-agent-integration.md';
 const e1SpecPath = path.join(repoRoot, ...E1_SPEC_RELATIVE.split('/'));
 const skillPath = path.join(repoRoot, 'skills', 'gan', 'SKILL.md');
 
+// Resolution caches by project root; clear on each side of every test so a
+// fixture is always composed fresh rather than served from a stale entry.
 beforeEach(() => clearResolvedConfigCache());
 afterEach(() => clearResolvedConfigCache());
 
-/**
- * Pull line 22 out of the E1 spec at test runtime (per the test
- * contract, the verbatim nudge string must NOT be hardcoded in this
- * file). The line carries the back-tick-enclosed nudge text; we
- * extract a stable substring ("No recognised ecosystem stack ..." up
- * to "as a starting point.") that is unique enough to act as a
- * regression check without dragging escape-handling complexity into
- * the test. Any drift in the spec's nudge wording — capitalisation,
- * punctuation, the "gan stacks new" CLI hint — surfaces here.
- */
+// Read the nudge straight from the E1 spec so the test asserts against the
+// authoritative wording, never a hand-copied duplicate that could drift.
 function extractNudgeFromSpec(): string {
   const e1 = readFileSync(e1SpecPath, 'utf8');
   const lines = e1.split('\n');
-  const line22 = lines[21]; // 1-indexed line 22
-  // The nudge text begins with "No recognised" and ends with the
-  // sentence "as a starting point."
+  // Line 22 of the spec (zero-indexed 21) is where the nudge contract lives.
+  const line22 = lines[21];
+
+  // Slice the nudge out by its stable head/tail phrases rather than a brittle
+  // column range; the markers bracket the exact substring SKILL.md must echo.
   const startMarker = 'No recognised';
   const endMarker = 'as a starting point.';
   const start = line22.indexOf(startMarker);
@@ -73,9 +60,10 @@ function extractNudgeFromSpec(): string {
 
 describe('first-run nudge — E1 line 22 contract end-to-end', () => {
   it('generic-fallback fixture activates ONLY generic AND SKILL.md carries the verbatim E1 line 22 nudge string', async () => {
-    // Half 1 — fixture-side detection contract: the generic-fallback
-    // project (no package.json, no other ecosystem signal) resolves to
-    // exactly ["generic"], with built-in tier provenance.
+
+    // Half one: the fixture must resolve to the generic stack ONLY, and that
+    // stack must come from the builtin tier — i.e. a genuine fallback, not a
+    // project-supplied stack named "generic".
     const resolved = await composeResolvedConfig(fixturePath, { packageRoot: repoRoot });
     expect(resolved.stacks.active).toEqual(['generic']);
     expect(Object.keys(resolved.stacks.byName)).toEqual(['generic']);
@@ -85,12 +73,12 @@ describe('first-run nudge — E1 line 22 contract end-to-end', () => {
       expect(generic.tier).toBe('builtin');
     }
 
-    // Half 2 — verbatim nudge contract: the nudge text loaded from
-    // E1 line 22 at test runtime appears unchanged inside SKILL.md.
+    // Half two: pull the nudge from the spec and confirm SKILL.md carries it
+    // verbatim. The length/content guards catch a spec edit that accidentally
+    // emptied or gutted the markers before the contains-check runs.
     const nudgeFromSpec = extractNudgeFromSpec();
     expect(nudgeFromSpec.length).toBeGreaterThan(20);
-    // The CLI hint is part of the spec's contract; surface it loudly
-    // if it disappears from E1's nudge text.
+
     expect(nudgeFromSpec).toMatch(/generic defaults/);
     const skill = readFileSync(skillPath, 'utf8');
     expect(skill).toContain(nudgeFromSpec);

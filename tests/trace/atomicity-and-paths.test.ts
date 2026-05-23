@@ -1,14 +1,26 @@
 /**
- * T1 Sprint 2 — atomic writes (F2.5) and path-traversal rejection (F2.4 /
- * spec filesystem-scoped authorisation).
+ * Trace store durability + path-safety suite — guards the two properties a
+ * crash-resilient append-only log must never violate: writes are all-or-nothing,
+ * and no reference can ever escape the trace root.
  *
- * Covers contract criteria:
- *  - atomic_writes_no_partial_file: temp-file-then-rename is the only write
- *    path; no `*.tmp*` sibling leaks on success; a mid-write failure leaves
- *    no file at the final path (old-or-complete, never partial).
- *  - payload_path_no_traversal_zone2_only: adversarial role/class/ref values
- *    are rejected; no write lands outside the trace root.
+ * Atomicity ("old-or-complete, never partial"): both event and payload writes
+ * go through one atomicWriteFile helper (temp file + rename). The success path
+ * proves no `*.tmp.*` sibling is left behind; the failure path makes the rename
+ * or the temp-write fail (by chmod'ing the target dir/parent read-only) and
+ * proves the final path holds NOTHING — never a half-written file — and a
+ * ConfigServerError is thrown. The "same helper" test pins that there is no
+ * second, unverified write mechanism. Failure-path tests early-return on win32
+ * because POSIX mode bits don't deny writes there.
+ *
+ * Path safety (zone-2 traversal defence): payload filenames/refs are rejected
+ * if the role carries a traversal segment or separator, if the payload class is
+ * unknown, or if a ref is absolute / contains `..` / uses a backslash.
+ * resolveRefWithinRoot must confine every resolved path under the trace root,
+ * and writePayloadFile must refuse to land a file outside it — the test also
+ * checks no escape file actually appears on disk, so it catches a check that
+ * throws but writes anyway.
  */
+
 import { describe, expect, it, afterEach } from 'vitest';
 import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
@@ -40,6 +52,8 @@ function makeRootDir(): string {
 
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) {
+    // Failure-path tests leave dirs chmod'd read-only; restore writability
+    // first or the recursive rm itself would fail to clean up.
     try {
       chmodSync(d, 0o755);
     } catch {
@@ -111,11 +125,15 @@ describe('atomic_writes_no_partial_file — success path', () => {
 
 describe('atomic_writes_no_partial_file — failure path (no partial file)', () => {
   it('a rename failure leaves NO file at the final event path (old-or-complete, never partial)', () => {
-    if (platform() === 'win32') return; // POSIX permission semantics
+    // POSIX-only: read-only mode bits don't block writes for the owner on win32.
+    if (platform() === 'win32') return;
     const root = path.join(makeRootDir(), 'trace');
     const dir = eventsDir(root);
     mkdirSync(dir, { recursive: true });
-    // Make the events dir read-only so the temp write (or rename) fails.
+
+    // Make the events dir read-only so the final rename (into it) fails after
+    // the temp file is written — the case that would leave a partial file if
+    // the write were not atomic.
     chmodSync(dir, 0o555);
 
     let threw = false;
@@ -128,19 +146,20 @@ describe('atomic_writes_no_partial_file — failure path (no partial file)', () 
     expect(threw).toBe(true);
 
     chmodSync(dir, 0o755);
-    // No event file landed at the final name, and no temp sibling leaked.
+
     const remaining = readdirSync(dir);
     expect(remaining).not.toContain('0000000000.json');
     expect(remaining.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });
 
   it('a temp-write failure (unwritable parent) leaves no file at the final path', () => {
-    if (platform() === 'win32') return; // POSIX permission semantics
+    if (platform() === 'win32') return;
     const baseDir = makeRootDir();
     const root = path.join(baseDir, 'trace');
-    // Pre-create the trace root but make it read-only so the events
-    // subdirectory cannot be created and the temp write fails before any
-    // rename — the observer sees nothing at the final name, never a partial.
+
+    // Make the trace root read-only so even creating the events subdir (and
+    // thus the temp file) fails — exercises the earlier "temp-write" failure
+    // point, distinct from the rename failure above.
     mkdirSync(root, { recursive: true });
     chmodSync(root, 0o555);
 
@@ -154,16 +173,14 @@ describe('atomic_writes_no_partial_file — failure path (no partial file)', () 
     expect(threw).toBe(true);
 
     chmodSync(root, 0o755);
-    // The events dir was never created; no final file, no temp sibling.
+
     expect(existsSync(eventsDir(root))).toBe(false);
     const rootNames = readdirSync(root);
     expect(rootNames.filter((n) => n.includes('.tmp.'))).toEqual([]);
   });
 
   it('the event/payload write path is the same atomicWriteFile helper (no second mechanism)', () => {
-    // Structural assertion: store.ts uses atomicWriteFile for both event and
-    // payload writes. We verify the success-path invariant (no partial, no
-    // temp sibling) holds for both, which is the observable contract.
+
     const root = path.join(makeRootDir(), 'trace');
     appendEventFile(root, sampleEvent(0));
     writePayloadFile(root, buildPayloadRef(0, 'gan-generator', 'prompt', 'text'), 'x');
@@ -193,7 +210,7 @@ describe('payload_path_no_traversal_zone2_only', () => {
     expect(() => assertSafeRelativeRef('payloads/../../etc/passwd')).toThrow();
     expect(() => assertSafeRelativeRef('..')).toThrow();
     expect(() => assertSafeRelativeRef('payloads\\x.md')).toThrow();
-    // A confined ref passes unchanged.
+
     expect(assertSafeRelativeRef('payloads/0000000001-gan-generator-result.md')).toBe(
       'payloads/0000000001-gan-generator-result.md',
     );
@@ -203,7 +220,7 @@ describe('payload_path_no_traversal_zone2_only', () => {
     const root = path.join(makeRootDir(), 'trace');
     const resolved = resolveRefWithinRoot(root, 'payloads/0000000001-gan-generator-result.md');
     expect(resolved.startsWith(path.resolve(root) + path.sep)).toBe(true);
-    // Escaping refs throw before any write.
+
     expect(() => resolveRefWithinRoot(root, '/abs/x.md')).toThrow();
     expect(() => resolveRefWithinRoot(root, 'payloads/../../../x.md')).toThrow();
   });
@@ -211,7 +228,9 @@ describe('payload_path_no_traversal_zone2_only', () => {
   it('writePayloadFile never lands a file outside the trace root', () => {
     const baseDir = makeRootDir();
     const root = path.join(baseDir, 'trace');
-    // An adversarial ref is rejected; the file is never written outside root.
+
+    // Throwing is necessary but not sufficient: also assert the escape target
+    // does not exist, catching a guard that rejects yet writes the file first.
     expect(() => writePayloadFile(root, '../../escape.md', 'pwned')).toThrow();
     expect(existsSync(path.join(baseDir, '..', 'escape.md'))).toBe(false);
   });
