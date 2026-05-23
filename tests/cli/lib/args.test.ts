@@ -1,7 +1,17 @@
+// Unit tests for `parseArgs`, the CLI's flag/positional parser. They pin the
+// full grammar the rest of the CLI relies on: `--flag=value` and `--flag value`
+// forms, short `-h`, boolean vs string flag typing, the `--` terminator, last-
+// writer-wins for repeated flags, and structured (never thrown) errors. The
+// guarantee under test is that parsing is total — every malformed input yields
+// a `result.error` describing the problem rather than an exception, so callers
+// can map it to an exit code instead of crashing.
 
 import { describe, expect, it } from 'vitest';
 import { GLOBAL_FLAGS, parseArgs, type CommandSpec } from '../../../src/cli/lib/args.js';
 
+// A representative spec: the global flags (`--json`, `--help`/`-h`,
+// `--project-root`) plus one extra string flag (`--tier`) so both flag types
+// are exercised against the same parser.
 const SPEC: CommandSpec = {
   flags: [...GLOBAL_FLAGS, { long: '--tier', type: 'string' }],
 };
@@ -37,6 +47,8 @@ describe('parseArgs', () => {
     expect(r.doubleDashSeen).toBe(true);
     expect(r._).toEqual(['--json', '--project-root', 'xyz']);
 
+    // Everything after `--` is positional, so `--json` was NOT parsed as a flag
+    // and keeps its default false — this is the key behaviour `--` guarantees.
     expect(r.flags['json']).toBe(false);
   });
 
@@ -89,6 +101,8 @@ describe('parseArgs', () => {
     expect(ok2.error).toBeUndefined();
     expect(ok2.flags['json']).toBe(false);
 
+    // A boolean flag accepts only the literals true/false in `=value` form;
+    // anything else (here `yes`) is reported as missing-value, never coerced.
     const bad = parseArgs(['--json=yes'], SPEC);
     expect(bad.error).toBeDefined();
     expect(bad.error?.kind).toBe('missing-value');
@@ -120,6 +134,9 @@ describe('parseArgs', () => {
   });
 
   it('allowUnknownFlags=true treats unknown flags as positional', () => {
+    // Opt-in lenient mode (used for pass-through subcommands): an unrecognised
+    // flag is collected as a positional instead of erroring, so the receiving
+    // subcommand can interpret it.
     const lenient: CommandSpec = { flags: [...GLOBAL_FLAGS], allowUnknownFlags: true };
     const r = parseArgs(['--nope'], lenient);
     expect(r.error).toBeUndefined();

@@ -1,3 +1,9 @@
+// Tests for `emitJson`, the CLI's `--json` serializer. The contract: byte-for-
+// byte deterministic output (recursively sorted keys, two-space indent, a single
+// trailing newline) so machine consumers and golden-file comparisons are stable.
+// The load-bearing test is the byte-identity check against `stableStringify`:
+// `emitJson` must *be* the determinism pin, not a second JSON formatter that
+// could drift from it.
 
 import { describe, expect, it } from 'vitest';
 import { emitJson } from '../../../src/cli/lib/json-output.js';
@@ -7,9 +13,12 @@ describe('emitJson', () => {
   it('produces sorted keys at every depth', () => {
     const out = emitJson({ z: 1, a: 2, m: { y: 1, x: 2 } });
 
+    // Assert ordering by substring position rather than re-parsing: the point is
+    // the literal text order, which is what a machine consumer diffs against.
     expect(out.indexOf('"a"')).toBeLessThan(out.indexOf('"m"'));
     expect(out.indexOf('"m"')).toBeLessThan(out.indexOf('"z"'));
 
+    // Nested keys are sorted too, not just the top level.
     expect(out.indexOf('"x"')).toBeLessThan(out.indexOf('"y"'));
   });
 

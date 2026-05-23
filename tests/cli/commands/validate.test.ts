@@ -1,3 +1,12 @@
+// End-to-end tests for `gan validate`, spawning the built CLI against curated
+// fixtures. They pin the exit-code-by-failure-class contract: 0 + "0 issues
+// found." on a clean config; 2 for schema-class failures; 4 for invariant
+// violations (e.g. the un-edited DRAFT banner). The human surface is locked to a
+// stable per-issue line format (`(error|warning) <Code> <loc>: <msg>`), and the
+// `--json` surface is verified to be parseable, to carry the same issues, and to
+// be byte-identical across runs (determinism). A final round-trip test scaffolds
+// a stack with `gan stacks new` and confirms `validate` then flags its DRAFT
+// banner — proving the two commands compose as a user would chain them.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -8,10 +17,14 @@ import { validateAll, type Issue } from '../../../src/config-server/tools/valida
 import { runGan } from '../helpers/spawn.js';
 import { stackFixturePath } from '../helpers/fixtures.js';
 
+// Three fixtures spanning the failure classes: clean (0 issues), schema-only
+// violation (exit 2, no invariants), and an invariant violation (DRAFT banner,
+// exit 4).
 const CLEAN_FIXTURE = stackFixturePath('js-ts-minimal');
 const SCHEMA_VIOLATION_FIXTURE = stackFixturePath('cli-validate-schema-violation');
 const INVARIANT_FIXTURE = stackFixturePath('invariant-stack-draft-banner');
 
+// The locked human-readable issue-line format every printed issue must match.
 const ISSUE_LINE_RE = /^(error|warning) [A-Za-z]+ .+: .+$/;
 
 const tmpDirs: string[] = [];
@@ -26,12 +39,16 @@ afterEach(() => {
   }
 });
 
+// A fresh temp project root for the round-trip test, registered for teardown.
 function makeTmpProject(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'gan-cli-validate-'));
   tmpDirs.push(dir);
   return dir;
 }
 
+// The trailing summary line ("N issues found.") is the last non-empty line of
+// stdout; this extracts it so the summary can be asserted independent of any
+// issue lines printed above it.
 function lastNonEmptyLine(text: string): string {
   const lines = text.split('\n').filter((l) => l.length > 0);
   return lines[lines.length - 1] ?? '';
@@ -48,6 +65,10 @@ describe('gan validate — clean fixture', () => {
 
 describe('gan validate — schema-only failure (fixture: cli-validate-schema-violation)', () => {
   it('the fixture itself produces ONLY schema-class issues (no InvariantViolation)', () => {
+    // Validate the fixture directly (no CLI spawn) to confirm it is a *pure*
+    // schema failure. This guards the exit-2 test below: if an invariant ever
+    // crept into this fixture it would change the exit code to 4, so we pin the
+    // fixture's failure class at the source.
     const direct = validateAll({ projectRoot: SCHEMA_VIOLATION_FIXTURE });
     expect(direct.issues.length).toBeGreaterThan(0);
     const invariantHits = direct.issues.filter((i: Issue) => i.code === 'InvariantViolation');
@@ -76,6 +97,8 @@ describe('gan validate — invariant fixture (DRAFT banner)', () => {
   it('issue lines match the locked format /^(error|warning) [A-Za-z]+ .+: .+$/', async () => {
     const r = await runGan(['validate', '--project-root', INVARIANT_FIXTURE]);
     expect(r.exitCode).toBe(4);
+    // Exclude the "N issues" summary line, then require every remaining line to
+    // be a well-formed issue line — catching any stray/unformatted output.
     const lines = r.stdout.split('\n').filter((l) => l.length > 0);
     const issueLines = lines.filter((l) => !/^[0-9]+ issue/.test(l));
     expect(issueLines.length).toBeGreaterThan(0);
@@ -117,6 +140,9 @@ describe('gan validate — end-to-end round-trip with `gan stacks new`', () => {
   it('scaffold a stack into a tmp project, then validate exits 4 citing DRAFT + the file basename', async () => {
     const proj = makeTmpProject();
 
+    // Seed a minimal valid project overlay so the temp project is a recognised
+    // gan project before scaffolding into it — the round-trip then exercises
+    // the real `stacks new` → `validate` chain rather than an empty dir.
     const overlayDir = path.join(proj, '.claude', 'gan');
     mkdirSync(overlayDir, { recursive: true });
     writeFileSync(

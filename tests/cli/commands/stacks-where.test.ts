@@ -1,3 +1,10 @@
+// End-to-end tests for `gan stacks where`, spawning the built CLI. Two modes
+// are covered: with no name it prints the built-in stacks directory; with a
+// name it resolves that stack across tiers and reports its path and tier. The
+// load-bearing behaviour is tier precedence — a project-tier customisation must
+// win over the same-named built-in — plus the locked `--json` shapes
+// (`{kind, path}` for the directory query, `{name, path, tier}` for a named
+// resolution) and the exit-2 MissingFile contract when no tier has the stack.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,6 +14,7 @@ import path from 'node:path';
 import { canonicalizePathForDisplay } from '../../../src/config-server/determinism/index.js';
 import { runGan } from '../helpers/spawn.js';
 
+// Temp dirs (package roots, project roots, fake homes) created per test.
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -19,12 +27,15 @@ afterEach(() => {
   }
 });
 
+// A fresh temp dir with a descriptive prefix, registered for teardown.
 function makeTmpDir(prefix: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(dir);
   return dir;
 }
 
+// Minimal schema-valid stack body, reused for both built-in and project-tier
+// seeds so resolution tests differ only in WHERE the file is placed.
 const STACK_BODY = (name: string) =>
   [
     '---',
@@ -41,6 +52,7 @@ const STACK_BODY = (name: string) =>
     '',
   ].join('\n');
 
+// Seed a built-in (package-tier) stack at `<packageRoot>/stacks/<name>.md`.
 function seedBuiltin(packageRoot: string, name: string): string {
   const dir = path.join(packageRoot, 'stacks');
   mkdirSync(dir, { recursive: true });
@@ -49,6 +61,10 @@ function seedBuiltin(packageRoot: string, name: string): string {
   return file;
 }
 
+// Seed a project-tier customisation at `<project>/.claude/gan/stacks/<name>.md`.
+// The path is canonicalised first so the seeded location matches what the CLI
+// resolves (the CLI works in canonical paths), letting the override-wins test
+// compare exact paths.
 function seedProjectTier(projectRoot: string, name: string): string {
   const dir = path.join(canonicalizePathForDisplay(projectRoot), '.claude', 'gan', 'stacks');
   mkdirSync(dir, { recursive: true });

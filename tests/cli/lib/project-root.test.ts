@@ -1,3 +1,10 @@
+// Tests for `resolveProjectRoot`, which turns the optional `--project-root` flag
+// into the canonical absolute directory the rest of the CLI operates on. Two
+// behaviours matter: (1) the `explicit` flag distinguishes a user-supplied root
+// from the cwd fallback, and an empty string is treated as "not supplied"; and
+// (2) the path is always canonicalised so a trailing slash or symlink resolves
+// to the same value, and a missing path or a file (not a directory) is rejected
+// up front with a descriptive throw rather than failing deeper in the pipeline.
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolveProjectRoot } from '../../../src/cli/lib/project-root.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 
+// Deferred cleanups for every temp dir created in a test, drained after each.
 const cleanups: Array<() => void> = [];
 
 afterEach(() => {
@@ -18,6 +26,8 @@ afterEach(() => {
   }
 });
 
+// Create a real temp directory (resolveProjectRoot stats the path, so it must
+// exist) and register its removal for teardown.
 function freshTmp(): string {
   const t = mkdtempSync(path.join(tmpdir(), 'gan-pr-'));
   cleanups.push(() => rmSync(t, { recursive: true, force: true }));

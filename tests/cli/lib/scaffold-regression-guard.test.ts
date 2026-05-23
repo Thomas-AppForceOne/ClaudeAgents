@@ -1,3 +1,14 @@
+// R6 closing-guard regression suite for the scaffold. It exists to pin the
+// exact way the R6 change NARROWED the un-edited-scaffold failure rather than
+// removing it: detection was dropped from the scaffold body, so the failure of
+// an un-edited scaffold must now be attributable to the TODO stubs / DRAFT
+// banner ONLY — never to a detection.tier3_only invariant (F3) or a C1
+// `/detection` parse rejection, both of which would mean detection sneaked back
+// in. It also guards that a fully-edited scaffold validates with zero residual
+// invariants, that the frontmatter carries no `detection` key, and — by reading
+// the actual source of stacks-new.ts and scaffold.ts — that tier→body selection
+// stays centralised in a single `buildScaffold(name, tier)` call rather than
+// per-tier branching at the call site.
 
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -24,6 +35,10 @@ const repoRoot = path.resolve(here, '..', '..', '..');
 const TIERS = ['project', 'user'] as const;
 type Tier = (typeof TIERS)[number];
 
+// Run the structural checks the real validator runs against one stack body:
+// schema validation plus the detection.tier3_only invariant. The snapshot is
+// hand-built (cast through unknown) since only `stackFiles` is consulted; the
+// virtual path embeds the tier so map keys are unique per tier.
 function structuralIssues(
   name: string,
   tier: Tier,
@@ -41,12 +56,17 @@ function structuralIssues(
   return issues;
 }
 
+// True iff the F3 detection.tier3_only invariant fired: an InvariantViolation
+// pinned to the `/detection` field. Its ABSENCE is what most tests assert.
 function hasDetectionTier3Invariant(issues: Issue[]): boolean {
   return issues.some(
     (i) => i.code === 'InvariantViolation' && (i.field ?? '') === '/detection',
   );
 }
 
+// True iff the C1 schema layer rejected something under `/detection` — i.e.
+// detection was present in the body and failed to parse. Also expected to be
+// absent now that the scaffold emits no detection at all.
 function hasC1DetectionParseRejection(issues: Issue[]): boolean {
   return issues.some(
     (i) =>
@@ -160,6 +180,9 @@ describe('R6 closing guard — tier→body selection stays centralised in buildS
       'utf8',
     );
 
+    // Strip block comments, import lines, and line comments before matching so a
+    // mention of `buildScaffold(` in a comment or import can't inflate the call
+    // count — we want to count real call sites in executable code only.
     const code = src
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n')

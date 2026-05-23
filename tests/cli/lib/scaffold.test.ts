@@ -1,3 +1,12 @@
+// Tests for `buildScaffold`, the generator behind `gan stacks new`. They lock
+// the scaffold's shape and its deliberate "friction": the DRAFT banner and TODO
+// stubs that make an un-edited scaffold FAIL validation, so a user cannot ship a
+// stack they never customised. Coverage spans the banner identity (re-exported
+// as the same binding, never a copy), the output structure (frontmatter, every
+// required key, the trailing prose section, a single trailing newline),
+// determinism (same args → byte-identical output), and the R6 contract: the body
+// is tier-aware and detection-free, the project/user tiers differ ONLY in the
+// activation-comment overlay phrase, and a fully-edited scaffold validates clean.
 
 import { describe, expect, it } from 'vitest';
 
@@ -15,6 +24,8 @@ import {
   editedScaffoldBody as editedBody,
 } from '../helpers/scaffold-edit.js';
 
+// Every key the schema requires a real stack to declare; the scaffold must
+// surface all of them (as TODO stubs) so the user knows what to fill in.
 const REQUIRED_KEYS = [
   'scope',
   'secretsGlob',
@@ -25,12 +36,19 @@ const REQUIRED_KEYS = [
   'securitySurfaces',
 ];
 
+// The two scaffold tiers; most assertions are run identically against both.
 const TIERS = ['project', 'user'] as const;
 
+// Drop blank/whitespace-only lines so positional checks ("first non-blank line
+// is the banner") are robust to incidental blank padding in the output.
 function nonBlankLines(text: string): string[] {
   return text.split('\n').filter((l) => l.trim().length > 0);
 }
 
+// Validate a *fully-edited* scaffold body the way the real pipeline does: schema
+// check plus the detection.tier3_only invariant. The snapshot is hand-built
+// (cast through unknown) because only the `stackFiles` map is consulted here;
+// fabricating just that field keeps the fixture minimal.
 function validateEdited(name: string, tier: (typeof TIERS)[number]): Issue[] {
   const data = editedBody(name, tier);
   const issues: Issue[] = [];
@@ -44,6 +62,9 @@ function validateEdited(name: string, tier: (typeof TIERS)[number]): Issue[] {
 
 describe('buildScaffold — banner identity', () => {
   it('re-exports DRAFT_BANNER as the same binding (=== identity)', () => {
+    // Reference identity, not just value equality: the scaffold module must
+    // re-export the one canonical banner constant, so the banner can never drift
+    // into two copies that the validator and generator disagree about.
     expect(SCAFFOLD_BANNER).toBe(SOURCE_BANNER);
   });
 
@@ -95,6 +116,8 @@ describe('buildScaffold — output shape', () => {
     const out = buildScaffold('web-node');
     expect(out).toContain('## Conventions');
 
+    // The prose must sit AFTER the closing frontmatter delimiter, not inside the
+    // YAML block — assert by relative offset of the last `---` vs the heading.
     const closingMarker = out.lastIndexOf('\n---\n');
     const conventions = out.indexOf('## Conventions');
     expect(closingMarker).toBeGreaterThan(-1);
@@ -106,6 +129,8 @@ describe('buildScaffold — output shape', () => {
     expect(out.endsWith('\n')).toBe(true);
     expect(out.endsWith('\n\n\n')).toBe(false);
 
+    // Exactly one trailing newline: the last char is `\n` but the second-to-last
+    // is not, so there is no blank line at EOF (POSIX text-file convention).
     const len = out.length;
     expect(len).toBeGreaterThan(1);
     expect(out[len - 2]).not.toBe('\n');
@@ -172,6 +197,9 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
     });
 
     it(`edited scaffold (TODOs replaced, banner removed) validates with zero errors (${tier} tier)`, () => {
+      // The other half of the friction contract: once the stubs are filled and
+      // the banner removed, validation is fully clean (no schema errors, no
+      // residual invariant violations).
       const issues = validateEdited('acme-svc', tier);
       expect(
         issues,
@@ -188,6 +216,8 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
       expect(out).toContain('"TODO/**/*"');
       expect(out).toContain('false  # TODO: replace before committing');
 
+      // An un-edited scaffold must FAIL schema validation — the TODO stubs are
+      // deliberately invalid so a forgotten edit can't slip through.
       const issues: Issue[] = [];
       validateStackBodyAgainstSchema(
         `/virtual/acme-svc.md`,
@@ -205,6 +235,9 @@ describe('buildScaffold — R6 tier-aware, detection-free body', () => {
     expect(proj).toContain('project overlay (.claude/gan/project.md)');
     expect(user).toContain('user overlay (~/.claude/gan/user.md)');
 
+    // Prove the ONLY difference is the tier-specific phrasing: rewrite the two
+    // known tier-dependent fragments to a common placeholder in both outputs;
+    // once normalised they must be byte-identical.
     const normalise = (s: string): string =>
       s
         .replace('project overlay (.claude/gan/project.md)', 'OVERLAY')

@@ -1,3 +1,14 @@
+// End-to-end tests for `gan stacks new`, spawning the built CLI. They pin the
+// write target per tier (project tier under `<root>/.claude/gan/stacks/`, user
+// tier under `<userHome>/.claude/gan/stacks/` independent of --project-root),
+// and assert the written bytes equal `buildScaffold(name, tier)` exactly so the
+// CLI is a thin wrapper over the generator. Argument-error contracts are locked:
+// an invalid/empty/bare `--tier` exits 64 with a message naming BOTH supported
+// values and creates no file; a missing name exits 64. The no-overwrite rule
+// (exit 1, file byte- and mtime-unchanged) is verified at both tiers. The R6
+// headline contract is exercised end-to-end through validateAll: scaffold →
+// first-edit pass → ZERO issues, while an un-edited scaffold still fails on the
+// DRAFT banner (friction preserved through the real validator).
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -10,6 +21,7 @@ import { validateAll } from '../../../src/config-server/tools/validate.js';
 import { runGan } from '../helpers/spawn.js';
 import { applyScaffoldFirstEditText } from '../helpers/scaffold-edit.js';
 
+// Temp project/home dirs created per test, removed in teardown.
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -69,6 +81,9 @@ describe('gan stacks new — rejected tiers name both supported values (R6)', ()
       expect(r.stderr).toMatch(/project/);
       expect(r.stderr).toMatch(/user/);
       expect(r.stderr).toContain(bad);
+      // Check BOTH the raw and the canonicalised project path: a rejected tier
+      // must leave no file under either spelling, ruling out a write that the
+      // canonicalisation step might otherwise hide.
       const canonicalRoot = canonicalizePath(proj);
       expect(existsSync(path.join(proj, '.claude', 'gan', 'stacks', 'web-node.md'))).toBe(false);
       expect(
@@ -132,6 +147,8 @@ describe('gan stacks new — --tier=user (R6 slice 2)', () => {
     const written = readFileSync(userTarget, 'utf8');
     expect(written).toBe(buildScaffold('my-rust', 'user'));
 
+    // Exactly one file in the dir: the atomic write must not leave its temp
+    // file behind (a rename-into-place artifact would show up here).
     const fs = await import('node:fs');
     const dir = path.join(home, '.claude', 'gan', 'stacks');
     expect(fs.readdirSync(dir)).toEqual(['my-rust.md']);
@@ -234,6 +251,9 @@ describe('gan stacks new — no-overwrite rule', () => {
     const after = readFileSync(target, 'utf8');
     expect(after).toBe(sentinel);
 
+    // Unchanged mtime AND size prove the file was never even opened for writing
+    // — a stronger guarantee than just comparing contents (which a rewrite of
+    // identical bytes could satisfy).
     const afterStat = statSync(target);
     expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
     expect(afterStat.size).toBe(beforeStat.size);
@@ -277,6 +297,9 @@ describe('gan stacks new — R6 headline contract, end-to-end through validateAl
     return dir;
   }
 
+  // Predicates that recognise the two invariant violations of interest by
+  // their pinned field: the DRAFT-banner prose check (`/prose`) and the
+  // detection.tier3_only check (`/detection`).
   const PROSE_BANNER = (i: { code: string; field?: string }): boolean =>
     i.code === 'InvariantViolation' && (i.field ?? '') === '/prose';
   const DETECTION_TIER3 = (i: { code: string; field?: string }): boolean =>
@@ -290,6 +313,9 @@ describe('gan stacks new — R6 headline contract, end-to-end through validateAl
     });
     expect(r.exitCode).toBe(0);
 
+    // Apply the canonical "first edit" (fill TODO stubs, remove the banner) to
+    // the scaffold the CLI just wrote, then re-run the full validator: this is
+    // the real user flow, not a synthetic body.
     const canonicalRoot = canonicalizePath(proj);
     const target = path.join(canonicalRoot, '.claude', 'gan', 'stacks', 'acme-svc.md');
     const edited = applyScaffoldFirstEditText(readFileSync(target, 'utf8'));
