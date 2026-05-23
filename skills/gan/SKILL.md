@@ -202,7 +202,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
-   **Before each attempt of a multi-attempt role** (`gan-contract-proposer`, `gan-generator`), the orchestrator runs the per-role ceiling check described in "Per-role attempt ceilings (A1)" below. If the check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. A check that does not halt proceeds to the spawn.
+   **Before each attempt of any role** (including the single-attempt clarifier and planner), the orchestrator runs two checks described below: the per-role ceiling check (for multi-attempt roles — see "Per-role attempt ceilings (A1)") and the sprint-wide budget check (for every role — see "Sprint-wide attempt budget (A1)"). If either check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. Only when neither check halts does it proceed to the spawn.
 
 8. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
 
@@ -227,6 +227,24 @@ The framework caps how many times a multi-attempt role may attempt the same step
 3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code, which is distinct from the validation/contract exit codes so a caller can tell a halt apart from a contract failure.
 
 A halted sprint is recoverable: re-running with `--recover` resumes from the trace, and unless the user changes the prompt or raises the ceiling the next attempt halts again — by design, so a halt is not silently undone.
+
+## Sprint-wide attempt budget (A1)
+
+Independent of the per-role ceilings, the framework caps the **combined** work across a whole sprint: the summed attempt count over every role. This guards against pathological cross-role thrash — a sprint that cycles plan → contract → generate → evaluate → revise without converging, where no single role ever reaches its own ceiling but the roles together burn through the sprint. The default sprint-wide budget comes from the framework's safety layer (12); it is the sum of the per-role ceilings (proposer 3 + generator 3 = 6) plus headroom for the roles that carry no per-role ceiling but still consume attempts — the single-attempt clarifier and planner and the once-per-output reviewer and evaluator.
+
+**Every role counts toward the budget — even the single-attempt ones.** The clarifier and planner have no per-role ceiling (by definition they run once), so the per-role check never fires for them; but their attempts are real work and so they **do** count toward the sprint-wide total. The budget summation includes every role's attempts and special-cases none.
+
+**Timing — checked at attempt-start boundaries, in addition to the per-role ceiling.** The orchestrator evaluates the sprint budget at the **start** of each attempt, immediately before it would spawn the next attempt of any role, alongside the per-role ceiling check. As with the per-role ceiling, an attempt already in flight always runs to completion; the budget is never used to cancel work mid-attempt. The two checks are evaluated together at the same well-defined boundary: if either says halt, the orchestrator halts.
+
+**Mechanism — the same trace counter, no separate state.** The orchestrator keeps no running budget total and writes no counter file. It reconstructs the per-role attempt accounting from the run's `agentAttempt` events with the `reconstructRecoveryState` helper — the same accounting the per-role check uses — and feeds the resulting per-role tally into the pure `checkSprintBudget` helper, which sums it. Reconstructing from the trace is what lets `--recover` resume with the same combined count the original run had; a persisted running sum would be a second source of truth recovery could not rebuild.
+
+**On a halt.** When `checkSprintBudget` returns a halt, the orchestrator follows the same halt sequence as the per-role ceiling, reusing the same machinery rather than a parallel path:
+
+1. Builds a `safetyHalt` trace event with the same `buildLoopDetectedBody` helper (the body carries `safetyClass = "loopDetected"`, `role = "sprint"`, and the `sprintBudgetExceeded` payload) and emits it through the run's trace emitter.
+2. Surfaces a `LoopDetected` structured error built with `createSprintBudgetError` — the same `LoopDetected` error code, with `reason = "sprintBudgetExceeded"` and `role = "sprint"`. Its message is plain prose that names the combined attempt count and the budget, points the user at the run's trace directory under the central store, and tells them to adjust the prompt (or raise the budget) and re-run with `--recover`.
+3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code — the same code the per-role halt uses, distinct from the validation/contract exit codes.
+
+The synthetic `role = "sprint"` on this halt denotes the aggregate budget, not an agent: it is never itself a multi-attempt role and is never per-role-ceiling-checked. As with a per-role halt, a sprint halted on the budget is recoverable via `--recover`, and unless the user changes the prompt or raises the budget it halts again on the next attempt.
 
 ## Per-run state versus configuration
 
@@ -274,7 +292,7 @@ The orchestrator/skill runtime wires the following integration points. Each name
 
 - **`--recover` → trace-driven resumption.** Recovery reads the archived trace (O2's archive includes the entire trace directory) to reconstruct sprint state with the `reconstructRecoveryState` helper: it resumes sequence numbering **gaplessly** from one past the highest sequence the archive ended on, and reconstructs the per-role attempt-counter state purely from the `agentAttempt` events — **without** any external counter file. The resume sequence is fed to a fresh trace emitter so writing continues to the same trace directory without a gap or a collision.
 
-- **A1 loop-detection `safetyHalt`.** The trace reserves the `safetyHalt` event class (a reserved extension point with a `safetyClass` discriminator); the framework's loop-detection layer emits a `safetyHalt` with `safetyClass = "loopDetected"` when it halts a run. The orchestrator builds that event body with the `buildLoopDetectedBody` helper and emits it through the trace emitter at the moment of the halt. The per-role ceiling decision itself is the pure `checkRoleCeiling` helper, fed the per-role attempt accounting reconstructed from the trace by `reconstructRecoveryState` (the same counters recovery uses) — there is no separate counter file. When `checkRoleCeiling` returns a halt, the orchestrator surfaces the `LoopDetected` structured error (built with `createLoopDetectedError`, which renders the user-facing prose pointing at the run's trace directory and `--recover`) and exits with the `LoopDetected` exit code. See "Per-role attempt ceilings (A1)" below for the timing.
+- **A1 loop-detection `safetyHalt`.** The trace reserves the `safetyHalt` event class (a reserved extension point with a `safetyClass` discriminator); the framework's loop-detection layer emits a `safetyHalt` with `safetyClass = "loopDetected"` when it halts a run. The orchestrator builds that event body with the `buildLoopDetectedBody` helper and emits it through the trace emitter at the moment of the halt — the same builder for every loop-detection trigger. Two triggers exist so far. The **per-role ceiling** decision is the pure `checkRoleCeiling` helper; the **sprint-wide budget** decision is the pure `checkSprintBudget` helper. Both are fed the per-role attempt accounting reconstructed from the trace by `reconstructRecoveryState` (the same counters recovery uses) — there is no separate counter file. When either check returns a halt, the orchestrator surfaces the `LoopDetected` structured error (built with `createLoopDetectedError` for a per-role halt or `createSprintBudgetError` for a budget halt; both render user-facing prose pointing at the run's trace directory and `--recover`, and both use the single `LoopDetected` exit code). See "Per-role attempt ceilings (A1)" and "Sprint-wide attempt budget (A1)" below for the timing.
 
 ## Spawn discipline (summary)
 
