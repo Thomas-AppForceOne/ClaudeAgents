@@ -12,8 +12,18 @@
 
 export { buildEvaluatorPlan } from './plan-builder.js';
 
+// Surface-instantiation helpers are exported individually so the Q5
+// proposer-side tests can assert documentation instantiation and the
+// union existence-check in isolation, without rebuilding the whole plan.
+export { buildSecuritySurfacesInstantiated } from './security-surfaces.js';
+export {
+  buildDocumentationSurfacesInstantiated,
+  isKnownSurfaceId,
+} from './documentation-surfaces.js';
+
 export type {
   AuditCmd,
+  DocumentationSurface,
   EvaluatorCoreSnapshot,
   EvaluatorPlan,
   SecuritySurface,

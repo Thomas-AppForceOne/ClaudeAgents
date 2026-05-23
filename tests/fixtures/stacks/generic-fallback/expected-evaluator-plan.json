@@ -9,6 +9,50 @@
   ],
   "auditCommands": [],
   "buildTestLint": {},
+  "documentationSurfacesInstantiated": [
+    {
+      "appliesToFiles": [
+        "README.md"
+      ],
+      "id": "comments_explain_why_not_what",
+      "stack": "generic",
+      "templateText": "Every comment added in this sprint explains a constraint, an invariant, or a non-obvious decision and its rationale — not a restatement of what the adjacent code already expresses. No added comment can be deleted without losing information absent from the code itself.\n",
+      "triggerEvidence": {
+        "keywordsHit": [],
+        "scopeMatched": [
+          "README.md"
+        ]
+      }
+    },
+    {
+      "appliesToFiles": [
+        "README.md"
+      ],
+      "id": "nonobvious_decision_cites_rationale",
+      "stack": "generic",
+      "templateText": "Any non-obvious implementation decision in changed code (a workaround, a performance trade-off, an ordering constraint) cites its rationale in a comment or doc contract.\n",
+      "triggerEvidence": {
+        "keywordsHit": [],
+        "scopeMatched": [
+          "README.md"
+        ]
+      }
+    },
+    {
+      "appliesToFiles": [
+        "README.md"
+      ],
+      "id": "public_contract_completeness",
+      "stack": "generic",
+      "templateText": "Every public function, type, or interface added or changed in this sprint documents, in its doc comment, each parameter's meaning (not merely its type), the failure modes it can raise, any side effect beyond its return value, and any invariant the caller must uphold.\n",
+      "triggerEvidence": {
+        "keywordsHit": [],
+        "scopeMatched": [
+          "README.md"
+        ]
+      }
+    }
+  ],
   "evaluatorAdditionalChecks": [],
   "secretsScans": [
     {

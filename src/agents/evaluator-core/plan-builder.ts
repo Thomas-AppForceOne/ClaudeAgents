@@ -10,6 +10,7 @@
  *   - auditCommands  → per-stack auditCmd (verbatim)
  *   - buildTestLint  → first-active-stack-wins per phase
  *   - securitySurfacesInstantiated → C1 template instantiation
+ *   - documentationSurfacesInstantiated → Q5 template instantiation
  *   - evaluatorAdditionalChecks    → cascaded splice point passthrough
  *
  * The carve-out reads no files. Callers (the orchestrator script in
@@ -23,6 +24,7 @@
 import { buildAuditCommands } from './audit-commands.js';
 import { buildBuildTestLint } from './build-test-lint.js';
 import { buildEvaluatorAdditionalChecks } from './additional-checks.js';
+import { buildDocumentationSurfacesInstantiated } from './documentation-surfaces.js';
 import { buildSecretsScans } from './secrets-scans.js';
 import { buildSecuritySurfacesInstantiated } from './security-surfaces.js';
 import type {
@@ -43,6 +45,11 @@ export function buildEvaluatorPlan(
     auditCommands: buildAuditCommands(snapshot),
     buildTestLint: buildBuildTestLint(snapshot),
     securitySurfacesInstantiated: buildSecuritySurfacesInstantiated(
+      snapshot,
+      sprintPlan,
+      worktreeState,
+    ),
+    documentationSurfacesInstantiated: buildDocumentationSurfacesInstantiated(
       snapshot,
       sprintPlan,
       worktreeState,

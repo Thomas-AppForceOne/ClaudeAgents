@@ -41,6 +41,26 @@ export interface SecuritySurface {
 }
 
 /**
+ * Documentation surface, mirroring Q5's `documentationSurfaces[*]` entry.
+ *
+ * Structurally identical to `SecuritySurface` (id + verbatim template +
+ * optional scope/keyword triggers). It is declared as a distinct type
+ * rather than aliased to `SecuritySurface` so that the two surface
+ * families remain independently evolvable: Q5 may later add doc-specific
+ * trigger fields without perturbing the security shape, and the union
+ * existence-check (security ∪ documentation) reads more honestly when the
+ * two members are nominally distinct rather than the same type twice.
+ */
+export interface DocumentationSurface {
+  id: string;
+  template: string;
+  triggers?: {
+    keywords?: string[];
+    scope?: string[];
+  };
+}
+
+/**
  * The carve-out's snapshot input. Wraps F2's `ResolvedConfig` with the
  * parsed stack bodies attached so this module remains pure (no
  * file-reading from disk).
@@ -65,6 +85,7 @@ export interface EvaluatorCoreSnapshot {
     testCmd?: string;
     lintCmd?: string;
     securitySurfaces?: SecuritySurface[];
+    documentationSurfaces?: DocumentationSurface[];
   }>;
   /**
    * Cascaded overlay splice points the evaluator plan splices in. The
@@ -132,6 +153,21 @@ export interface EvaluatorPlan {
   }>;
   buildTestLint: { buildCmd?: string; testCmd?: string; lintCmd?: string };
   securitySurfacesInstantiated: Array<{
+    stack: string;
+    id: string;
+    templateText: string;
+    triggerEvidence: { scopeMatched: string[]; keywordsHit: string[] };
+    appliesToFiles: string[];
+  }>;
+  /**
+   * Q5 layer (c) — `documentationSurfaces` instantiated into gating
+   * contract criteria. Same row shape as `securitySurfacesInstantiated`
+   * (the two surface families instantiate through the identical protocol)
+   * and the same `(stack, id)` byte-stable sort, so a polyglot run with
+   * two stacks declaring the same bare surface id keeps both rows in a
+   * deterministic order rather than collapsing them.
+   */
+  documentationSurfacesInstantiated: Array<{
     stack: string;
     id: string;
     templateText: string;

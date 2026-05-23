@@ -334,8 +334,14 @@ async function assembleInputsForFixture(projectRoot: string): Promise<{
     if (typeof body['buildCmd'] === 'string') entry.buildCmd = body['buildCmd'];
     if (typeof body['testCmd'] === 'string') entry.testCmd = body['testCmd'];
     if (typeof body['lintCmd'] === 'string') entry.lintCmd = body['lintCmd'];
-    const surfaces = readSecuritySurfaces(body['securitySurfaces']);
+    const surfaces = readSurfaces(body['securitySurfaces']);
     if (surfaces.length > 0) entry.securitySurfaces = surfaces;
+    // `documentationSurfaces` parses through the identical reader: the two
+    // surface families are structurally the same shape, so one parser
+    // covers both. Pre-loading them here lets the polyglot golden exercise
+    // the documentation surface-half scope-isolation, not just security.
+    const docSurfaces = readSurfaces(body['documentationSurfaces']);
+    if (docSurfaces.length > 0) entry.documentationSurfaces = docSurfaces;
     activeStacks.push(entry);
   }
 
@@ -374,7 +380,13 @@ function readAuditCmd(v: unknown): EvaluatorCoreSnapshot['activeStacks'][number]
   return out;
 }
 
-function readSecuritySurfaces(v: unknown): SecuritySurface[] {
+/**
+ * Parse a stack-body surface array (`securitySurfaces` or
+ * `documentationSurfaces`) into the carve-out's surface shape. The two
+ * families are structurally identical, so a single reader serves both —
+ * see the call sites in `assembleInputsForFixture`.
+ */
+function readSurfaces(v: unknown): SecuritySurface[] {
   if (!Array.isArray(v)) return [];
   const out: SecuritySurface[] = [];
   for (const entry of v) {
