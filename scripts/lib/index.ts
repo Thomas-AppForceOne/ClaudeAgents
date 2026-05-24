@@ -10,6 +10,7 @@
  */
 export { formatReport, formatReportJson } from './report.js';
 export type {
+  DocLintReport,
   EvaluatorPipelineCheckReport,
   FormattedReport,
   LintErrorTextReport,

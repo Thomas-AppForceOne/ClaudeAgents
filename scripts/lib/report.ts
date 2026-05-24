@@ -120,6 +120,23 @@ export interface LintErrorTextReport {
 }
 
 /**
+ * Result of `doc-lint`: exported symbols introduced or changed in the
+ * merge-base delta, checked for a preceding doc comment. `checked` is the
+ * number of delta `.ts`/`.tsx` files inspected (not symbols), so a clean
+ * delta of N files reads as "N files checked, 0 failed"; a finding is one
+ * undocumented introduced export. Like the schema/stack reports, the summary
+ * counts distinct failed files rather than raw hits, because several
+ * undocumented exports in one file are one file the author must revisit.
+ */
+export interface DocLintReport {
+  kind: 'doc-lint';
+
+  checked: number;
+
+  failures: ReportFailure[];
+}
+
+/**
  * Discriminated union of every script's report, keyed on `kind`. This is the
  * single type the renderers accept; the `kind` tag both selects the formatter
  * and drives the exhaustiveness checks that guard against an unhandled variant.
@@ -130,7 +147,8 @@ export type ScriptReport =
   | EvaluatorPipelineCheckReport
   | PublishSchemasReport
   | LintNoStackLeakReport
-  | LintErrorTextReport;
+  | LintErrorTextReport
+  | DocLintReport;
 
 /**
  * The two output streams a human-readable render produces. Kept separate so a
@@ -171,6 +189,9 @@ export function formatReport(input: ScriptReport): FormattedReport {
   }
   if (input.kind === 'lint-error-text') {
     return formatLintErrorText(input);
+  }
+  if (input.kind === 'doc-lint') {
+    return formatDocLint(input);
   }
 
   // Unreachable at runtime; exists so the compiler proves every `kind` above
@@ -252,6 +273,22 @@ function formatLintErrorText(input: LintErrorTextReport): FormattedReport {
   return { stdout, stderr };
 }
 
+// doc-lint reports distinct failed files (not raw hits) like the stack/schema
+// formatters: a finding is "this file introduced an undocumented export", and
+// one summary line per file is what the author acts on. The detail line per
+// failure carries the symbol via `field`, so several findings in one file are
+// each visible on stderr while the summary stays one-file-one-count.
+function formatDocLint(input: DocLintReport): FormattedReport {
+  const failedCount = countFailedFiles(input.failures);
+  const stdout = `${input.checked} files checked, ${failedCount} failed\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
 /**
  * Count how many *distinct* files appear across `failures`, deduplicating on
  * `path`. This is what the human summaries report as "failed", so several
@@ -290,6 +327,9 @@ export function formatReportJson(input: ScriptReport): string {
     return renderJson(input);
   }
   if (input.kind === 'lint-error-text') {
+    return renderJson(input);
+  }
+  if (input.kind === 'doc-lint') {
     return renderJson(input);
   }
 
