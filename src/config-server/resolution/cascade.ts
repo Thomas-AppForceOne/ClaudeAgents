@@ -27,13 +27,18 @@ import type { Issue } from '../validation/schema-check.js';
  * - `list-union-by-key-command` — union object lists, keyed by `command`.
  * - `scalar-override` — the highest tier's value simply replaces lower ones.
  * - `deep-merge-cache-env` — recursively merge the cacheEnv mapping (one level).
+ * - `merge-role-map` — per-key merge of a flat role→integer map (one level): a
+ *   higher tier overrides/extends a lower tier's per-role keys rather than
+ *   replacing the whole map, so `safety.attemptCeilings` setting one role keeps
+ *   the other roles' lower-tier (or seed) ceilings.
  */
 export type SpliceRule =
   | 'list-union-by-string'
   | 'list-union-by-key-name'
   | 'list-union-by-key-command'
   | 'scalar-override'
-  | 'deep-merge-cache-env';
+  | 'deep-merge-cache-env'
+  | 'merge-role-map';
 
 /**
  * Declaration of one mergeable field.
@@ -115,6 +120,31 @@ export const SPLICE_POINTS: readonly SpliceEntry[] = [
   {
     block: 'runner',
     field: 'thresholdOverride',
+    rule: 'scalar-override',
+    bareDefault: () => undefined,
+  },
+  // safety.* splice points. attemptCeilings is a per-role map merged
+  // key-by-key (merge-role-map), so a higher tier setting one role's ceiling
+  // does not wipe the others; sprintBudget and oscillationDetection are plain
+  // scalars where the highest tier wins. Each bareDefault is a fresh factory:
+  // the map starts as a new {} per resolution (no shared mutable state), and
+  // the two scalars start undefined so an absent field is omitted from the
+  // merged overlay entirely (the resolver then applies the seed default).
+  {
+    block: 'safety',
+    field: 'attemptCeilings',
+    rule: 'merge-role-map',
+    bareDefault: () => ({}),
+  },
+  {
+    block: 'safety',
+    field: 'sprintBudget',
+    rule: 'scalar-override',
+    bareDefault: () => undefined,
+  },
+  {
+    block: 'safety',
+    field: 'oscillationDetection',
     rule: 'scalar-override',
     bareDefault: () => undefined,
   },
@@ -388,7 +418,52 @@ function applyMerge(rule: SpliceRule, lower: unknown, higher: unknown): unknown 
       return mergeKeyedList(lower, higher, 'command');
     case 'deep-merge-cache-env':
       return deepMergeCacheEnv(lower, higher);
+    case 'merge-role-map':
+      return mergeRoleMap(lower, higher);
   }
+}
+
+// Role keys that must never index a role-keyed accumulator: they are the
+// prototype-pollution vectors. Mirrors `FORBIDDEN_KEYS` in
+// `src/trace/reconcile.ts` and `FORBIDDEN_ROLE_KEYS` in the safety modules, so
+// the cascade's per-role merge cannot regress the guard those layers establish.
+// A `__proto__`-named "role" in an overlay is hostile input, never a real role.
+const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
+
+// One-level per-key merge of two flat role→integer maps: higher-tier keys win,
+// lower-tier keys survive when the higher tier does not mention them (so setting
+// one role's ceiling never wipes the others). Built on a null-prototype
+// accumulator with the forbidden-key skip and Object.defineProperty install — the
+// same discipline the safety modules and trace-reconcile layer use — so a
+// `__proto__`/`constructor`/`prototype` role name in an overlay cannot pollute
+// Object.prototype, crash resolution, or shadow a genuine role's ceiling. Only
+// integer values are kept; the schema already enforces positive integers, so a
+// non-integer here is defensive degradation rather than an expected input.
+function mergeRoleMap(lower: unknown, higher: unknown): unknown {
+  const out: Record<string, number> = Object.create(null) as Record<string, number>;
+  const installFrom = (src: unknown): void => {
+    if (!isObject(src)) return;
+    for (const role of Object.keys(src)) {
+      if (FORBIDDEN_ROLE_KEYS.has(role)) continue;
+      const v = src[role];
+      if (typeof v !== 'number' || !Number.isInteger(v)) continue;
+      Object.defineProperty(out, role, {
+        value: v,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  };
+  // Lower first, then higher, so a higher-tier key overwrites a lower-tier one
+  // while untouched lower-tier keys remain.
+  installFrom(lower);
+  installFrom(higher);
+  return out;
 }
 
 // Union two string lists preserving lower-then-higher order and dropping

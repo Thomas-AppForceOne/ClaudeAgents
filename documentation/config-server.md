@@ -109,7 +109,7 @@ flowchart TD
 
     subgraph C4["C4 — Overlay cascade"]
         CASCADE["cascadeOverlays\ndefault < user < project"]
-        CASCADE --> SPLICE["Per splice-point merge\nlist-union · scalar-override\ndeep-merge-cache-env"]
+        CASCADE --> SPLICE["Per splice-point merge\nlist-union · scalar-override\ndeep-merge-cache-env · merge-role-map"]
         SPLICE --> DISCARD["Record discardInherited\npaths"]
     end
 

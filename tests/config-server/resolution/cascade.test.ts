@@ -295,4 +295,69 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
       expect(result.merged).toEqual({});
     });
   });
+
+  describe('safety.* splice points', () => {
+    it('safety.sprintBudget and safety.oscillationDetection scalar-override (highest tier wins)', () => {
+      const result = cascadeOverlays({
+        default: { safety: { sprintBudget: 12, oscillationDetection: true } },
+        user: null,
+        project: { safety: { sprintBudget: 20, oscillationDetection: false } },
+      });
+      expect(result.merged).toEqual({
+        safety: { sprintBudget: 20, oscillationDetection: false },
+      });
+    });
+
+    it('safety.attemptCeilings merges per-role across tiers, not wholesale replace', () => {
+      // The project sets only gan-generator; the user's gan-contract-proposer
+      // survives because merge-role-map merges per key rather than replacing the
+      // whole map. The shared key takes the higher (project) tier's value.
+      const result = cascadeOverlays({
+        default: null,
+        user: { safety: { attemptCeilings: { 'gan-contract-proposer': 4, 'gan-generator': 4 } } },
+        project: { safety: { attemptCeilings: { 'gan-generator': 5 } } },
+      });
+      const ceilings = (result.merged.safety as Record<string, unknown>).attemptCeilings as Record<
+        string,
+        number
+      >;
+      expect(ceilings['gan-contract-proposer']).toBe(4);
+      expect(ceilings['gan-generator']).toBe(5);
+    });
+
+    it('absent safety.* fields are omitted; no hollow safety block', () => {
+      // Additive guarantee: the new fields must not change the empty-overlay
+      // shape. With no safety anywhere the block is pruned entirely.
+      const result = cascadeOverlays({
+        default: { generator: { additionalRules: ['r'] } },
+        user: null,
+        project: null,
+      });
+      expect(result.merged.safety).toBeUndefined();
+    });
+
+    it('a __proto__-named ceiling key cannot pollute or shadow a real role', () => {
+      const before = ({} as Record<string, unknown>)['polluted'];
+      const result = cascadeOverlays({
+        default: null,
+        user: null,
+        project: {
+          safety: {
+            attemptCeilings: {
+              ['__proto__' as string]: 99,
+              'gan-generator': 5,
+            } as Record<string, number>,
+          },
+        },
+      });
+      expect(({} as Record<string, unknown>)['polluted']).toBe(before);
+      expect(Object.prototype).not.toHaveProperty('polluted');
+      const ceilings = (result.merged.safety as Record<string, unknown>).attemptCeilings as Record<
+        string,
+        number
+      >;
+      expect(ceilings['gan-generator']).toBe(5);
+      expect(Object.prototype.hasOwnProperty.call(ceilings, '__proto__')).toBe(false);
+    });
+  });
 });

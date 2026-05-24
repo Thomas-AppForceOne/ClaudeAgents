@@ -38,6 +38,13 @@ flowchart LR
         RC["Reconciler"]
     end
 
+    subgraph SF["Safety · loop/thrash detection"]
+        direction TB
+        S1["per-role ceiling"]
+        S2["sprint budget"]
+        S3["edit oscillation"]
+    end
+
     subgraph ZN["Storage zones"]
         direction TB
         Z1["zone 1 · config"]
@@ -58,6 +65,7 @@ flowchart LR
     EM         --> Z2R
     RC         -->|"reads"| Z2R
     DK         --> Z2M
+    SKILL      -->|"attempt-start halt checks"| SF
 ```
 
 ---
@@ -195,3 +203,4 @@ flowchart LR
 - **Zone 3 is the only shared scratch space agents write to directly.** It is ephemeral; nothing in zone 3 survives worktree removal.
 - **The trace emitter is the only writer to the zone-2 run log.** The reconciler is the only reader outside the normal flow.
 - **Trust gate runs before every resolution.** No resolved config is served from an unapproved file hash.
+- **The safety layer bounds every run.** At each attempt-start the orchestrator consults the loop/thrash checks — per-role ceiling, sprint-wide budget, edit oscillation — and any halt produces one `LoopDetected` error plus a `safetyHalt` trace event. Attempt counts are reconstructed from the trace, never a separate counter file. See [safety.md](safety.md).

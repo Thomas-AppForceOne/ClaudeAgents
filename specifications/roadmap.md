@@ -77,15 +77,16 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 9. ✅ **H1** — framework-owned confinement hook. Shipped PR #21. *(Hook path construction superseded by F7 — see slot 10.)*
 10. ✅ **F7** — centralized run-data store + worktree-aware execution. Shipped PR #23. Relocates run data to a central, repo-keyed store (`~/.gan-runs-data`) so it survives worktree removal; makes `/gan` reuse a task worktree in place (1a/1b/1c). Supersedes the run-data/trace location in F1/T1 and the confinement-hook path construction in H1 (those shipped specs are not edited; this entry is their cross-reference). Edits unimplemented O2/O3 and draft H2. Lands before A1/E5/O2/O3 so run paths and confinement are settled before those build on them.
 11. ✅ **[F8](F8-centralized-module-state-store.md)** — centralized repo-keyed module-state store. Shipped PR #24. Pairs with F7 (the same zone-2 worktree-removal fix, for module state): relocates `.gan-state/modules/` to a separate repo-keyed store (`~/.gan-module-state`), fixing both the durability footgun and a latent M2 cross-worktree port-collision bug. Depends on F7 (reuses its repo-key). Supersedes the module-state location decisions in F1 (zone-2 module-state home), M1 (the registry's durable-cross-run home), M2 (the Docker registry path), and R1 (the config server's module-state path resolution) — those shipped specs are not edited; this entry is their cross-reference. Edits unimplemented O2. Adds no confinement-hook or permission-grant surface (module state is config-server-managed, so it lands in NO `~/.claude/settings.json` `permissions.allow` rule or `additionalDirectories` entry — the parity-MINUS vs F7's `--runs-dir`).
-12. **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. ~3–4 sprints. Depends on T1.
-13. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
-14. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
-15. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
-16. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
-17. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
-18. **Pre-release chores.** See below.
+12. ✅ **A1** — loop & thrash detection. Shipped PR #27.
+13. **Next.** **[Q6](Q6-doc-lint-and-provenance.md)** — documentation enforcement: a framework doc-lint backing Q5's declared `docLintCmd` (export-doc presence gates; required-sections / commented-out-code advisory), a CI presence gate, and a comment / user-facing-string provenance judgment surface. ~3–4 sprints. Depends on Q5. (A Q-series quality-signal spec pulled ahead to ship next.)
+14. **[E5](E5-spec-clarification.md)** — spec clarification phase. ~3–4 sprints. Depends on T1; can run in parallel with A1.
+15. **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
+16. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
+17. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
+18. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
+19. **Pre-release chores.** See below.
 
-Independents within the order: slots 8–16 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 18.
+Independents within the order: slots 8–17 have the dependency relationships called out above; F6 (slot 7, documentation-only) gates nothing. The post-v1.0 dogfooding audit fires after slot 19.
 
 ### Known gaps accepted at v1.0
 

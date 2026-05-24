@@ -7,7 +7,15 @@
 // must fall back to the generic 1 rather than throwing or returning undefined.
 
 import { describe, expect, it } from 'vitest';
-import { exitCodeFor } from '../../../src/cli/lib/exit-codes.js';
+import {
+  exitCodeFor,
+  EXIT_LOOP_DETECTED,
+  EXIT_VALIDATION,
+  EXIT_SCHEMA_MISMATCH,
+  EXIT_INVARIANT_VIOLATION,
+  EXIT_API_UNREACHABLE,
+  EXIT_BAD_ARGS,
+} from '../../../src/cli/lib/exit-codes.js';
 
 // One row per error code → expected exit code, with the rationale that pins it.
 // `code: undefined` models "no error"; `TotallyUnknownFutureCode` deliberately
@@ -37,6 +45,11 @@ const TABLE: Array<{ code: string | undefined; expected: number; reason: string 
   { code: 'UnknownApiVersion', expected: 1, reason: 'unknown API version → generic' },
   { code: 'NotImplemented', expected: 1, reason: 'not-yet-implemented → generic' },
   { code: 'MalformedInput', expected: 64, reason: 'malformed CLI input → bad args' },
+  {
+    code: 'LoopDetected',
+    expected: 6,
+    reason: 'loop-detection halt → its own exit class, distinct from validation',
+  },
   { code: 'TotallyUnknownFutureCode', expected: 1, reason: 'unmapped code defaults to generic' },
 ];
 
@@ -46,4 +59,23 @@ describe('exitCodeFor', () => {
       expect(exitCodeFor(row.code)).toBe(row.expected);
     });
   }
+});
+
+describe('loop_detected_exit_code_is_distinct_from_validation_classes', () => {
+  it('exitCodeFor("LoopDetected") returns the EXIT_LOOP_DETECTED constant', () => {
+    expect(exitCodeFor('LoopDetected')).toBe(EXIT_LOOP_DETECTED);
+  });
+
+  it('EXIT_LOOP_DETECTED is non-zero and distinct from every validation-class code', () => {
+    expect(EXIT_LOOP_DETECTED).not.toBe(0);
+    for (const other of [
+      EXIT_VALIDATION,
+      EXIT_SCHEMA_MISMATCH,
+      EXIT_INVARIANT_VIOLATION,
+      EXIT_API_UNREACHABLE,
+      EXIT_BAD_ARGS,
+    ]) {
+      expect(EXIT_LOOP_DETECTED).not.toBe(other);
+    }
+  });
 });

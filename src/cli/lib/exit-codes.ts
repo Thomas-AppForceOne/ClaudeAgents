@@ -10,7 +10,7 @@
  * `ConfigServerError.code` (a string) to the exit code it should produce, so
  * every command surfaces the same failure as the same code.
  *
- * The values follow convention: 0 success, 1 generic, 2–5 specific failure
+ * The values follow convention: 0 success, 1 generic, 2–6 specific failure
  * classes, and 64 (`EX_USAGE` from sysexits) for bad CLI arguments.
  */
 
@@ -20,6 +20,17 @@ export const EXIT_VALIDATION = 2;
 export const EXIT_SCHEMA_MISMATCH = 3;
 export const EXIT_INVARIANT_VIOLATION = 4;
 export const EXIT_API_UNREACHABLE = 5;
+
+/**
+ * Loop/thrash safety halt (`LoopDetected`). Deliberately its own class,
+ * distinct from the validation codes (2–5): a halt means "the work could not
+ * converge", not "the configuration or contract was malformed", and scripts/CI
+ * must be able to tell the two apart without parsing output. Placed at 6 as the
+ * next free specific-failure slot above the validation classes and below the
+ * sysexits usage code (64).
+ */
+export const EXIT_LOOP_DETECTED = 6;
+
 export const EXIT_BAD_ARGS = 64;
 
 // Maps each known internal error code to its exit code. Several distinct error
@@ -46,6 +57,11 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   UnknownApiVersion: EXIT_GENERIC,
   NotImplemented: EXIT_GENERIC,
   MalformedInput: EXIT_BAD_ARGS,
+
+  // A loop-detection halt is its own exit class so a caller can distinguish
+  // "the framework halted an unproductive loop" from a contract/validation
+  // failure, which it would otherwise be conflated with.
+  LoopDetected: EXIT_LOOP_DETECTED,
 });
 
 /**

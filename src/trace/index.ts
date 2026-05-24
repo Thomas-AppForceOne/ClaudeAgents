@@ -68,9 +68,12 @@ export {
   buildTrustEventBody,
   buildValidationAbortBody,
   buildValidationAbortFromCode,
+  buildLoopDetectedBody,
   type TrustResolution,
   type TrustEventBody,
   type ValidationAbortBody,
+  type SafetyHaltBody,
+  type LoopDetectionHalt,
   type ValidationStage,
   type F2ErrorLike,
 } from './integration.js';
