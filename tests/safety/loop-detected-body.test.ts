@@ -1,14 +1,15 @@
 /**
  * loopDetected safety-halt body-builder suite — proves buildLoopDetectedBody
  * mirrors the existing trace body builders (pure mapping, schema-valid envelope)
- * and carries the A1 loop-detection halt detail.
+ * and carries the loop-detection halt detail.
  *
  * The builder lifts the triggering `role` to the event's top-level field and
  * inlines the loop-specific reason/attempts/ceiling/evidence into the small
  * `payload`, with `safetyClass = "loopDetected"`. Wrapped in an envelope it
- * validates against run-trace-v1 (T1 owns the safetyHalt class; A1 supplies the
- * loopDetected discriminator value and payload). The new LoopDetected exit code
- * is asserted distinct from every validation-class code.
+ * validates against run-trace-v1 (the trace owns the safetyHalt class; the
+ * safety layer supplies the loopDetected discriminator value and payload). The
+ * new LoopDetected exit code is asserted distinct from every validation-class
+ * code.
  */
 
 import { describe, expect, it } from 'vitest';

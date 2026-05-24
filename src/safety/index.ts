@@ -1,6 +1,6 @@
 /**
  * Public barrel for the `safety` subsystem — the framework-owned loop/thrash
- * detection layer (A1).
+ * detection layer.
  *
  * Re-exports the pure per-role attempt-ceiling check, the sprint-wide
  * attempt-budget check, the generator edit-oscillation detector (directRepeat /
@@ -12,7 +12,7 @@
  * types, and the pure effective-safety-config resolver that folds the seed
  * defaults, the merged overlay's `safety.*` block, and the one-off runtime flags
  * (precedence flags > overlay > defaults) into the {@link EffectiveSafetyConfig}
- * the orchestrator threads into the attempt-start checks, and the A1 recovery
+ * the orchestrator threads into the attempt-start checks, and the recovery
  * pieces — the recover-only `--reset-attempts` validation, the
  * `failed-loop-detected` terminal-reason record builder, and the pure mapping
  * from the trace-reconstructed attempt state plus the `--reset-attempts` flag to

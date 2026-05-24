@@ -191,7 +191,7 @@ export type {
   BundleCriterion,
 } from './trace/index.js';
 
-// The full A1 safety surface. `src/safety/index.js` is the subsystem barrel and
+// The full safety surface. `src/safety/index.js` is the subsystem barrel and
 // the canonical import surface; this package entry re-exports it in full so a
 // consumer importing from the package root sees the same safety API the barrel
 // exposes (per-role ceiling, sprint-wide budget, edit fingerprint + oscillation,

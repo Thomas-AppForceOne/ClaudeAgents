@@ -48,7 +48,7 @@ const TABLE: Array<{ code: string | undefined; expected: number; reason: string 
   {
     code: 'LoopDetected',
     expected: 6,
-    reason: 'A1 loop-detection halt → its own exit class, distinct from validation',
+    reason: 'loop-detection halt → its own exit class, distinct from validation',
   },
   { code: 'TotallyUnknownFutureCode', expected: 1, reason: 'unmapped code defaults to generic' },
 ];

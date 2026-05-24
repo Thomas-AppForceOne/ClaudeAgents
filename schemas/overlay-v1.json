@@ -321,7 +321,7 @@
       "additionalProperties": false,
       "properties": {
         "attemptCeilings": {
-          "description": "A1 safety.attemptCeilings splice point. A per-role map from kebab-case role id to that role's positive-integer attempt ceiling, overriding the framework's seed defaults (gan-contract-proposer: 3, gan-generator: 3). Scalar-cascade family, merged per-role across tiers; available in both tiers. Optional — absent leaves every role at its seed default.",
+          "description": "The safety.attemptCeilings splice point. A per-role map from kebab-case role id to that role's positive-integer attempt ceiling, overriding the framework's seed defaults (gan-contract-proposer: 3, gan-generator: 3). Scalar-cascade family, merged per-role across tiers; available in both tiers. Optional — absent leaves every role at its seed default.",
           "oneOf": [
             {
               "$ref": "#/definitions/attemptCeilingsBare"
@@ -348,7 +348,7 @@
         },
         "oscillationDetection": {
           "default": true,
-          "description": "A1 safety.oscillationDetection splice point. When true (the default) the generator edit-oscillation detector is consulted; when false only the per-role ceiling and sprint-budget checks apply. Scalar cascade; available in both tiers. Optional — absent means the default (true).",
+          "description": "The safety.oscillationDetection splice point. When true (the default) the generator edit-oscillation detector is consulted; when false only the per-role ceiling and sprint-budget checks apply. Scalar cascade; available in both tiers. Optional — absent means the default (true).",
           "oneOf": [
             {
               "$ref": "#/definitions/oscillationDetectionBare"
@@ -372,7 +372,7 @@
         },
         "sprintBudget": {
           "default": 12,
-          "description": "A1 safety.sprintBudget splice point. The sprint-wide aggregate attempt budget (a positive integer), overriding the framework's seed default of 12. Scalar cascade; available in both tiers. Optional — absent means the default (12).",
+          "description": "The safety.sprintBudget splice point. The sprint-wide aggregate attempt budget (a positive integer), overriding the framework's seed default of 12. Scalar cascade; available in both tiers. Optional — absent means the default (12).",
           "oneOf": [
             {
               "$ref": "#/definitions/sprintBudgetBare"

@@ -20,7 +20,7 @@ sortableLists:
 
 # web-node conventions (commentSyntax + sortableLists fixture)
 
-A stack fixture that declares the two A1 C1 fields (`commentSyntax` and
+A stack fixture that declares the two optional fields (`commentSyntax` and
 `sortableLists`) so the loader/validation round-trip can be asserted. The marker
 values are deliberately concrete (a line `//`, a `/* */` block, and an import
 block as the sortable region) but they are fixture data, not framework defaults.

@@ -1,6 +1,6 @@
 # GAN — Safety (loop & thrash detection)
 
-The Safety subsystem is the framework-owned halt layer (A1). It bounds a `/gan`
+The Safety subsystem is the framework-owned halt layer. It bounds a `/gan`
 run so a sprint that cannot converge halts with a structured error instead of
 retrying without limit. Every export under `src/safety/` is a **pure function**
 over plain data — the per-role attempt accounting the trace reconstructs, the
@@ -62,7 +62,7 @@ flowchart TD
 
     SH["safetyHalt trace event\n─────────────────\nsafetyClass 'loopDetected'\nrole + payload\nbuilt by buildLoopDetectedBody"]
 
-    NOTE["reserved by T3 (v1.2): tokenBudgetExceeded,\nwallClockBudgetExceeded — same error code,\nsame safety.* namespace"]
+    NOTE["reserved for a future budget feature:\ntokenBudgetExceeded, wallClockBudgetExceeded —\nsame error code, same safety.* namespace"]
 
     ERR --> REASONS
     ERR -->|"emitted alongside the error"| SH
@@ -104,9 +104,9 @@ flowchart TD
 Rule 1 runs **before** rule 3 so the sort key is whitespace-normalized — a
 reorder that also carries incidental in-region whitespace differences still
 collapses. The normalization is **stack-agnostic in code**: comment markers and
-sortable regions come only from the C1 stack fields `commentSyntax` and
-`sortableLists` (schema additions that ride with A1); no comment token or
-import-block heuristic is hard-coded for any ecosystem. The oscillation detector
+sortable regions come only from the stack-declared fields `commentSyntax` and
+`sortableLists`; no comment token or import-block heuristic is hard-coded for
+any ecosystem. The oscillation detector
 (§1) compares attempts by this exact digest rather than re-deriving its own, so
 the normalization rules and the triggers cannot drift apart.
 
@@ -140,10 +140,10 @@ role at `n` and derives the sprint budget as `n × roleCount + 4` (the `+4` is
 fixed headroom for clarifier, planner, reviewer, evaluator). Setting
 `safety.oscillationDetection: false` gates off the detector at the **call site**
 — a generator that repeats fingerprints then proceeds to its per-role ceiling
-without an `editOscillation` halt; the pure detector itself is unchanged (A1
-never modifies agent behaviour). All role-keyed maps are built with the
-null-prototype / forbidden-key (`__proto__`/`constructor`/`prototype`) discipline
-the trace reconciler establishes.
+without an `editOscillation` halt; the pure detector itself is unchanged (the
+safety layer never modifies agent behaviour). All role-keyed maps are built
+with the null-prototype / forbidden-key (`__proto__`/`constructor`/`prototype`)
+discipline the trace reconciler establishes.
 
 ---
 
@@ -169,9 +169,9 @@ reset on resume would defeat the ceiling, so the user must change the prompt (or
 raise the ceiling/overlay) for the next attempt to converge differently.
 `--reset-attempts` is the explicit, recover-scoped opt-in for fresh counters and
 is **valid only alongside `--recover`**; standalone use is a usage error. The
-full `--recover` orchestrator flow is O2's later work; this subsystem owns only
-the recovery *semantics* (terminal reason, counter resume, the flag guard) as
-pure pieces the orchestrator composes.
+full `--recover` orchestrator flow is later recovery work; this subsystem owns
+only the recovery *semantics* (terminal reason, counter resume, the flag guard)
+as pure pieces the orchestrator composes.
 
 ---
 
@@ -184,12 +184,12 @@ pure pieces the orchestrator composes.
   edit oscillation all emit one `safetyHalt` (`safetyClass = "loopDetected"`) and
   one `LoopDetected` error code with one exit code — no parallel halt paths.
 - **Stack-agnostic by construction.** Fingerprint normalization reads comment
-  syntax and sortable regions only from the C1 stack fields; nothing is
+  syntax and sortable regions only from the stack-declared fields; nothing is
   hard-coded for an ecosystem.
 - **Pure decisions, composed by the orchestrator.** The subsystem never spawns,
   cancels, or modifies an agent; it answers "halt or proceed" at attempt-start
   and the orchestrator acts on the answer.
 - **Seed values, not tuned constants.** The default ceilings (3/3) and budget
-  (12) are opinionated seeds that err toward halting early; a post-v1.0 audit
-  re-tunes them against real trace data. T3 (v1.2) extends the same contract with
-  token / wall-clock budget discriminators.
+  (12) are opinionated seeds that err toward halting early; a post-release audit
+  re-tunes them against real trace data. A future budget feature extends the same
+  contract with token / wall-clock budget discriminators.

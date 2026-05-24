@@ -1,7 +1,7 @@
 /**
- * Edit-set fingerprinting for the framework-owned oscillation-detection layer
- * (A1, sprint 3 — the normalization machinery only; the directRepeat/3cycle
- * triggers that consume these fingerprints are sprint 4).
+ * Edit-set fingerprinting for the framework-owned oscillation-detection layer.
+ * This module owns the normalization machinery only; the directRepeat/3cycle
+ * triggers that consume these fingerprints live in the oscillation detector.
  *
  * The fingerprint maps the structural shape of a generator's proposed changes
  * (the paths touched plus the post-edit content of each path) to a single
@@ -9,8 +9,8 @@
  * to the same digest so a later attempt that only re-spells the same edit is
  * recognisable as a repeat rather than mistaken for progress.
  *
- * "Logically the same" is defined by three normalization rules the spec pins
- * (A1 § "Edit oscillation detection"), each applied independently per file:
+ * "Logically the same" is defined by three normalization rules, each applied
+ * independently per file:
  *
  *  1. Whitespace-only differences collapse. Language-agnostic; needs no stack
  *     fields, so it is the only rule a stack declaring neither field gets.
@@ -22,7 +22,7 @@
  *
  * Stack-agnostic by construction: this module bakes in no comment token, no
  * import-block heuristic, and no per-language branch. Every ecosystem-specific
- * input — comment markers, sortable regions — arrives through the C1 stack
+ * input — comment markers, sortable regions — arrives through the stack-declared
  * fields passed in {@link FingerprintOptions}. That delegation is the whole
  * point: `src/` is framework code that must not privilege any one ecosystem.
  *
@@ -40,12 +40,13 @@ import { stableStringify } from '../config-server/determinism/index.js';
 
 // Keys that must never be copied off a caller-supplied (parsed-stack-derived)
 // keyed map: they are the prototype-pollution vectors. Mirrors the
-// reconcile.ts / sprint-1 / sprint-2 guard so this module's path-keyed and
-// glob-keyed maps share the one established defence rather than a parallel one.
+// `FORBIDDEN_KEYS` guard in `src/trace/reconcile.ts` (and the sibling safety
+// modules) so this module's path-keyed and glob-keyed maps share the one
+// established defence rather than a parallel one.
 const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
- * A stack's declared comment syntax (the C1 `commentSyntax` field).
+ * A stack's declared comment syntax (the `commentSyntax` field).
  *
  * Drives normalization rule 2: comment text matched by these markers is
  * stripped before hashing, so a comment-only edit does not change the digest.
@@ -68,7 +69,7 @@ export interface CommentSyntax {
 }
 
 /**
- * One stack-declared sortable region (an entry of the C1 `sortableLists`
+ * One stack-declared sortable region (an entry of the `sortableLists`
  * array). Drives normalization rule 3: within a matched region, line *order*
  * is normalized away, so a reordered-but-same-lines edit does not change the
  * digest. A region the stack does not declare is left untouched.
@@ -88,8 +89,8 @@ export interface SortableList {
 
 /**
  * The normalization parameters the fingerprint reads, sourced entirely from the
- * active stack's two C1 fields. Both are optional; an absent/empty field makes
- * its rule a no-op (rule 1 always applies regardless).
+ * active stack's two declared fields. Both are optional; an absent/empty field
+ * makes its rule a no-op (rule 1 always applies regardless).
  *
  * @property commentSyntax the stack's {@link CommentSyntax}; absent ⇒ rule 2 off.
  * @property sortableLists the stack's sortable regions; absent/empty ⇒ rule 3 off.
@@ -136,8 +137,8 @@ export type EditSet = EditFile[];
  * file's normalized content is keyed by path via {@link stableStringify} —
  * before hashing, so the same logical edit set yields a byte-identical digest
  * regardless of the incidental order the caller listed the files in. That
- * stability is what lets sprint 4 use the digest as the oscillation-history
- * key it compares attempts against.
+ * stability is what lets the oscillation detector use the digest as the
+ * history key it compares attempts against.
  */
 export function fingerprintEditSet(editSet: EditSet, options: FingerprintOptions = {}): string {
   // Null-prototype accumulator + explicit forbidden-key skip: the caller's
@@ -253,7 +254,7 @@ function pathMatchesGlob(filePath: string, pattern: string): boolean {
 // marker that appears between matching delimiters is string content, not a
 // comment, and must not be stripped. Covers the single/double/backtick quotes
 // common across mainstream ecosystems. This is a best-effort heuristic, not a
-// full per-language lexer — A1 defers deeper cross-language support to the
+// full per-language lexer — deeper cross-language support is deferred to the
 // stack-declared fields — but it eliminates the realistic false collapse where
 // a stack's comment marker appears inside a string (e.g. `//` inside a URL
 // string literal), which would otherwise erase a real in-string difference and

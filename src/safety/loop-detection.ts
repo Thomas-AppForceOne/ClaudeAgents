@@ -1,5 +1,5 @@
 /**
- * A1 loop/thrash detection — the framework-owned per-role attempt-ceiling halt
+ * Loop/thrash detection — the framework-owned per-role attempt-ceiling halt
  * primitive.
  *
  * This module is deliberately pure: every export is a function over plain data
@@ -8,14 +8,15 @@
  * runtime. The orchestrator composes these functions at attempt-start
  * boundaries (see `skills/gan/SKILL.md`); this file owns only the decision.
  *
- * Why the counters are an *input*, not state owned here: A1 mandates that the
- * trace is the single source of truth for "how many attempts have happened" so
- * that `--recover` can reconstruct counter state from the event log alone. This
+ * Why the counters are an *input*, not state owned here: the trace is the
+ * single source of truth for "how many attempts have happened" so that
+ * `--recover` can reconstruct counter state from the event log alone. This
  * module therefore consumes the per-role accounting that
  * `reconstructRecoveryState` derives from `agentAttempt` events
  * (`RoleAttemptState` / `attemptStateByRole`) rather than persisting its own
  * counter file. Introducing a sidecar counter would create a second source of
- * truth that recovery could not rebuild — exactly what A1 forbids.
+ * truth that recovery could not rebuild — exactly what the trace-as-only-counter
+ * design forbids.
  */
 
 import { createError, type ConfigServerError } from '../config-server/errors.js';
@@ -42,7 +43,7 @@ const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
  * agent cannot satisfy) that should surface to the user rather than burn more
  * tokens. A post-release audit re-tunes these against real trace data — until
  * then they are an opinionated guess that errs toward halting early rather than
- * late, and this comment is the rationale a reader gets without the A1 spec.
+ * late, and this comment is the rationale a reader gets.
  *
  * Only these two roles appear: single-attempt roles (clarifier, planner) run
  * once by definition, and the once-per-output roles (reviewer, evaluator) are
@@ -56,10 +57,11 @@ export const DEFAULT_ATTEMPT_CEILINGS: Readonly<Record<string, number>> = Object
 });
 
 /**
- * The `reason` discriminator on a {@link LoopDetectedFields} error. Sprint 1
- * implements only `roleCeilingExceeded`; the other values are reserved by A1
- * (`sprintBudgetExceeded`, `editOscillation`) and by T3
- * (`tokenBudgetExceeded`, `wallClockBudgetExceeded`) and land in later work.
+ * The `reason` discriminator on a {@link LoopDetectedFields} error. This module
+ * implements only `roleCeilingExceeded`; `sprintBudgetExceeded` and
+ * `editOscillation` are implemented by the sibling halt primitives, and the
+ * token/wall-clock budget discriminators are reserved for a future
+ * budget-enforcement feature.
  */
 export type LoopDetectedReason =
   | 'roleCeilingExceeded'
@@ -83,7 +85,7 @@ export interface RoleCeilingEvidenceEntry {
 
 /**
  * The structured fields carried on a `LoopDetected` error for the
- * `roleCeilingExceeded` discriminator, matching A1's "Halt contract" field list.
+ * `roleCeilingExceeded` discriminator, matching the halt contract's field list.
  *
  * @property reason the discriminator; `roleCeilingExceeded` for a per-role halt.
  * @property role the kebab-case role id that hit its ceiling.
@@ -277,7 +279,7 @@ export function renderRoleCeilingMessage(
  *
  * Built through the framework's existing `createError` factory so the halt is a
  * first-class {@link ConfigServerError} (same serialisation/transport as every
- * other framework error). The five A1 halt-contract fields (`reason`, `role`,
+ * other framework error). The five halt-contract fields (`reason`, `role`,
  * `attempts`, `ceiling`, `evidence`) ride along as structured context, and the
  * user-facing prose from {@link renderRoleCeilingMessage} becomes the message.
  *

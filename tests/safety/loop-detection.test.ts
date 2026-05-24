@@ -1,7 +1,7 @@
 /**
- * A1 per-role attempt-ceiling suite — proves the framework-owned halt primitive
+ * Per-role attempt-ceiling suite — proves the framework-owned halt primitive
  * is a pure decision over reconstructed attempt counts, with the halt contract
- * (LoopDetected error fields, evidence shape, seed-default table) the spec
+ * (LoopDetected error fields, evidence shape, seed-default table) the framework
  * mandates.
  *
  * Ceiling check: a proposer rejected three times in a row (ceiling 3) halts with

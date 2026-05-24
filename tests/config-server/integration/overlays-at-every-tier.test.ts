@@ -155,7 +155,7 @@ runner:
     expect(r.discarded).toEqual([]);
   });
 
-  it('surfaces merged safety.* through getResolvedConfig and getMergedSplicePoints (A1)', async () => {
+  it('surfaces merged safety.* through getResolvedConfig and getMergedSplicePoints', async () => {
     const { projectRoot, userHome } = makeTmpProjectAndUserHome();
 
     // user sets a base ceiling map; project raises one role and sets the two
@@ -207,7 +207,7 @@ safety:
     expect(eff.oscillationDetection).toBe(false);
   });
 
-  it('empty overlay resolves with no hollow safety block (A1 additive guarantee)', async () => {
+  it('empty overlay resolves with no hollow safety block (additive guarantee)', async () => {
     const { projectRoot, userHome } = makeTmpProjectAndUserHome();
     // No overlay files written at all → empty overlay for this project.
 
@@ -217,7 +217,7 @@ safety:
     const r = await getResolvedConfig({ projectRoot }, { userHome });
     const merged = r.overlay as Record<string, unknown>;
     // The three new fields are absent ⇒ no safety block is materialised (empty
-    // blocks are pruned), and the resolver yields exactly the sprint-1..4 seeds.
+    // blocks are pruned), and the resolver yields exactly the seed defaults.
     expect(merged.safety).toBeUndefined();
     expect(r.issues).toEqual([]);
 

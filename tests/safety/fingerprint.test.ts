@@ -1,9 +1,9 @@
-// Verifies the A1 sprint-3 fingerprint normalization machinery: the SHA-256
+// Verifies the fingerprint normalization machinery: the SHA-256
 // output shape and determinism, the three independently-testable normalization
 // rules (whitespace rule 1, comment rule 2 + its no-op, sortable rule 3 + its
 // no-op) each with a control that pins the rule does not over-collapse, and the
 // prototype-pollution guard on the path-keyed map. Also exercises the stack
-// schema/loader round-trip for the two new optional C1 fields: a stack
+// schema/loader round-trip for the two new optional stack fields: a stack
 // declaring both round-trips intact, malformed values are rejected as
 // SchemaMismatch, and the field-less web-node builtin stays valid.
 import { describe, expect, it } from 'vitest';
@@ -245,7 +245,7 @@ describe('fingerprintEditSet — prototype-pollution resistance', () => {
   });
 });
 
-describe('stack schema/loader round-trip for the new C1 fields', () => {
+describe('stack schema/loader round-trip for the new stack fields', () => {
   it('a stack declaring commentSyntax and sortableLists validates clean and round-trips', () => {
     const { loaded, issues } = loadStackWithValidation(
       'web-node',

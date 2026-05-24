@@ -22,7 +22,7 @@ export const EXIT_INVARIANT_VIOLATION = 4;
 export const EXIT_API_UNREACHABLE = 5;
 
 /**
- * A1 loop/thrash safety halt (`LoopDetected`). Deliberately its own class,
+ * Loop/thrash safety halt (`LoopDetected`). Deliberately its own class,
  * distinct from the validation codes (2–5): a halt means "the work could not
  * converge", not "the configuration or contract was malformed", and scripts/CI
  * must be able to tell the two apart without parsing output. Placed at 6 as the
@@ -58,7 +58,7 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   NotImplemented: EXIT_GENERIC,
   MalformedInput: EXIT_BAD_ARGS,
 
-  // A1: a loop-detection halt is its own exit class so a caller can distinguish
+  // A loop-detection halt is its own exit class so a caller can distinguish
   // "the framework halted an unproductive loop" from a contract/validation
   // failure, which it would otherwise be conflated with.
   LoopDetected: EXIT_LOOP_DETECTED,

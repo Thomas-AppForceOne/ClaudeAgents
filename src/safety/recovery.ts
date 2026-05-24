@@ -1,5 +1,5 @@
 /**
- * A1 recovery integration — the framework-owned pure pieces that govern how a
+ * Recovery integration — the framework-owned pure pieces that govern how a
  * loop-halted run resumes under `--recover`, and the validation that keeps
  * `--reset-attempts` a recover-only modifier.
  *
@@ -7,35 +7,35 @@
  * export is a pure function over plain data (the per-role attempt accounting
  * `reconstructRecoveryState` derives from the trace, and the parsed recover/
  * reset-attempts flag booleans). The orchestrator's full `--recover` execution
- * is O2's later work; A1 owns only the recovery *semantics* a resumed sprint
- * must obey, so they live here as testable library code the orchestrator
- * composes rather than re-implements.
+ * is a future recovery flow; this module owns only the recovery *semantics* a
+ * resumed sprint must obey, so they live here as testable library code the
+ * orchestrator composes rather than re-implements.
  *
- * Three decisions this module encodes, with their A1 rationale (so a reader who
- * has not read the spec set understands them):
+ * Three decisions this module encodes, with their rationale (so a reader
+ * understands them):
  *
  * - **`--reset-attempts` is valid only with `--recover` (standalone use is an
- *   error).** Per A1 § "User overrides", a fresh-counter request must be an
- *   explicit, recover-scoped opt-in. The ceiling exists to stop an
- *   unproductive loop; a counter reset that could be requested outside a
- *   recovery would be a silent way to defeat that ceiling, so the framework
- *   rejects it as a usage error rather than honouring it.
+ *   error).** A fresh-counter request must be an explicit, recover-scoped
+ *   opt-in. The ceiling exists to stop an unproductive loop; a counter reset
+ *   that could be requested outside a recovery would be a silent way to defeat
+ *   that ceiling, so the framework rejects it as a usage error rather than
+ *   honouring it.
  *
- * - **Recovery preserves the trace-reconstructed counters by default.** Per A1
- *   § "Recovery interaction", "silent counter resets defeat the purpose of the
- *   ceiling". A recovered sprint already at its per-role ceiling must halt
- *   again on the very next attempt-start check unless the user explicitly asked
- *   for fresh counters — the ceiling has to survive a resume or it is
- *   meaningless. The effective starting counters are therefore the preserved
- *   reconstructed counts (reset off) or zero (reset on), and feeding them into
- *   the shipped `checkRoleCeiling` is what produces the immediate re-halt.
+ * - **Recovery preserves the trace-reconstructed counters by default** — silent
+ *   counter resets defeat the purpose of the ceiling. A recovered sprint
+ *   already at its per-role ceiling must halt again on the very next
+ *   attempt-start check unless the user explicitly asked for fresh counters —
+ *   the ceiling has to survive a resume or it is meaningless. The effective
+ *   starting counters are therefore the preserved reconstructed counts (reset
+ *   off) or zero (reset on), and feeding them into the shipped
+ *   `checkRoleCeiling` is what produces the immediate re-halt.
  *
- * - **Counters come only from the trace, never a sidecar file.** Per A1
- *   § "Trace integration", the trace is the single source of truth so
- *   `--recover` can reconstruct counter state from the event log alone. This
- *   module reads attempt counts solely through `reconstructRecoveryState`'s
- *   {@link RoleAttemptState}; introducing a separate counter file would create a
- *   second source of truth recovery could not rebuild — exactly what A1 forbids.
+ * - **Counters come only from the trace, never a sidecar file.** The trace is
+ *   the single source of truth so `--recover` can reconstruct counter state
+ *   from the event log alone. This module reads attempt counts solely through
+ *   `reconstructRecoveryState`'s {@link RoleAttemptState}; introducing a
+ *   separate counter file would create a second source of truth recovery could
+ *   not rebuild — exactly what the trace-as-only-counter design forbids.
  */
 
 import { createError, type ConfigServerError } from '../config-server/errors.js';
@@ -55,16 +55,16 @@ const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The kebab-case `terminalReason` an A1 loop halt records on the run's terminal
+ * The kebab-case `terminalReason` a loop halt records on the run's terminal
  * state so the halted run is recoverable.
  *
- * **Why exactly this literal:** A1 § "Field encodings" pins `terminalReason`
- * codes to kebab-case ASCII matching O2's existing recoverable-terminal
- * convention, and names `failed-loop-detected` as the loop-halt code. O2's
- * `--recover` flow keys on this string to know the run terminated on a loop
- * halt (rather than a contract/validation failure) and is therefore resumable.
- * Frozen at the literal — a divergent spelling (camelCase, a different word)
- * would make the halted run un-discoverable to recovery.
+ * **Why exactly this literal:** `terminalReason` codes are kebab-case ASCII
+ * matching the existing recoverable-terminal convention, and `failed-loop-detected`
+ * is the loop-halt code. The `--recover` flow keys on this string to know the
+ * run terminated on a loop halt (rather than a contract/validation failure) and
+ * is therefore resumable. Frozen at the literal — a divergent spelling
+ * (camelCase, a different word) would make the halted run un-discoverable to
+ * recovery.
  */
 export const FAILED_LOOP_DETECTED_TERMINAL_REASON = 'failed-loop-detected';
 
@@ -104,7 +104,7 @@ export interface ResetAttemptsFlags {
  * **Why standalone use is rejected:** see this module's docblock — a
  * fresh-counter request must be an explicit, recover-scoped opt-in, because a
  * counter reset reachable outside recovery would be a silent way to defeat the
- * per-role ceiling A1 exists to enforce.
+ * per-role ceiling the safety layer exists to enforce.
  *
  * @param flags the parsed `--recover` / `--reset-attempts` booleans.
  * @returns a {@link ResetAttemptsValidation}: `{ ok: true }` when permitted, or
@@ -144,11 +144,11 @@ export function validateResetAttemptsUsage(flags: ResetAttemptsFlags): ResetAtte
 /**
  * A minimal recoverable terminal-state record for a loop-halted run.
  *
- * This is the A1-owned terminal-reason record — the fields O2's `--recover`
- * flow reads to know the run is a recoverable loop halt — not the full O2
- * archive. The full archive flow is later roadmap work; A1 owns only that the
- * terminal record carries the correct kebab-case reason and is marked terminal
- * in the recoverable sense.
+ * This is the terminal-reason record — the fields the `--recover` flow reads to
+ * know the run is a recoverable loop halt — not the full archive. The full
+ * archive flow is later recovery work; this module owns only that the terminal
+ * record carries the correct kebab-case reason and is marked terminal in the
+ * recoverable sense.
  *
  * @property terminal always `true`: a loop halt ends the run (the sprint did
  *   not converge), so the run is in a terminal state.
@@ -163,12 +163,12 @@ export interface LoopHaltTerminalRecord {
 }
 
 /**
- * Build the A1 terminal-state record for a loop halt.
+ * Build the terminal-state record for a loop halt.
  *
  * Produced when a `LoopDetected` halt fires (any of the three triggers), this
  * is the record whose `terminalReason` makes the run recoverable via
- * `--recover`. It is a pure builder over no inputs — the only A1-owned fact is
- * the fixed reason — so it can be unit-tested in isolation without the O2
+ * `--recover`. It is a pure builder over no inputs — the only fact it carries is
+ * the fixed reason — so it can be unit-tested in isolation without the
  * archive/`--recover` execution flow.
  *
  * @returns a {@link LoopHaltTerminalRecord} with `terminal: true` and
@@ -210,7 +210,7 @@ export interface EffectiveStartingCountersInput {
  * - **`resetAttempts === false` (default): counters preserved.** Each role's
  *   effective count is its reconstructed `attemptCount`. A recovered sprint
  *   already at its ceiling therefore halts on the very next attempt-start
- *   check — the by-design A1 guarantee that a loop halt is not silently undone
+ *   check — the by-design guarantee that a loop halt is not silently undone
  *   by resuming (see the module docblock).
  * - **`resetAttempts === true`: counters zeroed.** Every role's effective count
  *   is `0`, so the recovered sprint behaves like a fresh sprint and does not

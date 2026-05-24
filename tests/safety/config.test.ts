@@ -1,11 +1,11 @@
-// Unit tests for the pure effective-safety-config resolver (A1 sprint 5):
+// Unit tests for the pure effective-safety-config resolver:
 // resolveEffectiveSafetyConfig folds the seed defaults, the merged overlay's
 // safety.* block, and the one-off runtime flags into the EffectiveSafetyConfig
 // the orchestrator feeds into the attempt-start checks. Each behaviour is a
 // separately-asserted case so a partial implementation (e.g. one that misses
 // the flag-beats-overlay precedence, the n × roleCount + 4 arithmetic, or the
 // uniform-ceiling-over-every-role rule) cannot pass by satisfying the others:
-//   - empty/absent overlay+flags resolves to the sprint-1..4 seed defaults;
+//   - empty/absent overlay+flags resolves to the seed defaults;
 //   - safety.attemptCeilings.gan-generator: 5 ⇒ effective gan-generator 5 while
 //     gan-contract-proposer keeps its seed 3 (unspecified role not dropped);
 //   - safety.sprintBudget overrides the default 12;
@@ -25,8 +25,8 @@ import {
   MAX_ATTEMPTS_BUDGET_HEADROOM,
 } from '../../src/safety/config.js';
 
-describe('resolveEffectiveSafetyConfig — defaults (A1 sprint 5)', () => {
-  it('empty input resolves to the sprint-1..4 seed defaults', () => {
+describe('resolveEffectiveSafetyConfig — defaults', () => {
+  it('empty input resolves to the seed defaults', () => {
     const eff = resolveEffectiveSafetyConfig({});
     expect(eff.attemptCeilings).toEqual({ 'gan-contract-proposer': 3, 'gan-generator': 3 });
     expect(eff.attemptCeilings).toEqual({ ...DEFAULT_ATTEMPT_CEILINGS });
@@ -43,7 +43,7 @@ describe('resolveEffectiveSafetyConfig — defaults (A1 sprint 5)', () => {
   });
 });
 
-describe('resolveEffectiveSafetyConfig — overlay overrides (A1 sprint 5)', () => {
+describe('resolveEffectiveSafetyConfig — overlay overrides', () => {
   it('safety.attemptCeilings.gan-generator: 5 raises gan-generator to 5; proposer keeps seed 3', () => {
     const eff = resolveEffectiveSafetyConfig({
       overlay: { attemptCeilings: { 'gan-generator': 5 } },
@@ -72,7 +72,7 @@ describe('resolveEffectiveSafetyConfig — overlay overrides (A1 sprint 5)', () 
   });
 });
 
-describe('resolveEffectiveSafetyConfig — --max-attempts flag (A1 sprint 5)', () => {
+describe('resolveEffectiveSafetyConfig — --max-attempts flag', () => {
   it('uniform ceiling n on EVERY multi-attempt role AND sprintBudget = n × roleCount + 4', () => {
     const n = 2;
     const eff = resolveEffectiveSafetyConfig({ flags: { maxAttempts: n } });
@@ -112,7 +112,7 @@ describe('resolveEffectiveSafetyConfig — --max-attempts flag (A1 sprint 5)', (
   });
 });
 
-describe('resolveEffectiveSafetyConfig — prototype-pollution resistance (A1 sprint 5)', () => {
+describe('resolveEffectiveSafetyConfig — prototype-pollution resistance', () => {
   it('a __proto__-named ceiling key does not pollute, crash, or shadow real roles', () => {
     const before = ({} as Record<string, unknown>)['polluted'];
     const eff = resolveEffectiveSafetyConfig({
@@ -136,7 +136,7 @@ describe('resolveEffectiveSafetyConfig — prototype-pollution resistance (A1 sp
   });
 });
 
-describe('readSafetyOverlayBlock — merged-overlay extraction (A1 sprint 5)', () => {
+describe('readSafetyOverlayBlock — merged-overlay extraction', () => {
   it('extracts well-typed safety.* fields from a merged splice-point map', () => {
     const block = readSafetyOverlayBlock({
       safety: { attemptCeilings: { 'gan-generator': 5 }, sprintBudget: 20, oscillationDetection: false },

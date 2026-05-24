@@ -1,23 +1,23 @@
 /**
- * A1 edit-oscillation detection — the framework-owned halt primitive for the
- * generator role specifically (A1 § "Edit oscillation detection").
+ * Edit-oscillation detection — the framework-owned halt primitive for the
+ * generator role specifically.
  *
  * Where {@link checkRoleCeiling} caps how many times the generator may attempt
  * its step and {@link checkSprintBudget} caps the combined cross-role work,
  * this module catches a subtler failure: a generator that keeps re-proposing
  * the *same* change (or alternating between two changes) across attempts is not
- * converging even though it has not yet exhausted its attempt ceiling. A1 calls
- * this oscillation and halts it so the framework does not burn the remaining
+ * converging even though it has not yet exhausted its attempt ceiling. This is
+ * oscillation, and the framework halts it so it does not burn the remaining
  * attempts re-litigating an interpretation the evaluator has already rejected.
  *
- * Like the other two A1 checks, every export here is **pure**: a function over
- * a plain per-attempt history (the fingerprints sprint 3's `fingerprintEditSet`
+ * Like the other two checks, every export here is **pure**: a function over
+ * a plain per-attempt history (the fingerprints `fingerprintEditSet`
  * produced, each paired with a boolean reconstructed from the trace) with no
  * I/O and no persisted state. The orchestrator composes it at attempt-start
  * boundaries (see `skills/gan/SKILL.md`); this file owns only the decision.
  *
  * Why this module consumes fingerprints rather than re-deriving them: the
- * digest `fingerprintEditSet` returns already encodes A1's whole "logically the
+ * digest `fingerprintEditSet` returns already encodes the whole "logically the
  * same change" normalization contract (whitespace/comment/reorder collapsing).
  * Re-hashing here would risk a second, divergent notion of "same edit" — the
  * detector must compare attempts by the *exact* value the fingerprint layer
@@ -25,22 +25,22 @@
  * drift apart. The history element is therefore the 64-char lowercase-hex
  * SHA-256 string, never raw edit-set content.
  *
- * Two triggers fire an `editOscillation` halt, specified by A1 as INDEPENDENT
+ * Two triggers fire an `editOscillation` halt, and they are INDEPENDENT
  * (either alone halts):
  *
- *  - **directRepeat** — the same fingerprint recurs across the history. A1's
- *    acceptance pins the boundary: the halt fires only on the *third* same
- *    fingerprint ("after the second repeat"), not on the first A→A repeat,
- *    because a single isolated repeat could be an instructed revert rather than
- *    oscillation. directRepeat therefore scans *all* earlier attempts for a
- *    third recurrence, not just the immediately preceding one.
+ *  - **directRepeat** — the same fingerprint recurs across the history. The
+ *    boundary is pinned: the halt fires only on the *third* same fingerprint
+ *    (after the second repeat), not on the first A→A repeat, because a single
+ *    isolated repeat could be an instructed revert rather than oscillation.
+ *    directRepeat therefore scans *all* earlier attempts for a third
+ *    recurrence, not just the immediately preceding one.
  *  - **3cycle** — attempt N's fingerprint equals attempt N−2's (an A → B → A
  *    pattern, A != B). This compares only N against N−2 (a fixed two-step
  *    lookback), because the pattern it names is specifically the alternation
  *    between two interpretations; a wider scan would re-derive directRepeat.
  *
- * Post-rejection guard (A1's false-positive avoidance): a repeat is only
- * counted toward a trigger when the *repeating* attempt followed an evaluator
+ * Post-rejection guard (false-positive avoidance): a repeat is only counted
+ * toward a trigger when the *repeating* attempt followed an evaluator
  * rejection. An attempt that reverts a partial edit because the evaluator said
  * "undo that" is instructed behaviour, not oscillation, so a repeat that did
  * not follow a rejection returns no halt — even though the fingerprints match.
@@ -68,27 +68,27 @@ import type { CeilingDecision, LoopDetectedFields } from './loop-detection.js';
 // prototype setter.
 const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
-// A genuine fingerprint is a 64-char lowercase-hex SHA-256 digest (A1 §
-// "Field encodings"). Used by the evidence validator to reject mis-shaped
-// sequence elements; the detector itself compares opaque strings and does not
+// A genuine fingerprint is a 64-char lowercase-hex SHA-256 digest. Used by the
+// evidence validator to reject mis-shaped sequence elements; the detector
+// itself compares opaque strings and does not
 // require the input to match (a malformed history simply will not produce
 // matching repeats), so this is validation, not a parsing gate.
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 
 /**
- * The role whose fingerprint history A1 tracks for oscillation.
+ * The role whose fingerprint history is tracked for oscillation.
  *
  * Stamped on the `role` field of an `editOscillation` halt. It is the
- * kebab-case generator role id (A1 § "Field encodings"), the same key the
- * per-role ceiling table uses — A1 maintains an edit-fingerprint history "for
- * the generator role specifically", so oscillation halts always carry this
- * role. Kept distinct from the sprint-budget halt's `"sprint"` sentinel so a
- * trace reader can tell the two halt classes apart by the `role` field.
+ * kebab-case generator role id, the same key the per-role ceiling table uses —
+ * the edit-fingerprint history is maintained for the generator role
+ * specifically, so oscillation halts always carry this role. Kept distinct from
+ * the sprint-budget halt's `"sprint"` sentinel so a trace reader can tell the
+ * two halt classes apart by the `role` field.
  */
 export const OSCILLATION_ROLE = 'gan-generator';
 
 /**
- * Which of A1's two independent oscillation triggers fired.
+ * Which of the two independent oscillation triggers fired.
  *
  * - `directRepeat` — the same fingerprint recurred a third time across the
  *   history (the second repeat).
@@ -126,14 +126,13 @@ export interface AttemptFingerprint {
 export type FingerprintHistory = AttemptFingerprint[];
 
 /**
- * The `editOscillation` evidence value carried on the `LoopDetected` error
- * (A1 § "Halt contract" / § "Examples").
+ * The `editOscillation` evidence value carried on the `LoopDetected` error.
  *
  * @property fingerprintSequence the fingerprints that evidence the detected
  *   pattern, oldest first; each a 64-char lowercase-hex string. For a 3cycle
- *   halt this is the three-element A → B → A window, so `seq[0] === seq[2]`
- *   (matching A1's worked example). For a directRepeat halt it is the history
- *   up to and including the third recurrence.
+ *   halt this is the three-element A → B → A window, so `seq[0] === seq[2]`.
+ *   For a directRepeat halt it is the history up to and including the third
+ *   recurrence.
  * @property detectedPattern which trigger fired ({@link DetectedPattern}).
  */
 export interface EditOscillationEvidence {
@@ -183,19 +182,19 @@ export function isEditOscillationEvidence(value: unknown): value is EditOscillat
 /**
  * Decide whether the generator's edit-fingerprint history shows oscillation.
  *
- * Evaluates A1's two independent triggers over the history, oldest attempt
+ * Evaluates the two independent triggers over the history, oldest attempt
  * first, applying the post-rejection guard to each candidate repeat:
  *
  *  - **directRepeat** fires when a fingerprint recurs for the *third* time — the
  *    second repeat — and that third (current) attempt followed a rejection. The
- *    third-occurrence boundary is deliberate (A1 acceptance: "halts ... after
- *    the second repeat"): a single isolated A→A repeat could be an instructed
+ *    third-occurrence boundary is deliberate (the halt fires only after the
+ *    second repeat): a single isolated A→A repeat could be an instructed
  *    revert, so two occurrences never halt. directRepeat scans all earlier
  *    attempts for the third recurrence rather than only the adjacent one.
  *  - **3cycle** fires when attempt N's fingerprint equals attempt N−2's (with
  *    the two differing from their neighbour, an A → B → A alternation) and
  *    attempt N followed a rejection. It compares only N against N−2 — a fixed
- *    two-step lookback — because that is the exact alternation A1 names;
+ *    two-step lookback — because that is the exact alternation it names;
  *    widening the scan would collapse it into directRepeat.
  *
  * The two triggers are checked independently and the earliest-firing one (by
@@ -203,7 +202,7 @@ export function isEditOscillationEvidence(value: unknown): value is EditOscillat
  * adjacent attempts repeat, and an A→A→A history halts via directRepeat.
  *
  * The check runs at attempt-start boundaries; an attempt already in flight
- * finishes before the next check (A1 § "Halt timing").
+ * finishes before the next check.
  *
  * @param history the generator's per-attempt {@link FingerprintHistory},
  *   oldest first, each entry pairing the fingerprint with whether that attempt
@@ -368,7 +367,7 @@ export function renderEditOscillationMessage(
   traceDir: string,
 ): string {
   // directRepeat means the generator re-proposed the same edit; 3cycle means it
-  // alternated between two — A1's two failure shapes, surfaced so the user
+  // alternated between two — the two failure shapes, surfaced so the user
   // knows which without reading the evidence array.
   const shape =
     detectedPattern === 'directRepeat'

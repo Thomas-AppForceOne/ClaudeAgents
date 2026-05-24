@@ -1,5 +1,5 @@
 /**
- * A1 recovery-integration suite (sprint 6) — proves the pure recovery pieces
+ * Recovery-integration suite — proves the pure recovery pieces
  * that compose on top of the shipped `reconstructRecoveryState` +
  * `checkRoleCeiling`, with no `--recover` orchestrator runtime. Each behaviour
  * is a separately-asserted case so a partial implementation cannot pass by
@@ -71,7 +71,7 @@ function recoveryState(byRole: Record<string, RoleAttemptState>): RecoveryState 
   return { nextSequence: 0, attemptStateByRole };
 }
 
-describe('validateResetAttemptsUsage — recover-only modifier (A1 sprint 6)', () => {
+describe('validateResetAttemptsUsage — recover-only modifier', () => {
   it('--reset-attempts standalone (no --recover) is rejected with a MalformedInput structured error', () => {
     const result = validateResetAttemptsUsage({ recover: false, resetAttempts: true });
     expect(result.ok).toBe(false);
@@ -103,7 +103,7 @@ describe('validateResetAttemptsUsage — recover-only modifier (A1 sprint 6)', (
   });
 });
 
-describe('reset_attempts_rejection_message_follows_user_facing_discipline (A1 sprint 6)', () => {
+describe('reset_attempts_rejection_message_follows_user_facing_discipline', () => {
   it('the standalone-rejection message names no runtime/ecosystem tooling and refers to the framework', () => {
     const result = validateResetAttemptsUsage({ recover: false, resetAttempts: true });
     const msg = result.error?.message ?? '';
@@ -132,7 +132,7 @@ describe('reset_attempts_rejection_message_follows_user_facing_discipline (A1 sp
   });
 });
 
-describe('loop_halt_writes_recoverable_terminal_reason (A1 sprint 6)', () => {
+describe('loop_halt_writes_recoverable_terminal_reason', () => {
   it('builds a terminal record with terminalReason exactly "failed-loop-detected"', () => {
     const record = buildLoopHaltTerminalRecord();
     expect(record.terminalReason).toBe('failed-loop-detected');
@@ -141,12 +141,12 @@ describe('loop_halt_writes_recoverable_terminal_reason (A1 sprint 6)', () => {
     expect(record.terminal).toBe(true);
   });
 
-  it('the exported terminal-reason literal is the kebab-case A1/O2 convention', () => {
+  it('the exported terminal-reason literal is the kebab-case recoverable-terminal convention', () => {
     expect(FAILED_LOOP_DETECTED_TERMINAL_REASON).toBe('failed-loop-detected');
   });
 });
 
-describe('recovery_without_reset_preserves_counters_and_halts_on_next_attempt (A1 sprint 6)', () => {
+describe('recovery_without_reset_preserves_counters_and_halts_on_next_attempt', () => {
   it('an at-ceiling gan-generator (attemptCount 3, ceiling 3) preserved under reset=false halts immediately', () => {
     // A reconstructed state already at the role's ceiling.
     const state = recoveryState({
@@ -171,7 +171,7 @@ describe('recovery_without_reset_preserves_counters_and_halts_on_next_attempt (A
   });
 });
 
-describe('recovery_with_reset_yields_zero_effective_starting_counters (A1 sprint 6)', () => {
+describe('recovery_with_reset_yields_zero_effective_starting_counters', () => {
   it('the SAME at-ceiling state under reset=true yields zero effective counts and does NOT halt', () => {
     const state = recoveryState({
       'gan-generator': { attemptCount: 3, highestAttemptNumber: 3 },
@@ -209,7 +209,7 @@ describe('recovery_with_reset_yields_zero_effective_starting_counters (A1 sprint
   });
 });
 
-describe('counters_reconstructed_from_trace_events_no_separate_counter_file (A1 sprint 6)', () => {
+describe('counters_reconstructed_from_trace_events_no_separate_counter_file', () => {
   it('effective starting counters are derived from a reconstructed RecoveryState alone (round-trip)', () => {
     const root = makeTraceRoot();
     // Drive three gan-generator attempts purely through the trace emitter — no
@@ -246,7 +246,7 @@ describe('counters_reconstructed_from_trace_events_no_separate_counter_file (A1 
   });
 });
 
-describe('recovery_counter_mapping_resists_prototype_pollution (A1 sprint 6)', () => {
+describe('recovery_counter_mapping_resists_prototype_pollution', () => {
   it('a __proto__-named role does not pollute, crash, or shadow real roles (reset=false and reset=true)', () => {
     const before = ({} as Record<string, unknown>)['polluted'];
 

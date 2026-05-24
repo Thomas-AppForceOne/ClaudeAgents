@@ -1,5 +1,5 @@
 /**
- * A1 effective-safety-config resolver — the pure function that folds the
+ * Effective-safety-config resolver — the pure function that folds the
  * framework's seed defaults, the merged overlay's `safety.*` block, and the
  * one-off runtime flags into the single effective safety config the
  * orchestrator feeds into the attempt-start checks.
@@ -12,12 +12,12 @@
  * (the `sprintBudget`), and the gate on whether the edit-oscillation detector is
  * consulted (`oscillationDetection`). Keeping it pure means the precedence and
  * the `--max-attempts` arithmetic are unit-testable without an orchestrator
- * runtime, matching the sprint-1..4 safety primitives.
+ * runtime, matching the other pure safety primitives.
  *
  * Precedence is flags > overlay > defaults (highest wins):
  * - Runtime flags are a one-off, deliberately coarse debugging knob a user
- *   passes for a single invocation; A1 § "User overrides" makes them beat the
- *   persisted overlay so a quick `--max-attempts=2` is not silently undercut by
+ *   passes for a single invocation; they beat the persisted overlay so a quick
+ *   `--max-attempts=2` is not silently undercut by
  *   a project's committed `safety.*` config. The overlay, in turn, beats the
  *   framework's seed defaults.
  * - An unspecified role keeps its seed default rather than being dropped: a user
@@ -47,7 +47,7 @@ const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
  *
  * This is a **seed value, not data-derived**, consistent with the
  * {@link DEFAULT_ATTEMPT_CEILINGS} / {@link DEFAULT_SPRINT_BUDGET} seed-value
- * annotations. A1 § "User overrides" pins the derivation `sprintBudget =
+ * annotations. The derivation is `sprintBudget =
  * n × roleCount + 4`, where `roleCount` is the number of *multi-attempt* roles
  * the uniform ceiling applies to (the keys of {@link DEFAULT_ATTEMPT_CEILINGS}),
  * and the `+4` is fixed headroom for the four roles that consume attempts but
@@ -56,7 +56,7 @@ const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
  * {@link DEFAULT_SPRINT_BUDGET} (per-role sum + headroom), expressed for an
  * arbitrary uniform ceiling `n`. A post-release audit re-tunes it against trace
  * data; until then it is an opinionated guess, and this comment is the rationale
- * a reader gets without the A1 spec.
+ * a reader gets.
  */
 export const MAX_ATTEMPTS_BUDGET_HEADROOM = 4;
 
@@ -74,10 +74,10 @@ export const MAX_ATTEMPTS_BUDGET_HEADROOM = 4;
  *   `checkSprintBudget` consumes in place of {@link DEFAULT_SPRINT_BUDGET}.
  * @property oscillationDetection the effective gate on whether the edit-
  *   oscillation detector is consulted: `true` (the default) ⇒ the orchestrator
- *   consults the sprint-4 detector; `false` ⇒ it skips the detector and a
- *   generator that repeats fingerprints proceeds up to its per-role ceiling
+ *   consults the edit-oscillation detector; `false` ⇒ it skips the detector and
+ *   a generator that repeats fingerprints proceeds up to its per-role ceiling
  *   without an `editOscillation` halt. It gates the *call site*, not the
- *   detector — A1 § "What A1 does not do" forbids modifying agent behaviour.
+ *   detector — the safety layer never modifies agent behaviour.
  */
 export interface EffectiveSafetyConfig {
   attemptCeilings: Record<string, number>;

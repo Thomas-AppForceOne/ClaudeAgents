@@ -1,5 +1,5 @@
 /**
- * A1 sprint-wide attempt budget — the framework-owned aggregate-ceiling halt
+ * Sprint-wide attempt budget — the framework-owned aggregate-ceiling halt
  * primitive that composes with the per-role ceiling check in
  * `./loop-detection.ts`.
  *
@@ -15,8 +15,9 @@
  * derives from `agentAttempt` events) plus the budget. There is no I/O and no
  * persisted running sum — the trace stays the single source of truth for "how
  * many attempts have happened" so `--recover` can rebuild the count from the
- * event log alone (a sidecar counter would be a second source of truth A1
- * forbids). The orchestrator composes this at attempt-start boundaries alongside
+ * event log alone (a sidecar counter would be a second source of truth the
+ * trace-as-only-counter design forbids). The orchestrator composes this at
+ * attempt-start boundaries alongside
  * the per-role ceiling (see `skills/gan/SKILL.md`).
  */
 
@@ -61,8 +62,8 @@ export const SPRINT_ROLE = 'sprint';
  * across roles rather than converging, so halting at 12 errs toward stopping early
  * rather than burning tokens. A post-release audit re-tunes this against real
  * trace data — until then it is an opinionated guess, and this comment is the
- * rationale a reader gets without the A1 spec. Mirrors the seed-value annotation
- * on `DEFAULT_ATTEMPT_CEILINGS` so the two seed defaults read consistently.
+ * rationale a reader gets. Mirrors the seed-value annotation on
+ * `DEFAULT_ATTEMPT_CEILINGS` so the two seed defaults read consistently.
  */
 export const DEFAULT_SPRINT_BUDGET = 12;
 

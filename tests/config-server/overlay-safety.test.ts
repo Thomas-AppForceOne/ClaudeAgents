@@ -1,5 +1,5 @@
-// Schema-conformance tests for the overlay-v1 `safety.*` block added in A1
-// (sprint 5): safety.attemptCeilings (per-role positive-integer map),
+// Schema-conformance tests for the overlay-v1 `safety.*` block:
+// safety.attemptCeilings (per-role positive-integer map),
 // safety.sprintBudget (positive integer), and safety.oscillationDetection
 // (boolean). Two things are guarded:
 //   1. Each new field accepts its valid shapes — the bare value, the cascade
@@ -34,7 +34,7 @@ function validate(body: Record<string, unknown>): Issue[] {
   return issues;
 }
 
-describe('overlay-v1: safety.* well-typed accept (A1)', () => {
+describe('overlay-v1: safety.* well-typed accept', () => {
   it('accepts the three fields together, well-typed', () => {
     expect(
       validate({
@@ -79,7 +79,7 @@ describe('overlay-v1: safety.* well-typed accept (A1)', () => {
   });
 });
 
-describe('overlay-v1: safety.* mis-typed reject (A1)', () => {
+describe('overlay-v1: safety.* mis-typed reject', () => {
   it('rejects a negative attemptCeilings value', () => {
     const issues = validate({ safety: { attemptCeilings: { 'gan-generator': -1 } } });
     expect(issues.length).toBeGreaterThan(0);
@@ -121,7 +121,7 @@ describe('overlay-v1: safety.* mis-typed reject (A1)', () => {
   });
 });
 
-describe('overlay-v1: safety.* is optional/additive (A1)', () => {
+describe('overlay-v1: safety.* is optional/additive', () => {
   it('accepts an overlay omitting all three safety fields', () => {
     expect(validate({ runner: { thresholdOverride: 7 } })).toEqual([]);
   });

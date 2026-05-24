@@ -123,7 +123,7 @@ export const SPLICE_POINTS: readonly SpliceEntry[] = [
     rule: 'scalar-override',
     bareDefault: () => undefined,
   },
-  // A1 safety.* splice points. attemptCeilings is a per-role map merged
+  // safety.* splice points. attemptCeilings is a per-role map merged
   // key-by-key (merge-role-map), so a higher tier setting one role's ceiling
   // does not wipe the others; sprintBudget and oscillationDetection are plain
   // scalars where the highest tier wins. Each bareDefault is a fresh factory:

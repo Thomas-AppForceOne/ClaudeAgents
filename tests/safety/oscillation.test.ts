@@ -1,10 +1,10 @@
 /**
- * A1 edit-oscillation detection suite — proves the generator-history detector is
- * a pure decision over the per-attempt fingerprint history, with A1's two
+ * Edit-oscillation detection suite — proves the generator-history detector is
+ * a pure decision over the per-attempt fingerprint history, with the two
  * independent triggers, the post-rejection guard, and the single-LoopDetected
  * halt path.
  *
- * Each behaviour A1 pins is asserted as its own case so a partial
+ * Each behaviour is asserted as its own case so a partial
  * implementation cannot pass by satisfying only the others: directRepeat halts
  * on [A, A, A] after the second repeat; the negative that [A, A] does NOT halt;
  * 3cycle halts on [A, B, A] independently of directRepeat; the post-rejection
@@ -34,8 +34,8 @@ import { getRunTraceValidator } from '../../src/config-server/validation/schema-
 
 const RUN_ID = '20260523T171711-0388';
 
-// Three distinct, genuine fingerprints produced by the sprint-3 layer, so the
-// detector is exercised against the *exact* digest shape it will see at
+// Three distinct, genuine fingerprints produced by the fingerprint layer, so
+// the detector is exercised against the *exact* digest shape it will see at
 // runtime (64-char lowercase hex) rather than hand-typed stand-ins.
 const FP_A = fingerprintEditSet([{ path: 'src/a.ts', content: 'export const a = 1;' }]);
 const FP_B = fingerprintEditSet([{ path: 'src/b.ts', content: 'export const b = 2;' }]);
@@ -102,7 +102,7 @@ describe('threecycle_halts_on_ABA_post_rejection', () => {
     const evidence = decision.fields?.evidence as unknown as EditOscillationEvidence;
     expect(evidence.detectedPattern).toBe('3cycle');
     expect(evidence.fingerprintSequence).toHaveLength(3);
-    // The A1 worked-example invariant: attempt N equals attempt N-2.
+    // The worked-example invariant: attempt N equals attempt N-2.
     expect(evidence.fingerprintSequence[0]).toBe(evidence.fingerprintSequence[2]);
     expect(evidence.fingerprintSequence).toEqual([FP_A, FP_B, FP_A]);
   });
@@ -171,11 +171,11 @@ describe('post_rejection_guard_suppresses_repeats_not_following_rejection', () =
 });
 
 describe('editOscillation_evidence_validates_against_fingerprintSequence_detectedPattern_shape', () => {
-  it('accepts the produced evidence and A1’s worked 3cycle example', () => {
+  it('accepts the produced evidence and the worked 3cycle example', () => {
     const decision = detectEditOscillation(history([FP_A, true], [FP_B, true], [FP_A, true]));
     expect(isEditOscillationEvidence(decision.fields?.evidence)).toBe(true);
 
-    // A1 § Examples worked payload: detectedPattern "3cycle", a 3-element
+    // The worked payload: detectedPattern "3cycle", a 3-element
     // sequence with seq[0] == seq[2].
     const worked: EditOscillationEvidence = {
       detectedPattern: '3cycle',
@@ -266,9 +266,9 @@ describe('reuses_single_LoopDetected_error_and_buildLoopDetectedBody_no_parallel
     expect(body.role).toBe('gan-generator');
     expect(body.payload.reason).toBe('editOscillation');
 
-    // Wrapped in an envelope it validates against the run-trace schema (T1 owns
-    // the safetyHalt class; A1 supplies the loopDetected discriminator value and
-    // the editOscillation evidence shape).
+    // Wrapped in an envelope it validates against the run-trace schema (the
+    // trace owns the safetyHalt class; the safety layer supplies the
+    // loopDetected discriminator value and the editOscillation evidence shape).
     const validate = getRunTraceValidator();
     const event = {
       sequenceNumber: 7,

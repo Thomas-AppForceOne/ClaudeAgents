@@ -1,5 +1,5 @@
 /**
- * A1 sprint-wide attempt-budget suite — proves the aggregate-ceiling halt is a
+ * Sprint-wide attempt-budget suite — proves the aggregate-ceiling halt is a
  * pure decision over the same reconstructed per-role tally the per-role check
  * consumes, composing with (but independent of) `checkRoleCeiling`.
  *
@@ -7,7 +7,7 @@
  * case where every role is below its per-role ceiling yet the sum hits the budget
  * (the per-role check stays silent while the budget check halts); single-attempt
  * roles (clarifier, planner) counting toward the total without ever tripping a
- * per-role ceiling; the sprintBudgetExceeded evidence shape (accept A1's worked
+ * per-role ceiling; the sprintBudgetExceeded evidence shape (accept the worked
  * example, reject mis-shaped) with totalAttempts == sum(perRoleCounts); the
  * prototype-pollution guard on the summation; and the LoopDetected error +
  * buildLoopDetectedBody reuse for the new discriminator.
@@ -46,7 +46,7 @@ function tally(counts: Record<string, number>): Record<string, RoleAttemptState>
   return out;
 }
 
-// A1's worked example tally (A1 § Examples): the per-role counts that sum to 12.
+// A worked example tally: the per-role counts that sum to 12.
 const WORKED_EXAMPLE = {
   'gan-clarifier': 1,
   'gan-planner': 1,
@@ -178,7 +178,7 @@ describe('single_attempt_roles_count_toward_budget_but_never_ceiling', () => {
 });
 
 describe('sprint_budget_evidence_matches_declared_shape_and_worked_example', () => {
-  it('produces evidence matching A1’s worked example', () => {
+  it('produces evidence matching the worked example', () => {
     const decision = checkSprintBudget({ attemptStateByRole: tally(WORKED_EXAMPLE) });
     const evidence = decision.fields?.evidence as unknown as SprintBudgetEvidence;
 
@@ -262,8 +262,9 @@ describe('sprint_budget_halt_reuses_loop_detected_error_and_body_builder', () =>
     expect(body.payload.attempts).toBe(12);
     expect(body.payload.ceiling).toBe(12);
 
-    // Wrapped in an envelope it validates against the run-trace schema (T1 owns
-    // the safetyHalt class; A1 supplies the loopDetected discriminator value).
+    // Wrapped in an envelope it validates against the run-trace schema (the
+    // trace owns the safetyHalt class; the safety layer supplies the
+    // loopDetected discriminator value).
     const validate = getRunTraceValidator();
     const event = {
       sequenceNumber: 12,

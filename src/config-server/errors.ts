@@ -198,7 +198,7 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   PortNotDiscovered: 'Could not discover a port for the requested container.',
   UnknownStateKey:
     'Module-state operation referenced a state key that is not declared in the module manifest.',
-  // A1 loop/thrash safety halt. The default is intentionally generic; the real
+  // Loop/thrash safety halt. The default is intentionally generic; the real
   // user-facing prose (which names attempt counts, the trace directory, and the
   // recovery flow) is built by the safety module and passed as `details.message`
   // — this default only covers a LoopDetected raised without an explicit message.

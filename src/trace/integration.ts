@@ -150,7 +150,7 @@ export function buildValidationAbortFromCode(
 
 /**
  * The loop-detection halt details a {@link buildLoopDetectedBody} call maps into
- * a `safetyHalt` event body. These are the A1 `LoopDetected` halt-contract
+ * a `safetyHalt` event body. These are the `LoopDetected` halt-contract
  * fields minus `role`, which becomes a top-level event field rather than part of
  * the inlined payload.
  *
@@ -178,7 +178,7 @@ export interface LoopDetectionHalt {
  * mapping, no I/O, never throws. The triggering `role` becomes the event's
  * top-level `role` field (where every event class carries the responsible role),
  * while the loop-specific `reason` / `attempts` / `ceiling` / `evidence` are
- * inlined into the small structured `payload` — consistent with the rest of A1's
+ * inlined into the small structured `payload` — consistent with the rest of the
  * `LoopDetected` shape, so a trace reader recovers the halt detail without a
  * separate payload file.
  *

@@ -296,7 +296,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
     });
   });
 
-  describe('safety.* splice points (A1)', () => {
+  describe('safety.* splice points', () => {
     it('safety.sprintBudget and safety.oscillationDetection scalar-override (highest tier wins)', () => {
       const result = cascadeOverlays({
         default: { safety: { sprintBudget: 12, oscillationDetection: true } },
@@ -326,7 +326,7 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
     });
 
     it('absent safety.* fields are omitted; no hollow safety block', () => {
-      // A1 additive guarantee: the new fields must not change the empty-overlay
+      // Additive guarantee: the new fields must not change the empty-overlay
       // shape. With no safety anywhere the block is pruned entirely.
       const result = cascadeOverlays({
         default: { generator: { additionalRules: ['r'] } },
