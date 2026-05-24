@@ -65,9 +65,7 @@ flowchart LR
     EM         --> Z2R
     RC         -->|"reads"| Z2R
     DK         --> Z2M
-    SKILL      -->|"halt checks at attempt-start"| SF
-    RC         -->|"reconstructed attempt state"| SF
-    SF        -.->|"LoopDetected halt → safetyHalt"| EM
+    SKILL      -->|"attempt-start halt checks"| SF
 ```
 
 ---
