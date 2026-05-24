@@ -228,10 +228,12 @@ None. Reuses Q5's `docLintCmd` and `documentationSurfaces`.
 Part D (advisory→blocker promotion) is a checklist item on the existing post-v1.x audit, not a sprint
 here. There is no separate follow-up spec.
 
-## Note for spec-validator (not self-assigned)
+## Note for spec-validator
 
-Q6 is drafted but **not** slotted: `roadmap.md`/`PROJECT_CONTEXT.md` untouched (single-writer). For
-spec-validator: slot Q6 in **v1.2 quality-signal** (`roadmap.md:126`; Q6 free); add the Dependencies
-cross-refs (Q5/C1/E3/E1-E2/R4); at implementation, make the coordinated `PROJECT_CONTEXT.md` § Testing
-inventory edit for `test-doc-lint.yml` (Part B); and add required-sections/commented-out-code to the
-post-v1.x dogfooding-audit checklist (Part D).
+Q6 is slotted as the **`Next.`** item in the v1.0 implementation order (`roadmap.md`), pulled ahead
+of the remaining v1.0 work per an explicit prioritisation call — not its original Q-series v1.2
+placement. `PROJECT_CONTEXT.md` is untouched (single-writer). Remaining for spec-validator: add the
+Dependencies cross-refs (Q5/C1/E3/E1-E2/R4) to the depended specs' roadmap entries; at
+implementation, make the coordinated `PROJECT_CONTEXT.md` § Testing inventory edit for
+`test-doc-lint.yml` (Part B); and add required-sections/commented-out-code to the post-v1.x
+dogfooding-audit checklist (Part D).
