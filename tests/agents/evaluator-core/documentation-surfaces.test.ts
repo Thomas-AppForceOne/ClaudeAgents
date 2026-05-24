@@ -389,8 +389,10 @@ describe('comments_cite_no_development_provenance — C1 instantiation end-to-en
   it('(b) scope miss — a .md/.yml-only affected set does NOT fire it', () => {
     const snapshot = provenanceSnapshot(surface);
     // Markdown and YAML are deliberately outside the surface's
-    // ["**/*.ts", "**/*.tsx"] scope: Q6 leaves markdown provenance to the user's
-    // own prose, so the built-in surface must not fire on a docs/config-only diff.
+    // ["**/*.ts", "**/*.tsx"] scope: the built-in stack leaves markdown
+    // provenance to the user's own prose (judging a user's README/changelog
+    // references would over-reach), so the surface must not fire on a
+    // docs/config-only diff.
     const sprintPlan: SprintPlan = {
       affectedFiles: ['docs/notes.md', '.github/workflows/test-doc-lint.yml'],
       criteria: [],
