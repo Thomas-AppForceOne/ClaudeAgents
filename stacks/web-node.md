@@ -181,6 +181,19 @@ documentationSurfaces:
       scope:
         - '**/*.ts'
         - '**/*.tsx'
+  - id: comments_cite_no_development_provenance
+    template: >
+      Every comment, and every user-facing string the code emits (an error message, a log line,
+      text shown to a user), added in this sprint explains the code's reasons — a constraint, an
+      invariant, a non-obvious decision and its rationale — and references no development-process
+      artifact: a specification or RFC identifier used as a process tag, a sprint or iteration
+      label, a ticket, or a pull-request number. It says why the code is the way it is, not when,
+      by which process, or under which plan it was written. A citation that is itself the rationale
+      (an upstream bug the code works around, a standard the code implements) is allowed.
+    triggers:
+      scope:
+        - '**/*.ts'
+        - '**/*.tsx'
 docLintCmd:
   command: npm run doc-lint
   absenceSignal: warning
