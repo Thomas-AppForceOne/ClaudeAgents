@@ -611,11 +611,11 @@ export function run(opts: RunOptions): RunResult {
  * finding count.
  *
  * The advisory model's load-bearing rule: a run whose only findings are
- * advisory is clean (`SUCCESS`), so the CI gate (Part B) never blocks on a
- * heuristic's false positive; a run with at least one blocker fails
- * (`FAILURE`). A finding with no `severity` is treated as a blocker, so the
- * Sprint-1 presence rule keeps its exit semantics regardless of the field's
- * later addition. Pure.
+ * advisory is clean (`SUCCESS`), so a CI gate built on this tool never blocks
+ * on a heuristic's false positive; a run with at least one blocker fails
+ * (`FAILURE`). A finding with no `severity` is treated as a blocker, so a
+ * finding that predates the `severity` field keeps blocking behaviour rather
+ * than silently downgrading to advisory. Pure.
  *
  * @param failures the report's findings (already assembled).
  * @returns `SCRIPT_EXIT.FAILURE` if any finding is a blocker, else

@@ -1,7 +1,7 @@
 /**
  * Black-box tests for the `doc-lint` bin — the deterministic documentation
  * gate that reports an exported symbol introduced by the merge-base delta
- * without a doc comment (the lone Sprint-1 blocker).
+ * without a doc comment (the lone blocker; every other rule is advisory).
  *
  * The suite drives the compiled bin as a real process against hermetic temp
  * git repositories it builds itself, so the proof is end-to-end through the
@@ -18,7 +18,7 @@
  *   and a newly introduced *documented* export produces no finding;
  * - a diff whose only new export is documented exits 0;
  * - the `--json` shape and `--help` (exit 0) behave;
- * - the Sprint-2 advisory model: a diff whose only findings are advisory
+ * - the advisory model: a diff whose only findings are advisory
  *   (an incomplete required-sections doc and/or a commented-out-code comment,
  *   with no undocumented introduced export) reports those advisories AND exits
  *   0; a diff introducing both an undocumented export and an advisory reports

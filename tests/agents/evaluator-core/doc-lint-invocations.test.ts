@@ -214,9 +214,9 @@ describe('buildEvaluatorPlan wires docLintInvocations (FUNC-4)', () => {
 });
 
 /**
- * Q6 Sprint-2 resolution proof: inside `/gan`, the active `web-node` stack's
- * declared `docLintCmd` must resolve through buildDocLintInvocations — and on
- * through buildEvaluatorPlan into `plan.docLintInvocations` — to the real
+ * Resolution proof: inside `/gan`, the active `web-node` stack's declared
+ * `docLintCmd` must resolve through buildDocLintInvocations — and on through
+ * buildEvaluatorPlan into `plan.docLintInvocations` — to the real
  * `npm run doc-lint` command the tool ships behind, with web-node's TypeScript
  * scope globs (a copy, not an alias), `blocker` severity, `delta` baseline, and
  * `warning` absence signal.
@@ -228,7 +228,7 @@ describe('buildEvaluatorPlan wires docLintInvocations (FUNC-4)', () => {
  * literal — the `doc_lint_command_stays_stack_sourced` contract: the command
  * originates in stack data, never a hardcoded ecosystem token in evaluator-core.
  */
-describe('web-node docLintInvocations resolution (Q6 Sprint-2)', () => {
+describe('web-node docLintInvocations resolution', () => {
   function webNodeStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
     // Faithful to the resolved snapshot's web-node docLintCmd: the command is
     // the stack-declared value the tool backs, with delta baseline + blocker.
