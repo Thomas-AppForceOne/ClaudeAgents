@@ -29,6 +29,12 @@ import { stableStringify } from './json.js';
  * @property message human-readable detail, typically including remediation.
  * @property field optional dotted/pointer location within the file; emitted to
  *   JSON only when present (an absent field is omitted, not set to null).
+ * @property severity optional classification distinguishing a finding that must
+ *   gate (`'blocker'`) from one reported for human attention only
+ *   (`'advisory'`). Absent means the report variant does not grade by severity
+ *   and the finding is treated as gating — so existing single-severity reports
+ *   keep their meaning without setting the field. Emitted to JSON only when
+ *   present, matching the `field` convention.
  */
 export interface ReportFailure {
   path: string;
@@ -38,6 +44,8 @@ export interface ReportFailure {
   message: string;
 
   field?: string;
+
+  severity?: 'blocker' | 'advisory';
 }
 
 /**
@@ -120,13 +128,19 @@ export interface LintErrorTextReport {
 }
 
 /**
- * Result of `doc-lint`: exported symbols introduced or changed in the
- * merge-base delta, checked for a preceding doc comment. `checked` is the
- * number of delta `.ts`/`.tsx` files inspected (not symbols), so a clean
- * delta of N files reads as "N files checked, 0 failed"; a finding is one
- * undocumented introduced export. Like the schema/stack reports, the summary
- * counts distinct failed files rather than raw hits, because several
- * undocumented exports in one file are one file the author must revisit.
+ * Result of `doc-lint`: exported symbols and comments introduced or changed in
+ * the merge-base delta, checked against the documentation rules. `checked` is
+ * the number of delta `.ts`/`.tsx` files inspected (not symbols), so a clean
+ * delta of N files reads as "N files checked, 0 failed". Like the schema/stack
+ * reports, the summary counts distinct failed files rather than raw hits,
+ * because several findings in one file are one file the author must revisit.
+ *
+ * Findings carry a {@link ReportFailure.severity}: the export-doc-presence rule
+ * is a `'blocker'` (it gates), while the required-sections and
+ * commented-out-code heuristics are `'advisory'` (reported, never gating on
+ * their own). The exit-code routing — advisory-only is clean, any blocker
+ * fails — lives in the tool, not the report shape; the report only records the
+ * classification so a caller can tell the two apart.
  */
 export interface DocLintReport {
   kind: 'doc-lint';
@@ -366,6 +380,13 @@ function renderJson(input: ScriptReport): string {
       // the key rather than serialising a missing optional.
       if (typeof f.field === 'string') {
         entry['field'] = f.field;
+      }
+      // Same omit-when-absent rule for `severity`: a report variant that does
+      // not grade by severity emits no `severity` key at all, so its JSON shape
+      // is unchanged by this field's existence — only graded variants (doc-lint)
+      // carry it, letting a machine consumer route blocker vs. advisory.
+      if (typeof f.severity === 'string') {
+        entry['severity'] = f.severity;
       }
       return entry;
     }),

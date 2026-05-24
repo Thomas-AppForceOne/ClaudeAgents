@@ -1,0 +1,2 @@
+/** A documented export that exists at the merge-base. */
+export const documentedAtBase = 1;

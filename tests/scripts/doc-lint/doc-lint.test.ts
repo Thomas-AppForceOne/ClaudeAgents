@@ -17,7 +17,13 @@
  *   while a pre-existing undocumented export is grandfathered (not reported)
  *   and a newly introduced *documented* export produces no finding;
  * - a diff whose only new export is documented exits 0;
- * - the `--json` shape and `--help` (exit 0) behave.
+ * - the `--json` shape and `--help` (exit 0) behave;
+ * - the Sprint-2 advisory model: a diff whose only findings are advisory
+ *   (an incomplete required-sections doc and/or a commented-out-code comment,
+ *   with no undocumented introduced export) reports those advisories AND exits
+ *   0; a diff introducing both an undocumented export and an advisory reports
+ *   both in the same invocation AND exits 1; the advisory findings carry their
+ *   FP caveat and an `advisory` severity in `--json`.
  *
  * The fixture file CONTENTS live under `tests/doc-lint/` and are planted into
  * the temp repo across two revisions, so the fixtures read as named artifacts
@@ -166,6 +172,85 @@ describe('doc-lint bin', () => {
     const args = ['--project-root', repo, '--base-ref', 'base', '--json'];
     const a = await runScript('doc-lint', args);
     const b = await runScript('doc-lint', args);
+    expect(a.stdout).toBe(b.stdout);
+  });
+
+  it('advisory-only delta reports the advisories and exits 0 (no blocker)', async () => {
+    const repo = buildRepo(
+      fixture('base.advisory.module.ts.fixture'),
+      fixture('head-advisory-only.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', ['--project-root', repo, '--base-ref', 'base']);
+    // The defining property: advisory findings alone never drive a non-zero exit.
+    expect(r.exitCode).toBe(0);
+    // The summary still prints (one file failed) AND the advisories are on stderr,
+    // so the run is reported, not silent — only the EXIT is clean.
+    expect(r.stdout).toMatch(/^[0-9]+ files checked, 1 failed\n$/);
+    // Both advisory classes fired in the one invocation.
+    expect(r.stderr).toContain('IncompleteDocSections');
+    expect(r.stderr).toContain('CommentedOutCode');
+    // No blocker — the presence rule's code must be absent.
+    expect(r.stderr).not.toContain('MissingExportDoc');
+    // The FP caveat is present in the advisory finding text (the honesty contract).
+    expect(r.stderr).toContain('advisory (reported, not blocking)');
+    expect(r.stderr).toContain('this check cannot soundly tell');
+    // Required-sections names its FP cases; commented-out-code names its own.
+    expect(r.stderr).toContain('destructured or rest parameters');
+    expect(r.stderr).toContain('@example');
+  });
+
+  it('advisory + presence blocker in one invocation reports both and exits 1', async () => {
+    const repo = buildRepo(
+      fixture('base.advisory.module.ts.fixture'),
+      fixture('head-advisory-plus-blocker.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', ['--project-root', repo, '--base-ref', 'base']);
+    // The blocker drives the non-zero exit...
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('MissingExportDoc');
+    expect(r.stderr).toContain('introducedUndocumented');
+    // ...and the advisories that fired in the SAME run are still reported, not
+    // suppressed by the blocker.
+    expect(r.stderr).toContain('IncompleteDocSections');
+    expect(r.stderr).toContain('CommentedOutCode');
+    expect(r.stderr).toContain('advisory (reported, not blocking)');
+  });
+
+  it('--json carries the severity discriminator on each finding', async () => {
+    const repo = buildRepo(
+      fixture('base.advisory.module.ts.fixture'),
+      fixture('head-advisory-plus-blocker.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', [
+      '--project-root',
+      repo,
+      '--base-ref',
+      'base',
+      '--json',
+    ]);
+    expect(r.exitCode).toBe(1);
+    const parsed = JSON.parse(r.stdout) as {
+      failures: { code: string; severity?: string; message: string }[];
+    };
+    const byCode = (code: string) => parsed.failures.find((f) => f.code === code);
+    // The presence rule is a blocker; the heuristics are advisory — a machine
+    // consumer can route them apart by the `severity` field.
+    expect(byCode('MissingExportDoc')!.severity).toBe('blocker');
+    expect(byCode('IncompleteDocSections')!.severity).toBe('advisory');
+    expect(byCode('CommentedOutCode')!.severity).toBe('advisory');
+    // The caveat travels in the message, not only the human stderr render.
+    expect(byCode('IncompleteDocSections')!.message).toContain('advisory (reported, not blocking)');
+  });
+
+  it('two runs over an advisory+blocker delta produce byte-identical --json (determinism)', async () => {
+    const repo = buildRepo(
+      fixture('base.advisory.module.ts.fixture'),
+      fixture('head-advisory-plus-blocker.module.ts.fixture'),
+    );
+    const args = ['--project-root', repo, '--base-ref', 'base', '--json'];
+    const a = await runScript('doc-lint', args);
+    const b = await runScript('doc-lint', args);
+    // The three interleaved finding classes must order deterministically.
     expect(a.stdout).toBe(b.stdout);
   });
 
