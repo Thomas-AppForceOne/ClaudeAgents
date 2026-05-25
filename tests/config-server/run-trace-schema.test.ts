@@ -4,7 +4,7 @@
 // are the on-disk contract a trace reader depends on, so the suite pins both
 // what must be accepted and what must be rejected.
 //
-// run-trace-v1 is a oneOf discriminated union over exactly seven event classes
+// run-trace-v1 is a oneOf discriminated union over its known event classes
 // (asserted by name), each sharing a common ENVELOPE (sequenceNumber +
 // UTC-millisecond timestamp + runId). The field-encoding tests are the
 // load-bearing core: hashes are BARE lowercase 64-hex (no `sha256:` prefix —
@@ -109,18 +109,43 @@ const VALID_EVENTS: Record<string, Record<string, unknown>> = {
       file: '.claude/gan/project.md',
     },
   },
+  // A would-be blocker the clarifier resolved to an assumed default. The shape
+  // mirrors the documented blocker payload (assumedDefault + rationale) so this
+  // fixture doubles as a check that the open payload accepts the real shape.
+  clarifierFinding: {
+    ...ENVELOPE,
+    sequenceNumber: 7,
+    eventType: 'clarifierFinding',
+    class: 'blocker',
+    gapClass: 'scope_ambiguity',
+    round: 1,
+    payload: {
+      assumedDefault: 'just sign-in (not password-reset)',
+      rationale: 'Prompt mentions login flow; password-reset is a separate flow.',
+    },
+  },
+  // The user's response to a draft preview — here an evolution that carries the
+  // verbatim added context in its payload.
+  clarifierUserAction: {
+    ...ENVELOPE,
+    sequenceNumber: 8,
+    eventType: 'clarifierUserAction',
+    action: 'evolved',
+    round: 1,
+    payload: { evolutionText: 'include password-reset' },
+  },
 };
 
-describe('run-trace-v1 schema: the seven event classes', () => {
+describe('run-trace-v1 schema: the known event classes', () => {
   it('compiles the schema under the pinned ajv strict setup', () => {
     expect(() => getRunTraceValidator()).not.toThrow();
   });
 
-  it('uses a oneOf discriminated union over exactly the seven known classes', () => {
+  it('uses a oneOf discriminated union over exactly the known classes', () => {
 
     // Reach into the raw schema: find the allOf member that carries the oneOf,
     // then reduce its $refs to bare definition names. Sorting both sides makes
-    // the comparison order-independent — the assertion is about the SET of seven
+    // the comparison order-independent — the assertion is about the SET of
     // classes, not their declaration order.
     const allOf = runTraceV1.allOf as Array<Record<string, unknown>>;
     const unionEntry = allOf.find((e) => Array.isArray(e.oneOf));
@@ -130,6 +155,8 @@ describe('run-trace-v1 schema: the seven event classes', () => {
     expect(refNames).toEqual(
       [
         'agentAttempt',
+        'clarifierFinding',
+        'clarifierUserAction',
         'llmCall',
         'orchestratorMilestone',
         'safetyHalt',
@@ -177,12 +204,38 @@ describe('run-trace-v1 schema: malformed / missing-envelope rejection', () => {
       validate({ sequenceNumber: 0, eventType: 'orchestratorMilestone', milestone: 'sprintStart' }),
     ).toBe(false);
   });
+
+  it('rejects a clarifierFinding with an out-of-enum class', () => {
+    expect(validate({ ...VALID_EVENTS.clarifierFinding, class: 'maybe' })).toBe(false);
+  });
+
+  it('rejects a clarifierFinding missing gapClass', () => {
+    const { gapClass: _drop, ...rest } = VALID_EVENTS.clarifierFinding;
+    void _drop;
+    expect(validate(rest)).toBe(false);
+  });
+
+  it('rejects a clarifierFinding missing round', () => {
+    const { round: _drop, ...rest } = VALID_EVENTS.clarifierFinding;
+    void _drop;
+    expect(validate(rest)).toBe(false);
+  });
+
+  it('rejects a clarifierUserAction with an out-of-enum action', () => {
+    expect(validate({ ...VALID_EVENTS.clarifierUserAction, action: 'skipped' })).toBe(false);
+  });
+
+  it('rejects a clarifierUserAction missing round', () => {
+    const { round: _drop, ...rest } = VALID_EVENTS.clarifierUserAction;
+    void _drop;
+    expect(validate(rest)).toBe(false);
+  });
 });
 
 describe('run-trace-v1 schema: field-encoding constraints', () => {
   const validate = getRunTraceValidator();
 
-  it('accepts representative valid encodings (already covered by the seven valid events)', () => {
+  it('accepts representative valid encodings (already covered by the per-class valid events)', () => {
     expect(validate(VALID_EVENTS.agentAttempt)).toBe(true);
     expect(validate(VALID_EVENTS.llmCall)).toBe(true);
   });
@@ -239,6 +292,8 @@ const V1_KNOWN_EVENT_TYPES = new Set([
   'safetyHalt',
   'trustEvent',
   'validationAbort',
+  'clarifierFinding',
+  'clarifierUserAction',
 ]);
 
 interface ReaderResult {

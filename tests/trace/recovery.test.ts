@@ -245,7 +245,10 @@ describe('forward-compat: recovery past an unknown event class', () => {
   function unknownClass(seq: number): Record<string, unknown> {
     return {
       sequenceNumber: seq,
-      eventType: 'clarifierFinding',
+      // A class name no current version enumerates, standing in for an event a
+      // future framework version emits; the placeholder must stay outside the
+      // known set or this stops testing the unknown-class path.
+      eventType: 'futureUnknownEvent',
       timestamp: '2026-05-21T19:47:20.000Z',
       runId: RUN_ID,
       finding: 'recorded by a newer framework version',
