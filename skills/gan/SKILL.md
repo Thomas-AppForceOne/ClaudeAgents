@@ -1,6 +1,6 @@
 # GAN — Adversarial Development Loop
 
-Run a generative-adversarial development pipeline against a sprint plan: contract-proposer → generator → evaluator, looped per sprint. The orchestrator is a thin shell — every framework configuration value comes from the Configuration API. The orchestrator never parses stack files, overlay files, or YAML directly.
+Run a generative-adversarial development pipeline against a sprint plan. The full run begins by clarifying the user's prompt into an explicit spec, then planning from it, before the per-sprint loop: prompt → clarifier → planner → contract-proposer → generator → evaluator (the proposer → generator → evaluator stage loops per sprint). The orchestrator is a thin shell — every framework configuration value comes from the Configuration API. The orchestrator never parses stack files, overlay files, or YAML directly.
 
 ## Invocation
 
@@ -29,23 +29,20 @@ Parse arguments from the user's message before doing anything else. The five fla
 | `--skip-welcome` | false | Skip the first-run welcome banner. The marker file at `~/.claude/gan/welcomed` is created so subsequent runs also skip the banner. Idempotent — passing this flag on an already-welcomed system is a no-op. See "Welcome banner" below. |
 | `--max-attempts <n>` | from config | One-off override of the attempt ceilings for this run. Applies a **uniform** per-role ceiling of `n` to **every** multi-attempt role and sets the sprint-wide budget to `n × roleCount + 4` (the `+4` covers clarifier, planner, reviewer, and evaluator). It **overrides** the overlay's `safety.attemptCeilings.*` and `safety.sprintBudget`: a coarse one-off debugging knob beats persisted config for the run it is passed on. Feeds the resolved effective ceilings and budget into the attempt-start checks (see "Per-role attempt ceilings" and "Sprint-wide attempt budget"). |
 | `--reset-attempts` | false | Modifier valid only alongside `--recover`. When set, the recovered sprint resumes with attempt counters at zero; without it, recovery preserves the counters reconstructed from the trace (so a recovered sprint hitting the same loop halts again on the next attempt). |
+| `--skip-clarification` | false | Bypass the clarifier; the orchestrator writes a minimal `clarified-spec.md` (the verbatim prompt as Goal) and proceeds straight to the planner. Does NOT short-circuit `validateAll()`. |
+| `--clarifier-timeout=<seconds>` | from config (60) | Override the draft-preview auto-approve timeout for this run. Enforces the same `[10, 600]` range as the overlay splice; an out-of-range value (and `0`) is rejected at flag-parse time with `InvalidTimeoutValue`. |
 
 Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring. Help includes at least one realistic invocation example.
 
 The remaining text after flags is the user prompt passed to the planner (when a regular run is invoked).
 
-**Bare invocation (`/gan` with no prompt and no flags).** Do not spawn agents, do not run validation, do not print the welcome banner. Render a short message asking for a prompt, one realistic invocation example, and the `--help` hint. The exact rendering:
+**Bare invocation (`/gan` with no prompt).** A `/gan` invocation that carries no prompt and no agent-spawn-short-circuiting flag (i.e. not `--help`, `--print-config`, `--list-recoverable`, or `--recover`) is handled by the `NoPromptProvided` check inside the regular invocation flow — there is no separate pre-validation bare-invocation handler. The check fires **after `validateAll()` and after the welcome banner** (when applicable), but **before the clarifier** and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state. There is no point spawning the clarifier on an empty prompt.
 
-```
-No prompt supplied. What would you like to build or work on? For example:
+It halts with the structured error `NoPromptProvided`, carrying the exact user-facing message:
 
-  /gan "add a contact form to the workshop page"
-  /gan --spec specifications/some-feature.md
+`No prompt provided. Run `/gan "<your prompt here>"` to start a sprint, or `/gan --help` to see the available options.`
 
-Run `/gan --help` to see every flag (recovery, cleanup, config inspection, and more).
-```
-
-Exit 0 after rendering. The `--help` hint is mandatory — a user typing `/gan` blind is asking "what does this thing do?", and the answer must point them at the discovery surface.
+The `--help` hint is mandatory — a user typing `/gan` blind is asking "what does this thing do?", and the answer must point them at the discovery surface. The ordering is `validateAll()` → welcome banner → `NoPromptProvided`; see "Regular invocation flow" below for the precise step placement.
 
 ## Welcome banner
 
@@ -86,7 +83,8 @@ USAGE
 
   SPRINT-OPTS = [--target <path>] [--max-attempts <n>] [--threshold <0-100>]
                 [--branch-name <name>] [--base-branch <name>] [--label <text>]
-                [--no-project-commands] [--skip-welcome]
+                [--no-project-commands] [--skip-welcome] [--skip-clarification]
+                [--clarifier-timeout <seconds>]
 
 FLAGS  (defaults shown in parens)
   --spec <path>                 Use an existing spec file instead of planning from scratch (none)
@@ -103,6 +101,10 @@ FLAGS  (defaults shown in parens)
   --yes                         Skip the --cleanup confirmation prompt (off; prompt fires)
   --no-project-commands         Skip project- and user-tier overlay commands; use builtin defaults only (off)
   --skip-welcome                Write the first-run welcome marker without printing the banner (off)
+  --skip-clarification          Bypass the clarifier; the orchestrator writes a minimal clarified spec
+                                from the raw prompt and goes straight to the planner (off)
+  --clarifier-timeout <seconds> Override the draft-preview auto-approve timeout for this run; enforces
+                                the [10, 600] range and overrides the draft-timeout overlay (60)
 
 EXAMPLES
   /gan "add a contact form to the homepage"
@@ -188,26 +190,29 @@ The orchestrator follows this order on every regular `/gan` invocation:
 1. **Parse args.** Build the flag table from the user's message.
 2. **Welcome banner.** Check for `~/.claude/gan/welcomed`. If absent, the user did not pass `--skip-welcome`, and stdin/stdout are TTY, render the welcome banner described in the "Welcome banner" section above. After the banner finishes printing, create the marker (`mkdir -p ~/.claude/gan && touch ~/.claude/gan/welcomed`). On non-TTY invocations the marker is created without rendering the banner. With `--skip-welcome`, the marker is created without rendering the banner regardless of TTY status. If the marker already exists, this step is a no-op.
 3. **`validateAll()` (aborting).** Failure aborts the run with the F2 structured error report — no worktree is created, no agent is spawned, and no zone-2 or zone-3 writes occur. The structured error fields (`code`, `file`, `field`, `line`, `message`) are surfaced verbatim. The user-facing remediation hint (when present) is forwarded as-is; the orchestrator does not paraphrase or interpret API errors.
-4. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
+4. **`NoPromptProvided` check.** If the invocation carries no prompt and no agent-spawn-short-circuiting flag (not `--help`, `--print-config`, `--list-recoverable`, or `--recover`), halt here with the structured error `NoPromptProvided` and the exact message `No prompt provided. Run `/gan "<your prompt here>"` to start a sprint, or `/gan --help` to see the available options.` This check runs **after** `validateAll()` (step 3) and **after** the welcome banner (step 2), but **before** the clarifier and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state. (See "Bare invocation" above.)
+5. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
 
    **Enrich the snapshot with active-stack bodies before spawn.** The F2 `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Without this enrichment step, agents see undefined per-stack commands and silently degrade to graceful-fallback paths even when the stack file declared the command. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
-5. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
+6. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
 
    **First-run nudge.** When the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line. The verbatim text of the contract is reproduced here so the orchestrator can match the spec exactly:
 
    > 6. **Print the startup log.** Per O1's part A, emit one structured log line summarising the snapshot. **First-run nudge:** when the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line: `No recognised ecosystem stack — running with generic defaults. For richer behaviour, run \`gan stacks new <name>\` to scaffold a stack file, or fork an existing one from \`stacks/\` as a starting point.` The note appears even when log verbosity is reduced; it is part of the contract that the framework tells non-Node users *something* useful on first run. (A friendlier prose authoring guide is a known follow-up; today the canonical reference is C1's schema spec plus existing stack files.)
 
-6. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
-7. **Spawn the sprint loop.** For each sprint:
-   - Pass the snapshot to `gan-contract-proposer` (proposes the sprint contract — every security criterion sourced from the active stacks' `securitySurfaces` per C1 template instantiation).
+7. **Clarification phase.** Unless `--skip-clarification` was passed, spawn `gan-clarifier` with the user prompt, the captured snapshot, the union of every per-agent `additionalContext`, and the bounded directory listing (built from the active stacks' scope globs). The clarifier writes `clarified-spec.md` under the run's state directory and the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The orchestrator then renders the draft preview and resolves the user's action (see "Clarification phase" below). The approved `clarified-spec.md` is the planner's primary input — and the proposer reads it for criteria derivation. With `--skip-clarification`, the orchestrator (not the clarifier) writes the minimal `clarified-spec.md` itself and proceeds. This phase runs after the snapshot is captured and the startup log is printed, and before the worktree and sprint loop.
+8. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
+9. **Spawn the sprint loop.** For each sprint:
+   - The planner reads `clarified-spec.md` (the clarifier's output, under the run's state directory) as its **primary input** for the spec and plan it produces.
+   - Pass the snapshot to `gan-contract-proposer` (proposes the sprint contract — every security criterion sourced from the active stacks' `securitySurfaces` per C1 template instantiation; the proposer reads `clarified-spec.md` to derive contract criteria).
    - Pass the snapshot and the contract to `gan-generator`.
-   - Pass the snapshot, the contract, and the worktree state to `gan-evaluator`.
+   - Pass the snapshot, the contract, and the worktree state to `gan-evaluator`. The evaluator's input is **unchanged** — it reads only the contract, never the clarified spec.
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
    **Before each attempt of any role** (including the single-attempt clarifier and planner), the orchestrator runs the checks described below: the per-role ceiling check (for multi-attempt roles — see "Per-role attempt ceilings"), the sprint-wide budget check (for every role — see "Sprint-wide attempt budget"), and — before each generator attempt specifically — the edit-oscillation check (see "Edit-oscillation detection"). If any check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. Only when no check halts does it proceed to the spawn.
 
-8. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
+10. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
 
 ## Snapshot freshness rule
 
@@ -313,6 +318,38 @@ When the validation step returns the `UntrustedOverlay` structured error, the or
 The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set are the single responsibility of [`trust-prompt.md`](trust-prompt.md); the orchestrator renders the first-introduction or config-changed variant per whether `getTrustState(projectRoot)` reports a prior approval, and does not restate the options here.
 
 `GAN_TRUST=strict` makes the prompt fail closed in CI; `GAN_TRUST=unsafe-trust-all` skips the trust check entirely (logged loudly).
+
+## Clarification phase
+
+After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing built from the active stacks' scope globs. The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
+
+**Draft preview + action menu.** After the clarifier produces `clarified-spec.md`, the orchestrator renders the full document to the terminal — its `Goal`, `In scope`, `Out of scope`, `Assumptions`, `User actions`, and `Constraints` sections — and below it presents the action menu:
+
+```
+Proceed with this spec? [a]pprove / [e]dit / "evolve: <text>" / [c]ancel
+(auto-approve in 60s)
+```
+
+`[a]`, `[e]`, and `[c]` are **single keystrokes, case-insensitive**. `evolve:` is a **literal, case-insensitive prefix** followed by the evolution text. Matching is **exact** — the orchestrator never silently accepts a paraphrase or synonym. A free-text response that matches none of these falls through to the partial-answer rule: it is parsed per-blocker, any unanswered blockers fall through to assumptions, and the draft is regenerated and re-presented (counting as one round).
+
+- **`[a]` approve** — proceed with the current draft to the planner.
+- **`[e]` edit** — open the draft in the editor (see "Editor flow" below); editing does **not** consume an evolution round.
+- **`evolve: <text>` evolve** — re-run the clarifier with added context (see "Evolution rounds" below); consumes one round.
+- **`[c]` cancel** — abort the run (see "Signal handling" below).
+
+**Timeout.** The orchestrator waits for input with a default 60-second timeout, resolved from the `clarifier.draftTimeoutSeconds` overlay splice (default `60`). `--clarifier-timeout=<seconds>` overrides it for one run; both paths enforce the `[10, 600]` range, and an out-of-range value (and `0`) is rejected with the structured error `InvalidTimeoutValue` before any agent fires. On timeout with no input, the orchestrator **auto-approves the current draft** and proceeds to the planner; the clarified spec records the auto-approval explicitly (an `autoApprovedOnTimeout` user action noting the draft was auto-approved on timeout).
+
+**Evolution rounds.** A run allows **up to three rounds total** — the initial round plus at most two evolutions. An `evolve: <text>` response re-runs the clarifier with the **original prompt + the accumulated `additionalContext` + the user's evolution text**, producing a fresh `clarified-spec.md` presented via the same draft-preview surface; this counts as one round. The orchestrator preserves each prior-round draft at `clarified-spec.md.round-N` (where `N` is the round number) so the evolution audit trail is recoverable, and `raw-prompt.md` stays the verbatim original — evolutions layer on top, history is never rewritten. Reaching the **third round forces the user to choose approve / edit / cancel**; further evolution attempts are rejected. If a regenerated draft fails schema validation, the orchestrator surfaces the structured error inline, keeps the prior round's draft authoritative, re-presents the action menu against that prior draft, and the failed regeneration still **counts as one round**.
+
+**Editor flow (`[e]dit`).** The orchestrator resolves the editor command via the chain `$EDITOR` → `$VISUAL` → `vi`. If none resolves to an executable on `$PATH`, it halts with the structured error `EditorNotConfigured`, naming all three checked variables and telling the user to set one. It spawns the editor on `clarified-spec.md` and imposes **no sub-timeout** on the editor. On editor exit it **re-validates** the edited `clarified-spec.md` against the same document schema `validateAll()` uses; on validation failure it shows the structured error inline and re-opens the editor on the same file; on success it re-renders the edited draft and re-prompts the action menu. The editor flow does **not** consume an evolution round (only `evolve: <text>` does). Ctrl-C **inside the editor** is treated as "abandon edit; re-render the previous draft and re-prompt the action menu" — it does not cancel the run.
+
+**Signal handling.** Ctrl-C **at the action menu** is treated identically to typing `[c]ancel`: the run halts with the structured error `UserCancelled` and the orchestrator writes the kebab-case terminal reason `aborted-by-user` to `progress.json` (`progress.json.terminalReason`). Run state is preserved, so `--recover` can resume from the same draft if the user changes their mind. This is distinct from Ctrl-C inside the editor, which abandons the edit rather than cancelling the run.
+
+**`--skip-clarification`.** This flag bypasses the clarifier entirely. The **orchestrator** (not the clarifier — it is bypassed) writes the minimal `clarified-spec.md`: `Goal` = the verbatim user prompt; `In scope`, `Out of scope`, and `User actions` empty; `Assumptions` a single entry stating the user invoked `--skip-clarification` and downstream agents proceed with the raw prompt as goal; `Constraints` derived from `additionalContext` and the active stacks. `raw-prompt.md` is preserved alongside. The flag does **not** short-circuit `validateAll()` — clarification happens after validation in the pipeline — and the run proceeds straight to the planner with this minimal spec.
+
+**No-ambiguity case.** When the clarifier produces a `clarified-spec.md` with **zero blockers and no assumptions worth recording**, the orchestrator does **not** present the draft preview or action menu — it proceeds directly to the planner. The user is not interrupted for an empty spec. This is the single-round skip case; the clarifier's attempt is still part of the audit trail even when its output is minimal.
+
+**Trace.** The clarifier emits `agentAttempt`, `llmCall`, `clarifierFinding`, and `clarifierUserAction` events per round, and a `safetyHalt` of class `clarifierCancelled` when the user cancels at the action menu.
 
 ## Run-trace integration points
 

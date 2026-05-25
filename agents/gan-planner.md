@@ -19,6 +19,8 @@ The orchestrator passes you, at spawn time:
 - The **user prompt** — the message text the user passed to `/gan`. May be a brief description, or may include `SPECS_DIR: <path>` (specs-directory mode) or `TARGET_DIR: <path>` (existing-codebase mode).
 - The **run-id** — used to locate per-run artefact paths under `.gan-state/runs/<run-id>/`.
 
+When a `clarified-spec.md` exists in the run directory, it is the clarifier's output and your **primary input** — the disambiguated Goal / In scope / Out of scope / Assumptions / User actions / Constraints the clarifier settled before you ran. Expand *that* into the full product specification and sprint plan, treating its Goal as the work to plan and honouring its scope and recorded assumptions. The raw user prompt (preserved alongside as `raw-prompt.md`) is context, not the authority, when the clarified spec is present.
+
 You read prior run state directly from `.gan-state/runs/<run-id>/`. That is run state, not Configuration API territory; the snapshot is the only window into framework configuration.
 
 ## What you read from the snapshot
