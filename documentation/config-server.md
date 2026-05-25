@@ -8,7 +8,7 @@ The sole gateway to all GAN configuration: an MCP server that exposes reads, wri
 
 ```mermaid
 flowchart LR
-    subgraph READS["Reads (12)"]
+    subgraph READS["Reads (13)"]
         direction TB
         R1["getResolvedConfig"]
         R2["getActiveStacks"]
@@ -22,6 +22,7 @@ flowchart LR
         R10["getModuleState"]
         R11["listModules"]
         R12["getApiVersion"]
+        R13["getBoundedDirectoryListing"]
     end
 
     subgraph WRITES["Writes (12)"]

@@ -17,7 +17,7 @@ flowchart LR
 
     subgraph AL["Agent layer"]
         direction TB
-        PL["planner"] --> CP["contract-proposer"] --> CR["contract-reviewer"] --> GN["generator"] --> EV["evaluator\n+ evaluator-core"]
+        CL["clarifier"] --> PL["planner"] --> CP["contract-proposer"] --> CR["contract-reviewer"] --> GN["generator"] --> EV["evaluator\n+ evaluator-core"]
     end
 
     subgraph CS["Config Server · MCP"]
@@ -77,6 +77,7 @@ sequenceDiagram
     participant SK as /gan skill
     participant CS as Config Server
     participant TR as Trace
+    participant CL as clarifier
     participant PL as planner
     participant CP as contract-proposer
     participant CR as contract-reviewer
@@ -89,7 +90,14 @@ sequenceDiagram
     CS-->>SK: resolved config + active stack list
     SK->>TR: emit runStart
 
-    SK->>+PL: spawn with prompt + config snapshot
+    SK->>CS: getBoundedDirectoryListing (scope-filtered, ignore-pruned)
+    CS-->>SK: structure-only listing
+    SK->>+CL: spawn with prompt + snapshot + additionalContext + listing
+    CL-->>-SK: clarified-spec.md drafted
+    SK->>U: render draft preview (approve / edit / evolve / cancel, auto-approve on timeout)
+    U-->>SK: approve (or skipped: no-ambiguity / --skip-clarification)
+
+    SK->>+PL: spawn with clarified-spec.md + config snapshot
     PL->>CS: getResolvedConfig, getMergedSplicePoints
     PL-->>-SK: spec written to zone 3
 
