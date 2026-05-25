@@ -13,6 +13,7 @@ The orchestrator passes you, at spawn time:
 
 - The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself.
 - The **product spec** — the source-of-truth document for what the product must do; it lives under `.gan-state/runs/<run-id>/spec.md` once the planner writes it.
+- The **clarified spec** — the clarifier's output at `.gan-state/runs/<run-id>/clarified-spec.md`, when present. Read it alongside the product spec when deriving contract criteria: its Goal, scope, and recorded assumptions are the disambiguated intent the criteria must measure conformance to, so the contract scores against an explicit, clarified target rather than a guess at the raw prompt.
 - The **prior-sprint history** — for every completed prior sprint K, the contract that was promised plus the highest-numbered passing feedback that recorded what actually shipped. These tell you what is already built and what criteria you must not re-specify or contradict.
 - The **affected files** — the files this sprint will touch (create, modify, or delete), as identified by the planner. You feed these into the C1 template-instantiation protocol.
 - Optional **revision notes**, **objection**, or **blocking-concern** payloads if you are being re-spawned within the same sprint.

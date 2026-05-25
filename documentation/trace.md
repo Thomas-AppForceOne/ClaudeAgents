@@ -12,17 +12,19 @@ flowchart LR
         ENV["sequenceNumber\ntimestamp\nrunId\neventType"]
     end
 
-    subgraph KnownClasses["Seven v1 event classes"]
+    subgraph KnownClasses["Nine v1 event classes"]
         OM["orchestratorMilestone\n─────────────────\nmilestone\ndisposition?\nsummary?"]
         AA["agentAttempt\n─────────────────\nrole\nattemptNumber\ninputDigest\noutputArtifactPath\ndisposition"]
         LC["llmCall\n─────────────────\nmodel · role\npromptRef · responseRef\ntokensInput · tokensCached\ntokensOutput · latencyMs\ncacheHit"]
         TC["toolCall\n─────────────────\ntool · role\nargumentsRef · resultRef\ndisposition · latencyMs"]
-        SH["safetyHalt\n─────────────────\nsafetyClass\nrole\npayload"]
+        SH["safetyHalt\n─────────────────\nsafetyClass\nrole\npayload\n(clarifierCancelled on user cancel)"]
         TE["trustEvent\n─────────────────\npromptVariant\nuserChoice\ncontentHash"]
         VA["validationAbort\n─────────────────\nvalidationStage\nerrorCode\nerrorPayload"]
+        CF["clarifierFinding\n─────────────────\nclass · gapClass\nround\npayload"]
+        CU["clarifierUserAction\n─────────────────\naction\nround\npayload"]
     end
 
-    ENV --> OM & AA & LC & TC & SH & TE & VA
+    ENV --> OM & AA & LC & TC & SH & TE & VA & CF & CU
 ```
 
 ---
@@ -100,6 +102,8 @@ classDiagram
         SafetyHaltEvent
         TrustEventEvent
         ValidationAbortEvent
+        ClarifierFindingEvent
+        ClarifierUserActionEvent
     }
 
     class TraceEmitter {
@@ -116,6 +120,8 @@ classDiagram
         +emitSafetyHalt()
         +emitTrustEvent()
         +emitValidationAbort()
+        +emitClarifierFinding()
+        +emitClarifierUserAction()
         +reconcile() TraceIndex
         +peekNextSequence() number
         +getRedactionMode() RedactionMode

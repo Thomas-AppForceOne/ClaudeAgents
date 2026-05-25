@@ -34,6 +34,7 @@ import { packageRoot as resolvePackageRoot } from './package-root.js';
 import { apiToolsV1 } from './schemas-bundled.js';
 import {
   getActiveStacks as readGetActiveStacks,
+  getBoundedDirectoryListing as readGetBoundedDirectoryListing,
   getMergedSplicePoints as readGetMergedSplicePoints,
   getModuleState as readGetModuleState,
   getOverlay as readGetOverlay,
@@ -69,8 +70,9 @@ import {
 } from './tools/writes.js';
 
 /**
- * The tool names introduced by feature set F2 — the core read, write, and
- * validate surface. This is the advertised tool list (filtered to those with a
+ * The advertised tool surface: the core read, write, and validate tools
+ * introduced by feature set F2, plus additive read tools landed by later
+ * features. This is the advertised tool list (filtered to those with a
  * registered handler in {@link buildToolList}). Order is the catalogue order
  * shown to clients.
  */
@@ -85,6 +87,7 @@ export const F2_TOOL_NAMES: readonly string[] = [
   'getOverlayField',
   'getMergedSplicePoints',
   'getStackResolution',
+  'getBoundedDirectoryListing',
   'getTrustState',
   'getTrustDiff',
   'getModuleState',
@@ -402,6 +405,13 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       const projectRoot = requireProjectRoot(args, 'getStackResolution');
       const name = requireName(args, 'getStackResolution');
       return readGetStackResolution({ projectRoot, name });
+    },
+  },
+  getBoundedDirectoryListing: {
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'getBoundedDirectoryListing');
+      return readGetBoundedDirectoryListing({ projectRoot });
     },
   },
   getTrustState: {

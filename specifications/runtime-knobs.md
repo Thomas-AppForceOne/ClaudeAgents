@@ -30,6 +30,8 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 | `--new-worktree` | F7 | Force case-1c workspace resolution (fresh task-named branch + run-scoped worktree at `<project>/.gan-state/runs/<run-id>/worktree/`) even when the current context would match 1a or 1b. For engineers who want gan isolated from their current working tree. | No. |
 | `--max-attempts=<n>` | A1 | One-off attempt-ceiling override for a single run. Applies a **uniform** per-role ceiling of `n` to **every** multi-attempt role (so each capped at `n`), and sets the sprint-wide budget to `n × roleCount + 4`, where `roleCount` is the number of multi-attempt roles and the `+4` is fixed headroom for clarifier, planner, reviewer, and evaluator. **Overrides overlay config** (`safety.attemptCeilings.*` and `safety.sprintBudget`): a coarse debugging knob beats persisted config for the run it is passed on. | No. |
 | `--reset-attempts` | A1 | Modifier valid only alongside `--recover`; standalone use (without `--recover`) is rejected with a structured usage error. When set, the recovered sprint resumes with attempt counters at zero. **Without** it, recovery preserves the attempt counters reconstructed from the trace via the `agentAttempt` events (no separate counter file), so a recovered sprint that hits the same loop halts again on the next attempt. | n/a — modifier. |
+| `--skip-clarification` | E5 | Bypass the clarifier for this run. The orchestrator (not the clarifier) writes a minimal `clarified-spec.md` — Goal = the verbatim prompt, empty In/Out scope and User actions, a single Assumption naming the skip, and Constraints derived from `additionalContext` and the active stacks — and proceeds straight to the planner; `raw-prompt.md` is preserved alongside. Recommended for CI / scripted invocations where interactive prompting is impossible. | No (clarification runs after `validateAll()`; the flag does not short-circuit validation). |
+| `--clarifier-timeout=<seconds>` | E5 | One-off override of the draft-preview auto-approve timeout, overriding the `clarifier.draftTimeoutSeconds` overlay value for this run. Enforces the same `[10, 600]` range as the overlay splice; an out-of-range value (and `0`) is rejected at flag-parse time with `InvalidTimeoutValue` and the run halts before any agent fires. | No (the flag is parsed and range-checked, but clarification — and the timeout it governs — runs after `validateAll()`). |
 
 ## `install.sh` flags
 
@@ -93,6 +95,17 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 | `[r]` | Run with `--no-project-commands` (skip project-defined commands); does not write to cache. | F4 |
 | `[c]` | Cancel; abort the run. | F4 |
 
+## Clarifier draft-preview prompt branches (interactive UI)
+
+The clarifier draft preview renders `clarified-spec.md` and then offers an action menu (`Proceed with this spec? [a]pprove / [e]dit / "evolve: <text>" / [c]ancel`, with `(auto-approve in 60s)`). The `[a]` / `[e]` / `[c]` keys are single-keystroke, case-insensitive; `evolve:` is a literal case-insensitive prefix followed by the evolution text. Four action branches:
+
+| Branch | Action | Owning spec |
+|---|---|---|
+| `[a]` | Approve the draft as-is; proceed to the planner. | E5 |
+| `[e]` | Edit — open `clarified-spec.md` in `$EDITOR` (→ `$VISUAL` → `vi`); on editor exit re-validate and re-present the menu. Does not consume an evolution round. | E5 |
+| `evolve: <text>` | Evolve — re-run the clarifier with the original prompt + accumulated `additionalContext` + the evolution text; present a fresh draft. Consumes one of the (at most two) evolution rounds. | E5 |
+| `[c]` | Cancel — abort with `UserCancelled` (Ctrl-C at the menu is treated identically). | E5 |
+
 ## Surface-count rule and inventory
 
 **Rule.** Each unique `(surface-type, name)` pair counts once. Surface-type ∈ {command, subcommand, flag, env-var-value, prompt-branch}. Multi-word subcommands count as one (`gan trust approve` = one entry). Flags count by sigil string, deduplicated globally — `--help` appears under three commands but counts once. Aliases of the same flag (`--help` / `-h` / `help`) count as one surface, not three. Prompt branches count per unique action key, not per render variant.
@@ -103,13 +116,13 @@ The trust prompt has one render with two content variants (subsequent-change vs.
 |---|---|---|
 | command | 3 | `/gan`, `gan`, `install.sh` |
 | subcommand | 16 | `validate`, `config print`, `config get`, `config set`, `stacks list`, `stacks new`, `stack show`, `stack update`, `modules list`, `hooks status`, `trust info`, `trust approve`, `trust revoke`, `trust list`, `version`, `help` |
-| flag | 22 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--new-worktree`, `--max-attempts`, `--reset-attempts`, `--uninstall`, `--no-claude-code`, `--runs-dir`, `--module-state-dir`, `--json`, `--project-root`, `--tier`, `--note` |
+| flag | 24 | `--help`, `--print-config`, `--recover`, `--list-recoverable`, `--cleanup`, `--run-id`, `--all`, `--include-terminal`, `--yes`, `--no-project-commands`, `--skip-welcome`, `--new-worktree`, `--max-attempts`, `--reset-attempts`, `--skip-clarification`, `--clarifier-timeout`, `--uninstall`, `--no-claude-code`, `--runs-dir`, `--module-state-dir`, `--json`, `--project-root`, `--tier`, `--note` |
 | env-var-value | 6 | `GAN_TRUST=strict`, `GAN_TRUST=unsafe-trust-all`, `GAN_RUNS_DATA`, `GAN_MODULE_STATE`, `GAN_WORKTREE`, `GAN_RUN_DIR` |
-| prompt-branch | 4 | `[v]`, `[a]`, `[r]`, `[c]` |
-| **total** | **51** | |
+| prompt-branch | 8 | trust prompt: `[v]`, `[a]`, `[r]`, `[c]`; clarifier draft preview: `[a]`, `[e]`, `evolve:`, `[c]` |
+| **total** | **57** | |
 
 Pre-trim baseline was 43 (`gan trust export`/`import` and `gan migrate-overlays` as subcommands; `--out`, `--no-notes`, `--to`, `--force` as flags; `GAN_TRUST=approved-hashes-only` as env-var value). The trim removed exactly the 8 surfaces projected.
 
-**On schema fields vs. counted surfaces (Q5).** Q5 adds two new optional **stack-schema fields** — `documentationSurfaces` (an array of documentation-standard surfaces instantiated as gating contract criteria) and `docLintCmd` (a deterministic baseline-relative doc-lint invocation). These are stack-file body fields, **not** runtime knobs: the surface-count rule above keys on `(surface-type, name)` where surface-type ∈ {command, subcommand, flag, env-var-value, prompt-branch}, and schema fields are none of those. Q5 introduces no new flag, env-var value, subcommand, command, or prompt branch (the spec says so explicitly). The inventory does not maintain a schema-field list, so there is nothing to add to the tables above; this note records that **no counted surface changed** and the total stays **49**.
+**On schema fields vs. counted surfaces (Q5).** Q5 adds two new optional **stack-schema fields** — `documentationSurfaces` (an array of documentation-standard surfaces instantiated as gating contract criteria) and `docLintCmd` (a deterministic baseline-relative doc-lint invocation). These are stack-file body fields, **not** runtime knobs: the surface-count rule above keys on `(surface-type, name)` where surface-type ∈ {command, subcommand, flag, env-var-value, prompt-branch}, and schema fields are none of those. Q5 introduces no new flag, env-var value, subcommand, command, or prompt branch (the spec says so explicitly). The inventory does not maintain a schema-field list, so there is nothing to add to the tables above; this note records that **Q5 changed no counted surface** — the total was **49** when Q5 landed (A1 and E5 have since raised it; see the running total in the inventory above).
 
-When this table grows, the surface count grows with it. New knobs require explicit table editing as part of the PR; specs do not own surfaces independently. A1 added `--max-attempts` and `--reset-attempts` in its authoring PR (taking the total from 49 to 51). Remaining v1.0 specs (T1, E5) and downstream releases will add surfaces here in their authoring PRs — anticipated additions include `--skip-clarification` (E5), trace-related read paths (T1), and budget overrides (T3), but the table remains authoritative only for surfaces whose owning spec has landed.
+When this table grows, the surface count grows with it. New knobs require explicit table editing as part of the PR; specs do not own surfaces independently. A1 added `--max-attempts` and `--reset-attempts` in its authoring PR (taking the total from 49 to 51). E5 has now landed `--skip-clarification` and `--clarifier-timeout` (two flags, 22 → 24) plus the four clarifier draft-preview prompt branches (`[a]` / `[e]` / `evolve:` / `[c]`, 4 → 8), taking the total from 51 to 57. Downstream releases will add surfaces here in their authoring PRs — anticipated additions include budget overrides (T3) — but the table remains authoritative only for surfaces whose owning spec has landed.

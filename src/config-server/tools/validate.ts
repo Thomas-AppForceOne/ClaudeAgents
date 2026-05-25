@@ -51,6 +51,7 @@ import {
   type Issue,
 } from '../validation/schema-check.js';
 import { checkUserOverlayForbiddenFields } from '../validation/user-tier-forbidden.js';
+import { checkClarifierTimeoutRange } from '../validation/clarifier-timeout-check.js';
 
 /**
  * Re-export of the schema-validation {@link Issue} type, so callers (and the
@@ -412,6 +413,16 @@ function runPhase1Discovery(snapshot: ValidationSnapshot, ctx: ValidateContext):
   const userOverlay = snapshot.overlays.user;
   if (userOverlay) {
     checkUserOverlayForbiddenFields(userOverlay.path, userOverlay.data, snapshot.issues);
+  }
+
+  // clarifier.draftTimeoutSeconds is valid in both tiers, so the semantic
+  // range check runs on every loaded overlay (unlike the user-tier-only
+  // forbidden-field check above). An out-of-range integer must surface as
+  // InvalidTimeoutValue from the full validate path, not only the schema layer.
+  for (const tier of ['default', 'user', 'project'] as const) {
+    const row = snapshot.overlays[tier];
+    if (!row) continue;
+    checkClarifierTimeoutRange(row.path, row.data, snapshot.issues);
   }
 
   const registrations = loadModuleRegistrationsFor(ctx);

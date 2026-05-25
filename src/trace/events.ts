@@ -125,6 +125,37 @@ export interface ValidationAbortEvent extends TraceEnvelope {
 }
 
 /**
+ * A single gap the clarifier found while turning a raw prompt into a clarified
+ * spec. `class` records how the gap was disposed of — silently resolved with a
+ * framework default, defaulted-but-overridable, or surfaced as a blocker — so
+ * the trace separates "what we decided for you" from "what we asked about".
+ * `round` distinguishes the initial pass from the evolution rounds, letting a
+ * reader replay how the spec converged. The structured `payload` is inlined
+ * (small and class-specific) rather than referenced by hash.
+ */
+export interface ClarifierFindingEvent extends TraceEnvelope {
+  eventType: 'clarifierFinding';
+  class: 'selfResolved' | 'assumption' | 'blocker';
+  gapClass: string;
+  round: number;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * One user interaction at the clarifier's draft-preview menu. `action` captures
+ * the choice, including the timeout fallthrough, so an unattended run's outcome
+ * is as auditable as an interactive one. `round` ties the action to the round
+ * it terminated. The inlined `payload` carries the choice's detail (e.g. the
+ * verbatim evolution text) and is empty for choices that need none.
+ */
+export interface ClarifierUserActionEvent extends TraceEnvelope {
+  eventType: 'clarifierUserAction';
+  action: 'approved' | 'edited' | 'evolved' | 'cancelled' | 'autoApprovedOnTimeout';
+  round: number;
+  payload: Record<string, unknown>;
+}
+
+/**
  * Discriminated union of every known trace event, narrowable by `eventType`.
  */
 export type TraceEvent =
@@ -134,7 +165,9 @@ export type TraceEvent =
   | ToolCallEvent
   | SafetyHaltEvent
   | TrustEventEvent
-  | ValidationAbortEvent;
+  | ValidationAbortEvent
+  | ClarifierFindingEvent
+  | ClarifierUserActionEvent;
 
 /**
  * Runtime set of the event-type discriminants in {@link TraceEvent}. The
@@ -150,4 +183,6 @@ export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'safetyHalt',
   'trustEvent',
   'validationAbort',
+  'clarifierFinding',
+  'clarifierUserAction',
 ]);

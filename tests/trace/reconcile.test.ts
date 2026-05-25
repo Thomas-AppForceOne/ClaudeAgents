@@ -271,7 +271,7 @@ describe('forward-compat: unknown event-class types (T1 reader invariant)', () =
   it('skips an unknown-but-well-formed event class without marking it malformed (run stays recoverable)', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, JSON.stringify(validEvent(0, 'orchestratorMilestone')));
-    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'clarifierFinding')));
+    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'futureUnknownEvent')));
 
     const scan = scanEvents(root);
 
@@ -281,23 +281,23 @@ describe('forward-compat: unknown event-class types (T1 reader invariant)', () =
 
     expect(scan.events.map((e) => e.sequenceNumber)).toEqual([0]);
     expect(scan.unknownClassEvents).toEqual([
-      { sequenceNumber: 1, eventType: 'clarifierFinding', timestamp: '2026-05-21T19:47:20.000Z' },
+      { sequenceNumber: 1, eventType: 'futureUnknownEvent', timestamp: '2026-05-21T19:47:20.000Z' },
     ]);
 
     expect(scan.warnings).toHaveLength(1);
-    expect(scan.warnings[0]).toContain('clarifierFinding');
+    expect(scan.warnings[0]).toContain('futureUnknownEvent');
     expect(scan.warnings[0]).toContain('1');
   });
 
   it('counts unknown-class events in the reconciled index (totalEvents + countByClass)', () => {
     const root = makeRoot();
     writeRawEvent(root, 0, JSON.stringify(validEvent(0, 'orchestratorMilestone')));
-    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'clarifierFinding')));
-    writeRawEvent(root, 2, JSON.stringify(unknownClassEvent(2, 'clarifierFinding')));
+    writeRawEvent(root, 1, JSON.stringify(unknownClassEvent(1, 'futureUnknownEvent')));
+    writeRawEvent(root, 2, JSON.stringify(unknownClassEvent(2, 'futureUnknownEvent')));
 
     const index = reconcileIndex(root, RUN_ID);
     expect(index.totalEvents).toBe(3);
-    expect(index.countByClass).toEqual({ orchestratorMilestone: 1, clarifierFinding: 2 });
+    expect(index.countByClass).toEqual({ orchestratorMilestone: 1, futureUnknownEvent: 2 });
 
     const validate = getRunTraceIndexValidator();
     expect(validate(index), JSON.stringify(validate.errors)).toBe(true);
@@ -311,7 +311,7 @@ describe('forward-compat: unknown event-class types (T1 reader invariant)', () =
       0,
       JSON.stringify({
         sequenceNumber: 0,
-        eventType: 'clarifierFinding',
+        eventType: 'futureUnknownEvent',
         timestamp: '2026-05-21T19:47:20.000Z',
       }),
     );

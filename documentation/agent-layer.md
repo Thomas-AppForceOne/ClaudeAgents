@@ -1,6 +1,6 @@
 # GAN — Agent Layer
 
-Five specialised LLM agents orchestrated by the `/gan` skill in a fixed pipeline: planner produces a spec, contract-proposer and contract-reviewer establish measurable acceptance criteria, generator implements one feature at a time, and evaluator scores the result against the contract.
+Six specialised LLM agents orchestrated by the `/gan` skill in a fixed pipeline: a clarifier turns the raw prompt into an explicit clarified spec (shown to the user as an approvable draft), the planner expands that into a sprint plan, contract-proposer and contract-reviewer establish measurable acceptance criteria, generator implements one feature at a time, and evaluator scores the result against the contract.
 
 ---
 
@@ -14,6 +14,7 @@ flowchart LR
 
     subgraph PIPELINE["Agent pipeline"]
         direction LR
+        CL["clarifier"]
         PL["planner"]
         CP["contract-proposer"]
         CR["contract-reviewer"]
@@ -21,13 +22,14 @@ flowchart LR
         EV["evaluator\n+ evaluator-core"]
     end
 
+    CL -->|"clarified-spec.md\n(via draft preview)"| PL
     PL -->|"spec.md"| CP
     CP -->|"sprint-N-contract-draft.json"| CR
     CR -->|"sprint-N-review.json\n(approved / revise)"| GN
     GN -->|"commits on branch"| EV
     EV -->|"sprint-N-feedback-A.json\n(evidence bundle)"| ORCH
 
-    ORCH -->|"snapshot + prompt"| PL
+    ORCH -->|"snapshot + prompt"| CL
     ORCH -.->|"snapshot passed to every agent"| PIPELINE
 ```
 
@@ -133,13 +135,18 @@ classDiagram
 ```mermaid
 sequenceDiagram
     participant SK as /gan skill
+    participant CL as clarifier
     participant PL as planner
     participant CP as contract-proposer
     participant CR as contract-reviewer
     participant GN as generator
     participant EV as evaluator
 
-    SK->>+PL: snapshot + user prompt
+    SK->>+CL: snapshot + prompt + additionalContext union + bounded listing
+    CL-->>-SK: CLARIFICATION COMPLETE: B blockers, A assumptions
+    Note over SK,CL: clarified-spec.md drafted; SK renders the draft preview\n(approve / edit / evolve / cancel, auto-approve on timeout)\nskipped entirely for a no-ambiguity spec or --skip-clarification
+
+    SK->>+PL: snapshot + clarified-spec.md
     PL-->>-SK: PLANNING COMPLETE: N sprints defined
     Note over SK,PL: spec.md written to run dir
 

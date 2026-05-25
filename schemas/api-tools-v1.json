@@ -125,6 +125,21 @@
         "type": "object"
       }
     },
+    "getBoundedDirectoryListing": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
     "getMergedSplicePoints": {
       "inputSchema": {
         "additionalProperties": false,
@@ -644,6 +659,7 @@
     "appendToStackField",
     "getActiveStacks",
     "getApiVersion",
+    "getBoundedDirectoryListing",
     "getMergedSplicePoints",
     "getModuleState",
     "getOverlay",

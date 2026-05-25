@@ -34,6 +34,8 @@ import {
 } from './hash.js';
 import type {
   AgentAttemptEvent,
+  ClarifierFindingEvent,
+  ClarifierUserActionEvent,
   LlmCallEvent,
   OrchestratorMilestoneEvent,
   SafetyHaltEvent,
@@ -220,6 +222,41 @@ export interface ValidationAbortInput {
   validationStage: 'config' | 'overlay' | 'stack' | 'module';
   errorCode: string;
   errorPayload: Record<string, unknown>;
+}
+
+/**
+ * Input to {@link TraceEmitter.emitClarifierFinding}.
+ *
+ * @property class how the gap was disposed of — silently resolved with a
+ *   default, defaulted-but-overridable, or surfaced as a blocker.
+ * @property gapClass catalog label for the kind of ambiguity (snake_case, e.g.
+ *   `scope_ambiguity`).
+ * @property round clarification round that detected the gap (1 initial, 2-3
+ *   evolution); lets a reader attribute the finding to a round.
+ * @property payload class-specific detail recorded verbatim (shape varies by
+ *   `class`, so it is left open).
+ */
+export interface ClarifierFindingInput {
+  class: 'selfResolved' | 'assumption' | 'blocker';
+  gapClass: string;
+  round: number;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Input to {@link TraceEmitter.emitClarifierUserAction}.
+ *
+ * @property action the user's draft-preview choice, including the
+ *   timeout-driven auto-approval so an unattended run stays auditable.
+ * @property round round the interaction terminated; correlates with the
+ *   round's findings.
+ * @property payload action-specific detail recorded verbatim (e.g. the
+ *   evolution text), empty for choices that carry none.
+ */
+export interface ClarifierUserActionInput {
+  action: 'approved' | 'edited' | 'evolved' | 'cancelled' | 'autoApprovedOnTimeout';
+  round: number;
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -502,6 +539,43 @@ export class TraceEmitter {
       validationStage: input.validationStage,
       errorCode: input.errorCode,
       errorPayload: input.errorPayload,
+    };
+    this.persist(event);
+    return event;
+  }
+
+  /**
+   * Record one clarifier finding — a single ambiguity the clarifier detected
+   * while drafting the clarified spec — with its disposition class, gap-class
+   * label, round, and structured payload. Returns the persisted event. Side
+   * effect: appends an event file and rewrites the index. The inline `payload`
+   * is part of the event itself; no payload body is written separately.
+   */
+  emitClarifierFinding(input: ClarifierFindingInput): ClarifierFindingEvent {
+    const event: ClarifierFindingEvent = {
+      ...this.envelope('clarifierFinding'),
+      class: input.class,
+      gapClass: input.gapClass,
+      round: input.round,
+      payload: input.payload,
+    };
+    this.persist(event);
+    return event;
+  }
+
+  /**
+   * Record one clarifier draft-preview interaction (the user's action, the
+   * round it terminated, and any action-specific payload). Returns the
+   * persisted event. Side effect: appends an event file and rewrites the index.
+   * The inline `payload` is part of the event itself; no payload body is
+   * written separately.
+   */
+  emitClarifierUserAction(input: ClarifierUserActionInput): ClarifierUserActionEvent {
+    const event: ClarifierUserActionEvent = {
+      ...this.envelope('clarifierUserAction'),
+      action: input.action,
+      round: input.round,
+      payload: input.payload,
     };
     this.persist(event);
     return event;
