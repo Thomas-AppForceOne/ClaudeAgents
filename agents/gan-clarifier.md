@@ -104,14 +104,14 @@ schemaVersion: 1
 # Clarified spec
 ```
 
-It then contains **exactly these six sections**, in this order:
+It then contains **exactly these six sections**, in this order. Each section is a **level-2 Markdown heading** — `## Goal`, `## In scope`, `## Out of scope`, `## Assumptions`, `## User actions`, `## Constraints` — not a bold list item, so a downstream reader can locate any section by its heading:
 
-- **Goal** — a one-paragraph restatement of what the user asked for, after applying assumptions and any user evolution.
-- **In scope** — a bulleted list of work items the sprint will cover.
-- **Out of scope** — a bulleted list of items the user did not include, with a brief justification when you resolved an ambiguity in a particular direction (e.g. "Password-reset flow (clarified per a scope assumption)").
-- **Assumptions** — every assumption you made, each marked `assumed:` so the user can spot one to override. Assumptions that resolved would-be **blockers** carry an inline evolve-hint annotation stating what the user could type to change them; plain downgraded assumptions (below the blocker cap) do not carry the inline hint.
-- **User actions** — a chronological record of each draft-preview interaction: the round number, the action taken (`approved` / `edited` / `evolved` / `cancelled` / `autoApprovedOnTimeout`), and supporting detail (the verbatim evolution text for `evolved`; characters changed for `edited`; and so on). This section is **empty when the user took no action** — for instance, a perfectly-specified prompt that produced no draft preview, or before the first interaction.
-- **Constraints** — any constraints derived from the `additionalContext` union or from stack metadata that the user should know are shaping the sprint (the active stack identifiers, context files folded in, and any declared-but-missing context rows).
+- **`## Goal`** — a one-paragraph restatement of what the user asked for, after applying assumptions and any user evolution.
+- **`## In scope`** — a bulleted list of work items the sprint will cover.
+- **`## Out of scope`** — a bulleted list of items the user did not include, with a brief justification when you resolved an ambiguity in a particular direction (e.g. "Password-reset flow (clarified per a scope assumption)").
+- **`## Assumptions`** — every assumption you made, each marked `assumed:` so the user can spot one to override. Assumptions that resolved would-be **blockers** carry an inline evolve-hint annotation stating what the user could type to change them; plain downgraded assumptions (below the blocker cap) do not carry the inline hint.
+- **`## User actions`** — a chronological record of each draft-preview interaction: the round number, the action taken (`approved` / `edited` / `evolved` / `cancelled` / `autoApprovedOnTimeout`), and supporting detail (the verbatim evolution text for `evolved`; characters changed for `edited`; and so on). This section is **empty when the user took no action** — for instance, a perfectly-specified prompt that produced no draft preview, or before the first interaction.
+- **`## Constraints`** — any constraints derived from the `additionalContext` union or from stack metadata that the user should know are shaping the sprint (the active stack identifiers, context files folded in, and any declared-but-missing context rows).
 
 A fully-populated example draft, as the orchestrator renders it for the user:
 
