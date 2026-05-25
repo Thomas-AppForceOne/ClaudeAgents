@@ -108,7 +108,7 @@ sequenceDiagram
 
     SK->>+EV: spawn with contract + implementation
     EV->>CS: getResolvedConfig (eval cmds, security surfaces)
-    Note over EV: build, test, lint, audit, secrets scan
+    Note over EV: build, test, lint, audit, secrets scan, doc-lint, security + doc surface scoring
     EV->>CS: write evidence bundle
     EV-->>-SK: done
     CS-->>SK: passed / blocked
