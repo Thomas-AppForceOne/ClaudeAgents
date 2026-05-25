@@ -72,12 +72,20 @@ const COMMENTED_OUT_CODE_CODE = 'CommentedOutCode';
 const ADVISORY_PREFIX =
   'advisory (reported, not blocking): this is a heuristic and can misfire';
 
-// Base branches tried, in order, when `--base-ref` is not supplied: a branch
-// name resolvable in this repo is used as the merge-base partner. `develop` is
-// tried before `main` because this repo's git-flow branches diverge from
-// `develop`; both are tried so the tool works in either a git-flow or a
-// trunk-based repo without configuration.
-const DEFAULT_BASE_REF_CANDIDATES = ['develop', 'main'] as const;
+// Base branches tried, in order, when `--base-ref` is not supplied: the first
+// candidate that yields a merge-base is the partner. Local branch names come
+// first (a developer's working clone has `develop`/`main` as local branches);
+// the `origin/`-prefixed forms follow so a fresh CI checkout — where the base
+// exists only as a remote-tracking ref and `HEAD` is detached — still resolves
+// without an explicit `--base-ref`. `develop` precedes `main` because this
+// repo's branches diverge from `develop`; both are tried so the tool works in a
+// git-flow or a trunk-based repo without configuration.
+const DEFAULT_BASE_REF_CANDIDATES = [
+  'develop',
+  'main',
+  'origin/develop',
+  'origin/main',
+] as const;
 
 // Repo root derived from this compiled module's location (dist/scripts/...),
 // so a default project root resolves regardless of the caller's cwd.
@@ -88,7 +96,7 @@ const repoRoot = path.resolve(here, '..', '..', '..');
 /** Build the `--help` text. Pure; returns the usage block as a single string. */
 function renderHelp(): string {
   return [
-    'Usage: doc-lint [--base-ref <ref>] [--project-root <path>]',
+    'Usage: doc-lint [--base-ref <ref>] [--require-base] [--project-root <path>]',
     '                [--json] [--quiet] [--help]',
     '',
     'Checks the merge-base delta with the base branch. It reports, at blocker',
@@ -100,7 +108,12 @@ function renderHelp(): string {
     '',
     'Options:',
     '  --base-ref <ref>       Resolve the merge-base against this ref instead of',
-    '                         the auto-detected base branch (develop, then main).',
+    '                         the auto-detected base branch (develop, then main,',
+    '                         then their origin/ forms).',
+    '  --require-base         Fail (non-zero) instead of reporting clean when no',
+    '                         base ref resolves. Use in a gate so a missing',
+    '                         baseline (e.g. a shallow checkout) fails loudly',
+    '                         rather than silently passing every change.',
     '  --project-root <path>  Inspect this project root instead of the cwd.',
     '  --json                 Emit the report as a JSON document on stdout.',
     '  --quiet                Suppress the stdout summary on a clean run.',
@@ -131,6 +144,11 @@ interface RunResult {
  * @property json emit the report as JSON instead of the human summary.
  * @property quiet suppress the stdout summary on a clean run (failures still
  *   print to stderr).
+ * @property requireBase fail loudly (non-zero) when no base ref resolves,
+ *   instead of degrading to a clean run. A local developer run leaves this off
+ *   so an unusual git layout does not fail their machine; a gating run (CI)
+ *   sets it so the tool can never certify a change it never measured — a silent
+ *   clean on a shallow checkout would pass every change and defeat the gate.
  */
 interface RunOptions {
   projectRoot: string;
@@ -140,6 +158,8 @@ interface RunOptions {
   json: boolean;
 
   quiet: boolean;
+
+  requireBase: boolean;
 }
 
 /**
@@ -180,9 +200,10 @@ function gitTry(cwd: string, args: readonly string[]): string | null {
  * {@link DEFAULT_BASE_REF_CANDIDATES} is tried in order and the first one that
  * yields a merge-base wins. Returns `null` when no base can be resolved (a
  * shallow clone with no common ancestor, or a repo lacking every candidate
- * branch) — the caller treats that as "no baseline, nothing introduced to
- * measure" and reports a clean run, because the tool must never block on its
- * own inability to find a baseline. Read-only.
+ * branch). How the caller handles `null` depends on `requireBase`: a plain run
+ * degrades to a clean report (no baseline, nothing introduced to measure),
+ * while a gating run refuses loudly (see {@link run}) so it never certifies a
+ * change it could not measure. Read-only.
  *
  * @param cwd working tree the merge-base is computed in.
  * @param baseRef explicit base ref, or `null` to auto-detect.
@@ -553,8 +574,27 @@ export function run(opts: RunOptions): RunResult {
 
   const baseSha = resolveMergeBase(opts.projectRoot, opts.baseRef);
   if (baseSha === null) {
-    // No baseline → nothing "introduced" to measure → clean. The tool must
-    // never fail merely because it could not locate a base ref.
+    // No baseline resolved. The right response depends on the caller:
+    //  - a gating run sets `requireBase` and must refuse loudly — certifying a
+    //    change it never measured (a silent clean) would pass everything and
+    //    make the gate worthless, which is exactly the false-assurance failure
+    //    a gate exists to prevent;
+    //  - a local developer run leaves it off and degrades to clean, so an
+    //    unusual git layout does not fail their machine.
+    if (opts.requireBase) {
+      const tried = opts.baseRef !== null ? opts.baseRef : DEFAULT_BASE_REF_CANDIDATES.join(', ');
+      return {
+        stdout: '',
+        stderr:
+          `doc-lint: could not resolve a base ref to measure this change against ` +
+          `(tried: ${tried}). The documentation gate compares against the base branch and ` +
+          `cannot certify a change without it — a shallow checkout omits the base branch's ` +
+          `history. Fetch the base branch with full history and retry. Refusing to report a ` +
+          `clean result without a baseline.\n`,
+        code: SCRIPT_EXIT.FAILURE,
+      };
+    }
+    // No baseline → nothing "introduced" to measure → clean.
     return finalize({ kind: 'doc-lint', checked: 0, failures }, opts);
   }
 
@@ -689,7 +729,7 @@ function finalize(report: DocLintReport, opts: RunOptions): RunResult {
  */
 export async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, {
-    boolean: ['json', 'quiet', 'help'],
+    boolean: ['json', 'quiet', 'help', 'require-base'],
     string: ['project-root', 'base-ref'],
   });
 
@@ -727,6 +767,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     baseRef,
     json: parsed.flags['json'] === true,
     quiet: parsed.flags['quiet'] === true,
+    requireBase: parsed.flags['require-base'] === true,
   });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);

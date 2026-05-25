@@ -271,3 +271,108 @@ describe('doc-lint bin', () => {
     expect(r.stdout).toContain('Exit codes');
   });
 });
+
+/**
+ * Gate-safety tests for `--require-base`.
+ *
+ * These reproduce the hazard a gate built on this tool faces: a checkout where
+ * the base branch is absent (a shallow clone omits it), so no merge-base
+ * resolves. Each repo here has only `base`/`feature` branches — none of the
+ * auto-detected candidates (`develop`, `main`, `origin/develop`, `origin/main`)
+ * exist — and no `--base-ref` is supplied, so the baseline cannot be resolved.
+ * The HEAD deliberately introduces an undocumented export: if the tool reported
+ * clean in that state, the export would slip the gate. `--require-base` exists
+ * so a gate fails loudly there instead of certifying an unmeasured change,
+ * while a local run without the flag keeps degrading to clean.
+ */
+describe('doc-lint --require-base', () => {
+  it('no resolvable base + --require-base fails loudly (exit 1), not a silent clean', async () => {
+    const repo = buildRepo(
+      fixture('base.module.ts.fixture'),
+      fixture('head-introduces-undocumented.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', ['--project-root', repo, '--require-base']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('could not resolve a base ref');
+    // It must not masquerade as a measured, clean run.
+    expect(r.stdout).not.toMatch(/files checked/);
+  });
+
+  it('no resolvable base WITHOUT --require-base degrades to clean (exit 0) for local runs', async () => {
+    const repo = buildRepo(
+      fixture('base.module.ts.fixture'),
+      fixture('head-introduces-undocumented.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', ['--project-root', repo]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/^0 files checked, 0 failed\n$/);
+    expect(r.stderr).toBe('');
+  });
+
+  it('--require-base with a resolvable base still gates an introduced undocumented export (exit 1)', async () => {
+    const repo = buildRepo(
+      fixture('base.module.ts.fixture'),
+      fixture('head-introduces-undocumented.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', [
+      '--project-root',
+      repo,
+      '--require-base',
+      '--base-ref',
+      'base',
+    ]);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('MissingExportDoc');
+    expect(r.stderr).toContain('introducedUndocumented');
+  });
+});
+
+/**
+ * F4 discipline on the tool's user-facing finding messages.
+ *
+ * These messages are product output a developer reads on every run, so they
+ * must name no package manager or runtime. The repo's `lint-error-text` gate
+ * enforces F4 for `src/config-server` and `src/cli` but does not scan
+ * `scripts/`, so the doc-lint messages would otherwise be checked by eye and
+ * rot on the next edit. This pins the ACTUAL emitted messages (parsed from the
+ * tool's `--json`, not a copy) against the same single-source forbidden-token
+ * list `lint-error-text`/`lint-no-stack-leak` use, so a leak fails the suite.
+ */
+describe('doc-lint finding strings obey F4', () => {
+  // The one forbidden-token list, shared with the leak/error-text linters.
+  function forbiddenTokens(): string[] {
+    const file = path.resolve(here, '..', '..', '..', 'scripts', 'lint-no-stack-leak', 'forbidden.json');
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { 'web-node': string[] };
+    return parsed['web-node'];
+  }
+
+  it('no emitted finding message contains a forbidden ecosystem token', async () => {
+    const forbidden = forbiddenTokens();
+
+    // A delta that fires all three finding classes (blocker + both advisories)
+    // in one pass, so every message builder's output is exercised — otherwise
+    // this assertion could pass vacuously over a message that never renders.
+    const repo = buildRepo(
+      fixture('base.advisory.module.ts.fixture'),
+      fixture('head-advisory-plus-blocker.module.ts.fixture'),
+    );
+    const r = await runScript('doc-lint', ['--project-root', repo, '--base-ref', 'base', '--json']);
+    const parsed = JSON.parse(r.stdout) as {
+      failures: { code: string; message: string }[];
+    };
+
+    const codes = new Set(parsed.failures.map((f) => f.code));
+    expect(codes.has('MissingExportDoc')).toBe(true);
+    expect(codes.has('IncompleteDocSections')).toBe(true);
+    expect(codes.has('CommentedOutCode')).toBe(true);
+
+    for (const failure of parsed.failures) {
+      for (const token of forbidden) {
+        expect(
+          failure.message.includes(token),
+          `doc-lint ${failure.code} message leaks forbidden token '${token}': ${failure.message}`,
+        ).toBe(false);
+      }
+    }
+  });
+});

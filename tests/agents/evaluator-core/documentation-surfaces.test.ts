@@ -45,6 +45,8 @@ import type {
   SprintPlan,
   WorktreeState,
 } from '../../../src/agents/evaluator-core/index.js';
+import { verifyEvidenceBundle } from '../../../src/trace/evidence-bundle.js';
+import type { ContractCriterionLike } from '../../../src/trace/evidence-bundle.js';
 
 const DOC_PUBLIC_CONTRACT_TEMPLATE =
   "Every exported function, class, or type documents each parameter's meaning, " +
@@ -345,13 +347,6 @@ function provenanceSnapshot(surface: DocumentationSurface): EvaluatorCoreSnapsho
   };
 }
 
-// A run passes a per-criterion gate only when the score meets the threshold;
-// this mirrors the framework's standard per-criterion scoring so the gate the
-// provenance criterion rides is the ordinary one, not an ad-hoc check.
-function scoreCriterion(score: number, threshold: number): 'pass' | 'fail' {
-  return score >= threshold ? 'pass' : 'fail';
-}
-
 describe('comments_cite_no_development_provenance — C1 instantiation end-to-end', () => {
   const surface = readWebNodeProvenanceSurface();
 
@@ -412,7 +407,15 @@ describe('comments_cite_no_development_provenance — C1 instantiation end-to-en
     expect(isKnownSurfaceId(snapshot, PROVENANCE_QUALIFIED_ID)).toBe(true);
   });
 
-  it('(d) below-threshold score on the instantiated criterion fails the attempt', () => {
+  it('(d) a below-threshold provenance verdict rides the real evidence-bundle gate, not a stand-in', () => {
+    // Scoring (1–10 → pass/fail) is the LLM evaluator's judgment; the framework
+    // has no deterministic score→verdict function to unit-test, exactly as for
+    // every securitySurface criterion. What IS deterministic — and what the gate
+    // actually consumes — is the evidence bundle: a below-threshold criterion is
+    // recorded as verdict:'fail', and verifyEvidenceBundle is the real gate
+    // machinery that schema-validates that failing verdict and joins it to the
+    // sprint contract. This drives that real path instead of re-implementing
+    // `score >= threshold` in the test.
     const snapshot = provenanceSnapshot(surface);
     const sprintPlan: SprintPlan = { affectedFiles: ['src/feature.ts'], criteria: [] };
     const worktree: WorktreeState = { files: ['src/feature.ts'], fileContents: {} };
@@ -420,22 +423,55 @@ describe('comments_cite_no_development_provenance — C1 instantiation end-to-en
     // The criterion must be instantiated for the gate to have anything to score;
     // proving (d) on a criterion that did not fire would be vacuous.
     const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
-    const fired = rows.some((r) => `${r.stack}.${r.id}` === PROVENANCE_QUALIFIED_ID);
-    expect(fired).toBe(true);
+    const row = rows.find((r) => `${r.stack}.${r.id}` === PROVENANCE_QUALIFIED_ID);
+    expect(row).toBeTruthy();
+    const criterionName = `${row!.stack}.${row!.id}`;
 
-    // The provenance criterion rides the standard per-criterion threshold gate:
-    // a score under the resolved threshold is a failing verdict for the attempt,
-    // exactly as any other instantiated documentation/security criterion.
-    const threshold = 8;
-    expect(scoreCriterion(7, threshold)).toBe('fail');
-    expect(scoreCriterion(threshold, threshold)).toBe('pass');
+    // The sprint contract carries the instantiated provenance criterion as the
+    // join-key target.
+    const contract: ContractCriterionLike[] = [{ name: criterionName }];
 
-    // And a below-threshold provenance score vetoes an otherwise-green run: the
-    // run passes only if every functional criterion passes AND no gating doc
-    // criterion fails.
-    const functionalPass = scoreCriterion(9, threshold) === 'pass';
-    const provenanceFails = scoreCriterion(5, threshold) === 'fail';
-    const runPasses = functionalPass && !provenanceFails;
-    expect(runPasses).toBe(false);
+    // The evaluator's bundle for an attempt that scored provenance below its
+    // threshold: the criterion is recorded as a failing verdict with the
+    // evidence a fail requires.
+    const failingBundle = {
+      sprintNumber: 1,
+      attemptLetter: 'A',
+      criteria: [
+        {
+          name: criterionName,
+          verdict: 'fail',
+          evidence: {
+            traceEventRefs: [],
+            reproductionCommand: 'rg -n "sprint|ticket" src/feature.ts',
+            deltaFromContract: {
+              expected: 'comments and user-facing strings cite no development-process artifact',
+              observed: 'src/feature.ts carries an in-comment sprint reference',
+            },
+          },
+        },
+      ],
+      verdictSummary: { totalCriteria: 1, passed: 0, failed: 1, blocked: 0, skipped: 0 },
+    };
+
+    // The real gate machinery accepts the failing verdict and joins it to the
+    // contract: the provenance criterion genuinely participates in the gate, and
+    // the bundle is not all-pass — which the orchestrator treats as a failed
+    // attempt.
+    const result = verifyEvidenceBundle(failingBundle, contract, []);
+    expect(result.ok).toBe(true);
+    expect(result.schemaValid).toBe(true);
+    expect(failingBundle.criteria.some((c) => c.verdict === 'fail')).toBe(true);
+
+    // And the gate is not a rubber stamp: a fail verdict stripped of its required
+    // evidence is rejected by the same real machinery (a failing verdict cannot
+    // be recorded without the reproduction command + expected/observed delta).
+    const malformed = {
+      ...failingBundle,
+      criteria: [{ name: criterionName, verdict: 'fail', evidence: { traceEventRefs: [] } }],
+    };
+    const bad = verifyEvidenceBundle(malformed, contract, []);
+    expect(bad.ok).toBe(false);
+    expect(bad.failures.length).toBeGreaterThan(0);
   });
 });

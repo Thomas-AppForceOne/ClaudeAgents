@@ -5,11 +5,22 @@ on:
       run:
         required: true
         type: string
+      fetch-depth:
+        # Checkout depth. Defaults to 1 (a shallow checkout) so existing
+        # callers are unaffected. A caller that needs git history available —
+        # e.g. a gate that diffs against the base branch — passes 0 for a full
+        # checkout; a shallow checkout omits the base branch and would leave
+        # such a gate with no baseline.
+        required: false
+        type: number
+        default: 1
 jobs:
   setup-and-run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20.10.0'
