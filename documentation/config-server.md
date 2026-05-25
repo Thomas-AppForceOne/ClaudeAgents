@@ -8,7 +8,7 @@ The sole gateway to all GAN configuration: an MCP server that exposes reads, wri
 
 ```mermaid
 flowchart LR
-    subgraph READS["Reads (13)"]
+    subgraph READS["Reads (12)"]
         direction TB
         R1["getResolvedConfig"]
         R2["getActiveStacks"]
@@ -22,7 +22,6 @@ flowchart LR
         R10["getModuleState"]
         R11["listModules"]
         R12["getApiVersion"]
-        R13["getStackConventions"]
     end
 
     subgraph WRITES["Writes (12)"]
@@ -70,22 +69,7 @@ flowchart TD
     START(["getResolvedConfig\nprojectRoot"]) --> CANON["Canonicalise\nprojectRoot"]
     CANON --> CACHE_CHECK{"Cache hit?\nmtime guard"}
     CACHE_CHECK -->|"hit"| RETURN_CACHED(["Return cached\nResolvedConfig"])
-    CACHE_CHECK -->|"miss"| TRUST_GATE
-
-    subgraph PHASE4["Phase 4 — Trust gate"]
-        TRUST_GATE["projectDeclaresCommands?"]
-        TRUST_GATE -->|"no commands"| TRUST_SKIP["skipped"]
-        TRUST_GATE -->|"GAN_TRUST=unsafe-trust-all"| TRUST_BYPASS["bypassed"]
-        TRUST_GATE -->|"commands present"| HASH["computeTrustHash\nSHA-256 over .claude/gan/"]
-        HASH --> CACHE_LOOKUP["Lookup in\ntrust-cache.json"]
-        CACHE_LOOKUP -->|"approved"| TRUST_OK["approved"]
-        CACHE_LOOKUP -->|"no match"| TRUST_ISSUE["UntrustedOverlay\nissue"]
-    end
-
-    TRUST_SKIP --> DETECT
-    TRUST_BYPASS --> DETECT
-    TRUST_OK --> DETECT
-    TRUST_ISSUE --> DETECT
+    CACHE_CHECK -->|"miss"| DETECT
 
     subgraph PHASE1["Phase 1 — Discovery"]
         DETECT["Enumerate stack files\nall tiers"]
@@ -105,7 +89,22 @@ flowchart TD
         INVARIANTS["runAllInvariants\n8 registered invariants"]
     end
 
-    INVARIANTS --> CASCADE
+    INVARIANTS --> TRUST_GATE
+
+    subgraph PHASE4["Phase 4 — Trust gate (last validation phase)"]
+        TRUST_GATE["projectDeclaresCommands?"]
+        TRUST_GATE -->|"no commands"| TRUST_SKIP["skipped"]
+        TRUST_GATE -->|"GAN_TRUST=unsafe-trust-all"| TRUST_BYPASS["bypassed"]
+        TRUST_GATE -->|"commands present"| HASH["computeTrustHash\nSHA-256 · project.md +\nstacks/*.md + modules/*.yaml"]
+        HASH --> CACHE_LOOKUP["Lookup in\ntrust-cache.json"]
+        CACHE_LOOKUP -->|"approved"| TRUST_OK["approved"]
+        CACHE_LOOKUP -->|"no match"| TRUST_ISSUE["UntrustedOverlay\nissue (folded into issues[];\nresolution still proceeds)"]
+    end
+
+    TRUST_SKIP --> CASCADE
+    TRUST_BYPASS --> CASCADE
+    TRUST_OK --> CASCADE
+    TRUST_ISSUE --> CASCADE
 
     subgraph C4["C4 — Overlay cascade"]
         CASCADE["cascadeOverlays\ndefault < user < project"]
@@ -260,29 +259,28 @@ sequenceDiagram
     else Cache miss or mtime changed
         Cache-->>CS: undefined
 
-        CS->>Trust: runTrustCheck(snapshot)
+        CS->>Pipeline: validateAll (phases 1–4)
+        Pipeline->>Storage: enumerateTierStacks × all tiers
+        Storage-->>Pipeline: stack file paths
+        Pipeline->>Storage: loadOverlay × 3 tiers
+        Storage-->>Pipeline: LoadedOverlay | null
+        Pipeline->>Pipeline: phase 2 · ajv schema validation
+        Pipeline->>Pipeline: phase 3 · runAllInvariants
+        Pipeline->>Trust: phase 4 · runTrustCheck(snapshot)
         Trust->>Trust: projectDeclaresCommands?
         alt No commands declared
-            Trust-->>CS: status: skipped
+            Trust-->>Pipeline: status: skipped
         else Commands declared
-            Trust->>Trust: computeTrustHash(.claude/gan/)
+            Trust->>Trust: computeTrustHash(project.md + stacks/*.md + modules/*.yaml)
             Trust->>Storage: readCache(homeDir)
             Storage-->>Trust: trust-cache.json
             alt Hash approved
-                Trust-->>CS: status: approved
+                Trust-->>Pipeline: status: approved
             else Hash not approved
-                Trust-->>CS: UntrustedOverlay issue
+                Trust-->>Pipeline: UntrustedOverlay issue
             end
         end
-
-        CS->>Pipeline: validateAll (phases 1–3)
-        Pipeline->>Storage: loadOverlay × 3 tiers
-        Storage-->>Pipeline: LoadedOverlay | null
-        Pipeline->>Storage: enumerateTierStacks × all tiers
-        Storage-->>Pipeline: stack file paths
-        Pipeline->>Pipeline: ajv schema validation
-        Pipeline->>Pipeline: runAllInvariants
-        Pipeline-->>CS: issues[]
+        Pipeline-->>CS: issues[] (incl. any trust issue)
 
         CS->>Pipeline: cascadeOverlays(default, user, project)
         Pipeline-->>CS: CascadeResult (merged, discarded)
@@ -323,7 +321,7 @@ flowchart TD
     INVALIDATE --> SUCCESS(["Return\nmutated: true\npath: filePath"])
 
     subgraph TRUST_WRITES["Trust writes (trustApprove / trustRevoke)"]
-        TA_START(["trustApprove / trustRevoke"]) --> HASH2["computeTrustHash\nSHA-256 over .claude/gan/"]
+        TA_START(["trustApprove / trustRevoke"]) --> HASH2["computeTrustHash\nSHA-256 · .claude/gan/\nproject.md + stacks/*.md + modules/*.yaml"]
         HASH2 --> UPSERT["upsertApproval / removeApprovals\nwriteCache(homeDir, newCache)"]
         UPSERT --> LOG["logTrustEvent\naudit log"]
         LOG --> TINVALIDATE["cache.invalidate(canonicalRoot)"]
