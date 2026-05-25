@@ -210,6 +210,8 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
+   **No between-sprint prompt.** The loop runs fully autonomously: the orchestrator advances from each sprint to the next without pausing, and never asks the user to choose between autonomous and per-sprint-pause execution. No such prompt exists.
+
    **Before each attempt of any role** (including the single-attempt clarifier and planner), the orchestrator runs the checks described below: the per-role ceiling check (for multi-attempt roles — see "Per-role attempt ceilings"), the sprint-wide budget check (for every role — see "Sprint-wide attempt budget"), and — before each generator attempt specifically — the edit-oscillation check (see "Edit-oscillation detection"). If any check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. Only when no check halts does it proceed to the spawn.
 
 10. **Tear down.** On completion or unrecoverable failure, mark the run terminal in `progress.json` and remove the worktree filesystem (the run branch survives for inspection).
