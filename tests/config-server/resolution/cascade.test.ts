@@ -336,6 +336,42 @@ describe('cascadeOverlays — C4 cascade mechanics', () => {
       expect(result.merged.safety).toBeUndefined();
     });
 
+  });
+
+  describe('clarifier.draftTimeoutSeconds splice point', () => {
+    it('scalar-override: highest tier wins (project beats default)', () => {
+      const result = cascadeOverlays({
+        default: { clarifier: { draftTimeoutSeconds: 60 } },
+        user: null,
+        project: { clarifier: { draftTimeoutSeconds: 120 } },
+      });
+      expect(result.merged).toEqual({ clarifier: { draftTimeoutSeconds: 120 } });
+      expect(result.discarded).toEqual([]);
+      expect(result.issues).toEqual([]);
+    });
+
+    it('scalar-override: user beats default when project absent', () => {
+      const result = cascadeOverlays({
+        default: { clarifier: { draftTimeoutSeconds: 60 } },
+        user: { clarifier: { draftTimeoutSeconds: 90 } },
+        project: null,
+      });
+      expect(result.merged).toEqual({ clarifier: { draftTimeoutSeconds: 90 } });
+    });
+
+    it('absent everywhere → field omitted from the merged view (no hollow clarifier block)', () => {
+      // Additive guarantee: with no clarifier value anywhere the block is pruned
+      // entirely, leaving the resolver to apply the seed default of 60.
+      const result = cascadeOverlays({
+        default: { generator: { additionalRules: ['r'] } },
+        user: null,
+        project: null,
+      });
+      expect(result.merged.clarifier).toBeUndefined();
+    });
+  });
+
+  describe('safety.* prototype-pollution guard', () => {
     it('a __proto__-named ceiling key cannot pollute or shadow a real role', () => {
       const before = ({} as Record<string, unknown>)['polluted'];
       const result = cascadeOverlays({

@@ -43,7 +43,8 @@ export type ErrorCode =
   | 'PortInUse'
   | 'PortNotDiscovered'
   | 'UnknownStateKey'
-  | 'LoopDetected';
+  | 'LoopDetected'
+  | 'InvalidTimeoutValue';
 
 /**
  * The fully-specified shape of an error: a `code` and `message` plus optional
@@ -203,6 +204,14 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   // recovery flow) is built by the safety module and passed as `details.message`
   // — this default only covers a LoopDetected raised without an explicit message.
   LoopDetected: 'The framework halted the sprint to avoid an unproductive loop.',
+  // The clarifier draft-timeout value is out of range. The default names the
+  // valid bound and points at the dedicated skip flag: a zero timeout is the
+  // common "I want to bypass" mistake, and a separate flag already expresses
+  // that intent, so the framework rejects a zero here rather than overloading
+  // it. A call site attaches the offending field and the actual value as
+  // `details.message`.
+  InvalidTimeoutValue:
+    'The clarifier draft-timeout value is out of range; it must be an integer between 10 and 600 seconds. To bypass clarification entirely, use the dedicated skip flag rather than a zero timeout.',
 };
 
 /**

@@ -148,6 +148,19 @@ export const SPLICE_POINTS: readonly SpliceEntry[] = [
     rule: 'scalar-override',
     bareDefault: () => undefined,
   },
+  // clarifier.draftTimeoutSeconds is a plain scalar where the highest tier wins.
+  // bareDefault is undefined so an absent value is omitted from the merged
+  // overlay entirely (rather than seeded), letting the resolver fall back to the
+  // framework's seed default of 60. The [10, 600] bound is NOT enforced here:
+  // the cascade only merges, and an out-of-range value is caught by the semantic
+  // range check during validation, so a 0 surfaces as InvalidTimeoutValue rather
+  // than being silently passed through or coerced.
+  {
+    block: 'clarifier',
+    field: 'draftTimeoutSeconds',
+    rule: 'scalar-override',
+    bareDefault: () => undefined,
+  },
 ];
 
 /**

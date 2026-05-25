@@ -84,6 +84,9 @@
       },
       "type": "array"
     },
+    "draftTimeoutSecondsBare": {
+      "type": "integer"
+    },
     "oscillationDetectionBare": {
       "type": "boolean"
     },
@@ -118,6 +121,39 @@
   },
   "description": "JSON Schema (draft-07) for the body-YAML of ClaudeAgents overlay files. Per F3, this document is immutable; future changes bump to v2.",
   "properties": {
+    "clarifier": {
+      "additionalProperties": false,
+      "properties": {
+        "discardInherited": {
+          "type": "boolean"
+        },
+        "draftTimeoutSeconds": {
+          "default": 60,
+          "description": "The clarifier.draftTimeoutSeconds splice point. The number of seconds the draft-preview action menu waits for input before auto-approving the current draft (an integer, valid range [10, 600], default 60). Scalar cascade; available in both tiers. Optional — absent means the default (60). The JSON type here is integer only; the [10, 600] bound is enforced by a semantic check that rejects an out-of-range value (including 0) with InvalidTimeoutValue. A value of 0 is rejected rather than treated as a bypass — the bypass case has its own dedicated skip flag.",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/draftTimeoutSecondsBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/draftTimeoutSecondsBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "evaluator": {
       "additionalProperties": false,
       "properties": {
