@@ -15,7 +15,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { buildBoundedDirectoryListing } from '../../../src/config-server/resolution/bounded-directory-listing.js';
+import {
+  buildBoundedDirectoryListing,
+  gitignoreLineToGlobs,
+  readIgnoreGlobs,
+} from '../../../src/config-server/resolution/bounded-directory-listing.js';
 
 const tmpDirs: string[] = [];
 
@@ -132,5 +136,77 @@ describe('buildBoundedDirectoryListing — fault tolerance', () => {
     // The real file is present; the dangling symlink was skipped, not fatal.
     expect(listing!.scopedFiles).toContain('src/real.ts');
     expect(listing!.scopedFiles).not.toContain('src/dangling.ts');
+  });
+});
+
+describe('buildBoundedDirectoryListing — ignore pruning', () => {
+  // A project whose .gitignore excludes a dependency-like and a build-output
+  // directory, each holding in-scope .ts files that must NOT appear, alongside
+  // a real source file that must.
+  function makeProjectWithIgnore(): string {
+    const root = mkdtempSync(path.join(tmpdir(), 'bounded-listing-ignore-'));
+    mkdirSync(path.join(root, 'src'), { recursive: true });
+    mkdirSync(path.join(root, 'vendor_pkgs', 'dep'), { recursive: true });
+    mkdirSync(path.join(root, 'build_out'), { recursive: true });
+    writeFileSync(path.join(root, 'src', 'index.ts'), 'export const x = 1;\n');
+    writeFileSync(path.join(root, 'vendor_pkgs', 'dep', 'lib.ts'), 'export const v = 1;\n');
+    writeFileSync(path.join(root, 'build_out', 'bundle.ts'), 'export const b = 1;\n');
+    // A bare name (matches at any depth) and a trailing-slash directory rule.
+    writeFileSync(path.join(root, '.gitignore'), 'vendor_pkgs\nbuild_out/\n');
+    tmpDirs.push(root);
+    return root;
+  }
+
+  it('files under a .gitignore-excluded directory are absent from scopedFiles', () => {
+    const root = makeProjectWithIgnore();
+    const listing = buildBoundedDirectoryListing(root, ['**/*.ts']);
+    // The non-ignored source file survives; the ignored trees are pruned.
+    expect(listing.scopedFiles).toEqual(['src/index.ts']);
+    expect(listing.scopedFiles).not.toContain('vendor_pkgs/dep/lib.ts');
+    expect(listing.scopedFiles).not.toContain('build_out/bundle.ts');
+  });
+
+  it('a .gitignore-excluded directory is absent from topLevelDirectories', () => {
+    const root = makeProjectWithIgnore();
+    const listing = buildBoundedDirectoryListing(root, ['**/*.ts']);
+    expect(listing.topLevelDirectories).toEqual(['src']);
+    expect(listing.topLevelDirectories).not.toContain('vendor_pkgs');
+    expect(listing.topLevelDirectories).not.toContain('build_out');
+  });
+
+  it('an explicit options.ignoreGlobs overrides the .gitignore read', () => {
+    const root = makeProjectWithIgnore();
+    // Disable ignore-pruning explicitly: now the .gitignore'd trees are visible.
+    const listing = buildBoundedDirectoryListing(root, ['**/*.ts'], { ignoreGlobs: [] });
+    expect(listing.scopedFiles).toContain('vendor_pkgs/dep/lib.ts');
+    expect(listing.scopedFiles).toContain('build_out/bundle.ts');
+    expect(listing.topLevelDirectories).toContain('vendor_pkgs');
+  });
+
+  it('readIgnoreGlobs returns [] when no .gitignore is present (pruning disabled)', () => {
+    const root = makeProject();
+    expect(readIgnoreGlobs(root)).toEqual([]);
+  });
+});
+
+describe('gitignoreLineToGlobs — documented subset', () => {
+  it('drops blank lines, comments, and negations', () => {
+    expect(gitignoreLineToGlobs('')).toEqual([]);
+    expect(gitignoreLineToGlobs('   ')).toEqual([]);
+    expect(gitignoreLineToGlobs('# a comment')).toEqual([]);
+    expect(gitignoreLineToGlobs('!keep-me')).toEqual([]);
+  });
+
+  it('maps a bare name to an any-depth pattern', () => {
+    expect(gitignoreLineToGlobs('node_modules')).toEqual(['**/node_modules']);
+    // A trailing-slash directory marker is dropped, then treated as a bare name.
+    expect(gitignoreLineToGlobs('dist/')).toEqual(['**/dist']);
+  });
+
+  it('anchors a leading-slash or embedded-slash pattern to the project root', () => {
+    // Leading slash: anchored to root, slash stripped.
+    expect(gitignoreLineToGlobs('/build')).toEqual(['build']);
+    // Embedded slash: already a relative path, kept as-is (anchored).
+    expect(gitignoreLineToGlobs('coverage/lcov')).toEqual(['coverage/lcov']);
   });
 });

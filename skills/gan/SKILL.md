@@ -84,7 +84,7 @@ USAGE
   SPRINT-OPTS = [--target <path>] [--max-attempts <n>] [--threshold <0-100>]
                 [--branch-name <name>] [--base-branch <name>] [--label <text>]
                 [--no-project-commands] [--skip-welcome] [--skip-clarification]
-                [--clarifier-timeout <seconds>]
+                [--clarifier-timeout=<seconds>]
 
 FLAGS  (defaults shown in parens)
   --spec <path>                 Use an existing spec file instead of planning from scratch (none)
@@ -103,7 +103,7 @@ FLAGS  (defaults shown in parens)
   --skip-welcome                Write the first-run welcome marker without printing the banner (off)
   --skip-clarification          Bypass the clarifier; the orchestrator writes a minimal clarified spec
                                 from the raw prompt and goes straight to the planner (off)
-  --clarifier-timeout <seconds> Override the draft-preview auto-approve timeout for this run; enforces
+  --clarifier-timeout=<seconds> Override the draft-preview auto-approve timeout for this run; enforces
                                 the [10, 600] range and overrides the draft-timeout overlay (60)
 
 EXAMPLES
@@ -200,7 +200,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
    > 6. **Print the startup log.** Per O1's part A, emit one structured log line summarising the snapshot. **First-run nudge:** when the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line: `No recognised ecosystem stack — running with generic defaults. For richer behaviour, run \`gan stacks new <name>\` to scaffold a stack file, or fork an existing one from \`stacks/\` as a starting point.` The note appears even when log verbosity is reduced; it is part of the contract that the framework tells non-Node users *something* useful on first run. (A friendlier prose authoring guide is a known follow-up; today the canonical reference is C1's schema spec plus existing stack files.)
 
-7. **Clarification phase.** Unless `--skip-clarification` was passed, spawn `gan-clarifier` with the user prompt, the captured snapshot, the union of every per-agent `additionalContext`, and the bounded directory listing (built from the active stacks' scope globs). The clarifier writes `clarified-spec.md` under the run's state directory and the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The orchestrator then renders the draft preview and resolves the user's action (see "Clarification phase" below). The approved `clarified-spec.md` is the planner's primary input — and the proposer reads it for criteria derivation. With `--skip-clarification`, the orchestrator (not the clarifier) writes the minimal `clarified-spec.md` itself and proceeds. This phase runs after the snapshot is captured and the startup log is printed, and before the worktree and sprint loop.
+7. **Clarification phase.** Unless `--skip-clarification` was passed, spawn `gan-clarifier` with the user prompt, the captured snapshot, the union of every per-agent `additionalContext`, and the bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool (it unions the active stacks' scope globs and returns a scope-filtered, ignore-pruned, structure-only listing). The clarifier writes `clarified-spec.md` under the run's state directory and the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The orchestrator then renders the draft preview and resolves the user's action (see "Clarification phase" below). The approved `clarified-spec.md` is the planner's primary input — and the proposer reads it for criteria derivation. With `--skip-clarification`, the orchestrator (not the clarifier) writes the minimal `clarified-spec.md` itself and proceeds. This phase runs after the snapshot is captured and the startup log is printed, and before the worktree and sprint loop.
 8. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
 9. **Spawn the sprint loop.** For each sprint:
    - The planner reads `clarified-spec.md` (the clarifier's output, under the run's state directory) as its **primary input** for the spec and plan it produces.
@@ -323,7 +323,7 @@ The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set a
 
 ## Clarification phase
 
-After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing built from the active stacks' scope globs. The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
+After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool — which unions the active stacks' scope globs and returns a structure-only listing, scope-filtered and pruned of paths the project's own ignore file excludes (so it never enumerates dependency or build-output trees). The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
 
 **Draft preview + action menu.** After the clarifier produces `clarified-spec.md`, the orchestrator renders the full document to the terminal — its `Goal`, `In scope`, `Out of scope`, `Assumptions`, `User actions`, and `Constraints` sections — and below it presents the action menu:
 

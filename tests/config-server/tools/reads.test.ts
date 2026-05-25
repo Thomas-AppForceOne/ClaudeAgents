@@ -18,12 +18,15 @@
  *     a throw).
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   getActiveStacks,
+  getBoundedDirectoryListing,
   getMergedSplicePoints,
   getModuleState,
   getOverlay,
@@ -172,5 +175,77 @@ describe('S2 read tools (one positive test per tool)', () => {
     const result = getStackResolution({ projectRoot: jsTsMinimal, name: 'web-node' });
     expect(result.tier).toBe('builtin');
     expect(result.path.endsWith(path.join('stacks', 'web-node.md'))).toBe(true);
+  });
+});
+
+describe('getBoundedDirectoryListing (read tool)', () => {
+  // This tool needs an *active* stack with a declared scope (js-ts-minimal has
+  // none). The fixture activates the builtin web-node by satisfying its real
+  // detection (a manifest plus a lockfile), so its declared TS scope is what the
+  // tool unions; a .gitignore'd dependency-like tree must be pruned. A temp user
+  // home keeps resolution hermetic.
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs.splice(0)) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  });
+
+  function makeProject(): { projectRoot: string; userHome: string } {
+    const projectRoot = mkdtempSync(path.join(tmpdir(), 'bdl-tool-proj-'));
+    const userHome = mkdtempSync(path.join(tmpdir(), 'bdl-tool-home-'));
+    tmpDirs.push(projectRoot, userHome);
+
+    mkdirSync(path.join(projectRoot, '.claude', 'gan'), { recursive: true });
+    writeFileSync(
+      path.join(projectRoot, '.claude', 'gan', 'project.md'),
+      ['---', 'schemaVersion: 1', '---', ''].join('\n'),
+    );
+    // A manifest plus a lockfile satisfy the builtin web-node's detection, so it
+    // becomes the active stack and contributes its declared **/*.ts scope.
+    writeFileSync(
+      path.join(projectRoot, 'package.json'),
+      '{"name":"bdl-fixture","scripts":{"build":"echo build"}}\n',
+    );
+    writeFileSync(path.join(projectRoot, 'package-lock.json'), '{}\n');
+
+    mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+    mkdirSync(path.join(projectRoot, 'vendor_pkgs', 'dep'), { recursive: true });
+    writeFileSync(path.join(projectRoot, 'src', 'index.ts'), 'export const x = 1;\n');
+    writeFileSync(path.join(projectRoot, 'vendor_pkgs', 'dep', 'lib.ts'), 'export const v = 1;\n');
+    // The project declares the dependency-like tree uninteresting; the listing
+    // must honour that without this test (or the tool) naming the directory.
+    writeFileSync(path.join(projectRoot, '.gitignore'), 'vendor_pkgs\n');
+    return { projectRoot, userHome };
+  }
+
+  it('returns a scope-filtered, gitignore-pruned listing resolved from the active stacks', async () => {
+    const { clearResolvedConfigCache } =
+      await import('../../../src/config-server/resolution/cache.js');
+    clearResolvedConfigCache();
+    const { projectRoot, userHome } = makeProject();
+
+    // The suite's global setup points the package root at an empty fake root (no
+    // builtin stacks), so steer resolution at the real repo whose builtin
+    // web-node declares the **/*.ts scope this assertion depends on.
+    const listing = getBoundedDirectoryListing(
+      { projectRoot },
+      { userHome, packageRoot: repoRoot },
+    );
+
+    // In scope (the active web-node stack's **/*.ts) and not ignored.
+    expect(listing.scopedFiles).toContain('src/index.ts');
+    // Ignored by the project's own .gitignore — pruned from the walk.
+    expect(listing.scopedFiles).not.toContain('vendor_pkgs/dep/lib.ts');
+    // Out of scope (.md) never appears regardless of location.
+    expect(listing.scopedFiles.some((p) => p.endsWith('.md'))).toBe(false);
+    // Top-level shape excludes the ignored tree.
+    expect(listing.topLevelDirectories).toContain('src');
+    expect(listing.topLevelDirectories).not.toContain('vendor_pkgs');
   });
 });

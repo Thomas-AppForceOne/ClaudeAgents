@@ -45,6 +45,10 @@ import {
   composeResolvedConfigSync,
   type ResolvedConfig,
 } from '../resolution/resolved-config.js';
+import {
+  buildBoundedDirectoryListing,
+  type BoundedDirectoryListing,
+} from '../resolution/bounded-directory-listing.js';
 import { computeTrustHash } from '../trust/hash.js';
 import { readCache, type TrustApproval } from '../trust/cache-io.js';
 import { _runPhase1ForTests } from './validate.js';
@@ -585,6 +589,82 @@ export async function getResolvedConfig(
     userHome: ctx.userHome,
     packageRoot: ctx.packageRoot,
   });
+}
+
+/**
+ * Input to {@link getBoundedDirectoryListing}.
+ *
+ * @property projectRoot project directory; canonicalised before enumeration.
+ */
+export interface GetBoundedDirectoryListingInput {
+  projectRoot: string;
+}
+
+/**
+ * Produce a structure-only, scope-bounded directory listing for a project — the
+ * coarse repo shape a planning/clarification step grounds its questions in,
+ * without reading any file contents.
+ *
+ * Resolves the active stacks, unions their declared `scope` globs, and returns
+ * the top-level directory names plus every file matching those globs (less the
+ * paths the project's own ignore file excludes). The union of scope globs is
+ * how the listing stays confined to what the active stacks declare they own; a
+ * project with no active stack scope yields only the top-level directory names.
+ *
+ * Read-only; resolves config synchronously and walks the tree with guarded I/O.
+ * Throws a `ConfigServerError` only if config resolution itself fails (e.g. an
+ * unresolvable override); the directory walk never throws (see
+ * {@link buildBoundedDirectoryListing}).
+ *
+ * @param input see {@link GetBoundedDirectoryListingInput}.
+ * @param ctx ambient context steering resolution and stack loading.
+ * @returns the {@link BoundedDirectoryListing}.
+ */
+export function getBoundedDirectoryListing(
+  input: GetBoundedDirectoryListingInput,
+  ctx: ReadToolContext = {},
+): BoundedDirectoryListing {
+  const root = canonicalizePath(input.projectRoot);
+  const apiVersion = readPackageMetaSync().version;
+  const resolved = composeResolvedConfigSync(root, apiVersion, {
+    userHome: ctx.userHome,
+    packageRoot: ctx.packageRoot,
+  });
+  const scopeGlobs = collectActiveStackScopeGlobs(resolved.stacks.active, root, ctx);
+  return buildBoundedDirectoryListing(root, scopeGlobs);
+}
+
+/**
+ * Union the `scope` globs declared by every active stack, loading each stack to
+ * read its body. A stack that fails to load is skipped rather than aborting the
+ * gather — a missing scope for one stack should not blank the whole listing. A
+ * `Set` de-duplicates globs two stacks share.
+ */
+function collectActiveStackScopeGlobs(
+  activeNames: readonly string[],
+  projectRoot: string,
+  ctx: ReadToolContext,
+): string[] {
+  const opts: ResolveStackOptions = {};
+  if (ctx.userHome) opts.userHome = ctx.userHome;
+  if (ctx.packageRoot) opts.packageRoot = ctx.packageRoot;
+
+  const globs = new Set<string>();
+  for (const name of activeNames) {
+    let loaded: LoadedStack;
+    try {
+      loaded = loadStack(name, projectRoot, opts);
+    } catch {
+      continue;
+    }
+    const data = loaded.data;
+    if (isObject(data) && Array.isArray(data['scope'])) {
+      for (const g of data['scope']) {
+        if (typeof g === 'string') globs.add(g);
+      }
+    }
+  }
+  return [...globs];
 }
 
 /** Narrow to a non-null, non-array object. */
