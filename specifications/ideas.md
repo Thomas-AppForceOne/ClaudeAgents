@@ -102,3 +102,34 @@ A new `F5-secret-scanning.md` under the F-prefix (foundational/framework-wide su
 ### Trigger / likely target spec
 
 Extract the profile against the **second concrete language**, not before — factoring an abstraction from one example bakes in TS assumptions. A new Q-series spec (e.g. `Q7-doc-lint-language-profiles.md`) reusing C1's stack-schema discipline; ~1 spec sprint to author, ~1–2 to extract the core once, then each new language is config.
+
+---
+
+## 4. Post-run external documentation generation (markdown + mermaid)
+
+**Status:** interested · **Added:** 2026-05-25
+
+**TL;DR:** After a GAN run, generate/update *external* technical docs (markdown + mermaid diagrams — like this repo's own `documentation/` folder), not in-code doc comments. Optional per-stack **documentation module**, configured via the existing default→user→project overlay; runs only if present *and* configured. Incremental by default: assume existing docs are current, touch only what the run changed.
+
+### Motivation
+
+Today's `documentationSurfaces` *enforce* docs (proposer instantiates criteria, evaluator scores them) but generate nothing, and they target in-code comments. External architecture docs — the high-value, human-onboarding kind — are exactly what nobody keeps current. A GAN run already knows precisely what it changed, so it's well placed to emit the matching doc delta. The repo's six hand-authored mermaid subsystem files are the reference output / dogfood target.
+
+### Sketch
+
+1. **Optional per-stack documentation module** — declares *what artifacts* and *at what depth* (e.g. web-node → route/component graphs; python → module/dependency graphs). Optional: a stack may ship without it. Resolved through the existing overlay cascade (default→user→project); executes only if present and configured.
+2. **Incremental update** — bootstrap = full generation (or existing hand-authored docs as seed); thereafter touch only the artifacts the run's diff affects. Reuse the existing `documentationSurfaces` `triggers: { keywords, scope }` model to map a sprint's diff → affected doc artifacts (a reuse, not new infra).
+3. **Structural gate, not semantic** — before docs are accepted: mermaid parses, and every node/edge references a file/module/symbol that still exists (catches dangling refs after rename/delete). Semantic accuracy ("is this the *right* abstraction") is explicitly best-effort — the one artifact class gated structurally only.
+4. **New post-run phase** owned by the orchestrator (no post-run extension point exists today).
+
+### Open questions
+
+- **Compounding drift is the core risk.** Incremental gives up the self-correction that wholesale regen provides — a wrong edge in run 5 is inherited by runs 6–50. Mitigation: a **periodic full-regen backstop** to scrub accumulated drift. How often / what triggers it?
+- **Silent under-update** is the nasty failure mode: a local code change ripples into a system-level diagram that the trigger mapping misses. How conservative should the diff→artifact mapping be (over-touch costs tokens; under-touch costs accuracy)?
+- **Cost** — even incremental, doc gen is token-heavy. Gate on "only if scope X changed", or offer an on-demand mode?
+- **Generate + evaluate as a mini-loop?** Should doc gen be a true generator phase the evaluator then scores (consistent with the framework's "nothing unverified ships" DNA), or a lighter post-run step with only the structural gate?
+- Surgical mermaid edits are fiddly for an LLM (preserving untouched parts) — regenerate-per-artifact vs. true in-place edit?
+
+### Likely target spec
+
+A new `Q8-external-doc-generation.md` under the Q-prefix (quality surfaces, alongside Q5's documentation-quality enforcement and the Q6/Q7 doc-lint line), or a sibling under a new D-prefix. ~1 spec sprint to author; 2–3 to implement (module schema + overlay wiring + orchestrator post-run phase + structural gate + integration tests).
