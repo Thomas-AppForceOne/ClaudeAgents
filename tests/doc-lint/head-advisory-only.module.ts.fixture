@@ -1,0 +1,12 @@
+/** A documented export that exists at the merge-base. */
+export const documentedAtBase = 1;
+
+/**
+ * Adds two numbers. This doc block exists (so the presence blocker is
+ * satisfied) but documents neither parameter nor return via an explicit tag,
+ * so the required-sections advisory fires on it.
+ */
+export function advisoryNoSections(a, b) {
+  // const dead = a + b;
+  return a + b;
+}

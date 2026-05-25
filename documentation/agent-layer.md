@@ -240,7 +240,7 @@ flowchart TD
 flowchart TD
     START(["evaluator spawned\nwith contract + snapshot\n+ worktree path"])
     PLAN["consume evaluator-core plan\n(per-stack checks in order)"]
-    RUN_CHECKS["execute plan checks:\nsecrets scan · dependency audit\nlint · test · build\nadditional overlay checks"]
+    RUN_CHECKS["execute plan checks:\nsecrets scan · dependency audit · doc-lint\nlint · test · build\nadditional overlay checks"]
     WARN{"plan-derived\nwarnings?"}
     SURFACE_WARN["surface warnings verbatim\n(tool absence, scope mismatch)"]
     SCORE["score each criterion\nagainst its own threshold\n(1–10 scale)"]

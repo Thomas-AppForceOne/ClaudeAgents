@@ -29,17 +29,24 @@
  * equality against them is what proves "no interpolation".
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import {
   buildDocumentationSurfacesInstantiated,
   isKnownSurfaceId,
 } from '../../../src/agents/evaluator-core/index.js';
 import type {
+  DocumentationSurface,
   EvaluatorCoreSnapshot,
   SprintPlan,
   WorktreeState,
 } from '../../../src/agents/evaluator-core/index.js';
+import { verifyEvidenceBundle } from '../../../src/trace/evidence-bundle.js';
+import type { ContractCriterionLike } from '../../../src/trace/evidence-bundle.js';
 
 const DOC_PUBLIC_CONTRACT_TEMPLATE =
   "Every exported function, class, or type documents each parameter's meaning, " +
@@ -288,5 +295,183 @@ describe('isKnownSurfaceId (suppress union existence-check)', () => {
     expect(keptIds).toContain('web-node.public_contract_completeness');
 
     expect(isKnownSurfaceId(snapshot, suppress[0]!)).toBe(true);
+  });
+});
+
+// The qualified key the engine emits for the provenance surface; named once so
+// the (a)/(b)/(c) cases and the per-criterion gate all key off the same string.
+const PROVENANCE_QUALIFIED_ID = 'web-node.comments_cite_no_development_provenance';
+
+// Read the provenance surface back out of the shipped web-node stack rather
+// than re-stating its template here: the instantiation proof is "the engine
+// carries the stack-declared template through verbatim", so the expected value
+// must originate in the stack data, not a hand-copied literal that could drift
+// from the stack and still pass. Parsing the front-matter is also what proves
+// the surface is plain stack data the unchanged engine consumes.
+function readWebNodeProvenanceSurface(): DocumentationSurface {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // tests/agents/evaluator-core -> repo root is three levels up.
+  const repoRoot = path.resolve(here, '..', '..', '..');
+  const raw = readFileSync(path.join(repoRoot, 'stacks', 'web-node.md'), 'utf8');
+
+  // The stack file is a Markdown doc with a leading YAML front-matter block; the
+  // surfaces live in that block, so we slice it out before parsing.
+  const match = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (match === null) {
+    throw new Error('web-node.md has no YAML front-matter block to read surfaces from');
+  }
+  const front = parseYaml(match[1]) as {
+    documentationSurfaces?: DocumentationSurface[];
+  };
+  const surface = (front.documentationSurfaces ?? []).find(
+    (s) => s.id === 'comments_cite_no_development_provenance',
+  );
+  if (surface === undefined) {
+    throw new Error('web-node.md is missing the comments_cite_no_development_provenance surface');
+  }
+  return surface;
+}
+
+// Build a snapshot whose only stack is web-node carrying the real provenance
+// surface read from the stack file — the engine sees exactly what /gan would.
+function provenanceSnapshot(surface: DocumentationSurface): EvaluatorCoreSnapshot {
+  return {
+    activeStacks: [
+      {
+        name: 'web-node',
+        scope: ['**/*.ts', '**/*.tsx'],
+        documentationSurfaces: [surface],
+      },
+    ],
+    mergedSplicePoints: {},
+  };
+}
+
+describe('comments_cite_no_development_provenance — C1 instantiation end-to-end', () => {
+  const surface = readWebNodeProvenanceSurface();
+
+  it('(a) instantiates verbatim against a .ts affected file, keyed web-node.<id>', () => {
+    const snapshot = provenanceSnapshot(surface);
+    const sprintPlan: SprintPlan = { affectedFiles: ['src/feature.ts'], criteria: [] };
+    // The surface has no keyword trigger, so file contents are irrelevant to
+    // whether it fires — only scope matters; the worktree is supplied for parity
+    // with how the builder is called in /gan, not because a keyword is needed.
+    const worktree: WorktreeState = {
+      files: ['src/feature.ts'],
+      fileContents: { 'src/feature.ts': 'export function f(): void {}\n' },
+    };
+
+    const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
+    const row = rows.find((r) => `${r.stack}.${r.id}` === PROVENANCE_QUALIFIED_ID);
+
+    expect(row).toBeTruthy();
+    // Verbatim: equality against the template read from the stack, not a literal.
+    expect(row!.templateText).toBe(surface.template);
+    expect(row!.appliesToFiles).toEqual(['src/feature.ts']);
+  });
+
+  it('(a) also fires on a .tsx affected file', () => {
+    const snapshot = provenanceSnapshot(surface);
+    const sprintPlan: SprintPlan = { affectedFiles: ['src/component.tsx'], criteria: [] };
+    const worktree: WorktreeState = { files: ['src/component.tsx'], fileContents: {} };
+
+    const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
+    const keys = rows.map((r) => `${r.stack}.${r.id}`);
+
+    expect(keys).toContain(PROVENANCE_QUALIFIED_ID);
+  });
+
+  it('(b) scope miss — a .md/.yml-only affected set does NOT fire it', () => {
+    const snapshot = provenanceSnapshot(surface);
+    // Markdown and YAML are deliberately outside the surface's
+    // ["**/*.ts", "**/*.tsx"] scope: the built-in stack leaves markdown
+    // provenance to the user's own prose (judging a user's README/changelog
+    // references would over-reach), so the surface must not fire on a
+    // docs/config-only diff.
+    const sprintPlan: SprintPlan = {
+      affectedFiles: ['docs/notes.md', '.github/workflows/test-doc-lint.yml'],
+      criteria: [],
+    };
+    const worktree: WorktreeState = {
+      files: ['docs/notes.md', '.github/workflows/test-doc-lint.yml'],
+      fileContents: {},
+    };
+
+    const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('(c) isKnownSurfaceId recognises the new qualified id', () => {
+    const snapshot = provenanceSnapshot(surface);
+    expect(isKnownSurfaceId(snapshot, PROVENANCE_QUALIFIED_ID)).toBe(true);
+  });
+
+  it('(d) a below-threshold provenance verdict rides the real evidence-bundle gate, not a stand-in', () => {
+    // Scoring (1–10 → pass/fail) is the LLM evaluator's judgment; the framework
+    // has no deterministic score→verdict function to unit-test, exactly as for
+    // every securitySurface criterion. What IS deterministic — and what the gate
+    // actually consumes — is the evidence bundle: a below-threshold criterion is
+    // recorded as verdict:'fail', and verifyEvidenceBundle is the real gate
+    // machinery that schema-validates that failing verdict and joins it to the
+    // sprint contract. This drives that real path instead of re-implementing
+    // `score >= threshold` in the test.
+    const snapshot = provenanceSnapshot(surface);
+    const sprintPlan: SprintPlan = { affectedFiles: ['src/feature.ts'], criteria: [] };
+    const worktree: WorktreeState = { files: ['src/feature.ts'], fileContents: {} };
+
+    // The criterion must be instantiated for the gate to have anything to score;
+    // proving (d) on a criterion that did not fire would be vacuous.
+    const rows = buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktree);
+    const row = rows.find((r) => `${r.stack}.${r.id}` === PROVENANCE_QUALIFIED_ID);
+    expect(row).toBeTruthy();
+    const criterionName = `${row!.stack}.${row!.id}`;
+
+    // The sprint contract carries the instantiated provenance criterion as the
+    // join-key target.
+    const contract: ContractCriterionLike[] = [{ name: criterionName }];
+
+    // The evaluator's bundle for an attempt that scored provenance below its
+    // threshold: the criterion is recorded as a failing verdict with the
+    // evidence a fail requires.
+    const failingBundle = {
+      sprintNumber: 1,
+      attemptLetter: 'A',
+      criteria: [
+        {
+          name: criterionName,
+          verdict: 'fail',
+          evidence: {
+            traceEventRefs: [],
+            reproductionCommand: 'rg -n "sprint|ticket" src/feature.ts',
+            deltaFromContract: {
+              expected: 'comments and user-facing strings cite no development-process artifact',
+              observed: 'src/feature.ts carries an in-comment sprint reference',
+            },
+          },
+        },
+      ],
+      verdictSummary: { totalCriteria: 1, passed: 0, failed: 1, blocked: 0, skipped: 0 },
+    };
+
+    // The real gate machinery accepts the failing verdict and joins it to the
+    // contract: the provenance criterion genuinely participates in the gate, and
+    // the bundle is not all-pass — which the orchestrator treats as a failed
+    // attempt.
+    const result = verifyEvidenceBundle(failingBundle, contract, []);
+    expect(result.ok).toBe(true);
+    expect(result.schemaValid).toBe(true);
+    expect(failingBundle.criteria.some((c) => c.verdict === 'fail')).toBe(true);
+
+    // And the gate is not a rubber stamp: a fail verdict stripped of its required
+    // evidence is rejected by the same real machinery (a failing verdict cannot
+    // be recorded without the reproduction command + expected/observed delta).
+    const malformed = {
+      ...failingBundle,
+      criteria: [{ name: criterionName, verdict: 'fail', evidence: { traceEventRefs: [] } }],
+    };
+    const bad = verifyEvidenceBundle(malformed, contract, []);
+    expect(bad.ok).toBe(false);
+    expect(bad.failures.length).toBeGreaterThan(0);
   });
 });

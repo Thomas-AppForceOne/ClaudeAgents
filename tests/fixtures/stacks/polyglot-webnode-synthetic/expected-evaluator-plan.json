@@ -73,6 +73,20 @@
       "appliesToFiles": [
         "src/main.ts"
       ],
+      "id": "comments_cite_no_development_provenance",
+      "stack": "web-node",
+      "templateText": "Every comment, and every user-facing string the code emits (an error message, a log line, text shown to a user), added in this sprint explains the code's reasons — a constraint, an invariant, a non-obvious decision and its rationale — and references no development-process artifact: a specification or RFC identifier used as a process tag, a sprint or iteration label, a ticket, or a pull-request number. It says why the code is the way it is, not when, by which process, or under which plan it was written. A citation that is itself the rationale (an upstream bug the code works around, a standard the code implements) is allowed.\n",
+      "triggerEvidence": {
+        "keywordsHit": [],
+        "scopeMatched": [
+          "src/main.ts"
+        ]
+      }
+    },
+    {
+      "appliesToFiles": [
+        "src/main.ts"
+      ],
       "id": "comments_explain_why_not_what",
       "stack": "web-node",
       "templateText": "Every comment added in this sprint explains a constraint, an invariant, or a non-obvious decision and its rationale — not a restatement of what the adjacent code already expresses. No added comment can be deleted without losing information absent from the code itself.\n",

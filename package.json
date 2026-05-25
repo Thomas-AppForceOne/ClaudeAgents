@@ -33,7 +33,8 @@
     "publish-schemas": "node dist/scripts/publish-schemas/index.js",
     "publish-schemas:check": "node dist/scripts/publish-schemas/index.js --dry-run",
     "lint-no-stack-leak": "node dist/scripts/lint-no-stack-leak/index.js",
-    "lint-error-text": "node dist/scripts/lint-error-text/index.js"
+    "lint-error-text": "node dist/scripts/lint-error-text/index.js",
+    "doc-lint": "node dist/scripts/doc-lint/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

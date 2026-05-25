@@ -1,0 +1,7 @@
+/** A documented export that exists at the merge-base. */
+export const documentedAtBase = 1;
+
+// A pre-existing UNDOCUMENTED export: it has only a line comment, no doc block.
+// The ratchet must grandfather this one — it predates the delta, so the tool
+// never reports it even though it lacks a doc comment.
+export const undocumentedAtBase = 2;

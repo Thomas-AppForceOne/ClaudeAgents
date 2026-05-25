@@ -1,0 +1,14 @@
+/** A documented export that exists at the merge-base. */
+export const documentedAtBase = 1;
+
+// A pre-existing UNDOCUMENTED export: it has only a line comment, no doc block.
+// The ratchet must grandfather this one — it predates the delta, so the tool
+// never reports it even though it lacks a doc comment.
+export const undocumentedAtBase = 2;
+
+// The delta introduces this export with only a line comment — no doc block —
+// so it is the lone blocker the tool must report.
+export const introducedUndocumented = 3;
+
+/** A newly introduced export that IS documented, so it must produce no finding. */
+export const introducedDocumented = 4;

@@ -9,20 +9,22 @@ Technical documentation for the evaluator-core deterministic subsystem.
 flowchart LR
     subgraph IN["Inputs — assembled by the evaluator agent"]
         direction TB
-        SNP["EvaluatorCoreSnapshot\nactiveStacks[]\n  · name · scope · secretsGlob\n  · auditCmd\n  · buildCmd · testCmd · lintCmd\n  · securitySurfaces[]\nmergedSplicePoints\n  · evaluator.additionalChecks"]
+        SNP["EvaluatorCoreSnapshot\nactiveStacks[]\n  · name · scope · secretsGlob\n  · auditCmd · docLintCmd\n  · buildCmd · testCmd · lintCmd\n  · securitySurfaces[] · documentationSurfaces[]\nmergedSplicePoints\n  · evaluator.additionalChecks"]
         SPL["SprintPlan\naffectedFiles[]\ncriteria[]"]
         WTS["WorktreeState\nfiles[]\nfileContents?"]
     end
 
-    PB["buildEvaluatorPlan\nPure function · no I/O · deterministic\nOrchestrates all five builders"]
+    PB["buildEvaluatorPlan\nPure function · no I/O · deterministic\nOrchestrates all eight builders"]
 
     subgraph BL["Builders · one per EvaluatorPlan section"]
         direction TB
         BAS["buildActiveStacks\nSort active stacks by name"]
         BSS["buildSecretsScans\nuses: activeStacks · worktree.files\n1 · Filter worktree files to stack scope\n2 · Per extension: match **/*.ext\n3 · Sort by (stack · extension)"]
         BAC["buildAuditCommands\nuses: activeStacks\nPer stack with auditCmd:\n  emit command + absenceSignal\nSort by stack name"]
+        BDL["buildDocLintInvocations\nuses: activeStacks\nPer stack with docLintCmd:\n  emit command + scope + severity\n  + baseline + absenceSignal\nSort by stack name"]
         BBT["buildBuildTestLint\nuses: activeStacks\nSort stacks by name\nFirst-stack-wins per phase\n  buildCmd · testCmd · lintCmd"]
         BSI["buildSecuritySurfacesInstantiated\nuses: activeStacks · affectedFiles · fileContents\n1 · affectedFiles ∩ stack.scope\n2 · If trigger.scope → ∩ trigger.scope\n3 · If trigger.keywords → scan fileContents\n4 · No triggers → instantiate if touched non-empty\n5 · Record scopeMatched + keywordsHit\nSort by (stack · id)"]
+        BDS["buildDocumentationSurfacesInstantiated\nuses: activeStacks · affectedFiles · fileContents\nSame C1 instantiation engine as security surfaces\n(documentationSurfaces source array)\nSort by (stack · id)"]
         BAD["buildEvaluatorAdditionalChecks\nuses: mergedSplicePoints\nPass-through evaluator.additionalChecks verbatim"]
     end
 
@@ -31,8 +33,10 @@ flowchart LR
         OAS["activeStacks[]\nname · scope"]
         OSS["secretsScans[]\nstack · extension · files[]"]
         OAC["auditCommands[]\nstack · command · absenceSignal"]
+        ODL["docLintInvocations[]\nstack · command · scope\nseverity · baseline · absenceSignal"]
         OBT["buildTestLint\nbuildCmd? · testCmd? · lintCmd?"]
         OSI["securitySurfacesInstantiated[]\nstack · id · templateText\ntriggerEvidence { scopeMatched · keywordsHit }\nappliesToFiles[]"]
+        ODS["documentationSurfacesInstantiated[]\nstack · id · templateText\ntriggerEvidence { scopeMatched · keywordsHit }\nappliesToFiles[]"]
         OAD["evaluatorAdditionalChecks[]\ncommand · on_failure · tier"]
     end
 
@@ -40,13 +44,15 @@ flowchart LR
     SPL --> PB
     WTS --> PB
 
-    PB --> BAS & BSS & BAC & BBT & BSI & BAD
+    PB --> BAS & BSS & BAC & BDL & BBT & BSI & BDS & BAD
 
     BAS --> OAS
     BSS --> OSS
     BAC --> OAC
+    BDL --> ODL
     BBT --> OBT
     BSI --> OSI
+    BDS --> ODS
     BAD --> OAD
 ```
 
@@ -65,16 +71,32 @@ classDiagram
         +scope string[]
         +secretsGlob string[]
         +auditCmd AuditCmd
+        +docLintCmd DocLintCmd
         +buildCmd string
         +testCmd string
         +lintCmd string
         +securitySurfaces SecuritySurface[]
+        +documentationSurfaces DocumentationSurface[]
     }
     class AuditCmd {
         <<interface>>
         +command string
         +absenceSignal string
         +absenceMessage string
+    }
+    class DocLintCmd {
+        <<interface>>
+        +command string
+        +absenceSignal string
+        +absenceMessage string
+        +severity string
+        +baseline string
+    }
+    class DocumentationSurface {
+        <<interface>>
+        +id string
+        +template string
+        +triggers Triggers
     }
     class SecuritySurface {
         <<interface>>
@@ -108,8 +130,10 @@ classDiagram
         +activeStacks ActiveStack[]
         +secretsScans SecretsRow[]
         +auditCommands AuditRow[]
+        +docLintInvocations DocLintRow[]
         +buildTestLint BuildTestLint
         +securitySurfacesInstantiated SecurityRow[]
+        +documentationSurfacesInstantiated DocRow[]
         +evaluatorAdditionalChecks AdditionalCheck[]
     }
     class ActiveStack {
@@ -125,6 +149,21 @@ classDiagram
         +stack string
         +command string
         +absenceSignal string
+    }
+    class DocLintRow {
+        +stack string
+        +command string
+        +scope string[]
+        +severity string
+        +baseline string
+        +absenceSignal string
+    }
+    class DocRow {
+        +stack string
+        +id string
+        +templateText string
+        +triggerEvidence TriggerEvidence
+        +appliesToFiles string[]
     }
     class BuildTestLint {
         +buildCmd string
@@ -151,17 +190,23 @@ classDiagram
     EvaluatorCoreSnapshot "1" *-- "n" StackEntry : activeStacks
     EvaluatorCoreSnapshot *-- MergedSplicePoints
     StackEntry o-- AuditCmd
+    StackEntry o-- DocLintCmd
     StackEntry "1" *-- "n" SecuritySurface
+    StackEntry "1" *-- "n" DocumentationSurface
     SecuritySurface o-- Triggers
+    DocumentationSurface o-- Triggers
     MergedSplicePoints "1" *-- "n" AdditionalCheck
     SprintPlan "1" *-- "n" Criterion
     EvaluatorPlan "1" *-- "n" ActiveStack
     EvaluatorPlan "1" *-- "n" SecretsRow
     EvaluatorPlan "1" *-- "n" AuditRow
+    EvaluatorPlan "1" *-- "n" DocLintRow
     EvaluatorPlan *-- BuildTestLint
     EvaluatorPlan "1" *-- "n" SecurityRow
+    EvaluatorPlan "1" *-- "n" DocRow
     EvaluatorPlan "1" *-- "n" AdditionalCheck
     SecurityRow *-- TriggerEvidence
+    DocRow *-- TriggerEvidence
 ```
 
 ---
@@ -178,20 +223,25 @@ flowchart TD
     B1["buildActiveStacks\nsort by name"]
     B2["buildSecretsScans\nglob expansion · scope filter · sort by stack+ext"]
     B3["buildAuditCommands\nverbatim passthrough · sort by stack name"]
-    B4["buildBuildTestLint\nfirst-stack-wins per phase"]
-    B5["buildSecuritySurfacesInstantiated\nC1 template instantiation · sort by stack+id"]
-    B6["buildEvaluatorAdditionalChecks\nsplice-point passthrough verbatim"]
+    B4["buildDocLintInvocations\nverbatim docLintCmd → invocation · sort by stack name"]
+    B5["buildBuildTestLint\nfirst-stack-wins per phase"]
+    B6["buildSecuritySurfacesInstantiated\nC1 template instantiation · sort by stack+id"]
+    B7["buildDocumentationSurfacesInstantiated\nsame C1 engine · documentationSurfaces · sort by stack+id"]
+    B8["buildEvaluatorAdditionalChecks\nsplice-point passthrough verbatim"]
 
     OUT["EvaluatorPlan\nbyte-stable"]
 
     IN1 & IN2 & IN3 --> MAIN
-    MAIN --> B1 & B2 & B3 & B4 & B5 & B6
-    B1 & B2 & B3 & B4 & B5 & B6 --> OUT
+    MAIN --> B1 & B2 & B3 & B4 & B5 & B6 & B7 & B8
+    B1 & B2 & B3 & B4 & B5 & B6 & B7 & B8 --> OUT
 ```
 
 ---
 
-## 4 — Security surface instantiation algorithm
+## 4 — Surface instantiation algorithm (security and documentation)
+
+`buildDocumentationSurfacesInstantiated` shares this exact algorithm with `buildSecuritySurfacesInstantiated`; only the source array differs (`documentationSurfaces` vs `securitySurfaces`). The flow below therefore applies to both.
+
 ```mermaid
 flowchart TD
     FOR_STACK(["for each active stack"])
@@ -245,8 +295,10 @@ sequenceDiagram
     participant BAS as buildActiveStacks
     participant BSS as buildSecretsScans
     participant BAC as buildAuditCommands
+    participant BDL as buildDocLintInvocations
     participant BBT as buildBuildTestLint
     participant BSI as buildSecuritySurfacesInstantiated
+    participant BDS as buildDocumentationSurfacesInstantiated
     participant BAD as buildEvaluatorAdditionalChecks
 
     CA->>PB: buildEvaluatorPlan(snapshot, sprintPlan, worktreeState)
@@ -263,6 +315,10 @@ sequenceDiagram
 
     PB->>BAC: buildAuditCommands(snapshot)
     BAC-->>PB: auditCommands[] sorted by stack name
+
+    PB->>BDL: buildDocLintInvocations(snapshot)
+    Note over BDL: per stack with docLintCmd · verbatim command + scope/severity/baseline
+    BDL-->>PB: docLintInvocations[] sorted by stack name
 
     PB->>BBT: buildBuildTestLint(snapshot)
     Note over BBT: sort stacks by name · first-stack-wins per phase
@@ -281,6 +337,10 @@ sequenceDiagram
         end
     end
     BSI-->>PB: securitySurfacesInstantiated[] sorted by (stack, id)
+
+    PB->>BDS: buildDocumentationSurfacesInstantiated(snapshot, sprintPlan, worktreeState)
+    Note over BDS: same instantiation engine as BSI · documentationSurfaces source array
+    BDS-->>PB: documentationSurfacesInstantiated[] sorted by (stack, id)
 
     PB->>BAD: buildEvaluatorAdditionalChecks(snapshot)
     BAD-->>PB: evaluatorAdditionalChecks[] verbatim passthrough

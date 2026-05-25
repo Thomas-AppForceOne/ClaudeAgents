@@ -1,9 +1,9 @@
 /**
  * Structural tests for the CI workflow files under `.github/workflows`.
  *
- * The CI surface is a single reusable `shared-setup.yml` plus six per-category
+ * The CI surface is a single reusable `shared-setup.yml` plus seven per-category
  * workflows that all call it. This suite pins that layout and the conventions
- * that keep it consistent: exactly the seven expected `.yml` files exist (no
+ * that keep it consistent: exactly the eight expected `.yml` files exist (no
  * stray `.yaml`), the shared workflow is `workflow_call`-triggered and pins a
  * Node version in the supported range while running `npm ci` + `npm run
  * build`, every category workflow triggers on push and pull_request, reuses
@@ -37,6 +37,7 @@ const CATEGORY_WORKFLOWS = [
   'test-schemas.yml',
   'test-no-stack-leak.yml',
   'test-error-text.yml',
+  'test-doc-lint.yml',
 ] as const;
 const EXPECTED_FILES = [SHARED, ...CATEGORY_WORKFLOWS].sort();
 
@@ -112,7 +113,7 @@ function nodeVersionInRange(version: string): boolean {
 }
 
 describe('workflows: directory layout', () => {
-  it('contains exactly the seven expected `.yml` files', () => {
+  it('contains exactly the eight expected `.yml` files', () => {
     const entries = readdirSync(WORKFLOWS_DIR).sort();
     expect(entries).toEqual(EXPECTED_FILES);
   });
@@ -248,6 +249,11 @@ describe('workflows: per-file command substrings', () => {
   it('test-error-text.yml runs `npm run lint-error-text`', () => {
     const raw = readWorkflow('test-error-text.yml');
     expect(raw).toContain('npm run lint-error-text');
+  });
+
+  it('test-doc-lint.yml runs `npm run doc-lint`', () => {
+    const raw = readWorkflow('test-doc-lint.yml');
+    expect(raw).toContain('npm run doc-lint');
   });
 });
 

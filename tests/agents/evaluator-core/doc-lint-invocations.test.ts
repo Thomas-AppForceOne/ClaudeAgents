@@ -212,3 +212,85 @@ describe('buildEvaluatorPlan wires docLintInvocations (FUNC-4)', () => {
     expect(plan.docLintInvocations).toEqual([]);
   });
 });
+
+/**
+ * Resolution proof: inside `/gan`, the active `web-node` stack's declared
+ * `docLintCmd` must resolve through buildDocLintInvocations — and on through
+ * buildEvaluatorPlan into `plan.docLintInvocations` — to the real
+ * `npm run doc-lint` command the tool ships behind, with web-node's TypeScript
+ * scope globs (a copy, not an alias), `blocker` severity, `delta` baseline, and
+ * `warning` absence signal.
+ *
+ * The stack here mirrors the resolved snapshot's `byName['web-node'].docLintCmd`
+ * (stacks/web-node.md). The assertions read the command and scope back OUT of
+ * the constructed snapshot and compare the emitted row to that source, proving
+ * the resolution *carries the stack value through* rather than re-stating a
+ * literal — the `doc_lint_command_stays_stack_sourced` contract: the command
+ * originates in stack data, never a hardcoded ecosystem token in evaluator-core.
+ */
+describe('web-node docLintInvocations resolution', () => {
+  function webNodeStack(): EvaluatorCoreSnapshot['activeStacks'][number] {
+    // Faithful to the resolved snapshot's web-node docLintCmd: the command is
+    // the stack-declared value the tool backs, with delta baseline + blocker.
+    return {
+      name: 'web-node',
+      scope: ['**/*.ts', '**/*.tsx'],
+      docLintCmd: {
+        command: 'npm run doc-lint',
+        absenceSignal: 'warning',
+        absenceMessage:
+          'The framework could not run the documentation linter for this stack. Confirm a `doc-lint` script is configured for the project and re-run, or review the changed exports by hand before merging.\n',
+        severity: 'blocker',
+        baseline: 'delta',
+      },
+    };
+  }
+
+  it('buildDocLintInvocations resolves web-node to its stack-declared command and fields', () => {
+    const stack = webNodeStack();
+    const snapshot: EvaluatorCoreSnapshot = {
+      activeStacks: [stack],
+      mergedSplicePoints: {},
+    };
+
+    const rows = buildDocLintInvocations(snapshot);
+
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row!.stack).toBe('web-node');
+    // Command is whatever the stack declared — read from the source, proving the
+    // resolution carries it through rather than re-stating a literal here.
+    expect(row!.command).toBe(stack.docLintCmd!.command);
+    // The fields the evaluator needs to run and grade it, resolved from the stack.
+    expect(row!.severity).toBe('blocker');
+    expect(row!.baseline).toBe('delta');
+    expect(row!.absenceSignal).toBe('warning');
+    // Scope equals web-node's globs, and is a COPY (a later mutation of the row
+    // must not bleed back into the snapshot's array).
+    expect(row!.scope).toEqual(stack.scope);
+    expect(row!.scope).not.toBe(stack.scope);
+  });
+
+  it('the same row flows unchanged through buildEvaluatorPlan into plan.docLintInvocations', () => {
+    const snapshot: EvaluatorCoreSnapshot = {
+      activeStacks: [webNodeStack()],
+      mergedSplicePoints: {},
+    };
+
+    const plan = buildEvaluatorPlan(snapshot, NO_SPRINT, NO_WORKTREE);
+
+    // The plan field equals the direct builder output — the assembly step does
+    // not alter the resolved row on its way into the plan.
+    expect(plan.docLintInvocations).toEqual(buildDocLintInvocations(snapshot));
+    expect(plan.docLintInvocations).toHaveLength(1);
+    const [row] = plan.docLintInvocations;
+    // Read the resolved command back from the plan and compare to the stack
+    // source — the end-to-end /gan resolution the spec names as a criterion.
+    expect(row!.command).toBe(snapshot.activeStacks[0]!.docLintCmd!.command);
+    expect(row!.stack).toBe('web-node');
+    expect(row!.severity).toBe('blocker');
+    expect(row!.baseline).toBe('delta');
+    expect(row!.absenceSignal).toBe('warning');
+    expect(row!.scope).toEqual(['**/*.ts', '**/*.tsx']);
+  });
+});

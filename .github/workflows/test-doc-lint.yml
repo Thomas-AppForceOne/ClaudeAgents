@@ -1,0 +1,16 @@
+name: test-doc-lint
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+jobs:
+  run:
+    uses: ./.github/workflows/shared-setup.yml
+    with:
+      # Full history so the base commit is present locally: the gate diffs the
+      # change against the base, and a shallow checkout omits that baseline.
+      fetch-depth: 0
+      # Diff against the base commit for the event: the pull request's base on a
+      # pull_request, the push's previous tip on a push. --require-base makes a
+      # missing baseline fail the check rather than silently report clean.
+      run: npm run doc-lint -- --require-base --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"

@@ -29,6 +29,12 @@ import { stableStringify } from './json.js';
  * @property message human-readable detail, typically including remediation.
  * @property field optional dotted/pointer location within the file; emitted to
  *   JSON only when present (an absent field is omitted, not set to null).
+ * @property severity optional classification distinguishing a finding that must
+ *   gate (`'blocker'`) from one reported for human attention only
+ *   (`'advisory'`). Absent means the report variant does not grade by severity
+ *   and the finding is treated as gating — so existing single-severity reports
+ *   keep their meaning without setting the field. Emitted to JSON only when
+ *   present, matching the `field` convention.
  */
 export interface ReportFailure {
   path: string;
@@ -38,6 +44,8 @@ export interface ReportFailure {
   message: string;
 
   field?: string;
+
+  severity?: 'blocker' | 'advisory';
 }
 
 /**
@@ -120,6 +128,29 @@ export interface LintErrorTextReport {
 }
 
 /**
+ * Result of `doc-lint`: exported symbols and comments introduced or changed in
+ * the merge-base delta, checked against the documentation rules. `checked` is
+ * the number of delta `.ts`/`.tsx` files inspected (not symbols), so a clean
+ * delta of N files reads as "N files checked, 0 failed". Like the schema/stack
+ * reports, the summary counts distinct failed files rather than raw hits,
+ * because several findings in one file are one file the author must revisit.
+ *
+ * Findings carry a {@link ReportFailure.severity}: the export-doc-presence rule
+ * is a `'blocker'` (it gates), while the required-sections and
+ * commented-out-code heuristics are `'advisory'` (reported, never gating on
+ * their own). The exit-code routing — advisory-only is clean, any blocker
+ * fails — lives in the tool, not the report shape; the report only records the
+ * classification so a caller can tell the two apart.
+ */
+export interface DocLintReport {
+  kind: 'doc-lint';
+
+  checked: number;
+
+  failures: ReportFailure[];
+}
+
+/**
  * Discriminated union of every script's report, keyed on `kind`. This is the
  * single type the renderers accept; the `kind` tag both selects the formatter
  * and drives the exhaustiveness checks that guard against an unhandled variant.
@@ -130,7 +161,8 @@ export type ScriptReport =
   | EvaluatorPipelineCheckReport
   | PublishSchemasReport
   | LintNoStackLeakReport
-  | LintErrorTextReport;
+  | LintErrorTextReport
+  | DocLintReport;
 
 /**
  * The two output streams a human-readable render produces. Kept separate so a
@@ -171,6 +203,9 @@ export function formatReport(input: ScriptReport): FormattedReport {
   }
   if (input.kind === 'lint-error-text') {
     return formatLintErrorText(input);
+  }
+  if (input.kind === 'doc-lint') {
+    return formatDocLint(input);
   }
 
   // Unreachable at runtime; exists so the compiler proves every `kind` above
@@ -252,6 +287,22 @@ function formatLintErrorText(input: LintErrorTextReport): FormattedReport {
   return { stdout, stderr };
 }
 
+// doc-lint reports distinct failed files (not raw hits) like the stack/schema
+// formatters: a finding is "this file introduced an undocumented export", and
+// one summary line per file is what the author acts on. The detail line per
+// failure carries the symbol via `field`, so several findings in one file are
+// each visible on stderr while the summary stays one-file-one-count.
+function formatDocLint(input: DocLintReport): FormattedReport {
+  const failedCount = countFailedFiles(input.failures);
+  const stdout = `${input.checked} files checked, ${failedCount} failed\n`;
+  if (input.failures.length === 0) {
+    return { stdout, stderr: '' };
+  }
+  const lines = input.failures.map((f) => `${f.path}: ${f.code}: ${f.message}`);
+  const stderr = `${lines.join('\n')}\n`;
+  return { stdout, stderr };
+}
+
 /**
  * Count how many *distinct* files appear across `failures`, deduplicating on
  * `path`. This is what the human summaries report as "failed", so several
@@ -292,6 +343,9 @@ export function formatReportJson(input: ScriptReport): string {
   if (input.kind === 'lint-error-text') {
     return renderJson(input);
   }
+  if (input.kind === 'doc-lint') {
+    return renderJson(input);
+  }
 
   // Same exhaustiveness guard as formatReport: a new unhandled `kind` is a
   // compile error here rather than silently producing no JSON.
@@ -326,6 +380,13 @@ function renderJson(input: ScriptReport): string {
       // the key rather than serialising a missing optional.
       if (typeof f.field === 'string') {
         entry['field'] = f.field;
+      }
+      // Same omit-when-absent rule for `severity`: a report variant that does
+      // not grade by severity emits no `severity` key at all, so its JSON shape
+      // is unchanged by this field's existence — only graded variants (doc-lint)
+      // carry it, letting a machine consumer route blocker vs. advisory.
+      if (typeof f.severity === 'string') {
+        entry['severity'] = f.severity;
       }
       return entry;
     }),

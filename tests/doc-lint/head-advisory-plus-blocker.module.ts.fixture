@@ -1,0 +1,16 @@
+/** A documented export that exists at the merge-base. */
+export const documentedAtBase = 1;
+
+// The delta introduces this export with only a line comment — no doc block —
+// so it is the lone blocker the tool reports.
+export const introducedUndocumented = 3;
+
+/**
+ * Adds two numbers. This doc block satisfies the presence blocker but documents
+ * neither parameter nor return via an explicit tag, so the required-sections
+ * advisory fires on it.
+ */
+export function advisoryNoSections(a, b) {
+  // const dead = a + b;
+  return a + b;
+}

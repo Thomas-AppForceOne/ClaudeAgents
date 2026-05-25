@@ -68,3 +68,64 @@ Bonus consideration: extending the evaluator-core's `secrets-scans.ts` from "lis
 ### Likely target spec
 
 A new `F5-secret-scanning.md` under the F-prefix (foundational/framework-wide surfaces), or an amendment to `F4-threat-model-and-trust.md`. About 1 spec sprint to author, 1 to wire the CI gate, 1 to land the evaluator-core extension if scoped in.
+
+---
+
+## 3. Multi-stack doc-lint: language profile (data) + neutral core (library), never stack-injected code
+
+**Status:** idea · **Added:** 2026-05-25
+
+**TL;DR:** Q6 shipped `scripts/doc-lint/` TypeScript-only. To cover other stacks without rewriting the tool per language, split it three ways and keep all per-language knowledge as **data** or a **trusted subprocess** — never as executable code a stack injects.
+
+### Motivation
+
+`docLintCmd` already lets a stack name *any* command, and the evaluator wiring (`buildDocLintInvocations`) is fully stack-agnostic — so the integration path needs no framework change. The cost is concentrated entirely in the linter behind the command. But that cost is smaller than it looks: the engine's git/delta/grandfather/`--require-base`/severity/report machinery is **already language-neutral**; only ~6 symbols (the glob list, export regexes, doc-comment association, the two advisory collectors) are TypeScript-bound, and most of *those* are data, not logic.
+
+### Sketch — the three-way split
+
+- **Presence rule (the only gating rule) → declarative `LanguageProfile`** in stack front-matter: file globs, export-detection regex(es), a `visibility` enum (keyword `export`/`pub` | capitalized | underscore-private), doc-comment delimiter + position (`above` | `docstring-below`). Pure data, schema-validated, fits the existing stack/trust model. Adding a language's *gate* becomes config.
+- **Tag-shaped advisories** (required-sections, commented-out-code) **→ also data:** their algorithms are already neutral; only the regex tables differ (`@param`/`@returns`, code-looking patterns). Carry them in the profile as regex lists.
+- **Structurally-divergent advisories** (e.g. Python docstrings live *inside* the body as prose, not as tags above) **→ delegate to the ecosystem's real linter** via the existing `docLintCmd` string (ruff/pydocstyle, revive). Don't reimplement.
+- **Code reuse for tool authors → ship the neutral core as an importable library;** keep framework→tool a subprocess.
+
+### The load-bearing constraint
+
+**Never let a stack ship an *executable* heuristics module.** Stacks are declarative data gated by the trust protocol (F4/F6); a loadable module = arbitrary code running in `/gan` and CI, a supply-chain surface, a versioned engine↔module API, and a trust model that must now cover code execution. This is exactly why `docLintCmd` is a subprocess string, not a plugin — the subprocess *is* the trust boundary. The whole idea works only because the heuristics arrive as data or as a separately-trusted command.
+
+### Open questions
+
+- Profile home: inline in each stack's front-matter, or a shared `profiles/` referenced by name? (Schema impact either way.)
+- Do the `visibility` / doc-position enums stay a closed set, or will a language force a new variant? (Escape hatch is always `docLintCmd` delegation.)
+- Neutral core: published as an npm package, or vendored — given consumer ecosystems may not be on Node?
+- The regex-table approach inherits TS's accepted false-negative ceiling (re-exports/destructuring) per language; where does that push a language straight to a real external linter instead of a profile?
+
+### Trigger / likely target spec
+
+Extract the profile against the **second concrete language**, not before — factoring an abstraction from one example bakes in TS assumptions. A new Q-series spec (e.g. `Q7-doc-lint-language-profiles.md`) reusing C1's stack-schema discipline; ~1 spec sprint to author, ~1–2 to extract the core once, then each new language is config.
+
+---
+
+## 4. Post-run external documentation generation (markdown + mermaid)
+
+**Status:** interested · **Added:** 2026-05-25
+
+**TL;DR:** After a GAN run, generate/update *external* technical docs (markdown + mermaid diagrams — like this repo's own `documentation/` folder), not in-code doc comments. Optional per-stack **documentation module**, configured via the existing default→user→project overlay; runs only if present *and* configured. Incremental by default: assume existing docs are current, touch only what the run changed.
+
+### Motivation
+
+Today's `documentationSurfaces` *enforce* docs (proposer instantiates criteria, evaluator scores them) but generate nothing, and they target in-code comments. External architecture docs — the high-value, human-onboarding kind — are exactly what nobody keeps current. A GAN run already knows precisely what it changed, so it's well placed to emit the matching doc delta. The repo's six hand-authored mermaid subsystem files are the reference output / dogfood target.
+
+### Sketch
+
+1. **Optional per-stack documentation module** — declares *what artifacts* and *at what depth* (e.g. web-node → route/component graphs; python → module/dependency graphs). Optional: a stack may ship without it. Resolved through the existing overlay cascade (default→user→project); executes only if present and configured.
+2. **Incremental update** — bootstrap = full generation (or existing hand-authored docs as seed); thereafter touch only the artifacts the run's diff affects. Reuse the existing `documentationSurfaces` `triggers: { keywords, scope }` model to map a sprint's diff → affected doc artifacts (a reuse, not new infra).
+3. **Structural gate, not semantic** — before docs are accepted: mermaid parses, and every node/edge references a file/module/symbol that still exists (catches dangling refs after rename/delete). Semantic accuracy ("is this the *right* abstraction") is explicitly best-effort — the one artifact class gated structurally only.
+4. **New post-run phase** owned by the orchestrator (no post-run extension point exists today).
+
+### Open questions
+
+- **Compounding drift is the core risk.** Incremental gives up the self-correction that wholesale regen provides — a wrong edge in run 5 is inherited by runs 6–50. Mitigation: a **periodic full-regen backstop** to scrub accumulated drift. How often / what triggers it?
+- **Silent under-update** is the nasty failure mode: a local code change ripples into a system-level diagram that the trigger mapping misses. How conservative should the diff→artifact mapping be (over-touch costs tokens; under-touch costs accuracy)?
+- **Cost** — even incremental, doc gen is token-heavy. Gate on "only if scope X changed", or offer an on-demand mode?
+- **Generate + evaluate as a mini-loop?** Should doc gen be a true generator phase the evaluator then scores (consistent with the framework's "nothing unverified ships" DNA), or a lighter post-run step with only the structural gate?
+- Surgical mermaid edits are fiddly for an LLM (preserving untouched parts) — regenerate-per-artifact vs. true in-place edit?

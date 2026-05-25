@@ -36,7 +36,7 @@ flowchart TD
     Persist["persist(event)"]
 
     subgraph Payload["Payload storage (full mode only)"]
-        PayRef["buildPayloadRef()\n→ <seq>/<role>.<class>.<ext>"]
+        PayRef["buildPayloadRef()\n→ payloads/<seq>-<role>-<class>.<ext>"]
         PayFile["writePayloadFile()\natomic temp+rename\nunder payloads/"]
     end
 
