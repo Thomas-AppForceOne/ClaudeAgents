@@ -129,7 +129,3 @@ Today's `documentationSurfaces` *enforce* docs (proposer instantiates criteria, 
 - **Cost** — even incremental, doc gen is token-heavy. Gate on "only if scope X changed", or offer an on-demand mode?
 - **Generate + evaluate as a mini-loop?** Should doc gen be a true generator phase the evaluator then scores (consistent with the framework's "nothing unverified ships" DNA), or a lighter post-run step with only the structural gate?
 - Surgical mermaid edits are fiddly for an LLM (preserving untouched parts) — regenerate-per-artifact vs. true in-place edit?
-
-### Likely target spec
-
-A new `Q8-external-doc-generation.md` under the Q-prefix (quality surfaces, alongside Q5's documentation-quality enforcement and the Q6/Q7 doc-lint line), or a sibling under a new D-prefix. ~1 spec sprint to author; 2–3 to implement (module schema + overlay wiring + orchestrator post-run phase + structural gate + integration tests).
