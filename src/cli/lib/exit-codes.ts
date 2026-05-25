@@ -54,6 +54,7 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   TrustCacheCorrupt: EXIT_GENERIC,
   InvalidYAML: EXIT_VALIDATION,
   MissingFile: EXIT_VALIDATION,
+  InvalidTimeoutValue: EXIT_VALIDATION,
   UnknownApiVersion: EXIT_GENERIC,
   NotImplemented: EXIT_GENERIC,
   MalformedInput: EXIT_BAD_ARGS,

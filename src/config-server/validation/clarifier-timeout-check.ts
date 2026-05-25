@@ -39,11 +39,7 @@ const MAX_TIMEOUT_SECONDS = 600;
  * wrapper form (`draftTimeoutSeconds: { discardInherited, value: 30 }`) are
  * inspected; the wrapper's `.value` is the value range-checked.
  */
-export function checkClarifierTimeoutRange(
-  filePath: string,
-  data: unknown,
-  issues: Issue[],
-): void {
+export function checkClarifierTimeoutRange(filePath: string, data: unknown, issues: Issue[]): void {
   if (!isObject(data)) return;
 
   const clarifier = data['clarifier'];
