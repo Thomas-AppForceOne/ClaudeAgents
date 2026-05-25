@@ -68,3 +68,37 @@ Bonus consideration: extending the evaluator-core's `secrets-scans.ts` from "lis
 ### Likely target spec
 
 A new `F5-secret-scanning.md` under the F-prefix (foundational/framework-wide surfaces), or an amendment to `F4-threat-model-and-trust.md`. About 1 spec sprint to author, 1 to wire the CI gate, 1 to land the evaluator-core extension if scoped in.
+
+---
+
+## 3. Multi-stack doc-lint: language profile (data) + neutral core (library), never stack-injected code
+
+**Status:** idea · **Added:** 2026-05-25
+
+**TL;DR:** Q6 shipped `scripts/doc-lint/` TypeScript-only. To cover other stacks without rewriting the tool per language, split it three ways and keep all per-language knowledge as **data** or a **trusted subprocess** — never as executable code a stack injects.
+
+### Motivation
+
+`docLintCmd` already lets a stack name *any* command, and the evaluator wiring (`buildDocLintInvocations`) is fully stack-agnostic — so the integration path needs no framework change. The cost is concentrated entirely in the linter behind the command. But that cost is smaller than it looks: the engine's git/delta/grandfather/`--require-base`/severity/report machinery is **already language-neutral**; only ~6 symbols (the glob list, export regexes, doc-comment association, the two advisory collectors) are TypeScript-bound, and most of *those* are data, not logic.
+
+### Sketch — the three-way split
+
+- **Presence rule (the only gating rule) → declarative `LanguageProfile`** in stack front-matter: file globs, export-detection regex(es), a `visibility` enum (keyword `export`/`pub` | capitalized | underscore-private), doc-comment delimiter + position (`above` | `docstring-below`). Pure data, schema-validated, fits the existing stack/trust model. Adding a language's *gate* becomes config.
+- **Tag-shaped advisories** (required-sections, commented-out-code) **→ also data:** their algorithms are already neutral; only the regex tables differ (`@param`/`@returns`, code-looking patterns). Carry them in the profile as regex lists.
+- **Structurally-divergent advisories** (e.g. Python docstrings live *inside* the body as prose, not as tags above) **→ delegate to the ecosystem's real linter** via the existing `docLintCmd` string (ruff/pydocstyle, revive). Don't reimplement.
+- **Code reuse for tool authors → ship the neutral core as an importable library;** keep framework→tool a subprocess.
+
+### The load-bearing constraint
+
+**Never let a stack ship an *executable* heuristics module.** Stacks are declarative data gated by the trust protocol (F4/F6); a loadable module = arbitrary code running in `/gan` and CI, a supply-chain surface, a versioned engine↔module API, and a trust model that must now cover code execution. This is exactly why `docLintCmd` is a subprocess string, not a plugin — the subprocess *is* the trust boundary. The whole idea works only because the heuristics arrive as data or as a separately-trusted command.
+
+### Open questions
+
+- Profile home: inline in each stack's front-matter, or a shared `profiles/` referenced by name? (Schema impact either way.)
+- Do the `visibility` / doc-position enums stay a closed set, or will a language force a new variant? (Escape hatch is always `docLintCmd` delegation.)
+- Neutral core: published as an npm package, or vendored — given consumer ecosystems may not be on Node?
+- The regex-table approach inherits TS's accepted false-negative ceiling (re-exports/destructuring) per language; where does that push a language straight to a real external linter instead of a profile?
+
+### Trigger / likely target spec
+
+Extract the profile against the **second concrete language**, not before — factoring an abstraction from one example bakes in TS assumptions. A new Q-series spec (e.g. `Q7-doc-lint-language-profiles.md`) reusing C1's stack-schema discipline; ~1 spec sprint to author, ~1–2 to extract the core once, then each new language is config.
