@@ -71,7 +71,7 @@ Single inventory of every flag, env-var value, and prompt branch a user can hit 
 | `--help` / `-h` | every subcommand | R3 | Print subcommand help, exit 0. |
 | `--json` | reads | R3 | Emit raw API JSON instead of human format. |
 | `--project-root=<path>` | global | R3 | Project root override. Trust-mutating subcommands require this explicitly. |
-| `--tier=project\|repo` | `gan stacks new` | R3 | Scaffold target tier; default `project`. |
+| `--tier=project\|user` | `gan stacks new` | R3 | Scaffold target tier; default `project`. |
 | `--note=<text>` | `gan trust approve` | R5 | Note attached to approval (free text; user-visible in `gan trust list`). |
 
 ## Environment variables

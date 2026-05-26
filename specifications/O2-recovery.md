@@ -109,6 +109,7 @@ The post-E1 `progress.json` schema gains four fields beyond the legacy set:
   "status": "clarifying | planning | negotiating | building | evaluating | complete | failed",
   "currentSprint": 3,
   "currentAttempt": 1,
+  "contractRevision": 0,
   "totalSprints": 7,
   "completedSprints": 2,
 
@@ -149,18 +150,24 @@ complete                       Run finished all sprints successfully
 failed-max-attempts            Sprint exhausted maxAttempts
 failed-budget                  Hit maxAttemptsTotal or maxMinutes
 failed-loop-detected           A1 halt — see safetyHalt event for discriminator
+failed-evaluation-rejected     E8 renegotiation cap hit with unresolved blocker
+                               findings — the gate REJECTED the work. A real
+                               evaluation failure, distinct from the user-initiated
+                               aborted-* codes and from aborted-contract-failed
+                               (which is a pre-generation negotiation failure)
 failed-clarifier-error         E5 clarifier itself errored (e.g. LLM call failed)
 aborted-by-user                User answered N at resume prompt OR typed [c]ancel
                                at the E5 draft preview action menu
 aborted-planner-error          Planner failed (schema, refusal, etc.)
-aborted-contract-failed        Contract negotiation hit max revisions
+aborted-contract-failed        INITIAL contract negotiation hit max revisions
+                               (before any generator work; cf. failed-evaluation-
+                               rejected, the post-generation gate rejection)
 aborted-validation-failed      validateAll() failed in aborting mode
 ```
 
 `failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
-Schema lives at `schemas/run-state/progress-v1.json` per F3's naming conventions; this
-sprint adds it to the schema set if it isn't already present.
+Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (slot 17, ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies.
 
 ### 3. Teardown — terminal marker, never delete
 
@@ -507,7 +514,15 @@ Each criterion concrete and testable.
     `tests/fixtures/<fixture>/.gan-state/modules/dummy/state.json` and asserts the file
     is byte-identical after `--cleanup --all --include-terminal`.
 
-Tests cover at minimum: success path for 1-4, 6, 11, 13-16, 18-21, 23, 25, 27; failure path for 7-10, 17, 22, 24, 26.
+29. **Recover an E8-renegotiated run (the E8↔O2 seam).** A run halted with
+    `terminalReason: failed-evaluation-rejected` and `contractRevision > 0` is listed by
+    `--list-recoverable` and resumed by `--recover`: recovery reads the active
+    `contractRevision` from `progress.json`, re-attaches the canonical
+    `sprint-{N}-contract.json` (latest locked revision), and continues. This is the
+    integration test for the writer-before-schema ordering — it fails if `progress-v1.json`
+    rejects E8's `terminalReason` value or `contractRevision` field.
+
+Tests cover at minimum: success path for 1-6, 11-16, 18-21, 23, 25, 27, 29; failure path for 7-10, 17, 22, 24, 26, 28.
 
 ---
 
@@ -521,21 +536,19 @@ Tests cover at minimum: success path for 1-4, 6, 11, 13-16, 18-21, 23, 25, 27; f
 - **O1** — fail-open contract for `--recover` validation behaviour.
 - **T1** — the run trace recovery reads to reconstruct sprint and counter state.
 - **A1** — the loop-halt reasons (`failed-loop-detected`) recovery resumes from and the trace-as-only-counter reconstruction it shares.
-- **R7** — the runtime invocation bridge that makes the trace emittable/readable from the markdown orchestrator; without it the trace recovery reads would be empty. (Recovery is silent on the emission mechanism, so it is compatible-once-R7-lands rather than dependent on R7's internals, but R7 is what makes recovery operative in practice.)
+- **R7** — the runtime invocation bridge that makes the trace emittable/readable from the markdown orchestrator; without it the trace recovery reads would be empty. (Recovery is silent on the emission mechanism, so it is compatible-once-R7-lands rather than dependent on R7's internals, but R7 is what makes recovery operative in practice.) R7 also exposes the `acquireRunLock`/`releaseRunLock` tool §8's concurrency guard uses.
+- **E8** — E8 (slot 17) ships **before** O2 (slot 21) and is the *writer* of two `progress.json` fields O2's schema must accept: the `failed-evaluation-rejected` `terminalReason` value and `contractRevision`. O2 authors `progress-v1.json`, so its schema **must** include these or every E8-renegotiated run fails validation once the strict schema lands. `--recover` must also resume a run halted on E8's renegotiation cap (see AC). This writer-before-schema ordering is the seam to watch — AC 29 is its integration test.
 
 ## Implementation notes
 
 - **SKILL.md changes only.** No new agent file. The flag-dispatch table
   in SKILL.md gains three short-circuit handlers (`--list-recoverable`, `--recover
   [--run-id X]`, `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`).
-- **No external archive root.** `--telemetry-dir` and `--no-telemetry` no longer affect
-  recovery; telemetry is a separate concern. (Telemetry directories may still receive
-  copies of `progress.json` etc. for outcome tracking, but recovery does not depend on
-  them.)
+- **Recovery is independent of telemetry.** Telemetry is a separate concern owned by O3; recovery neither reads nor depends on any telemetry surface. (There is **no `--telemetry-dir` flag** — an earlier draft referenced one; it is absent from `runtime-knobs.md` and is removed here. O3 owns `--no-telemetry`.)
 - **Schema bump.** `progress.json`'s shape changes (gains `terminal`, `terminalReason`,
-  `terminalAt`, `projectRoot`, `overlaysAtSnapshot`, `recoveryHistory`). Per the
+  `terminalAt`, `contractRevision`, `projectRoot`, `overlaysAtSnapshot`, `recoveryHistory`). Per the
   pre-1.0 no-backward-compat rule, this is a `schemaVersion` bump on the run-state
-  schema if `schemas/run-state/progress-v1.json` exists, or first creation of that
+  schema if `schemas/progress-v1.json` exists, or first creation of that
   file.
 - **Tests live under `tests/integration/recovery/`** (new directory, follows the
   pattern of `tests/integration/snapshot-freshness.test.ts` and

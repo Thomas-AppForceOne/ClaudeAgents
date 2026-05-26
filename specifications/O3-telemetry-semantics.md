@@ -60,7 +60,7 @@ The artifact is written exactly once at run termination, regardless of how the r
 
 | Section | Purpose |
 |---|---|
-| `disposition` | Top-level run outcome: `"success"` \| `"halted"` \| `"aborted"` \| `"errored"`. |
+| `disposition` | Top-level run outcome: `"success"` \| `"rejected"` \| `"halted"` \| `"aborted"` \| `"errored"`. **`rejected`** = the gate refused the work; it maps from O2's `failed-evaluation-rejected` `terminalReason` (E8's renegotiation-cap rejection) — the most important new terminal state in v1.0. Without it a gate rejection would mis-bucket as `halted` (a safety halt) or `aborted` (user-initiated). |
 | `terminalReason` | Per [O2](O2-recovery.md)'s `terminalReason` codes (kebab-case ASCII). |
 | `sprints[]` | One entry per sprint that started: `{sprintNumber, status, attemptCounts: {<role>: <int>}, ...}`. |
 | `cost` | Aggregate from [T1](T1-structured-run-trace.md) trace events: `{tokensInput, tokensCached, tokensOutput, llmCallCount, toolCallCount, wallClockMs}`. |
