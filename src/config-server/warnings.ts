@@ -27,16 +27,21 @@
  * {@link DEFAULT_WARNING_MESSAGES} and a discriminated payload arm in
  * {@link WarningDetails}, both keyed exhaustively by this type — so the
  * compiler refuses to let a new code ship without its message and payload.
+ *
+ * The catalog currently holds a single code; it is kept as a union (rather than
+ * a bare string literal) so the exhaustive keying stays in force and a second
+ * code can be added without restructuring the type.
  */
-export type WarningCode = 'StackOverrideShrinkage' | 'PerStackOverrideUnsupported';
+export type WarningCode = 'StackOverrideShrinkage';
 
 /**
  * Payload carried by a {@link Warning}, discriminated by the warning's `code`.
  *
- * The two arms are disjoint by design so a consumer that has narrowed on `code`
- * gets a precisely-typed `details` with no optional-everything soup. The shapes
- * are intentionally minimal: only the data a surface needs to render the
- * warning or that a structured consumer asserts on.
+ * Modelled as a discriminated union (one arm today) so a consumer that has
+ * narrowed on `code` gets a precisely-typed `details` with no
+ * optional-everything soup, and a second code adds an arm rather than widening a
+ * shared shape. The shapes are intentionally minimal: only the data a surface
+ * needs to render the warning or that a structured consumer asserts on.
  *
  * `StackOverrideShrinkage` payload:
  * @property overrideSet the active stack names the user's `stack.override`
@@ -45,26 +50,13 @@ export type WarningCode = 'StackOverrideShrinkage' | 'PerStackOverrideUnsupporte
  *   the override been absent (locale-sorted).
  * @property suppressed the names present in `detectionSet` but absent from
  *   `overrideSet` — the coverage the override silently dropped (locale-sorted).
- *
- * `PerStackOverrideUnsupported` payload:
- * @property stack the stack name whose per-stack command override was declared.
- * @property fields the overridden command-field names for that stack, collapsed
- *   into one warning and deterministically ordered. The override *values* are
- *   deliberately NOT carried here: a value is opaque user text that may embed a
- *   secret, so only field names are surfaced (see {@link WARNING_FIELD_ORDER}).
  */
-export type WarningDetails =
-  | {
-      code: 'StackOverrideShrinkage';
-      overrideSet: string[];
-      detectionSet: string[];
-      suppressed: string[];
-    }
-  | {
-      code: 'PerStackOverrideUnsupported';
-      stack: string;
-      fields: string[];
-    };
+export type WarningDetails = {
+  code: 'StackOverrideShrinkage';
+  overrideSet: string[];
+  detectionSet: string[];
+  suppressed: string[];
+};
 
 /**
  * One non-aborting warning attached to the resolved-config snapshot.
@@ -94,25 +86,7 @@ export interface Warning {
 const DEFAULT_WARNING_MESSAGES: Record<WarningCode, string> = {
   StackOverrideShrinkage:
     "Your overlay's stack.override is smaller than the framework's auto-detection result, so some stacks auto-detection would have activated are suppressed. stack.override replaces detection wholesale; list every stack you want active to keep them.",
-  PerStackOverrideUnsupported:
-    'Your overlay declares per-stack command overrides. The framework accepts these in the overlay schema but does not yet apply them, so the override is recorded but does not affect this run. Remove the override to run with the stack-file defaults only.',
 };
-
-/**
- * Canonical ordering for the command-override field names a single
- * {@link PerStackOverrideUnsupported} warning may carry. The detection collapses
- * every overridden field for one stack into a single warning, and the snapshot
- * is byte-stable, so the field set must be emitted in a fixed order rather than
- * in user-declaration or hash order. This array is that order; the scan sorts a
- * stack's fields by their index here so two runs over the same overlay produce
- * identical bytes.
- */
-export const WARNING_FIELD_ORDER: readonly string[] = [
-  'auditCmd',
-  'buildCmd',
-  'testCmd',
-  'lintCmd',
-];
 
 /**
  * Canonical factory for a {@link Warning}. Prefer this over building the object
@@ -126,12 +100,13 @@ export const WARNING_FIELD_ORDER: readonly string[] = [
  *   bare warning that just needs the generic default.
  * @returns a plain, JSON-serialisable {@link Warning}. Never throws and has no
  *   side effects: it neither reads nor logs the caller's data, so it cannot leak
- *   an override value the caller did not put into `details`.
+ *   anything the caller did not put into `details`.
  *
- * Invariant the caller must uphold: `details` must never embed a per-stack
- * override *value* (only field names) — the factory copies `details` through
- * verbatim, so a value placed there would reach the persisted snapshot. The
- * detection layer enforces this by constructing `details` from field names only.
+ * Invariant the caller must uphold: because the factory copies `details` through
+ * verbatim into the persisted snapshot, a detection site must place only inert,
+ * non-sensitive data in `details` — never raw user-supplied free text. The
+ * shrinkage detection upholds this by carrying only stack names it derived from
+ * detection, not values copied out of the user's overlay.
  */
 export function createWarning(details: WarningDetails, message?: string): Warning {
   return {

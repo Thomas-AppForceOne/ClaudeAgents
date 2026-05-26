@@ -72,11 +72,12 @@ const SHRINKAGE_REMEDIATION = [
  * Render the active-stacks response for human (non-JSON) output.
  *
  * Two output shapes, gated strictly on the presence of a
- * `StackOverrideShrinkage` warning — and ONLY that code. A
- * `PerStackOverrideUnsupported` warning alone does not change the active set,
- * so it must NOT trigger the breakdown; the gate is therefore on the shrinkage
- * code, not on "any warning present". This keeps the script-friendly path
- * (one name per line) byte-for-byte unchanged whenever no coverage was lost.
+ * `StackOverrideShrinkage` warning — and ONLY that code. The breakdown exists to
+ * explain a shrunk active set, so only the shrinkage warning may trigger it; a
+ * future overlay warning of any other code must NOT, which is why the gate keys
+ * on the shrinkage code rather than on "any warning present". This keeps the
+ * script-friendly path (one name per line) byte-for-byte unchanged whenever no
+ * coverage was lost.
  *
  * - No shrinkage warning: one active stack name per line (trailing newline), or
  *   the literal `(none)\n` when the active set is empty. Byte-for-byte the

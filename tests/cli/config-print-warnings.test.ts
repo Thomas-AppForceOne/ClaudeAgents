@@ -47,7 +47,7 @@ describe('gan config print — W1 warnings', () => {
   });
 
   it('--json is byte-stable across runs over the same snapshot', async () => {
-    const fixture = stackFixturePath('overlay-warn-combined');
+    const fixture = stackFixturePath('overlay-warn-shrinkage');
     const a = await runGan(['config', 'print', '--project-root', fixture, '--json']);
     const b = await runGan(['config', 'print', '--project-root', fixture, '--json']);
     expect(a.exitCode).toBe(0);
@@ -72,14 +72,6 @@ describe('gan config print — W1 warnings', () => {
     expect(r.stdout).toContain('stack.override');
   });
 
-  it('human format prints one prose line per warning when several apply', async () => {
-    const fixture = stackFixturePath('overlay-warn-combined');
-    const r = await runGan(['config', 'print', '--project-root', fixture]);
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain('StackOverrideShrinkage: ');
-    expect(r.stdout).toContain('PerStackOverrideUnsupported: ');
-  });
-
   it('human format omits the warnings section entirely when no warning applies', async () => {
     const fixture = stackFixturePath('overlay-warn-single-detection');
     const r = await runGan(['config', 'print', '--project-root', fixture]);
@@ -87,6 +79,5 @@ describe('gan config print — W1 warnings', () => {
     // The table verbatim: no warnings header, no warning codes.
     expect(r.stdout).not.toContain('warnings:');
     expect(r.stdout).not.toContain('StackOverrideShrinkage');
-    expect(r.stdout).not.toContain('PerStackOverrideUnsupported');
   });
 });

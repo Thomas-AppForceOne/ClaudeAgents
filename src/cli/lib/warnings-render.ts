@@ -6,9 +6,8 @@
  * source across every CLI surface — so the prose can never drift between
  * commands — both human renderers route through {@link renderWarningProse}
  * here. The helper reads only the warning's `code` and `message`, which the
- * data layer already guaranteed are value-safe (a per-stack override's command
- * VALUE is never carried on the warning), so a rendering surface cannot
- * re-introduce a secret leak by reaching past these fields to the raw overlay.
+ * data layer already composed as inert, value-safe prose, so a rendering surface
+ * cannot re-introduce a leak by reaching past these fields to the raw overlay.
  */
 
 import type { Warning } from '../../index.js';
@@ -19,8 +18,8 @@ import type { Warning } from '../../index.js';
  *
  * @param warning the warning to render; only its `code` and `message` are read.
  *   `message` is the data layer's already-composed, value-safe prose — this
- *   helper neither reshapes it nor reads `details` (and so never the raw
- *   override value).
+ *   helper neither reshapes it nor reads `details` (and so never any raw
+ *   overlay value).
  * @returns the line `"<code>: <message>"` with NO trailing newline; the caller
  *   joins lines and controls line breaks. Pure: never throws, no side effects.
  */

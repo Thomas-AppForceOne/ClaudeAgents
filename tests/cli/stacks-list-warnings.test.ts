@@ -5,12 +5,8 @@
  * Covers the two human shapes (the active-vs-suppressed breakdown when a
  * StackOverrideShrinkage warning is present, and the preserved one-name-per-line
  * output when no shrinkage applies) and the always-present top-level `warnings`
- * array under `--json`. The fixtures are the Sprint-1 overlay-warn-* projects,
- * so the surface is exercised against the real data layer rather than a stub.
- *
- * The breakdown gate is verified to be strictly the StackOverrideShrinkage
- * code: a PerStackOverrideUnsupported warning alone (overlay-warn-per-stack-*)
- * must NOT trigger the breakdown, since it does not change the active set.
+ * array under `--json`. The fixtures are the overlay-warn-* projects, so the
+ * surface is exercised against the real data layer rather than a stub.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -51,25 +47,6 @@ describe('gan stacks list — W1 warnings', () => {
     expect(r.stdout).toBe('php-grav\n');
     expect(r.stdout).not.toContain('ACTIVE for this directory:');
     expect(r.stdout).not.toContain('SUPPRESSED');
-  });
-
-  it('a PerStackOverrideUnsupported warning alone does NOT trigger the breakdown', async () => {
-    // overlay-warn-per-stack-secret carries a PerStackOverrideUnsupported
-    // warning but no shrinkage; the active set is unchanged, so the human
-    // surface stays on the one-name-per-line path.
-    const fixture = stackFixturePath('overlay-warn-per-stack-secret');
-    const r = await runGan(['stacks', 'list', '--project-root', fixture]);
-    expect(r.exitCode).toBe(0);
-    // No breakdown framing whatsoever — the surface stays on the script path.
-    expect(r.stdout).not.toContain('ACTIVE for this directory:');
-    expect(r.stdout).not.toContain('SUPPRESSED');
-    expect(r.stdout).not.toContain('would have been activated');
-    // The fixture none the less carries the per-stack warning under --json, so
-    // confirm the breakdown was suppressed despite a warning being present.
-    const j = await runGan(['stacks', 'list', '--project-root', fixture, '--json']);
-    const parsed = JSON.parse(j.stdout) as { warnings: Warning[] };
-    expect(parsed.warnings).toHaveLength(1);
-    expect(parsed.warnings[0].code).toBe('PerStackOverrideUnsupported');
   });
 
   it('--json always carries a top-level warnings array (populated when shrinkage present)', async () => {

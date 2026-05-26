@@ -272,50 +272,15 @@ function computeOverlayWarningsForSnapshot(snapshot: ValidationSnapshot): Warnin
     // auto-detection result is the resolver's empty-match fallback; its presence
     // in the no-override run is therefore a reliable fallback marker.
     const detectionFellBackToGeneric = detectionRun.active.includes('generic');
-    // The per-stack-override scan runs over the user's AUTHORED overlay bodies,
-    // not the cascade's `merged` output: the cascade keeps only its allowlisted
-    // splice points and would strip a stack-named block, but that block is
-    // exactly the declaration the warning must name. The three tiers are
-    // shallow-unioned (project over user over default) so a stack-named block
-    // at any tier is seen, matching the precedence the rest of the cascade uses.
-    const overlaySource = unionOverlayTierBodies(snapshot);
-    return computeOverlayWarnings(
-      {
-        overrideActive: overrideRun.active.slice(),
-        detectionActive: detectionRun.active.slice(),
-        detectionFellBackToGeneric,
-      },
-      overlaySource,
-    );
+    return computeOverlayWarnings({
+      overrideActive: overrideRun.active.slice(),
+      detectionActive: detectionRun.active.slice(),
+      detectionFellBackToGeneric,
+    });
   } catch {
     // Best-effort: advisory warnings must never fail validation.
     return [];
   }
-}
-
-/**
- * Shallow-union the three overlay tiers' parsed bodies into one map for the
- * per-stack-override scan, with project winning over user winning over default
- * at the top-level-key granularity (the same precedence the cascade applies).
- *
- * Only top-level keys are merged (a per-stack command override is a top-level
- * stack-named block), so this is a deliberately shallow union, not a deep merge.
- * A tier whose body is absent or not an object contributes nothing. The result
- * carries the stack-named blocks the cascade would otherwise discard.
- */
-function unionOverlayTierBodies(snapshot: ValidationSnapshot): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const tier of ['default', 'user', 'project'] as const) {
-    const data = snapshot.overlays[tier]?.data;
-    if (!isObject(data)) continue;
-    for (const key of Object.keys(data)) {
-      // Own-property copy only; never assign through a prototype-polluting key,
-      // so a hostile `__proto__` block in an overlay cannot corrupt the union.
-      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-      out[key] = data[key];
-    }
-  }
-  return out;
 }
 
 /**

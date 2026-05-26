@@ -1,16 +1,13 @@
-// Covers the pure overlay-warning detectors: the StackOverrideShrinkage
+// Covers the pure overlay-warning detector: the StackOverrideShrinkage
 // comparison (including the count-blind generic-fallback edge case and the
-// same-size-swap non-firing rule) and the PerStackOverrideUnsupported scan
-// (one-warning-per-stack with field-set collapse, deterministic field order,
-// the fires-for-inactive-stacks rule, the never-echo-the-value security rule,
-// and prototype-pollution / malformed-shape safety). These functions are pure,
-// so the tests pass plain objects rather than building filesystem fixtures —
-// the fixture-backed end-to-end coverage lives in the resolver/validate suites.
+// same-size-swap non-firing rule) and the computeOverlayWarnings composition
+// wrapper. These functions are pure, so the tests pass plain objects rather than
+// building filesystem fixtures — the fixture-backed end-to-end coverage lives in
+// the resolver/validate suites.
 import { describe, expect, it } from 'vitest';
 
 import {
   computeStackOverrideShrinkageWarning,
-  computePerStackOverrideWarnings,
   computeOverlayWarnings,
 } from '../../../src/config-server/resolution/overlay-warnings.js';
 
@@ -116,113 +113,22 @@ describe('computeStackOverrideShrinkageWarning', () => {
   });
 });
 
-describe('computePerStackOverrideWarnings', () => {
-  it('emits one warning naming the stack and field for a single override', () => {
-    const ws = computePerStackOverrideWarnings({
-      'web-node': { buildCmd: 'custom-build' },
-    });
-    expect(ws).toHaveLength(1);
-    expect(ws[0].code).toBe('PerStackOverrideUnsupported');
-    expect(ws[0].details).toEqual({
-      code: 'PerStackOverrideUnsupported',
-      stack: 'web-node',
-      fields: ['buildCmd'],
-    });
-  });
-
-  it('collapses multiple fields for one stack into a single deterministically-ordered warning', () => {
-    // Declared out of canonical order (testCmd before buildCmd) to prove the
-    // emitted field set follows the fixed order, not the declaration order.
-    const ws = computePerStackOverrideWarnings({
-      'web-node': { testCmd: 'y', buildCmd: 'x', lintCmd: 'z', auditCmd: 'a' },
-    });
-    expect(ws).toHaveLength(1);
-    expect(ws[0].details).toEqual({
-      code: 'PerStackOverrideUnsupported',
-      stack: 'web-node',
-      fields: ['auditCmd', 'buildCmd', 'testCmd', 'lintCmd'],
-    });
-  });
-
-  it('emits one warning per distinct stack, locale-sorted by stack name', () => {
-    const ws = computePerStackOverrideWarnings({
-      'web-node': { buildCmd: 'x', testCmd: 'y' },
-      'php-grav': { buildCmd: 'z' },
-    });
-    expect(ws).toHaveLength(2);
-    expect(ws.map((w) => (w.details as { stack: string }).stack)).toEqual(['php-grav', 'web-node']);
-    const webNode = ws.find((w) => (w.details as { stack: string }).stack === 'web-node');
-    expect((webNode!.details as { fields: string[] }).fields).toEqual(['buildCmd', 'testCmd']);
-  });
-
-  it('never echoes the override command value into message or details', () => {
-    // The override value embeds a recognisable secret-like token. It must not
-    // surface anywhere in the warning — neither the prose nor the structured
-    // details — because the snapshot and startup log are persisted.
-    const SECRET = 'SECRET_TOKEN_abc123XYZ';
-    const ws = computePerStackOverrideWarnings({
-      'web-node': { buildCmd: `deploy --token=${SECRET}` },
-    });
-    expect(ws).toHaveLength(1);
-    const serialised = JSON.stringify(ws[0]);
-    expect(serialised).not.toContain(SECRET);
-    expect(ws[0].message).not.toContain(SECRET);
-  });
-
-  it('ignores the framework overlay blocks (they are not stack names)', () => {
-    // `stack`, `proposer`, etc. are cascade-owned blocks; a `buildCmd`-shaped
-    // key inside one of them must not be mistaken for a per-stack override.
-    const ws = computePerStackOverrideWarnings({
-      stack: { override: ['web-node'] },
-      proposer: { additionalContext: ['a'] },
-      generator: { additionalRules: ['r'] },
-    });
-    expect(ws).toEqual([]);
-  });
-
-  it('tolerates non-object stack entries without throwing', () => {
-    const ws = computePerStackOverrideWarnings({
-      'web-node': 'not-an-object',
-      'php-grav': ['also', 'not'],
-      other: null,
-    });
-    expect(ws).toEqual([]);
-  });
-
-  it('skips prototype-polluting keys and never reads through the prototype chain', () => {
-    const ws = computePerStackOverrideWarnings({
-      __proto__: { buildCmd: 'x' },
-      constructor: { buildCmd: 'y' },
-      prototype: { buildCmd: 'z' },
-      'web-node': { buildCmd: 'real' },
-    });
-    // Only the genuine stack key produces a warning; the prototype vectors are
-    // skipped. (Object.prototype is also unharmed — proven indirectly: the loop
-    // would have thrown or produced spurious warnings if it walked the chain.)
-    expect(ws).toHaveLength(1);
-    expect((ws[0].details as { stack: string }).stack).toBe('web-node');
-    // An inherited toString must not be read as a buildCmd override either.
-    expect(({} as Record<string, unknown>)['buildCmd']).toBeUndefined();
-  });
-
-  it('returns no warnings for a non-object merged overlay', () => {
-    expect(computePerStackOverrideWarnings(null)).toEqual([]);
-    expect(computePerStackOverrideWarnings('string')).toEqual([]);
-    expect(computePerStackOverrideWarnings([1, 2, 3])).toEqual([]);
-  });
-});
-
 describe('computeOverlayWarnings — composition', () => {
-  it('composes both surfaces without interaction', () => {
-    const ws = computeOverlayWarnings(
-      {
-        overrideActive: ['php-grav'],
-        detectionActive: ['php-grav', 'web-node'],
-        detectionFellBackToGeneric: false,
-      },
-      { 'web-node': { buildCmd: 'x' } },
-    );
-    const codes = ws.map((w) => w.code).sort();
-    expect(codes).toEqual(['PerStackOverrideUnsupported', 'StackOverrideShrinkage']);
+  it('returns the shrinkage warning when coverage was lost', () => {
+    const ws = computeOverlayWarnings({
+      overrideActive: ['php-grav'],
+      detectionActive: ['php-grav', 'web-node'],
+      detectionFellBackToGeneric: false,
+    });
+    expect(ws.map((w) => w.code)).toEqual(['StackOverrideShrinkage']);
+  });
+
+  it('returns an empty list when no coverage was lost', () => {
+    const ws = computeOverlayWarnings({
+      overrideActive: ['php-grav', 'web-node'],
+      detectionActive: ['php-grav', 'web-node'],
+      detectionFellBackToGeneric: false,
+    });
+    expect(ws).toEqual([]);
   });
 });
