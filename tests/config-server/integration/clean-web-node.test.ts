@@ -54,6 +54,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
       'runtimeMode',
       'schemaVersions',
       'stacks',
+      'warnings',
     ]);
     expect(r.apiVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(r.schemaVersions).toEqual({ stack: 1, overlay: 1 });
@@ -63,6 +64,7 @@ describe('integration: clean web-node project (js-ts-minimal)', () => {
     expect(r.discarded).toEqual([]);
     expect(r.additionalContext).toEqual({ planner: [], proposer: [] });
     expect(r.issues).toEqual([]);
+    expect(r.warnings).toEqual([]);
     expect(r.modules).toEqual({});
   });
 
