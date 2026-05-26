@@ -39,6 +39,9 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     expect(r.additionalContext.planner).toEqual([]);
     expect(r.additionalContext.proposer).toEqual([]);
     expect(r.issues).toEqual([]);
+    // warnings is always present and is an empty array for a clean project with
+    // no override and no per-stack command declarations.
+    expect(r.warnings).toEqual([]);
   });
 
   it('idempotent: byte-identical JSON across two consecutive calls', async () => {
@@ -59,7 +62,7 @@ describe('composeResolvedConfig — F2 stable shape', () => {
     expect(serialised).toBe(reSerialised);
   });
 
-  it('top-level keys: apiVersion, schemaVersions, runtimeMode, stacks, overlay, discarded, additionalContext, issues, modules', async () => {
+  it('top-level keys: apiVersion, schemaVersions, runtimeMode, stacks, overlay, discarded, additionalContext, issues, warnings, modules', async () => {
     const r = await composeResolvedConfig(jsTsMinimal);
     const keys = Object.keys(r).sort();
     expect(keys).toEqual([
@@ -72,6 +75,7 @@ describe('composeResolvedConfig — F2 stable shape', () => {
       'runtimeMode',
       'schemaVersions',
       'stacks',
+      'warnings',
     ]);
   });
 });

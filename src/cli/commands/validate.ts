@@ -9,7 +9,7 @@
  * routes through the error path.
  */
 
-import { validateAll, type Issue } from '../../index.js';
+import { validateAll, type Issue, type Warning } from '../../index.js';
 import { ConfigServerError } from '../../config-server/errors.js';
 import { emitJson } from '../lib/json-output.js';
 import {
@@ -26,10 +26,18 @@ import type { ParsedArgs } from '../lib/args.js';
  * Shape returned by `validateAll`.
  *
  * @property issues every validation issue found; an empty array means the
- *   project validated clean.
+ *   project validated clean. Issue severity — never the warning list — drives
+ *   the exit code (see {@link run}); warnings are informational and non-aborting.
+ * @property warnings the non-aborting overlay-misuse warnings `validateAll()`
+ *   already returns at runtime (empty array when none apply). Modelled here so a
+ *   surface that renders warnings reads a typed field rather than relying on
+ *   untyped structural access; carrying it does NOT change validate's
+ *   exit-code-by-severity contract. Each entry is read verbatim from the
+ *   snapshot — the CLI never recomputes the detection.
  */
 interface ValidateAllResult {
   issues: Issue[];
+  warnings: Warning[];
 }
 
 /**
