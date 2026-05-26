@@ -266,6 +266,7 @@ export type {
 } from './safety/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';
+export type { Warning, WarningCode, WarningDetails } from './config-server/warnings.js';
 export type {
   ResolvedConfig,
   ResolvedStackEntry,

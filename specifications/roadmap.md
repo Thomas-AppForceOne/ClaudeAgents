@@ -80,9 +80,9 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 12. ✅ **A1** — loop & thrash detection. Shipped PR #27.
 13. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — documentation enforcement: a framework doc-lint backing Q5's declared `docLintCmd` (export-doc presence gates; required-sections / commented-out-code advisory), a CI presence gate, and a comment / user-facing-string provenance judgment surface. Shipped PR #29.
 14. ✅ **E5** — spec clarification phase. Shipped PR #30.
-15. **Next.** **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
-16. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
-17. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
+15. ✅ **W1** — overlay-misuse warnings. Shipped PR #31.
+16. **Next.** **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
+17. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with D1.
 18. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
 19. **Pre-release chores.** See below.
 
@@ -91,7 +91,7 @@ Independents within the order: slots 8–17 have the dependency relationships ca
 ### Known gaps accepted at v1.0
 
 - **No CI test for end-to-end orchestrator flow.** v1.0 dogfooding is the implicit test surface; the orchestrator-side test harness is v2.0 V1's scope.
-- **Per-stack overlay command override is a no-op.** Visible via W1's `PerStackOverrideUnsupported` warning; full implementation lands in v1.1.
+- **Per-stack overlay command override is not supported.** A `<stack>.buildCmd` / `testCmd` / `lintCmd` / `auditCmd` block in an overlay is rejected by the overlay schema (`overlay-v1.json` is `additionalProperties: false` and has no per-stack block — those fields live only in the stack schema), so it surfaces as a `SchemaMismatch` validation error today, not a silent no-op. An earlier W1 draft planned a `PerStackOverrideUnsupported` warning for this and it was cut before shipping (false premise — see W1 § "Deferred: per-stack command-override warning"). Real support lands in v1.1.
 
 ### Pre-release chores
 
@@ -119,7 +119,7 @@ Builds on T1 trace data and v1.0 user reports. Specs land in priority order driv
 - **[T4](T4-run-configuration-record.md)** — run-configuration trace record. A per-run `runConfiguration` event (framework version, config digest, active stacks, agent roster + per-role model, trust posture, resolved harness knobs) for run-level debugging and V1's cross-run comparison. Additive new event class on `run-trace-v1`.
 - **A4** — PII / secret regex catalog (per-stack regex bank layered on `secretsGlob`).
 - **E5 round 2** — confidence-scored adaptive clarification depth; optional persistence of resolved clarifications to `additionalContext`.
-- **Per-stack overlay command override completion** — closes W1's `PerStackOverrideUnsupported` warning with the real implementation.
+- **Per-stack overlay command override — real support (supersedes W1's cut warning).** v1.0 has no per-stack command override: the `auditCmd` / `buildCmd` / `testCmd` / `lintCmd` fields exist only in the **stack** schema, and the overlay schema (`overlay-v1.json`, `additionalProperties: false`) has no per-stack block, so such an overlay declaration is a `SchemaMismatch` error — not an accepted-then-ignored value. W1 originally planned a `PerStackOverrideUnsupported` warning here; it was **cut before shipping** because the premise was false — the warning could never fire without a contradicting schema error, and on a real `/gan` run the aborting `validateAll()` halts before any warning surfaces (the `reads.ts` trust-summary `perStackOverridesCount` is likewise a hardcoded `0`, "not yet implemented"). The v1.1 spec must therefore deliver the *implementation*, not a warning: (1) extend the overlay schema to v2 (per F3, a real schema change is a version bump and its own decision) with a schema-valid per-stack command-override block; (2) wire the overrides through the cascade and the resolved-config snapshot so they actually replace the stack-file defaults during sprints; (3) update the trust summary to count them. Once overrides are accepted and applied there is no "recorded but ignored" state left to warn about — the honest surface is the working override itself.
 - **Schema-runtime alignment via generation or contract tests** — closes F5's surgical fix with the structural one.
 - **F6 → trust-prompt enforcement (new spec).** Builds on F6's documentation baseline with server-side enforcement options: rate-limiting, content-hash echo, structured audit log, scoped capability tokens (per F4's `[deferred-to-v1.1]` markers).
 - **`getMergedSplicePoints` inclusion-rule documentation (new spec).** Defines which fields participate; reserved fields like `stack.override` surface elsewhere.

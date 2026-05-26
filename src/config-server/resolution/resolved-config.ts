@@ -27,11 +27,8 @@ import { parseYamlBlock } from '../storage/yaml-block-parser.js';
 import { _runPhase1ForTests, validateAll, type Issue } from '../tools/validate.js';
 import { cascadeOverlays } from './cascade.js';
 import { detectActiveStacks } from './detection.js';
-import {
-  getResolvedConfigCache,
-  cacheKeyForProjectRoot,
-  backingFileMtime,
-} from './cache.js';
+import type { Warning } from '../warnings.js';
+import { getResolvedConfigCache, cacheKeyForProjectRoot, backingFileMtime } from './cache.js';
 import { resolveStackFile, type ResolveStackOptions } from './stack-resolution.js';
 
 /**
@@ -68,6 +65,12 @@ export interface ResolvedModuleEntry {
  * @property issues every problem found across all phases, de-duplicated and
  *   stably sorted. A non-empty `issues` does NOT prevent a config being
  *   returned — callers inspect it to decide whether to proceed.
+ * @property warnings non-aborting warnings about overlay declarations the
+ *   framework accepted but did not act on as the user likely intended (e.g. a
+ *   `stack.override` that silently shrank the active set, or a per-stack command
+ *   override that is recorded but not yet applied). Always present — an empty
+ *   array when none apply — so downstream surfaces never branch on absence.
+ *   Unlike `issues`, warnings never prevent a run; they are informational.
  * @property modules resolved module entries keyed by module name.
  */
 export interface ResolvedConfig {
@@ -76,7 +79,6 @@ export interface ResolvedConfig {
 
   runtimeMode: { noProjectCommands: boolean };
   stacks: {
-
     active: string[];
 
     byName: Record<string, ResolvedStackEntry>;
@@ -93,6 +95,8 @@ export interface ResolvedConfig {
 
   issues: Issue[];
 
+  warnings: Warning[];
+
   modules: Record<string, ResolvedModuleEntry>;
 }
 
@@ -104,7 +108,6 @@ export interface ResolvedConfig {
  * @property schemaVersion the stack schema version (pinned to the framework's).
  */
 export interface ResolvedStackEntry {
-
   tier: 'project' | 'user' | 'builtin';
 
   path: string;
@@ -241,6 +244,13 @@ export function composeResolvedConfigSync(
   const detection = detectActiveStacks(snapshot, { stackOverride });
   for (const issue of detection.issues) allIssues.push(issue);
 
+  // Non-aborting overlay warnings are computed once, by `validateAll`, and
+  // carried onto the snapshot here. Reusing that single result (rather than
+  // recomputing) keeps the warnings the resolved config exposes byte-identical
+  // to what the validation surface reports for the same project — a single
+  // source of truth for the two callers.
+  const warnings: Warning[] = validation.warnings;
+
   // Resolve each active stack name to its winning file/tier.
   const byName: Record<string, ResolvedStackEntry> = {};
   const opts: ResolveStackOptions = {};
@@ -297,6 +307,7 @@ export function composeResolvedConfigSync(
     discarded: cascade.discarded.slice(),
     additionalContext,
     issues: sortedIssues,
+    warnings,
     modules,
   };
 
@@ -342,14 +353,8 @@ function collectBackingFileStates(input: {
     process.env['USERPROFILE'];
   const hasUserHome = typeof userHome === 'string' && userHome.length > 0;
 
-  states.set(
-    path.join(input.canonRoot, '.claude', 'gan', 'default.md'),
-    null,
-  );
-  states.set(
-    path.join(input.canonRoot, '.claude', 'gan', 'project.md'),
-    null,
-  );
+  states.set(path.join(input.canonRoot, '.claude', 'gan', 'default.md'), null);
+  states.set(path.join(input.canonRoot, '.claude', 'gan', 'project.md'), null);
   if (hasUserHome) {
     states.set(path.join(userHome, '.claude', 'gan', 'user.md'), null);
   }

@@ -39,6 +39,10 @@ import {
 } from '../storage/module-loader.js';
 import { loadOverlay, type LoadedOverlay, type OverlayTier } from '../storage/overlay-loader.js';
 import { parseYamlBlock } from '../storage/yaml-block-parser.js';
+import { cascadeOverlays } from '../resolution/cascade.js';
+import { detectActiveStacks } from '../resolution/detection.js';
+import { computeOverlayWarnings } from '../resolution/overlay-warnings.js';
+import type { Warning } from '../warnings.js';
 import {
   resolveStackFile,
   type ResolveStackOptions,
@@ -59,6 +63,12 @@ import { checkClarifierTimeoutRange } from '../validation/clarifier-timeout-chec
  * shape without reaching into the validation layer.
  */
 export type { Issue };
+
+/**
+ * Re-export of the structured {@link Warning} type so callers of the validation
+ * surface get the warning shape without reaching into the warning catalog.
+ */
+export type { Warning };
 
 /**
  * One discovered stack file in the snapshot.
@@ -175,7 +185,6 @@ export interface ValidateOverlayInput {
  *   this root is loaded (no fallback to the production root).
  */
 export interface ValidateContext {
-
   userHome?: string;
 
   packageRoot?: string;
@@ -197,20 +206,96 @@ export interface ValidateContext {
  * Failure modes: expected config problems are returned as `issues`, not thrown;
  * an unexpected (non-`ConfigServerError`) fault inside any phase propagates.
  *
+ * Alongside the aborting `issues`, this also computes the non-aborting
+ * {@link Warning} list (overlay declarations accepted but not acted on as the
+ * user likely intended). Warnings are orthogonal to the error path: they never
+ * abort validation, never throw, and never turn a clean validation into a
+ * failed one — a project that produces only warnings still validates
+ * successfully. They are carried alongside `issues` so the inspection-only
+ * callers (the ones that surface config without running it) show both.
+ *
  * @param input see {@link ValidateAllInput}.
  * @param ctx ambient context / injection seams.
- * @returns `{ issues }` — all collected issues, deterministically ordered.
+ * @returns `{ issues, warnings }` — all collected issues (deterministically
+ *   ordered) and the non-aborting warnings (empty array when none apply).
  */
 export function validateAll(
   input: ValidateAllInput,
   ctx: ValidateContext = {},
-): { issues: Issue[] } {
+): { issues: Issue[]; warnings: Warning[] } {
   const snapshot = createSnapshot(input.projectRoot);
   runPhase1Discovery(snapshot, ctx);
   runPhase2SchemaValidation(snapshot);
   runPhase3Invariants(snapshot);
   runPhase4Trust(snapshot, ctx);
-  return { issues: snapshot.issues };
+  // Warnings are computed last, after phase 2 has back-filled each stack row's
+  // parsed `data` (detection needs it). This step is strictly additive: it reads
+  // the snapshot but never appends to `snapshot.issues`, so it cannot change the
+  // validation outcome.
+  const warnings = computeOverlayWarningsForSnapshot(snapshot);
+  return { issues: snapshot.issues, warnings };
+}
+
+/**
+ * Compute the non-aborting overlay {@link Warning} list for an
+ * already-discovered, schema-validated snapshot.
+ *
+ * @param snapshot a snapshot whose stack rows carry parsed `data` (i.e. after
+ *   phase 2) and whose overlays are loaded (after phase 1). Detection reads
+ *   `data`, so calling this before phase 2 yields fewer/no detection-driven
+ *   warnings rather than a fault.
+ * @returns the warnings, or an empty array. Best-effort and non-aborting: any
+ *   unexpected fault while cascading, detecting, or scanning degrades to no
+ *   warnings rather than propagating, because a warning must never derail the
+ *   validation a caller is waiting on.
+ *
+ * Why detection may run twice: a non-empty `stack.override` short-circuits
+ * auto-detection, hiding what detection WOULD have activated. To flag a silent
+ * coverage loss the comparison set is obtained by running detection a second
+ * time with no override; that run's issues are deliberately discarded here
+ * (they are not the authoritative active set and would double-report).
+ */
+function computeOverlayWarningsForSnapshot(snapshot: ValidationSnapshot): Warning[] {
+  try {
+    const cascade = cascadeOverlays({
+      default: snapshot.overlays.default?.data ?? null,
+      user: snapshot.overlays.user?.data ?? null,
+      project: snapshot.overlays.project?.data ?? null,
+    });
+    const stackOverride = readMergedStackOverride(cascade.merged);
+    const hasOverride = stackOverride.length > 0;
+    const overrideRun = hasOverride
+      ? detectActiveStacks(snapshot, { stackOverride })
+      : { active: [] as string[] };
+    const detectionRun = detectActiveStacks(snapshot, {});
+    // `generic` carries no detection block, so its only route into an
+    // auto-detection result is the resolver's empty-match fallback; its presence
+    // in the no-override run is therefore a reliable fallback marker.
+    const detectionFellBackToGeneric = detectionRun.active.includes('generic');
+    return computeOverlayWarnings({
+      overrideActive: overrideRun.active.slice(),
+      detectionActive: detectionRun.active.slice(),
+      detectionFellBackToGeneric,
+    });
+  } catch {
+    // Best-effort: advisory warnings must never fail validation.
+    return [];
+  }
+}
+
+/**
+ * Pull the cascaded `stack.override` string list out of the merged overlay, or
+ * `[]` when absent/non-array. Non-string entries are filtered out defensively so
+ * a malformed override degrades to "no override" rather than throwing.
+ */
+function readMergedStackOverride(merged: Record<string, unknown>): string[] {
+  const stack = merged['stack'];
+  if (!isObject(stack)) return [];
+  const ov = stack['override'];
+  if (Array.isArray(ov)) {
+    return ov.filter((v): v is string => typeof v === 'string');
+  }
+  return [];
 }
 
 /**
@@ -340,7 +425,6 @@ function loadModuleRegistrationsFor(ctx: ValidateContext): ModuleRegistration[] 
   try {
     return loadModules(prodRoot);
   } catch (e) {
-
     if (e instanceof ConfigServerError) throw e;
     throw e;
   }
