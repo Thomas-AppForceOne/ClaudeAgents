@@ -14,7 +14,7 @@ The skill orchestrator, after `validateAll()` succeeds and before spawning agent
 
 ```
 /gan loaded:
-  stacks: android.md (project), web-node.md (builtin)
+  stacks: web-node.md (project)
   user overlay: ~/.claude/gan/config.md
   project overlay: .claude/gan/project.md
   additionalContext: docs/architecture.md, docs/conventions.md
@@ -49,10 +49,9 @@ The output:
 
 ```json
 {
-  "apiVersion": 1,
+  "apiVersion": "0.1.0",
   "activeStacks": [
-    {"name": "android", "tier": "project", "path": ".claude/gan/stacks/android.md", "schemaVersion": 1},
-    {"name": "web-node", "tier": "builtin", "path": "stacks/web-node.md",          "schemaVersion": 1}
+    {"name": "web-node", "tier": "project", "path": ".claude/gan/stacks/web-node.md", "schemaVersion": 1}
   ],
   "overlays": {
     "user":    {"loaded": true, "path": "~/.claude/gan/config.md"},

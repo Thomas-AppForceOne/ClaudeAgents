@@ -69,7 +69,8 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 - **Inlined facts present.** After the spec-reference strip, the F4 forbidden-token rule, the C1 instantiation rule, and the F2 error-field list are present **inline** in the relevant prompts (not merely de-cited).
 - **`lint-no-spec-ref` green with correct scope.** Zero internal-reference forms (including possessive/bare codes) in `agents/` + `skills/gan/`, while the `--help` EXAMPLES `--spec` sample path is allowlisted and does not trip it.
 - **Safety-collapse completeness.** The collapsed halt section still expresses all five per-trigger distinctions (roles checked, counter substrate, trigger logic, error builder, gating) — verified against the checklist in §1.
-- **`lint-no-stack-leak` and `test-error-text` remain green** on the refactored files.
+- **`lint-no-stack-leak`, `test-error-text`, and `lint-status-markers` (D1) remain green** on the refactored files. D2 lands after D1, so the status markers it adds must survive the de-verbosing.
+- **E8 and D1 content survives the collapse.** The operative-rule inventory (above) explicitly enumerates and re-asserts **E8's renegotiation-loop steps** (independent-review spawn, the two-guard finding-validation, the canonical-file re-lock, the `failed-evaluation-rejected` path) and **D1's `[shipped-in-v1.0]` / `[partial-v1.0]` / `[deferred-to-v1.1]` status markers**. A silent drop of an E8 rule or a D1 marker during the hygiene collapse is the precise risk this AC guards — D2 refactors the *post-E8, post-D1* SKILL.md, and "behaviour-preserving" must include their additions.
 
 ### Manual review checks
 

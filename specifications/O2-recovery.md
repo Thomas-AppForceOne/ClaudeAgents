@@ -38,6 +38,8 @@ What changes is how the framework delivers it.
 
 ## Solution summary
 
+> **v1.0 scope and status markers (per [D1](D1-diagnostic-clarity.md)).** This spec describes the *full* recovery + cleanup surface; the roadmap (slot 21) ships it in slices. **`[shipped-in-v1.0]`:** `--list-recoverable` (enumeration, §4), the concurrent-run lock (§8), and terminal marking (§3). **`[partial-v1.0]`:** `--recover` (§5) — minimal trace-driven resume in v1.0; the richer UX (overlay-drift warnings, re-attach edge cases) is v1.1. **`[deferred-to-v1.1]`:** `--cleanup` in full (§5.5 — `--all` / `--include-terminal` / `--yes` / merge-aware remote-branch deletion). The v1.0 implementation builds only the `shipped`/`partial` slices; sections below carry these markers. Without this demarcation the roadmap's "minimal, ~1–2 sprints" estimate and D1's marker discipline both fail against the full spec.
+
 Three coordinated mechanisms, all post-E1:
 
 1. **Run directories persist as the recovery surface.** No archive copy step. The
@@ -184,7 +186,7 @@ Failure modes:
   remains "recoverable" (because `terminal: false` or missing) which is the safer
   failure mode.
 
-### 4. `--list-recoverable`
+### 4. `--list-recoverable` `[shipped-in-v1.0]`
 
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
 
@@ -210,7 +212,7 @@ New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
 
 If no runs found: `No runs found at <store-root>/<repo-key>/runs/.` Exit 0.
 
-### 5. `--recover [--run-id X]`
+### 5. `--recover [--run-id X]` `[partial-v1.0]`
 
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Per E1's recovery contract,
 runs `validateAll()` in non-aborting mode first.
@@ -293,7 +295,7 @@ runs `validateAll()` in non-aborting mode first.
      Round count is preserved across recovery — a halt mid-round-2 resumes at round-2,
      not round-1.
 
-### 5.5. `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`
+### 5.5. `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]` `[deferred-to-v1.1]`
 
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
 
@@ -376,7 +378,7 @@ A user running `/gan` in two terminals against the same project would, without a
 
 Mechanism:
 
-- On `/gan` invocation (any short-circuit-or-not path), the orchestrator acquires an exclusive lock at `<store-root>/<repo-key>/run.lock` (per F7; formerly `<projectRoot>/.gan-state/run.lock`) via `flock(LOCK_EX | LOCK_NB)` before any other zone-2 work. Because the key is the repo's main worktree, this serializes runs **repo-wide** — concurrent `/gan` from two worktrees of the same repo contend on the one lock.
+- On `/gan` invocation (any short-circuit-or-not path), the orchestrator acquires an exclusive lock at `<store-root>/<repo-key>/run.lock` (per F7; formerly `<projectRoot>/.gan-state/run.lock`) via the framework's existing portable **`link(2)` run-lock** — the shipped `src/config-server/storage/run-lock.ts`, exposed to the orchestrator through an R7 lock-acquire/release tool — **not** `flock(2)`. (`flock` has no `flock(1)` CLI on macOS, the v1 target and release-gating platform, and the markdown orchestrator cannot issue the syscall; the shipped lock already uses atomic `link(2)`, which is portable and orchestrator-callable via R7.) The lock is acquired before any other zone-2 work. Because the key is the repo's main worktree, this serializes runs **repo-wide** — concurrent `/gan` from two worktrees of the same repo contend on the one lock.
 - Lock contents: `{ runId, pid, startedAt, hostname }` written atomically (temp + rename) on acquisition.
 - On failure to acquire (lock held by another process):
   - Read the lock contents.
@@ -386,7 +388,7 @@ Mechanism:
 - On orchestrator exit (success, halt, error, signal): release the lock by deleting the file.
 - The `--print-config`, `--list-recoverable`, and `--help` short-circuits do NOT acquire the lock — they are read-only and don't write zone 2. Only `--recover` and a regular `/gan` invocation acquire it.
 
-Lock semantics are best-effort cross-platform: POSIX `flock` works on local filesystems but not all network filesystems. NFS-mounted project roots will see degraded lock semantics; documented limitation.
+Lock semantics are best-effort cross-platform: atomic `link(2)` works on local filesystems but has known weaknesses on some network filesystems. NFS-mounted project roots will see degraded lock semantics; documented limitation. O2 introduces no new lock mechanism — it reuses the shipped `link(2)` run-lock, which already provides exactly this primitive (and is what the active-run guard in §5.5 reads).
 
 A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypassing it requires editing the lock file by hand (`rm .gan-state/run.lock`), which is a deliberate friction.
 
@@ -408,6 +410,8 @@ A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypass
 
 Each criterion concrete and testable.
 
+> **Path note (post-F7).** ACs below use the `.gan-state/runs/<run-id>/` shorthand for *run data*; per the F7 supersession note above, run data lives in the central store, so read every run-*data* path as `<store-root>/<repo-key>/runs/<run-id>/` (only the `worktree/` subtree stays under `.gan-state/runs/`). The ACs that previously spelled out `<projectRoot>/.gan-state/runs/` are corrected to the central-store form so an implementer coding to an AC cannot build the pre-F7 path.
+
 1. **Terminal marker on graceful run end.** A run that completes all sprints lands
    `progress.json.terminal: true`, `terminalReason: complete`, `terminalAt`
    populated, run directory still on disk.
@@ -427,7 +431,7 @@ Each criterion concrete and testable.
 6. **`--recover` without `--run-id` picks most recent recoverable.** Two non-terminal
    runs → newer mtime wins.
 
-7. **`--recover --run-id X` for missing run.** Exit 1, message names `<projectRoot>/.gan-state/runs/X/`.
+7. **`--recover --run-id X` for missing run.** Exit 1, message names the run's central-store path `<store-root>/<repo-key>/runs/X/`.
 
 8. **`--recover` refuses cross-project recovery.** A run with `projectRoot:
    /old/path` invoked from a different `cwd` → exit 1, message names both paths.
@@ -494,10 +498,10 @@ Each criterion concrete and testable.
     prompt is shown but the preview table is still printed.
 
 26. **`--cleanup` of a non-existent `--run-id`.** Exit 1, message names
-    `<projectRoot>/.gan-state/runs/X/`.
+    `<store-root>/<repo-key>/runs/X/`.
 
 27. **`--cleanup` empty case.** Project with no runs → `No non-terminal runs found at
-    <projectRoot>/.gan-state/runs/.` Exit 0 (not an error — nothing to do).
+    <store-root>/<repo-key>/runs/.` Exit 0 (not an error — nothing to do).
 
 28. **`--cleanup` is read-only against `.gan-state/modules/`.** Regression test seeds
     `tests/fixtures/<fixture>/.gan-state/modules/dummy/state.json` and asserts the file
