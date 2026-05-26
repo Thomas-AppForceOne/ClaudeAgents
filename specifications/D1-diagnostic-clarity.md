@@ -8,7 +8,7 @@ The first dogfooding session caught three diagnostic surfaces producing the wron
 
 2. **SKILL.md described not-yet-operative behavior with no marking.** The orchestrator skill describes emitting trace events and running loop-detection halts as if live, but those are only operative once R7 (the runtime invocation bridge) exposes the trace/safety libraries to the markdown orchestrator. A reader — or an orchestrator implementing the skill from scratch — has no signal that the behavior is aspirational until R7 lands; the doc reads as if operative when it isn't. (The original dogfooding instance was `--recover`/`--list-recoverable`; those now ship in v1.0 — minimal recovery via O2, made operative by R7 — so the live instance of this problem is the trace/safety integration sections R7 turns real.)
 
-3. **`gan stacks --help` advertised 2 of 6 subcommands.** The CLI ships six `stacks` subcommands (`list`, `available`, `new`, `where`, `customize`, `reset`), but the help output listed only `list` and `new`. A user running `gan stacks list` and getting back only `generic` (because they were not in a Node project) had no obvious path to discover that `gan stacks available` lists every stack the framework ships. The functionality existed; the help didn't surface it.
+3. **`gan stacks --help` completeness — already shipped; D1 only verifies.** An earlier draft of this problem claimed the help listed only 2 of 6 subcommands. That is **stale**: R6 (#16) already ships the full output — `help.ts` lists all six (`list` / `available` / `new` / `where` / `customize` / `reset`), the "Active vs. available" paragraph, and the `--tier` / `--force` flags. So D1's stacks-help work is a **verification** that this stays complete — there is no rewrite. (D1's real deliverables are #1's `ConfigApiUnreachable` preflight and the SKILL.md status markers.)
 
 All three are diagnostic-surface failures: the framework had the data to guide the user well, and didn't. D1 covers all three because they share a discipline — match the diagnostic to the user's actual state, not to the most-common case.
 
@@ -74,7 +74,7 @@ The lint runs in CI.
 
 ### `gan stacks --help` completeness
 
-The R3 CLI's stacks-help registry currently lists `list` and `new`. Update to list all six subcommands (`list`, `available`, `new`, `where`, `customize`, `reset`) and explicitly distinguish `list` (active for current dir, detection-driven) from `available` (all stacks the framework ships, regardless of detection).
+The R3 CLI's stacks-help registry **already** lists all six subcommands and distinguishes `list` (active, detection-driven) from `available` (all shipped) — R6 (#16) shipped this. D1 **verifies** it remains complete and changes nothing; the example below documents the already-shipped output (note its header is `Flags:`, not `Options:`).
 
 The help text gets an "Active vs. available" paragraph:
 
@@ -175,7 +175,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
   gan stacks customize <name>           Copy a built-in stack into a writable tier.
   gan stacks reset <name>               Remove a customized stack copy.
 
-  Options:
+  Flags:
       --tier=project|user   Where to scaffold/customize/reset (default: project).
       --force               (customize) Overwrite an existing higher-tier copy.
 
@@ -197,9 +197,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - A `/gan --recover` invocation under v1.0 dispatches to the minimal recovery flow (O2, made operative by R7), not a "requires v1.1" short-circuit; `/gan --list-recoverable` enumerates recoverable runs. **This AC presupposes O2 has landed (see Dependencies → O2); it rides with O2's PR if D1 lands first.** A section genuinely marked `[deferred-to-v1.1]` short-circuits with the structured "requires v1.1" message and exits non-zero.
 - The `lint-status-markers` script asserts every section heading in SKILL.md has a marker (or is in a designated prologue section).
 - The lint script rejects markers referencing releases not present in the roadmap (e.g. `[shipped-in-v9.9]`).
-- The `gan stacks --help` output advertises all six `stacks` subcommands.
-- The `gan stacks --help` output contains an "Active vs. available" paragraph distinguishing the two reads.
-- The `gan stacks --help` output contains an "Options:" section documenting `--tier=project|user` (default `project`) and `--force`. This line predates D1 in shipped `help.ts`; D1's rewrite must preserve it. (R6 — tier-aware stack scaffold — makes the `--tier=user` value truthful for `gan stacks new`; the help line must not be dropped. See [R6](R6-tier-aware-stack-scaffold.md).)
+- **Verify (not rewrite):** the shipped `gan stacks --help` already advertises all six subcommands, the "Active vs. available" paragraph, and the `--tier` / `--force` flags under its **`Flags:`** header (R6 #16). D1 asserts these remain present and **does not** rename `Flags:`→`Options:` or otherwise churn the shipped output.
 - The `gan stacks list` runtime output format is unchanged (one stack name per line, `(none)` on empty set; existing tests still pass).
 
 ### Manual review checks
@@ -210,7 +208,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 
 ## Version bump (install-affecting)
 
-D1 adds the `subReason` discriminator on `ConfigApiUnreachable` and rewrites the `gan stacks --help` CLI output — installed-package (server + CLI) changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), D1's implementation PR **bumps `package.json` `version`**. (The `lint-status-markers` script is maintainer/CI tooling, not installed — it is not what forces the bump; the SKILL.md status markers are copied every install and likewise do not.)
+D1 introduces the `ConfigApiUnreachable` preflight + error code (the `gan stacks --help` output is already shipped by R6, so D1 only verifies it) — an installed-package (server + CLI) change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), D1's implementation PR **bumps `package.json` `version`**. (The `lint-status-markers` script is maintainer/CI tooling, not installed — it is not what forces the bump; the SKILL.md status markers are copied every install and likewise do not.)
 
 ## Dependencies
 
@@ -229,6 +227,6 @@ Sprintable as:
 1. (one sprint) `ConfigApiUnreachable` branching: orchestrator preflight check, three sub-checks, remediation routing, structured-error `subReason` discriminator.
 2. (one sprint) SKILL.md status markers: token vocabulary, runtime alignment (deferred-flag short-circuits print "requires v1.1"), spec edits.
 3. (one sprint) `lint-status-markers` script: parser, lint rules, CI workflow integration.
-4. (one sprint) `gan stacks --help` rewrite: help registry edit, "Active vs. available" paragraph, examples update.
+4. (trivial) `gan stacks --help` **verification** — R6 (#16) already ships the full output; D1 asserts completeness, no rewrite.
 
 Slices are independent; can land in any order. Slice 3 must wait until slice 2 establishes the marker vocabulary.
