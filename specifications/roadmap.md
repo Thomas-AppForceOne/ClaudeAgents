@@ -80,8 +80,8 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 12. ✅ **A1** — loop & thrash detection. Shipped PR #27.
 13. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — documentation enforcement: a framework doc-lint backing Q5's declared `docLintCmd` (export-doc presence gates; required-sections / commented-out-code advisory), a CI presence gate, and a comment / user-facing-string provenance judgment surface. Shipped PR #29.
 14. ✅ **E5** — spec clarification phase. Shipped PR #30.
-15. **Next.** **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. ~2 sprints. Independent of A1/E5.
-16. **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
+15. ✅ **W1** — overlay-misuse warnings. Shipped PR #31.
+16. **Next.** **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity. ~2–3 sprints. SKILL.md status markers depend on knowing which v1.0 sections are operative — lands after A1, E5.
 17. **[O3](O3-telemetry-semantics.md)** — telemetry semantics. ~2–3 sprints. Depends on T1 and F7; can run in parallel with W1, D1.
 18. **O1 / O2 / U1 / U2 / U3** — polish on existing primitives (full O1 surface, O2 implementation, the three overlay-UX specs). ~2–3 sprints across all five.
 19. **Pre-release chores.** See below.
