@@ -2,9 +2,9 @@
 
 ## Problem
 
-The first dogfooding session caught three diagnostic surfaces producing the wrong remediation for the user's actual situation. In each case the framework had the information needed to guide the user precisely; it just lumped distinct failure modes into a single generic message.
+The first dogfooding session caught three diagnostic surfaces producing the wrong remediation for the user's actual situation. In each case the framework has (or can obtain) the information to guide the user precisely. **Surface #1 (Config-API-unreachable) is net-new mechanism, not a refinement:** the framework has **no** preflight reachability check or `ConfigApiUnreachable` error of its own today (grep-confirmed: the code, the remediation prose, and the error enum entry are all absent), so the lumped message the session hit was Claude Code's generic MCP surface, not the framework's — D1 **introduces** the framework preflight. The other two refine existing framework messages.
 
-1. **`ConfigApiUnreachable` lumped install + restart.** The orchestrator's preflight diagnostic, when it cannot reach the Configuration API, emitted a single remediation: "Install the framework: `bash <repo>/install.sh`. Then restart Claude Code." For a user who had already run `install.sh` (and just hit the restart-required failure mode after the install completed), this remediation was misleading — they didn't need to re-install, they needed to restart Claude Code so the live session picked up the freshly-registered MCP server. The remediation is correct as a default; it was wrong as the only branch.
+1. **Config-API-unreachable has no framework preflight — D1 introduces one (net-new, not polish).** Today, when the Configuration API is unreachable, the user sees only Claude Code's generic MCP-unreachable surface; the framework has no preflight of its own. A naive single remediation ("Install the framework: `bash <repo>/install.sh`. Then restart Claude Code.") is misleading for a user who already ran `install.sh` and just hit the restart-required mode — they need to restart Claude Code so the live session picks up the freshly-registered MCP server, not re-install. So D1 **builds net-new mechanism**: a framework preflight (before `validateAll()`), a new `ConfigApiUnreachable` structured-error code with a `subReason` discriminator **and its CLI exit-code-map entry**, a `~/.claude.json` read, and an MCP-reachability probe (the three sub-checks below). This is scoped as new mechanism, not a refinement of an existing lumped message — there is none in `src/`.
 
 2. **SKILL.md described not-yet-operative behavior with no marking.** The orchestrator skill describes emitting trace events and running loop-detection halts as if live, but those are only operative once R7 (the runtime invocation bridge) exposes the trace/safety libraries to the markdown orchestrator. A reader — or an orchestrator implementing the skill from scratch — has no signal that the behavior is aspirational until R7 lands; the doc reads as if operative when it isn't. (The original dogfooding instance was `--recover`/`--list-recoverable`; those now ship in v1.0 — minimal recovery via O2, made operative by R7 — so the live instance of this problem is the trace/safety integration sections R7 turns real.)
 
@@ -214,7 +214,7 @@ D1 adds the `subReason` discriminator on `ConfigApiUnreachable` and rewrites the
 
 ## Dependencies
 
-- **F2** — structured-error model; D1 adds the `subReason` discriminator on `ConfigApiUnreachable`.
+- **F2** — structured-error model. D1 **introduces** the `ConfigApiUnreachable` code (it does not exist in F2/R5 today), its `subReason` discriminator, and the matching CLI exit-code-map entry — net-new error surface built on F2's model, not a discriminator added to an existing code.
 - **F4** — trust prompt context; the `notRegistered` remediation may also describe the trust-prompt sequence the user will encounter on first install.
 - **E1** — orchestrator that emits the diagnostics; SKILL.md status markers ride with E1's spec ownership.
 - **R3** — CLI help registry; `gan stacks --help` rewrite is an R3 amendment.

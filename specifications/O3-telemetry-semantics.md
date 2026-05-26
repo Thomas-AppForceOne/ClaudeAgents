@@ -204,7 +204,9 @@ Standard per A1 / T1 / E5 / E6 conventions:
 
 ### Automated checks
 
-- A completed `/gan` run produces both `<store-root>/<repo-key>/runs/<run-id>/telemetry/config.json` and `.../outcome.json` (central store, per F7).
+**CI has no LLM**, so these run against a **synthetic harness** that drives O3's telemetry writer with fabricated trace + disposition data — the writer is deterministic code (not the LLM loop), so the artifacts are produced and validated without a live `/gan` run. (The end-to-end "a *real* orchestrated run emits telemetry" assertion is **dogfood-only**, per the release gate — the same CI-vs-dogfood split R7 and E8 use; see Manual/dogfood checks.)
+
+- A synthetic run-completion (the telemetry writer driven with a fabricated trace + disposition, no live LLM) produces both `<store-root>/<repo-key>/runs/<run-id>/telemetry/config.json` and `.../outcome.json` (central store, per F7).
 - `config.json` validates against `schemas/telemetry-config-v1.json`.
 - `outcome.json` validates against `schemas/telemetry-outcome-v1.json`.
 - A `/gan --no-telemetry` invocation produces no `telemetry/` subdirectory at any point during or after the run.
@@ -218,6 +220,7 @@ Standard per A1 / T1 / E5 / E6 conventions:
 
 - The local-only invariant is documented in the v1.0 release notes prominently enough that a user concerned about privacy can verify it without reading the spec.
 - The `--no-telemetry` flag is named in `gan --help` output (per [R3](R3-cli-wrapper.md)).
+- **Dogfood (release gate):** a *real* orchestrated `/gan` run emits a `config.json` + `outcome.json` whose `cost` matches the live trace — the end-to-end assertion CI cannot make (no LLM). Observed on the release-gate dogfood run, not gated in CI.
 - A reviewer can answer "what does ClaudeAgents capture and where does it go?" by pointing at this spec.
 
 ## Examples

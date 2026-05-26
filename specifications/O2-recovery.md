@@ -95,7 +95,10 @@ ownership invariant. Module state belongs to modules; run-state has its own lane
 
 The worktree's parent directory moves from `.gan/worktree/` (legacy) to
 `.gan-state/runs/<run-id>/worktree/` (post-E1, per F1 zone 2). Generator confinement
-hooks check `.gan-state/runs/<run-id>/worktree/` instead of `.gan/worktree/`.
+hooks derive their allowed zones from the orchestrator-exported `GAN_WORKTREE` /
+`GAN_RUN_DIR` env vars (per F7 / SKILL.md "Confinement"), **not** a hardcoded
+`.gan-state/runs/<run-id>/worktree/` path — in case 1a `GAN_WORKTREE` is the
+engineer's own worktree, not a run-scoped directory.
 
 > **F7 supersession (run-data relocation).** Per [F7](F7-central-run-data-store-and-worktree-execution.md), the run *data* shown above — `progress.json`, `spec.md`, the `sprint-*` artifacts, `trace/`, and `telemetry/` — no longer lives under `<projectRoot>/.gan-state/runs/<run-id>/`. It lives in the central, repo-keyed store at `<store-root>/<repo-key>/runs/<run-id>/` (default `~/.gan-runs-data`), so it survives removal of the worktree it ran in. Only the `worktree/` subtree stays at `<project>/.gan-state/runs/<run-id>/worktree/` (gan-created, cases 1b/1c) or is the engineer's own worktree (case 1a). Read every `.gan-state/runs/<run-id>/` *data* path below as the central run dir; read `<projectRoot>` as the **main-worktree root** (the parent of `git rev-parse --git-common-dir`), which makes run *discovery* (`--list-recoverable`, `--cleanup`) and the lock **repo-wide** across all worktrees of the repo; and read `run.lock` as `<store-root>/<repo-key>/run.lock`. **`--recover` is the exception:** resuming a run is bound to its recorded `workspace.worktreePath` and refuses from any other worktree (per F7 — a run resumes only in the worktree it executed in). O2's full implementation (later in the v1.0 order) applies this uniformly.
 
@@ -178,7 +181,7 @@ aborted-validation-failed      validateAll() failed in aborting mode
 
 `failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. **Note the two distinct "budget" concepts** (they never share a code): A1's `sprintBudgetExceeded` is the per-sprint *attempt* ceiling — a loop-detection halt, so it writes `failed-loop-detected`; `failed-budget` is the run-wide *resource* cap (`maxAttemptsTotal` / `maxMinutes`), a non-loop ceiling. Both render as a halted, recoverable run, but the path that writes each is unambiguous. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
-Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies.
+Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies. **`additionalProperties` posture (the orchestrator writes `progress.json` free-form, so this is load-bearing):** the strict schema MUST enumerate **every** field the orchestrator writes — `runId`, `status`, `currentSprint`/`currentAttempt`, `totalSprints`/`completedSprints`, `contractRevision`, `projectRoot`, `runBranch`/`baseBranch`/`startingBranch`, `workspace`, `terminal`/`terminalReason`/`terminalAt`, `overlaysAtSnapshot`, `recoveryHistory` — and set `additionalProperties: false`. An AC **reconciles** that enumerated set against the orchestrator's actual writes (a fixture `progress.json` from a synthetic run validates clean), so a field the orchestrator writes but the schema omits fails **CI**, never a live run — get this wrong and the strict schema rejects every real run.
 
 ### 3. Teardown — terminal marker, never delete
 
@@ -315,7 +318,7 @@ runs `validateAll()` in non-aborting mode first.
 
 ### 5.5. `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]` `[deferred-to-v1.1]`
 
-New top-level flag. Parsed at SKILL.md flag-table dispatch. Symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
+The **full** `--cleanup` surface (lands in v1.1). The current `SKILL.md` already carries `--cleanup` prose describing destructive cleanup as operative; the v1.0 PR **reduces** that to the deferred stub above — this is not a net-new flag, it is an existing over-promise being scaled back. Parsed at the SKILL.md flag-table dispatch; symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
 
 **v1.0 behaviour — deferred stub.** Because `--cleanup` is `[deferred-to-v1.1]`, its v1.0 SKILL.md dispatch handler does **not** run the destructive logic below: per D1's deferred-marker discipline it prints the structured "this command requires v1.1" message and exits non-zero — it never no-ops and never partially cleans. Everything specified below is the v1.1 implementation; the v1.0 dispatch is the stub.
 
@@ -593,9 +596,9 @@ O2 authors the bundled `schemas/progress-v1.json` — an installed-package chang
 
 | Risk | Mitigation |
 |---|---|
-| `progress.json` schema bump breaks Phase 3 tests | Schema version is bumped on the on-disk format; in-memory shape is additive. Existing tests that reference `progress.json` get updated. The `_audit-post-r.md` discipline applies. |
+| Authoring strict `progress-v1.json` breaks Phase 3 tests that wrote free-form `progress.json` | `progress-v1.json` is **created** at v1 (not a bump — it does not exist today); existing tests that reference `progress.json` are updated to the strict shape. The `_audit-post-r.md` discipline applies. |
 | User runs `--recover` against a run from before this spec lands (no `terminal` field) | Treat missing `terminal` as `false` (recoverable). Acceptable — pre-revision runs were always recoverable in spirit. |
 | `recoveryHistory[]` grows unbounded across many recoveries of a chronically failing run | Bounded by user behaviour; in practice 1-3 entries typical. No GC needed in v1. |
-| Filesystem race: another process writes to the run directory mid-recovery | Best-effort. Document that recovery assumes exclusive access to `.gan-state/runs/<run-id>/`. Cross-process locking is out of scope (v2 candidate). |
+| Filesystem race: another process writes to the run directory mid-recovery | The §8 `link(2)` run-lock **is** the v1.0 cross-process guard — `--recover` acquires it, so a concurrent run or recover fails closed (`InvariantViolation` / `ConcurrentRunInProgress`). Best-effort on network filesystems (per §8); **not** out of scope. |
 | Overlay drift hash check has high false-positive rate (whitespace edits) | Documented as acceptable; the warning is informational, not blocking. v2 could move to AST-level diff. |
 | `validateAll()` non-aborting mode surfaces too much noise during recovery | Recovery report sections are clearly separated (preflight / drift / validation). The user can scan the section they care about. |
