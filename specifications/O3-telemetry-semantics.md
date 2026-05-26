@@ -67,6 +67,23 @@ The artifact is written exactly once at run termination, regardless of how the r
 | `safetyHalts[]` | Summary references to safety halts (per [A1](A1-loop-and-thrash-detection.md), future [A2](A2-generator-scope-enforcement.md)) — `{sprintNumber, safetyClass, reason}`. The halt evidence lives in the trace; `outcome.json` carries summary references only. |
 | `humanReviews[]` | When [E6](E6-pluggable-evaluator-role.md) ships in v1.2, summary references to human-evaluated sprints (`{sprintNumber, userIdentity, disposition}`). Reserved field in v1.0; empty array. |
 
+**Complete `terminalReason` → `disposition` mapping.** O2 defines the `terminalReason` codes; O3 owns `disposition`. Every code maps to exactly one disposition — implementers must not guess:
+
+| `terminalReason` (O2) | `disposition` (O3) |
+|---|---|
+| `complete` | `success` |
+| `failed-evaluation-rejected` | `rejected` |
+| `aborted-contract-failed` | `rejected` |
+| `failed-max-attempts` | `halted` |
+| `failed-budget` | `halted` |
+| `failed-loop-detected` | `halted` |
+| `aborted-by-user` | `aborted` |
+| `failed-clarifier-error` | `errored` |
+| `aborted-planner-error` | `errored` |
+| `aborted-validation-failed` | `errored` |
+
+Rationale and the naming caveat: `rejected` = the gate or contract refused the work (E8's post-generation gate rejection, and `aborted-contract-failed` = pre-generation negotiation that could not agree a contract — both are refusals, not crashes). `halted` = an A1 safety halt (ceiling / budget / loop). `aborted` = **user-initiated only** (`aborted-by-user`). `errored` = a component failed to run (clarifier/planner error, or `validateAll()` failing in aborting mode). Note the deliberate mismatch: most `aborted-*` `terminalReason` codes do **not** map to the `aborted` *disposition* — the `aborted-` prefix is historical, while `disposition` is semantic (user-initiated vs failure). A new O2 `terminalReason` code added later must add its row here in the same PR.
+
 Schema at `schemas/telemetry-outcome-v1.json`. Example shape:
 
 ```json

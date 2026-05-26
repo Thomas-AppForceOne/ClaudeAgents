@@ -53,7 +53,7 @@ Three coordinated mechanisms, all post-E1:
      user must be able to recover a known-broken project).
    - Reads the target run's `progress.json` directly from `.gan-state/runs/<run-id>/`.
    - Re-attaches the git worktree from the recorded `runBranch`.
-   - Compares the archived overlay state in `progress.json.overlaysAtArchive` against
+   - Compares the archived overlay state in `progress.json.overlaysAtSnapshot` against
      the current `getResolvedConfig().overlays`; surfaces drift as a recovery-report
      warning.
    - Falls through to the existing in-`SKILL.md` resume state machine.
@@ -478,7 +478,7 @@ Each criterion concrete and testable.
     deletion. `--recover` and `--list-recoverable` honor this rule.
 
 18. **`--cleanup --run-id X` removes a single run.** After cleanup,
-    `.gan-state/runs/X/` is gone, `git branch -l 'gan/run/X*'` is empty, and
+    `.gan-state/runs/X/` is gone, `git branch -l 'gan/X*'` is empty (the run branch is `gan/<run-id>`, per the `runBranch` field — not a `gan/run/` scheme), and
     `git worktree list` does not include the run's worktree path.
 
 19. **`--cleanup` (no flags) targets most recent non-terminal run.** Two non-terminal
@@ -518,9 +518,15 @@ Each criterion concrete and testable.
     `terminalReason: failed-evaluation-rejected` and `contractRevision > 0` is listed by
     `--list-recoverable` and resumed by `--recover`: recovery reads the active
     `contractRevision` from `progress.json`, re-attaches the canonical
-    `sprint-{N}-contract.json` (latest locked revision), and continues. This is the
-    integration test for the writer-before-schema ordering — it fails if `progress-v1.json`
-    rejects E8's `terminalReason` value or `contractRevision` field.
+    `sprint-{N}-contract.json` (latest locked revision), and continues. It fails if
+    `progress-v1.json` rejects E8's `terminalReason` value or `contractRevision` field.
+    **It also asserts revision-scoped budget survives recovery (the half the earlier AC
+    omitted):** a recovered run at `contractRevision: 1` whose revision-0 `agentAttempt`
+    events would, summed whole-trace, exceed the sprint budget must **not** mis-fire
+    `sprintBudgetExceeded` — `reconstructRevisionState(traceRoot, 1)` (E8 § "Bounding
+    thrash") tallies only revision-1 attempts, so the budget check sees the scoped count.
+    Verifies the budget *scoping* survives recovery, not just that the schema accepts the
+    fields.
 
 Tests cover at minimum: success path for 1-6, 11-16, 18-21, 23, 25, 27, 29; failure path for 7-10, 17, 22, 24, 26, 28.
 
