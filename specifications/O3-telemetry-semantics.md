@@ -165,7 +165,7 @@ T1 owns the **event log** (`trace/`); O3 owns the **summary artifacts** (`teleme
 - T1 records every LLM call, tool call, agent attempt, safety halt, trust event, validation abort, milestone — appending events as the run progresses.
 - O3 records the run-start configuration view (once) and the run-end summary (once).
 
-`outcome.json`'s `cost` section is derived from T1 trace events at termination time **via R7's `aggregateRunSummary`** — the structured per-run aggregate (the markdown orchestrator does not hand-sum the events). If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but *detectably lossy*** — **R7's `reconcileTraceIndex` reports** that `index.json` does not reconcile to the `events/` file count, i.e. a best-effort emit was dropped (disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`, or null when the gap is unbounded) rather than reported as a confident-but-wrong total. A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null and carries the `complete` flag.
+`outcome.json`'s `cost` section is derived from T1 trace events at termination time **via R7's `aggregateRunSummary`** — the structured per-run aggregate (the markdown orchestrator does not hand-sum the events). If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but *detectably lossy*** — **R7's `reconcileTraceIndex` reports** that `index.json` does not reconcile to the `events/` file count, i.e. a best-effort emit was dropped (disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`, or null when the gap is unbounded) rather than reported as a confident-but-wrong total. A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null; when `cost` is a non-null object, **`complete` is a required boolean** (`true` for a verified-complete sum, `false` when the trace is detectably lossy) — it is never omitted, so its presence is unambiguous and both `outcome.json` examples carry it.
 
 `telemetry.tracePayloads` (T1's overlay splice point) controls *trace* payload content — it does not affect O3's artifacts. A run with `tracePayloads: "hashed"` and telemetry on still produces full `config.json` and `outcome.json` (these don't carry user-prompt content; they're configuration and aggregate metrics).
 
@@ -275,6 +275,7 @@ An `outcome.json` for a successful one-sprint run:
     }
   ],
   "cost": {
+    "complete": true,
     "tokensInput": 38192,
     "tokensCached": 28412,
     "tokensOutput": 5347,

@@ -7,7 +7,7 @@
 1. `gan-recover` placement: **orchestrator-internal in `skills/gan/SKILL.md`** (no separate agent file).
 2. Overlay-drift policy: **warn-and-continue** (drift surfaces in the recovery report; recovery proceeds).
 3. Cross-project recovery: **refused** (no `--project-root` override in v1; `progress.json.projectRoot` must match the current resolved root).
-4. Greenfield runs: **out of scope for v1** (recovery refuses runs whose `targetDir` is null).
+4. Greenfield runs: **out of scope for v1** — every run targets an existing repo and records `progress.json.projectRoot` (per Decision 3), so there is no null-target / greenfield run for recovery to guard. (The `targetDir` field an earlier draft named here was never added to the schema and is dropped; `projectRoot` is the real field.)
 5. Recovered-run lifecycle: **same `runId`, append `recoveryHistory[]`, flip `terminal: true` on graceful end** (no copy-into-new-run-id step). Concurrent-run lockfile **is** present in v1.0 per Section 8; this revises decision 5's original "no lock file" stance.
 6. Garbage collection: **none in v1** (`gan run prune --keep <N>` is a Phase 7+ follow-up).
 
@@ -317,6 +317,8 @@ runs `validateAll()` in non-aborting mode first.
 
 New top-level flag. Parsed at SKILL.md flag-table dispatch. Symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
 
+**v1.0 behaviour — deferred stub.** Because `--cleanup` is `[deferred-to-v1.1]`, its v1.0 SKILL.md dispatch handler does **not** run the destructive logic below: per D1's deferred-marker discipline it prints the structured "this command requires v1.1" message and exits non-zero — it never no-ops and never partially cleans. Everything specified below is the v1.1 implementation; the v1.0 dispatch is the stub.
+
 Per E1's recovery contract, runs `validateAll()` in non-aborting mode first. Does **not** acquire the run lock (it operates on non-active runs; an attempt to clean up an active run is refused per the active-run check below).
 
 1. **Resolve target run(s).** Mirrors `--recover`; enumeration is `<store-root>/<repo-key>/runs/` (per F7 — repo-wide).
@@ -401,7 +403,7 @@ Mechanism:
 - On failure to acquire (lock held by another process):
   - Read the lock contents.
   - Verify the holding process is still alive (`kill -0 <pid>` on POSIX, equivalent on Windows).
-  - **If holder alive:** exit 1 with structured error `ConcurrentRunInProgress` naming the holder's `runId`, `pid`, `startedAt`, and the suggestion: "Wait for the other run to finish, or `kill <pid>` if it is stuck."
+  - **If holder alive:** the shipped `link(2)` lock throws `InvariantViolation` with `reason: ConcurrentRunInProgress` (per `run-lock.ts`), which the CLI maps to **exit 4** (`EXIT_INVARIANT_VIOLATION`, not exit 1); the message names the holder's `runId`, `pid`, `startedAt`, and the suggestion: "Wait for the other run to finish, or `kill <pid>` if it is stuck."
   - **If holder dead** (stale lock from a hard-killed previous run): break the lock, log a warning to stderr, acquire fresh, proceed.
 - On orchestrator exit (success, halt, error, signal): release the lock by deleting the file.
 - The `--print-config`, `--list-recoverable`, and `--help` short-circuits do NOT acquire the lock — they are read-only and don't write zone 2. Only `--recover` and a regular `/gan` invocation acquire it.
@@ -538,10 +540,17 @@ Each criterion concrete and testable.
     thrash") tallies only revision-1 attempts, so the budget check sees the scoped count.
     Verifies the budget *scoping* survives recovery, not just that the schema accepts the
     fields.
+30. **Concurrent run is refused (orchestrator wiring of §8, not just the unit-tested primitive).**
+    With one run holding `<store-root>/<repo-key>/run.lock` (a live `pid`), a second `/gan`
+    against the same repo is refused **before any zone-2 write**: `InvariantViolation` /
+    `reason: ConcurrentRunInProgress` naming the holder's `runId` / `pid` / `startedAt`, exit 4
+    (`EXIT_INVARIANT_VIOLATION`). A lock referencing a dead pid is broken and re-acquired (the
+    stale-lock path). Guards the `[shipped-in-v1.0]` §8 lock — `run-lock.ts` is unit-tested, but
+    this is the missing AC that the orchestrator actually acquires it on every `/gan`.
 
 Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers above):
 
-- **v1.0** (`--list-recoverable`, `--recover`, terminal marking, the lock, and the E8 seam): success path for 1-6, 11-16, 29; failure path for 7-10, 17.
+- **v1.0** (`--list-recoverable`, `--recover`, terminal marking, the lock, and the E8 seam): success path for 1-6, 11-16, 29, 30; failure path for 7-10, 17.
 - **Deferred to v1.1** (the full `--cleanup` surface, §5.5): success path for 18-21, 23, 25, 27; failure path for 22, 24, 26, 28. These ACs are authored here but their tests land with the v1.1 `--cleanup` implementation — the v1.0 PR does **not** gate on ACs 18-28, matching the roadmap's "minimal, ~1–2 sprints" estimate.
 
 ---
