@@ -139,7 +139,7 @@ R7 adds new MCP tools (`api-tools-v1.json` entries + handlers across `src/config
 
 One coordinated PR, sliced per tool group so each lands behind a parity test:
 
-1. **Run-context tool (`resolveRunContext`)** + the SKILL.md step-8 worktree-creation rewrite + the residual SKILL.md F7-path reconciliation — lands **first**: every later slice's tools take a `runDir`/`repoKey` only this produces, so nothing else is callable without it, and the worktree-from-main regression is the most visible thing it fixes.
+1. **Run-context tool (`resolveRunContext`)** + the **run-lock tool (`acquireRunLock` / `releaseRunLock`)** + the SKILL.md step-8 worktree-creation rewrite + the residual SKILL.md F7-path reconciliation — lands **first**: every later slice's tools take a `runDir`/`repoKey` only this produces (and O2 §8's concurrency guard needs the lock tool), so nothing else is callable without it; the worktree-from-main regression is the most visible thing it fixes.
 2. Trace tools (`appendTraceEvent` + `emitTraceEvent` + formatters + `aggregateRunSummary` + `reconcileTraceIndex` + the `buildTrustEventBody`/`buildValidationAbortBody` builders + `reconstructRecoveryState`) — unblocks O2/O3 and the trace-non-empty AC.
 3. Safety tools — unblocks A1's halts becoming reachable.
 4. Evaluator-core tool (`buildEvaluatorPlan`) — unblocks E8's forced-plan consumption.

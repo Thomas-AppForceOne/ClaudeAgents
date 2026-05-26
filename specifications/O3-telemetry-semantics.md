@@ -110,6 +110,7 @@ Schema at `schemas/telemetry-outcome-v1.json`. Example shape:
     }
   ],
   "cost": {
+    "complete": true,
     "tokensInput": 38192,
     "tokensCached": 28412,
     "tokensOutput": 5347,
@@ -300,6 +301,7 @@ O3 authors the bundled `schemas/telemetry-config-v1.json` and `schemas/telemetry
 - **E1** — orchestrator writes `config.json` at run start and `outcome.json` at run termination.
 - **R3** — the `--no-telemetry` runtime flag is added to the CLI's flag table; `runtime-knobs.md` updated in the same PR.
 - **A1** — `safetyHalts[]` summary references A1's `loopDetected` halts.
+- **R7** — exposes the structured `aggregateRunSummary` and `reconcileTraceIndex` tools the `cost` rollup and the lossy-trace `cost.complete` flag are derived from (§ "outcome.json"); the markdown orchestrator cannot hand-sum the trace, so without R7's tools `cost` has no structured source.
 - **E6** *(v1.2)* — `humanReviews[]` is reserved at v1.0 and lit up when E6 ships.
 
 ## Bite-size note

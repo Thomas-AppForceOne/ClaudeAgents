@@ -176,7 +176,7 @@ aborted-contract-failed        INITIAL contract negotiation hit max revisions
 aborted-validation-failed      validateAll() failed in aborting mode
 ```
 
-`failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
+`failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. **Note the two distinct "budget" concepts** (they never share a code): A1's `sprintBudgetExceeded` is the per-sprint *attempt* ceiling — a loop-detection halt, so it writes `failed-loop-detected`; `failed-budget` is the run-wide *resource* cap (`maxAttemptsTotal` / `maxMinutes`), a non-loop ceiling. Both render as a halted, recoverable run, but the path that writes each is unambiguous. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
 Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (slot 17, ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies.
 
@@ -381,7 +381,7 @@ content remaining byte-identical across recovery.
 | Case | Behavior |
 |---|---|
 | Run branch force-deleted | Refuse in preflight; `--list-recoverable` still shows the run. |
-| Two `--recover` invocations against the same run, concurrently | Second invocation reads the now-non-empty `recoveryHistory[]` and refuses if the most recent entry is < 5 minutes old (heuristic lock). Document this as best-effort; cross-process locking is out of scope. |
+| Two `--recover` invocations against the same run, concurrently | Both contend on the §8 `link(2)` run-lock, acquired before any zone-2 work; the second fails closed at lock acquisition. No separate heuristic is needed — the real lock already serializes concurrent recovers (the earlier 5-minute `recoveryHistory` heuristic is retired as a pre-§8-lock leftover). |
 | Recovered run completes successfully | `terminal: true` flips. The run is no longer `--list-recoverable`-recoverable. |
 | Recovered run's recovery itself fails | New `recoveryHistory[]` entry records the failure. The run remains `terminal: false`; future `--recover` is not blocked. |
 | Overlay drift but only formatting whitespace | Hashes still differ. Warning still fires. Acceptable false-positive; the user can ignore. |

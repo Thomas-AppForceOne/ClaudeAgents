@@ -68,7 +68,7 @@ The R4 maintainer-tooling spec gains a lint check (`lint-status-markers`) that w
 
 - Every section heading in SKILL.md has a status marker (or is in a designated "non-shipped-behavior" prologue section like the spec's "Problem" / "Bite-size note" sections, which are about the spec itself rather than runtime behavior).
 - Markers reference releases that exist in the roadmap (no `[shipped-in-v9.9]` for unreleased futures).
-- Sections whose marker says `[shipped-in-v<release>]` for a release that has merged are exercised by a test (CI check that the section's behavior actually runs).
+- Sections whose marker says `[shipped-in-v<release>]` for a release that has merged are exercised by a test that the section's behaviour actually runs — **except sections whose behaviour is LLM-driven orchestrator prose** (the R7-wired trace, safety-halt, recovery, and renegotiation sections), which CI cannot execute because CI has no LLM. Those carry the marker on the strength of their CI-tested **tool-level mechanics** (R7's parity/decision checks) plus the **release-gate dogfood**, and the lint exempts them from the behavioural-CI-test clause (recognising an explicit LLM-driven section) rather than demanding a test it cannot satisfy. Without this carve-out the rule would forbid marking operative exactly the sections R7/E8/O2 make operative.
 
 The lint runs in CI.
 
@@ -220,7 +220,7 @@ D1 adds the `subReason` discriminator on `ConfigApiUnreachable` and rewrites the
 - **R3** — CLI help registry; `gan stacks --help` rewrite is an R3 amendment.
 - **R4** — maintainer tooling; the `lint-status-markers` script is a new R4 addition.
 - **O1** — observability; `--print-config` output continues to emit `validationErrors` with the new structured fields.
-- **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** D1 and O2 are co-grouped after R7+E8 ({D1, O2→O3} in the implementation order, §"Dependencies within slots 19–22"), and D1 is numbered before O2 (20); land O2 first, or let D1's `--recover`-dispatch AC ride with O2's PR. This edge is exactly what D1's own discipline demands — a `[shipped-in-v1.0]` marker on a flow O2 has not yet wired would be the spec-vs-runtime drift D1 exists to prevent.
+- **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** D1 and O2 are co-grouped after R7+E8 in the implementation order, and D1 is numbered before O2 (slot 20); land O2 first, or let D1's `--recover`-dispatch AC ride with O2's PR. This edge is exactly what D1's own discipline demands — a `[shipped-in-v1.0]` marker on a flow O2 has not yet wired would be the spec-vs-runtime drift D1 exists to prevent.
 
 ## Bite-size note
 
