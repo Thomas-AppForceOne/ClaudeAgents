@@ -26,7 +26,7 @@ The rewrite is **conditional**: a stack with no docker module is unaffected (the
 
 ### Scope boundary
 
-- **Generator-side only.** M4 owns the `gan-generator.md` rewrite. The **evaluator-side** gate — running `dockerCheckContainerHealth` and gating a criterion on whether the built container actually boots — is owned by **[E8](E8-independent-review-and-forced-verification.md) §3 "Forced deterministic verification"**, not duplicated here. M4 and E8 are the two halves of slot-18 docker wiring.
+- **Generator-side only.** M4 owns the `gan-generator.md` rewrite. The **evaluator-side** gate — running `dockerCheckContainerHealth` and gating a criterion on whether the built container actually boots — is owned by **[E8](E8-independent-review-and-forced-verification.md) §3 "Forced deterministic verification"**, not duplicated here. M4 and E8 are the two halves of docker wiring — M4 the generator side, E8 the evaluator side — landing in adjacent slots (M4 immediately after E8 in the implementation order).
 - **M2 is shipped and not edited.** M4 cross-references M2's helpers. If the real call-graph reveals an M2 API gap, that is a *new* spec under the next free slot, not an in-place edit to M2 (per the specification-lifecycle rule).
 
 ## Acceptance criteria

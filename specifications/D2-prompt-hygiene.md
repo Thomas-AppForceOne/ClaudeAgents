@@ -54,7 +54,7 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 - It does **not** change any agent's behaviour, flow, schemas, rubrics, or catalogs. Same rules, sourced once and stated plainly.
 - It does **not** trim behavioural specificity (evidence-bundle shape, secure-coding standards, scoring rubric, gap catalog) — that earns its length and stays.
 - It does **not** use runtime preamble injection (the rejected mechanism), and it does **not** delete a behaviour-bearing fact when it deletes its citation.
-- It does **not** edit shipped specs — it **replaces** the product prompt bodies in one PR (replacement, not migration, per the do's-and-don'ts), naming what it supersedes (the prompt content E1/E5/Q5/Q6/E8 authored); retirement rows land at merge.
+- It does **not** edit shipped specs — it **replaces** the product prompt bodies in one PR (replacement, not migration, per the do's-and-don'ts), naming what it supersedes (the prompt content E1/E5/Q5/Q6 authored — all shipped before D2; E8's later `gan-reviewer-independent.md` is **not** in this list, it instead conforms to D2's format when it lands, per E8's Dependencies); retirement rows land at merge.
 
 ## Surface additions
 
