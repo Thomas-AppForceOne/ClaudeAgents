@@ -38,7 +38,7 @@ What changes is how the framework delivers it.
 
 ## Solution summary
 
-> **v1.0 scope and status markers (per [D1](D1-diagnostic-clarity.md)).** This spec describes the *full* recovery + cleanup surface; the roadmap ships it in slices. **`[shipped-in-v1.0]`:** `--list-recoverable` (enumeration, §4), the concurrent-run lock (§8), and terminal marking (§3). **`[partial-v1.0]`:** `--recover` (§5) — minimal trace-driven resume in v1.0; the richer UX (overlay-drift warnings, re-attach edge cases) is v1.1. **`[deferred-to-v1.1]`:** `--cleanup` in full (§5.5 — `--all` / `--include-terminal` / `--yes` / merge-aware remote-branch deletion). The v1.0 implementation builds only the `shipped`/`partial` slices; sections below carry these markers. Without this demarcation the v1.0-slice effort (~2–3 sprints; see § "Effort (v1.0 slice)") and D1's marker discipline both fail against the full spec.
+> **v1.0 scope and status markers (per [D1](D1-diagnostic-clarity.md)).** This spec describes the *full* recovery + cleanup surface; the roadmap ships it in slices. **`[shipped-in-v1.0]`:** `--list-recoverable` (enumeration, §4), the concurrent-run lock (§8), and terminal marking (§3). **`[partial-v1.0]`:** `--recover` (§5) — minimal trace-driven resume in v1.0; the richer UX (overlay-drift warnings, re-attach edge cases) is v1.1. **`[deferred-to-v1.1]`:** `--cleanup` in full (§5.5 — `--all` / `--include-terminal` / `--yes` / merge-aware remote-branch deletion). The v1.0 implementation builds only the `shipped`/`partial` slices; sections below carry these markers. Without this demarcation the v1.0-slice effort (~2–3 sprints; see § "Effort (v1.0 slice)") and D1's marker discipline both fail against the full spec. **Roadmap entry mid-rollout:** O2's slot flips to ✅ when the **v1.0 slice** ships (that is what "shipping O2" means at v1.0); the `[deferred-to-v1.1]` `--cleanup` surface is tracked by the separate v1.1 "full recovery UX" entry and does not hold the slot open. The spec prose is complete and immutable from that flip — only the deferred *implementation* continues.
 
 Three coordinated mechanisms, all post-E1:
 
@@ -49,8 +49,9 @@ Three coordinated mechanisms, all post-E1:
    `terminal` for backwards-compat — see migration below).
 
 2. **Recovery is re-attach + resume, not copy + restore.** `--recover`:
-   - Calls `validateAll()` in non-aborting mode (per O1 / E1's recovery contract — the
-     user must be able to recover a known-broken project).
+   - Calls `validateAll()` in non-aborting mode (per E1's shipped recovery contract — the
+     user must be able to recover a known-broken project). This is **shipped** behaviour
+     (`validate.ts`'s non-aborting mode), **not** an O1 dependency — see Dependencies.
    - Reads the target run's `progress.json` directly from `.gan-state/runs/<run-id>/`.
    - Re-attaches the git worktree from the recorded `runBranch`.
    - Compares the archived overlay state in `progress.json.overlaysAtSnapshot` against
@@ -408,6 +409,7 @@ Mechanism:
   - Verify the holding process is still alive (`kill -0 <pid>` on POSIX, equivalent on Windows).
   - **If holder alive:** the shipped `link(2)` lock throws `InvariantViolation` with `reason: ConcurrentRunInProgress` (per `run-lock.ts`), which the CLI maps to **exit 4** (`EXIT_INVARIANT_VIOLATION`, not exit 1); the message names the holder's `runId`, `pid`, `startedAt`, and the suggestion: "Wait for the other run to finish, or `kill <pid>` if it is stuck."
   - **If holder dead** (stale lock from a hard-killed previous run): break the lock, log a warning to stderr, acquire fresh, proceed.
+  - **Recovery exception — the self-lock case (closes the stranded-lock deadlock).** Because the lock records the holder's `pid`, and in the MCP-tool context that pid is the **long-lived config server** (per R7's lock-lifecycle note), a run that aborted *without* releasing — the exit-release below didn't run (SIGKILL, or the markdown orchestrator skipped the release step) — leaves a lock whose pid is **still alive** (the same server). The *alive-holder* branch above would then refuse `--recover` against a dead run, and stale-break (dead-pid only) never fires — the run would be unrecoverable except by manual `rm`. `--recover` therefore special-cases it **by `runId`, not pid**: the lock contents carry the holder's `runId`, and **if that `runId` is the exact run being recovered, the lock belongs to the interrupted run itself** — `--recover` breaks it (R7 `releaseRunLock` by key) and re-acquires, because resuming a run is by definition taking over its own lock. Only a lock whose `runId` is a *different* run is a genuine concurrent holder and still refuses with `ConcurrentRunInProgress`. (Two concurrent `--recover` on the same run still serialize: the atomic `link(2)` re-acquire lets exactly one win, the loser gets `EEXIST` and refuses — the concurrent-recover row in the edge-case table. The escape is no longer a manual `rm`.)
 - On orchestrator exit (success, halt, error, signal): release the lock by deleting the file.
 - The `--print-config`, `--list-recoverable`, and `--help` short-circuits do NOT acquire the lock — they are read-only and don't write zone 2. Only `--recover` and a regular `/gan` invocation acquire it.
 
@@ -550,6 +552,12 @@ Each criterion concrete and testable.
     (`EXIT_INVARIANT_VIOLATION`). A lock referencing a dead pid is broken and re-acquired (the
     stale-lock path). Guards the `[shipped-in-v1.0]` §8 lock — `run-lock.ts` is unit-tested, but
     this is the missing AC that the orchestrator actually acquires it on every `/gan`.
+    **And the self-lock recovery case (G3):** a `--recover` whose target `runId` **matches** a
+    still-**live-pid** lock (the stranded config-server pid of the interrupted run) **breaks and
+    re-acquires** rather than refusing — so an interrupted run is recoverable without a manual
+    `rm` — while a `--recover` whose target differs from the lock's `runId` still refuses with
+    `ConcurrentRunInProgress`. The discriminator is `runId`, not pid: "resume my own stranded run"
+    proceeds; "a different run is active" refuses.
 
 Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers above):
 
@@ -575,7 +583,7 @@ O2 authors the bundled `schemas/progress-v1.json` — an installed-package chang
 - **E1** — gan-recover role contract; orchestrator's snapshot model; SKILL.md's
   `--recover` / `--list-recoverable` short-circuit dispatch.
 - **F3** — `progress-v1.json` schema (added in this sprint if not already present).
-- **O1** — fail-open contract for `--recover` validation behaviour.
+- **E1 (shipped), not O1** — the fail-open contract `--recover` needs is the **non-aborting `validateAll()`** that already ships (`validate.ts`'s non-aborting mode), so a known-broken project stays recoverable. An earlier draft listed **O1** here, but O1 ships *after* O2 (later in the implementation order) and only *observes* resolution — it does not provide this behaviour. The real dependency is on shipped code; O2 must not declare a dependency on a spec that lands after it.
 - **T1** — the run trace recovery reads to reconstruct sprint and counter state.
 - **A1** — the loop-halt reasons (`failed-loop-detected`) recovery resumes from and the trace-as-only-counter reconstruction it shares.
 - **R7** — the runtime invocation bridge that makes the trace emittable/readable from the markdown orchestrator; without it the trace recovery reads would be empty. (Recovery is silent on the emission mechanism, so it is compatible-once-R7-lands rather than dependent on R7's internals, but R7 is what makes recovery operative in practice.) R7 also exposes the `acquireRunLock`/`releaseRunLock` tool §8's concurrency guard uses.

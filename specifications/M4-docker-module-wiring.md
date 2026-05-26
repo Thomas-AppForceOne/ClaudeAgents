@@ -26,25 +26,26 @@ The rewrite is **conditional**: a stack with no docker module is unaffected (the
 
 ### Scope boundary
 
-- **Generator-side only.** M4 owns the `gan-generator.md` rewrite. The **evaluator-side** gate — running `dockerCheckContainerHealth` and gating a criterion on whether the built container actually boots — is owned by **[E8](E8-independent-review-and-forced-verification.md) §3 "Forced deterministic verification"**, not duplicated here. M4 and E8 are the two halves of docker wiring — M4 the generator side, E8 the evaluator side — landing in adjacent slots (M4 immediately after E8 in the implementation order).
+- **Both prompt sides of docker wiring — and the container-health criterion *activates here*.** M4 owns the `gan-generator.md` rewrite (generator side) **and activates the evaluator-side container-health criterion** that E8 *designed*. E8 §3 "Forced deterministic verification" ships the forced-execution machinery that can run a plan command and gate on it; **M4's PR injects the actual container-health criterion** — run R7's `dockerCheckContainerHealth`, gate on whether the built container boots — into docker-active evaluations, **co-landing it with the generator-side naming** so the evaluator never checks a container the generator hasn't built. (The why: `dockerCheckContainerHealth` — the shipped `ContainerHealth.waitForHealthy` — times out → unhealthy when nothing is listening, so an evaluator-only landing would fail every docker run until the generator side existed; see [E8](E8-independent-review-and-forced-verification.md) §3.) **E8 designs the gate; M4 turns it on.** Both are prompt changes — no library or schema change.
 - **M2 is shipped and not edited.** M4 cross-references M2's helpers. If the real call-graph reveals an M2 API gap, that is a *new* spec under the next free slot, not an in-place edit to M2 (per the specification-lifecycle rule).
 
 ## Acceptance criteria
 
 - `agents/gan-generator.md` instructs a docker-active generator to obtain ports/names from R7's `dockerReservePort` / `dockerDiscoverPort` / `dockerContainerName` and to release with `dockerReleasePort` — verified by prompt inspection; the prompt passes `lint-no-stack-leak` and the F4 error-text discipline.
 - A generator run on a **non-docker** stack makes no docker-tool call (the rewrite is strictly conditional).
-- The wiring is exercised against the existing Docker dogfood project: a real run reserves its port through the registry rather than hard-coding one. This is **dogfood/manual** — like R7's end-to-end checks, CI has no LLM to drive the markdown generator.
+- A docker-active **evaluation** carries the container-health criterion: the evaluator (via E8 §3's forced-execution machinery) runs R7's `dockerCheckContainerHealth` against the `dockerContainerName` and gates a criterion on the boot result — verified by prompt inspection that the criterion is injected **only when a docker module is active**, and that a **non-docker** evaluation injects none. This is the activation E8 designed and M4 turns on; it co-lands with the generator-side naming above, so evaluator and generator never disagree on whether a container exists (closing the E8-only "fails against a container that was never built" window).
+- The wiring is exercised against the existing Docker dogfood project: a real run reserves its port through the registry rather than hard-coding one, **and** the evaluator's container-health criterion gates on the booted container. This is **dogfood/manual** — like R7's end-to-end checks, CI has no LLM to drive the markdown generator/evaluator.
 
 ## Version bump: none
 
-M4 is a **prompt-only** change (`agents/gan-generator.md`); agent content is copied on every `install.sh` run, so no `package.json` bump is needed (per the pre-1.0 install-version bump discipline, roadmap § "Pre-release chores and release gate"). M4 adds no MCP tool, schema, or `gan`/server change — those it *uses* (R7's docker tools) ship and bump under R7.
+M4 is a **prompt-only** change (`agents/gan-generator.md` plus the evaluator/proposer prompt that emits and runs the container-health criterion); agent content is copied on every `install.sh` run, so no `package.json` bump is needed (per the pre-1.0 install-version bump discipline, roadmap § "Pre-release chores and release gate"). M4 adds no MCP tool, schema, or `gan`/server change — those it *uses* (R7's docker tools) ship and bump under R7.
 
 ## Dependencies
 
 - **R7** — exposes the docker tools the rewrite calls. Must land first.
-- **E8** — owns the paired evaluator-side `ContainerHealth` gate (the other half of Docker-module wiring).
+- **E8** — ships the evaluator's forced-execution machinery and *designs* the container-health gate; M4 **activates** that criterion (injects it into docker-active evaluations), co-landing it with the generator-side naming. E8 must land first — its machinery is the substrate the criterion plugs into.
 - **M2** — the shipped Docker module whose helpers back the tools; cross-referenced, not edited.
 
 ## Bite-size note
 
-One conditional prompt rewrite, ~1–2 sprints. Lands after R7 (its tools must exist) and pairs with E8's evaluator-side gate.
+Conditional prompt changes on **both** sides — the `gan-generator.md` rewrite plus activating the evaluator-side container-health criterion E8 designed — ~1–2 sprints. Lands after R7 (its tools must exist) and after E8 (whose forced-execution machinery the criterion plugs into).
