@@ -46,6 +46,8 @@ Argument and return shapes are the **existing** shapes except where noted; "Sche
   - `buildEvaluatorPlan({ snapshot, sprintPlan, worktreeState })` → wraps `buildEvaluatorPlan(snapshot, sprintPlan, worktreeState)`. Returns a **plan**: data describing which commands to run and which surfaces fired — not execution (see "Relationship to F4").
 - **Modules (`src/modules/`)** — **lazy-loaded** (see below):
   - `dockerReservePort`, `dockerReleasePort`, `dockerDiscoverPort`, `dockerCheckContainerHealth`, `dockerContainerName` → the `PortRegistry` / `PortDiscovery` / `ContainerHealth` / `ContainerNaming` helpers; registry state persists through the module-state store (F8).
+- **Run lock (`src/config-server/storage/run-lock.ts`)**
+  - `acquireRunLock({ repoKey })` / `releaseRunLock(...)` → the shipped portable `link(2)` run-lock that O2's concurrent-run guard and `--recover` rely on. Exposed because the markdown orchestrator cannot issue the lock syscall directly and O2 references this tool; the underlying lock implementation already exists (R7 only adds its tool wrapper, per the dual-callable rule). This is the lock O2 §8 acquires; it is **not** `flock`.
 
 ### Lazy module loading (must-fix — prevents a boot crash)
 
