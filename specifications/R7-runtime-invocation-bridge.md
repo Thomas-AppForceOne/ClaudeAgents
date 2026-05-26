@@ -124,6 +124,10 @@ Emission is a single append: `appendTraceEvent` reads the index tail for the cur
 - **A live loop-detection halt firing end-to-end** is verified when E8 and v1.0 dogfooding land (E8 drives the attempts that reach a ceiling); R7 verifies only that the check is callable and correct.
 - **A rich read surface over the now-real trace** is deferred to T2 (v1.1), per T1's data-first / read-second split.
 
+## Version bump (install-affecting)
+
+R7 adds new MCP tools (`api-tools-v1.json` entries + handlers across `src/config-server` / `src/trace` / `src/safety` / `src/agents`) — installed-package changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), R7's implementation PR **bumps `package.json` `version`** so an upgrading dogfooder need not uninstall-then-install. (Framework package version — not a `schemaVersion` change.)
+
 ## Dependencies
 
 - **T1, A1, E3, M2** — the libraries R7 exposes. Shipped; cross-referenced, not edited.

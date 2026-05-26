@@ -35,6 +35,10 @@ The rewrite is **conditional**: a stack with no docker module is unaffected (the
 - A generator run on a **non-docker** stack makes no docker-tool call (the rewrite is strictly conditional).
 - The wiring is exercised against the existing Docker dogfood project: a real run reserves its port through the registry rather than hard-coding one. This is **dogfood/manual** — like R7's end-to-end checks, CI has no LLM to drive the markdown generator.
 
+## Version bump: none
+
+M4 is a **prompt-only** change (`agents/gan-generator.md`); agent content is copied on every `install.sh` run, so no `package.json` bump is needed (per the pre-1.0 install-version bump discipline, roadmap § "Pre-release chores and release gate"). M4 adds no MCP tool, schema, or `gan`/server change — those it *uses* (R7's docker tools) ship and bump under R7.
+
 ## Dependencies
 
 - **R7** — exposes the docker tools the rewrite calls. Must land first.

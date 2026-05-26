@@ -141,6 +141,10 @@ The independent reviewer **expands the contract's coverage**; the evaluator stil
 - **Findings represented inside the evidence bundle** — Q2 (v1.1) generalises E8's artifact.
 - **Reviewer-verdict reproducibility (pinned temperature/seed)** — A5 (v1.2).
 
+## Version bump (install-affecting)
+
+E8 adds the bundled `independent-review-v1` schema, the `reconstructRevisionState` MCP tool, and additive `run-trace-v1` / `overlay-v1` fields — installed-package changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), E8's implementation PR **bumps `package.json` `version`**. This is the framework package version and is **distinct from** the `run-trace`/`overlay` `schemaVersion`, which stays `v1` (the fields are additive, per the schema-versioning ruling).
+
 ## Dependencies
 
 - **R7** (hard) — forced plan execution and the reviewer's reproduction-gated validation are impossible without it. E8 cannot land before R7.

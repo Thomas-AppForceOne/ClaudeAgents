@@ -208,6 +208,10 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - All three `ConfigApiUnreachable` branches' messages obey the F4 prose-discipline rule.
 - The status markers in SKILL.md align with the actual orchestrator behavior — sections marked `[shipped-in-v1.0]` are operative; sections marked `[deferred-to-v1.1]` short-circuit with a structured "requires v1.1" message.
 
+## Version bump (install-affecting)
+
+D1 adds the `subReason` discriminator on `ConfigApiUnreachable` and rewrites the `gan stacks --help` CLI output — installed-package (server + CLI) changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), D1's implementation PR **bumps `package.json` `version`**. (The `lint-status-markers` script is maintainer/CI tooling, not installed — it is not what forces the bump; the SKILL.md status markers are copied every install and likewise do not.)
+
 ## Dependencies
 
 - **F2** — structured-error model; D1 adds the `subReason` discriminator on `ConfigApiUnreachable`.

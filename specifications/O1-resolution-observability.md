@@ -104,6 +104,10 @@ The combination tells a debugger both *what* was discarded and *what replaced it
 - A field-level discard like `generator.additionalRules.discardInherited: true` with no replacement appears as `{"scope": "generator.additionalRules", "byTier": "<tier>", "replacedWith": {"kind": "absent"}}`.
 - Running `/gan --print-config` against a project with a malformed overlay prints both the partial resolved view (under `resolvedConfig`) and the validation errors (under `validationErrors`); exit code is non-zero. (Fail-open behavior, distinct from a regular `/gan` run.)
 
+## Version bump (install-affecting)
+
+O1 changes `gan config print`'s fail-open behaviour (the partial resolved view plus the `validationErrors` / `validationWarnings` keys) and its exit-code policy — a CLI/server (installed-package) change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O1's implementation PR **bumps `package.json` `version`**. (The `--print-config` flag parsing and the startup-log line live in `SKILL.md`, copied every install; the bump is for the `gan config print` package change.)
+
 ## Dependencies
 
 - F2 (the API that produces the data this spec surfaces)

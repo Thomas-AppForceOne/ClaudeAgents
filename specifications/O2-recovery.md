@@ -546,6 +546,10 @@ Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers
 
 ---
 
+## Version bump (install-affecting)
+
+O2 authors the bundled `schemas/progress-v1.json` — an installed-package change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O2's implementation PR **bumps `package.json` `version`** (the framework package version, not the `progress-v1` `schemaVersion`). The `--recover` / `--list-recoverable` / `--cleanup` dispatch lives in `SKILL.md`, which is copied every install and does not itself force the bump.
+
 ## Dependencies
 
 - **F1** — zone 2 layout. Recovery operates entirely inside `.gan-state/runs/<run-id>/`.

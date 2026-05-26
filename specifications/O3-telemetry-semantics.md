@@ -286,6 +286,10 @@ An `outcome.json` for a successful one-sprint run:
 }
 ```
 
+## Version bump (install-affecting)
+
+O3 authors the bundled `schemas/telemetry-config-v1.json` and `schemas/telemetry-outcome-v1.json` — installed-package changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O3's implementation PR **bumps `package.json` `version`**. The `--no-telemetry` flag parsing and `telemetry/` writing live in `SKILL.md` / the orchestrator (copied every install) and do not themselves force the bump; the two new bundled schemas do.
+
 ## Dependencies
 
 - **F1** — zone semantics; `telemetry/` is zone 2.

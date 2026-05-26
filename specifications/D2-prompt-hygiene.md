@@ -81,6 +81,10 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 
 - None. D2 is self-contained within v1.0.
 
+## Version bump: none
+
+D2 edits `SKILL.md` and the agent prompts (copied every `install.sh` run) and adds the `lint-no-spec-ref` maintainer/CI script (not installed). It changes no installed-package surface — no MCP tool, schema, or `gan`/server behaviour — so no `package.json` bump is needed (per the pre-1.0 install-version bump discipline, roadmap § "Pre-release chores and release gate").
+
 ## Dependencies
 
 - **E1** — the prompt set and `SKILL.md` D2 refactors (product artifacts, editable; the shipped E1 spec is cross-referenced, not edited).
