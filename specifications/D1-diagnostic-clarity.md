@@ -6,7 +6,7 @@ The first dogfooding session caught three diagnostic surfaces producing the wron
 
 1. **`ConfigApiUnreachable` lumped install + restart.** The orchestrator's preflight diagnostic, when it cannot reach the Configuration API, emitted a single remediation: "Install the framework: `bash <repo>/install.sh`. Then restart Claude Code." For a user who had already run `install.sh` (and just hit the restart-required failure mode after the install completed), this remediation was misleading — they didn't need to re-install, they needed to restart Claude Code so the live session picked up the freshly-registered MCP server. The remediation is correct as a default; it was wrong as the only branch.
 
-2. **SKILL.md described unshipped behavior with no marking.** The orchestrator skill spec describes `--recover` and `--list-recoverable` dispatching to "the recovery flow per O2's revision," but O2 is not implemented in v1.0. An orchestrator implementing the skill from scratch — or a user reading SKILL.md to understand what `/gan` does — has no signal that those flags are aspirational. The doc reads as if the behavior is operative.
+2. **SKILL.md described not-yet-operative behavior with no marking.** The orchestrator skill describes emitting trace events and running loop-detection halts as if live, but those are only operative once R7 (the runtime invocation bridge) exposes the trace/safety libraries to the markdown orchestrator. A reader — or an orchestrator implementing the skill from scratch — has no signal that the behavior is aspirational until R7 lands; the doc reads as if operative when it isn't. (The original dogfooding instance was `--recover`/`--list-recoverable`; those now ship in v1.0 — minimal recovery via O2, made operative by R7 — so the live instance of this problem is the trace/safety integration sections R7 turns real.)
 
 3. **`gan stacks --help` advertised 2 of 6 subcommands.** The CLI ships six `stacks` subcommands (`list`, `available`, `new`, `where`, `customize`, `reset`), but the help output listed only `list` and `new`. A user running `gan stacks list` and getting back only `generic` (because they were not in a Node project) had no obvious path to discover that `gan stacks available` lists every stack the framework ships. The functionality existed; the help didn't surface it.
 
@@ -57,8 +57,8 @@ The orchestrator skill spec (`skills/gan/SKILL.md`) and any other forward-lookin
 
 The markers appear at section-heading level in the spec (e.g. immediately after `## Inspection and recovery short-circuits`). They are also reflected in the orchestrator's behavior:
 
-- A `--recover` invocation under v1.0 (where O2 is deferred) prints "this command requires v1.1; install the latest framework" and exits with a non-zero status code, instead of silently no-oping or attempting an undefined dispatch.
-- A `--list-recoverable` invocation produces the same.
+- A section genuinely marked `[deferred-to-v1.1]` (e.g. the full operator-control surface H2 adds) short-circuits with a structured "this command requires v1.1; install the latest framework" message and exits non-zero, instead of silently no-oping or attempting an undefined dispatch.
+- By contrast, `--recover` and `--list-recoverable` ship in v1.0 — minimal trace-driven recovery (O2), made operative by R7 — so they dispatch normally and are marked `[partial-v1.0]` / `[shipped-in-v1.0]`, not deferred. The marker must track what actually ships, which is exactly the drift this discipline prevents.
 
 The orchestrator's runtime behavior aligning with the spec's markers is the contract that makes the markers meaningful. Without the runtime alignment, markers are just decoration.
 
@@ -150,16 +150,13 @@ A SKILL.md section with status markers:
 - Emits an O1-shaped object on stdout.
 - Exit code reflects validation status.
 
-`--recover` [deferred-to-v1.1]
-- Per O2's revision: dispatches to the recovery flow.
-- v1.0 behavior: prints "this command requires v1.1; install the latest
-  framework" and exits non-zero.
+`--recover` [partial-v1.0]
+- Dispatches to the recovery flow (O2). Minimal trace-driven resume ships in
+  v1.0 (made operative by R7); the richer recovery UX lands in v1.1.
 
-`--list-recoverable` [deferred-to-v1.1]
-- Per O2's revision: enumerates `<store-root>/<repo-key>/runs/*/progress.json`
-  (central store per F7) and prints recoverable runs.
-- v1.0 behavior: prints "this command requires v1.1; install the latest
-  framework" and exits non-zero.
+`--list-recoverable` [shipped-in-v1.0]
+- Enumerates `<store-root>/<repo-key>/runs/*/progress.json` (central store
+  per F7) and prints recoverable runs.
 ```
 
 The `gan stacks --help` output:
@@ -197,7 +194,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - A `/gan --print-config` invocation against an installation where `~/.claude.json` lacks the `mcpServers.claudeagents-config` entry produces `ConfigApiUnreachable` with `subReason: "notRegistered"` and the install-then-restart remediation.
 - A `/gan --print-config` invocation against an installation where `~/.claude.json` has the entry but the registered bin path does not exist produces `ConfigApiUnreachable` with `subReason: "binMissing"` and the re-install remediation.
 - A `/gan --print-config` invocation against an installation where the entry is present, the bin exists, but the MCP server is not reachable in the current session produces `ConfigApiUnreachable` with `subReason: "notLoadedInSession"` and the restart-only remediation.
-- A `/gan --recover` or `/gan --list-recoverable` invocation under v1.0 prints the documented "this command requires v1.1" message and exits non-zero.
+- A `/gan --recover` invocation under v1.0 dispatches to the minimal recovery flow (O2, made operative by R7), not a "requires v1.1" short-circuit; `/gan --list-recoverable` enumerates recoverable runs. A section genuinely marked `[deferred-to-v1.1]` short-circuits with the structured "requires v1.1" message and exits non-zero.
 - The `lint-status-markers` script asserts every section heading in SKILL.md has a marker (or is in a designated prologue section).
 - The lint script rejects markers referencing releases not present in the roadmap (e.g. `[shipped-in-v9.9]`).
 - The `gan stacks --help` output advertises all six `stacks` subcommands.

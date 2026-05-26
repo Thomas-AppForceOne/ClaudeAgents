@@ -515,6 +515,9 @@ Tests cover at minimum: success path for 1-4, 6, 11, 13-16, 18-21, 23, 25, 27; f
   `--recover` / `--list-recoverable` short-circuit dispatch.
 - **F3** — `progress-v1.json` schema (added in this sprint if not already present).
 - **O1** — fail-open contract for `--recover` validation behaviour.
+- **T1** — the run trace recovery reads to reconstruct sprint and counter state.
+- **A1** — the loop-halt reasons (`failed-loop-detected`) recovery resumes from and the trace-as-only-counter reconstruction it shares.
+- **R7** — the runtime invocation bridge that makes the trace emittable/readable from the markdown orchestrator; without it the trace recovery reads would be empty. (Recovery is silent on the emission mechanism, so it is compatible-once-R7-lands rather than dependent on R7's internals, but R7 is what makes recovery operative in practice.)
 
 ## Implementation notes
 
