@@ -77,7 +77,7 @@ Phases 0–4 (foundations F1–F4; configuration domains C1–C5; reference impl
 
 ### Implementation order
 
-The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec link, position rationale, dependencies. Spec content lives in the spec files.
+The numbered list below is the v1.0 spec inventory, in execution order. Each entry is a one-line spec link (shipped entries add the PR); dependencies, effort, and rationale live in the spec files.
 
 1. ✅ **[M3](M3-module-surface-alignment.md)** — module surface alignment. Shipped PR #8.
 2. ✅ **[I1](I1-self-contained-install-correctness.md)** — self-contained install correctness. Shipped PR #9.
@@ -102,8 +102,6 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 21. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
 22. [D2](D2-prompt-hygiene.md) — prompt hygiene.
 23. **Pre-release chores + release gate.** See below.
-
-Execution order after R7: **R7 → E8 → {D1, O2 → O3} → D2**, with O1 and M4 (slot 18) independent. E8 (17) is the critical path; D2 (22) must be the *last* SKILL.md edit, or a later spec re-bloats what the hygiene pass just trimmed. The post-v1.0 dogfooding audit fires after slot 23.
 
 ### Known gaps accepted at v1.0
 
