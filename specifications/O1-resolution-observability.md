@@ -4,6 +4,8 @@
 
 Once stack dispatch (C2), overlays (C3, C4), and three-tier resolution (C5) are in place, it becomes hard for a user to answer "why did `/gan` do that?" — which stacks were active, which tier each stack came from, which overlay fields applied, which `additionalContext` files were read. Debugging a misbehaving run without this is guesswork.
 
+> **Status markers (per [D1](D1-diagnostic-clarity.md)).** Both O1 surfaces are operative in v1.0: the SKILL.md `/gan --print-config` flag-parsing section carries `[shipped-in-v1.0]` (D1's worked example uses exactly this flag), and the orchestrator startup-log section (part A) likewise. No part of O1 is deferred, so D1's `lint-status-markers` — which requires every SKILL.md section heading to carry a marker — passes for O1's additions once they land.
+
 ## Proposed change
 
 Two mechanisms — one automatic, one on demand. Both surface data the Configuration API (F2) already produces; this spec defines how that data reaches the user.
@@ -38,7 +40,7 @@ Both produce identical JSON when given `--json`. The flag parsing for `/gan --pr
 
 **Failure mode: fail-open.** `--print-config` is a debug surface. When `validateAll()` fails, the output prints both the partial resolved view (everything the resolver could compute despite the errors) **and** the structured error report. Both are JSON when `--json` is given; both surfaces are top-level keys in the output (`resolvedConfig` and `validationErrors`). Exit code reflects the validation status (non-zero on failure), but the user always gets the resolved view to debug from. This differs from a regular `/gan` run, which fails closed and prints only the validation report.
 
-**Exit code policy on warnings (v1.0).** `validateAll()` distinguishes errors from warnings; the latter are non-aborting (e.g. the per-stack overlay override warning per the v1.0 pre-release chore, or a missing `additionalContext` file). `--print-config`'s exit code is:
+**Exit code policy on warnings (v1.0).** `validateAll()` distinguishes errors from warnings; the latter are non-aborting (e.g. W1's `StackOverrideShrinkage` warning — a `stack.override` that shrinks the active set vs. detection — or a missing `additionalContext` file). `--print-config`'s exit code is:
 
 - **0** — `validateAll()` produced no errors. Warnings, if any, appear under a top-level `validationWarnings` key and are also enumerated to stderr in non-JSON mode. CI scripts that gate on warnings can check this key explicitly; the default exit-zero matches the contract that "warnings inform, errors fail."
 - **Non-zero** — `validateAll()` produced one or more errors. The error array appears under `validationErrors`; warnings (if any) still appear under `validationWarnings`. The non-zero exit code is the same regardless of whether warnings are also present.

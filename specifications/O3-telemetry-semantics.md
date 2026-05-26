@@ -14,6 +14,8 @@ O3 closes the gap with a minimal v1.0 contract: two artifacts under `telemetry/`
 
 O3 is the third spec under the **O** (observability and operations) phase code, after [O1](O1-resolution-observability.md) and [O2](O2-recovery.md). Where O1 surfaces resolution observability at run start (the startup log) and O2 owns the run-state lifecycle, O3 owns the run-summary artifacts an operator reads *after* the run terminates.
 
+> **Status markers (per [D1](D1-diagnostic-clarity.md)).** O3's `--no-telemetry` flag is operative in v1.0 — its SKILL.md flag-parsing section carries `[shipped-in-v1.0]`, so D1's `lint-status-markers` (every SKILL.md section heading must carry a marker) passes for O3's addition once it lands. No part of O3 is deferred.
+
 ## Proposed change
 
 ### The `telemetry/` subdirectory
@@ -162,7 +164,7 @@ T1 owns the **event log** (`trace/`); O3 owns the **summary artifacts** (`teleme
 - T1 records every LLM call, tool call, agent attempt, safety halt, trust event, validation abort, milestone — appending events as the run progresses.
 - O3 records the run-start configuration view (once) and the run-end summary (once).
 
-`outcome.json`'s `cost` section is derived from T1 trace events at termination time. If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but *detectably lossy*** — R7's `index.json` does not reconcile to the `events/` file count, i.e. a best-effort emit was dropped (disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`, or null when the gap is unbounded) rather than reported as a confident-but-wrong total. A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null and carries the `complete` flag.
+`outcome.json`'s `cost` section is derived from T1 trace events at termination time **via R7's `aggregateRunSummary`** — the structured per-run aggregate (the markdown orchestrator does not hand-sum the events). If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but *detectably lossy*** — **R7's `reconcileTraceIndex` reports** that `index.json` does not reconcile to the `events/` file count, i.e. a best-effort emit was dropped (disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`, or null when the gap is unbounded) rather than reported as a confident-but-wrong total. A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null and carries the `complete` flag.
 
 `telemetry.tracePayloads` (T1's overlay splice point) controls *trace* payload content — it does not affect O3's artifacts. A run with `tracePayloads: "hashed"` and telemetry on still produces full `config.json` and `outcome.json` (these don't carry user-prompt content; they're configuration and aggregate metrics).
 

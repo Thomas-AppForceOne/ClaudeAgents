@@ -194,7 +194,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - A `/gan --print-config` invocation against an installation where `~/.claude.json` lacks the `mcpServers.claudeagents-config` entry produces `ConfigApiUnreachable` with `subReason: "notRegistered"` and the install-then-restart remediation.
 - A `/gan --print-config` invocation against an installation where `~/.claude.json` has the entry but the registered bin path does not exist produces `ConfigApiUnreachable` with `subReason: "binMissing"` and the re-install remediation.
 - A `/gan --print-config` invocation against an installation where the entry is present, the bin exists, but the MCP server is not reachable in the current session produces `ConfigApiUnreachable` with `subReason: "notLoadedInSession"` and the restart-only remediation.
-- A `/gan --recover` invocation under v1.0 dispatches to the minimal recovery flow (O2, made operative by R7), not a "requires v1.1" short-circuit; `/gan --list-recoverable` enumerates recoverable runs. A section genuinely marked `[deferred-to-v1.1]` short-circuits with the structured "requires v1.1" message and exits non-zero.
+- A `/gan --recover` invocation under v1.0 dispatches to the minimal recovery flow (O2, made operative by R7), not a "requires v1.1" short-circuit; `/gan --list-recoverable` enumerates recoverable runs. **This AC presupposes O2 has landed (see Dependencies → O2); it rides with O2's PR if D1 lands first.** A section genuinely marked `[deferred-to-v1.1]` short-circuits with the structured "requires v1.1" message and exits non-zero.
 - The `lint-status-markers` script asserts every section heading in SKILL.md has a marker (or is in a designated prologue section).
 - The lint script rejects markers referencing releases not present in the roadmap (e.g. `[shipped-in-v9.9]`).
 - The `gan stacks --help` output advertises all six `stacks` subcommands.
@@ -216,6 +216,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - **R3** — CLI help registry; `gan stacks --help` rewrite is an R3 amendment.
 - **R4** — maintainer tooling; the `lint-status-markers` script is a new R4 addition.
 - **O1** — observability; `--print-config` output continues to emit `validationErrors` with the new structured fields.
+- **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** D1 and O2 are co-grouped after R7+E8 ({D1, O2→O3} in the implementation order, §"Dependencies within slots 19–22"), and D1 is numbered before O2 (20); land O2 first, or let D1's `--recover`-dispatch AC ride with O2's PR. This edge is exactly what D1's own discipline demands — a `[shipped-in-v1.0]` marker on a flow O2 has not yet wired would be the spec-vs-runtime drift D1 exists to prevent.
 
 ## Bite-size note
 

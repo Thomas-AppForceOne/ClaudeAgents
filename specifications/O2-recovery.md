@@ -38,7 +38,7 @@ What changes is how the framework delivers it.
 
 ## Solution summary
 
-> **v1.0 scope and status markers (per [D1](D1-diagnostic-clarity.md)).** This spec describes the *full* recovery + cleanup surface; the roadmap (slot 21) ships it in slices. **`[shipped-in-v1.0]`:** `--list-recoverable` (enumeration, §4), the concurrent-run lock (§8), and terminal marking (§3). **`[partial-v1.0]`:** `--recover` (§5) — minimal trace-driven resume in v1.0; the richer UX (overlay-drift warnings, re-attach edge cases) is v1.1. **`[deferred-to-v1.1]`:** `--cleanup` in full (§5.5 — `--all` / `--include-terminal` / `--yes` / merge-aware remote-branch deletion). The v1.0 implementation builds only the `shipped`/`partial` slices; sections below carry these markers. Without this demarcation the roadmap's "minimal, ~1–2 sprints" estimate and D1's marker discipline both fail against the full spec.
+> **v1.0 scope and status markers (per [D1](D1-diagnostic-clarity.md)).** This spec describes the *full* recovery + cleanup surface; the roadmap (slot 20) ships it in slices. **`[shipped-in-v1.0]`:** `--list-recoverable` (enumeration, §4), the concurrent-run lock (§8), and terminal marking (§3). **`[partial-v1.0]`:** `--recover` (§5) — minimal trace-driven resume in v1.0; the richer UX (overlay-drift warnings, re-attach edge cases) is v1.1. **`[deferred-to-v1.1]`:** `--cleanup` in full (§5.5 — `--all` / `--include-terminal` / `--yes` / merge-aware remote-branch deletion). The v1.0 implementation builds only the `shipped`/`partial` slices; sections below carry these markers. Without this demarcation the roadmap's "minimal, ~1–2 sprints" estimate and D1's marker discipline both fail against the full spec.
 
 Three coordinated mechanisms, all post-E1:
 
@@ -101,7 +101,7 @@ hooks check `.gan-state/runs/<run-id>/worktree/` instead of `.gan/worktree/`.
 
 ### 2. `progress.json` extensions for recovery
 
-The post-E1 `progress.json` schema gains four fields beyond the legacy set:
+The post-E1 `progress.json` schema gains the recovery fields below beyond the legacy set. The legacy set itself **includes `workspace`** — `{worktreePath, branch, createdByGan}`, written today by F7's shipped `recordWorkspace` and read by recovery (§5) and cleanup (§5.5); because O2 authors the strict `progress-v1.json`, the schema **must** list it or every run that recorded a workspace fails validation:
 
 ```json
 {
@@ -117,6 +117,12 @@ The post-E1 `progress.json` schema gains four fields beyond the legacy set:
   "runBranch": "gan/20260503T143010-b8e1",
   "baseBranch": "develop",
   "startingBranch": "develop",
+
+  "workspace": {
+    "worktreePath": "/Users/thak/projects/myapp/.gan-state/runs/20260503T143010-b8e1/worktree",
+    "branch": "gan/20260503T143010-b8e1",
+    "createdByGan": true
+  },
 
   "terminal": false,
   "terminalReason": null,
@@ -142,6 +148,11 @@ The post-E1 `progress.json` schema gains four fields beyond the legacy set:
   against current state during recovery to detect drift.
 - `recoveryHistory[]` — appended on each `--recover` invocation. Empty array on a
   fresh run.
+- `workspace` — `{worktreePath, branch, createdByGan}`; a **legacy** field (written
+  today by F7's `recordWorkspace`, not new this sprint), listed here because the
+  strict schema must accept it. Recovery re-attaches the run to
+  `workspace.worktreePath` (§5) and cleanup classifies teardown by
+  `workspace.createdByGan` (§5.5).
 
 Enumerated `terminalReason` codes:
 
@@ -528,7 +539,10 @@ Each criterion concrete and testable.
     Verifies the budget *scoping* survives recovery, not just that the schema accepts the
     fields.
 
-Tests cover at minimum: success path for 1-6, 11-16, 18-21, 23, 25, 27, 29; failure path for 7-10, 17, 22, 24, 26, 28.
+Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers above):
+
+- **v1.0** (`--list-recoverable`, `--recover`, terminal marking, the lock, and the E8 seam): success path for 1-6, 11-16, 29; failure path for 7-10, 17.
+- **Deferred to v1.1** (the full `--cleanup` surface, §5.5): success path for 18-21, 23, 25, 27; failure path for 22, 24, 26, 28. These ACs are authored here but their tests land with the v1.1 `--cleanup` implementation — the v1.0 PR does **not** gate on ACs 18-28, matching the roadmap's "minimal, ~1–2 sprints" estimate.
 
 ---
 
@@ -543,7 +557,7 @@ Tests cover at minimum: success path for 1-6, 11-16, 18-21, 23, 25, 27, 29; fail
 - **T1** — the run trace recovery reads to reconstruct sprint and counter state.
 - **A1** — the loop-halt reasons (`failed-loop-detected`) recovery resumes from and the trace-as-only-counter reconstruction it shares.
 - **R7** — the runtime invocation bridge that makes the trace emittable/readable from the markdown orchestrator; without it the trace recovery reads would be empty. (Recovery is silent on the emission mechanism, so it is compatible-once-R7-lands rather than dependent on R7's internals, but R7 is what makes recovery operative in practice.) R7 also exposes the `acquireRunLock`/`releaseRunLock` tool §8's concurrency guard uses.
-- **E8** — E8 (slot 17) ships **before** O2 (slot 21) and is the *writer* of two `progress.json` fields O2's schema must accept: the `failed-evaluation-rejected` `terminalReason` value and `contractRevision`. O2 authors `progress-v1.json`, so its schema **must** include these or every E8-renegotiated run fails validation once the strict schema lands. `--recover` must also resume a run halted on E8's renegotiation cap (see AC). This writer-before-schema ordering is the seam to watch — AC 29 is its integration test.
+- **E8** — E8 (slot 17) ships **before** O2 (slot 20) and is the *writer* of two `progress.json` fields O2's schema must accept: the `failed-evaluation-rejected` `terminalReason` value and `contractRevision`. O2 authors `progress-v1.json`, so its schema **must** include these or every E8-renegotiated run fails validation once the strict schema lands. `--recover` must also resume a run halted on E8's renegotiation cap (see AC). This writer-before-schema ordering is the seam to watch — AC 29 is its integration test.
 
 ## Implementation notes
 
@@ -551,11 +565,13 @@ Tests cover at minimum: success path for 1-6, 11-16, 18-21, 23, 25, 27, 29; fail
   in SKILL.md gains three short-circuit handlers (`--list-recoverable`, `--recover
   [--run-id X]`, `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`).
 - **Recovery is independent of telemetry.** Telemetry is a separate concern owned by O3; recovery neither reads nor depends on any telemetry surface. (There is **no `--telemetry-dir` flag** — an earlier draft referenced one; it is absent from `runtime-knobs.md` and is removed here. O3 owns `--no-telemetry`.)
-- **Schema bump.** `progress.json`'s shape changes (gains `terminal`, `terminalReason`,
-  `terminalAt`, `contractRevision`, `projectRoot`, `overlaysAtSnapshot`, `recoveryHistory`). Per the
-  pre-1.0 no-backward-compat rule, this is a `schemaVersion` bump on the run-state
-  schema if `schemas/progress-v1.json` exists, or first creation of that
-  file.
+- **Schema creation (not a bump).** `schemas/progress-v1.json` does **not** exist
+  today, so this sprint **creates** it at v1 — covering the legacy fields (incl.
+  `workspace`) plus the recovery additions (`terminal`, `terminalReason`,
+  `terminalAt`, `contractRevision`, `projectRoot`, `overlaysAtSnapshot`,
+  `recoveryHistory`). Per the schema-versioning ruling (roadmap § "Schema-versioning
+  ruling"; E8 § "Schema and surface additions"), were the file already present these
+  additive fields would stay v1 in place — only a rename/semantic change forces `v2`.
 - **Tests live under `tests/integration/recovery/`** (new directory, follows the
   pattern of `tests/integration/snapshot-freshness.test.ts` and
   `tests/integration/first-run-nudge.test.ts` from Phase 3 Sprint 6).
