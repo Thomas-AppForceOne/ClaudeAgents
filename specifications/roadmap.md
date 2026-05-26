@@ -95,12 +95,12 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 14. ✅ **[E5](E5-spec-clarification.md)** — spec clarification phase. Shipped PR #30.
 15. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
 16. **Next** [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
-17. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
-18. [M4](M4-docker-module-wiring.md) — Docker module wiring.
-19. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
-20. [O2](O2-recovery.md) — minimal recovery.
-21. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
-22. [D2](D2-prompt-hygiene.md) — prompt hygiene.
+17. [D2](D2-prompt-hygiene.md) — prompt hygiene.
+18. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
+19. [M4](M4-docker-module-wiring.md) — Docker module wiring.
+20. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
+21. [O2](O2-recovery.md) — minimal recovery.
+22. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
 23. **Pre-release chores + release gate.** See below.
 
 ### Known gaps accepted at v1.0
@@ -123,6 +123,7 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
   This converts "the gate can reject" and "won't loop forever" from design claims into evidence. It is make-or-break for v1.0 credibility: **if the protocol does not pass, v1.0 does not ship.**
 - **README v1.0 stack and module inventory.** Two README sections — "Stacks available in v1.0" (`web-node`, `generic`) and "Modules available in v1.0" (`docker`) — so users authoring an overlay don't have to read the C / M specs to discover what's available.
 - **Install-version bump discipline (every install-affecting spec).** `install.sh` re-runs `npm install -g .` — the step that re-links the config server, its bundled `schemas/`, and the `gan` CLI — **only when `package.json`'s `version` differs from the installed server's** (`version_probe_mcp`); agent and `SKILL.md` content is copied on every run regardless. So any spec whose implementation changes the **installed package** — a new/changed MCP tool, a bundled `schemas/*.json`, or `gan`/server-binary behaviour — **MUST minor-bump `package.json` `version` in its implementation PR** — a *minor* increment (`0.MINOR.0`, e.g. `0.1.0` → `0.2.0`), with patch reserved for fixes within a version — or a dogfooding user who `git pull`s and re-runs `install.sh` keeps the *old* server and must uninstall-then-install to recover. Prompt-only specs (agent / `SKILL.md` edits) don't bump. This is the framework `package.json` version — **distinct from** per-schema `schemaVersion` (the additive-stays-v`N` ruling above). Each affected v1.0 spec states its bump in its own text; **flagged for the spec-validator** to fold the rule into PROJECT_CONTEXT § Conventions (its permanent home).
+- **Final prompt-hygiene re-check (covers D2's early-landing residual).** D2 lands early (right after R7) and its lints — the `agents/_house-rules.md` parity check and `lint-no-spec-ref` — keep the *structural* format through every later SKILL.md edit (E8/D1/O2/O1/O3). The one thing no lint catches is subjective prose verbosity in the content those specs add afterward. So before release, a reviewer re-reads the assembled `SKILL.md` + agent prompts against D2's format (no re-introduced rationale or self-quotation, the halt-contract still single, sections terse) — a diff-scoped read-through, not a re-refactor. This substitutes for the "D2 runs last" guarantee that landing it early trades away.
 
 ### Post-v1.0 dogfooding audit
 

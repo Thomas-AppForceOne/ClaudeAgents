@@ -220,7 +220,7 @@ D1 adds the `subReason` discriminator on `ConfigApiUnreachable` and rewrites the
 - **R3** — CLI help registry; `gan stacks --help` rewrite is an R3 amendment.
 - **R4** — maintainer tooling; the `lint-status-markers` script is a new R4 addition.
 - **O1** — observability; `--print-config` output continues to emit `validationErrors` with the new structured fields.
-- **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** D1 and O2 are co-grouped after R7+E8 in the implementation order, and D1 is numbered before O2 (slot 20); land O2 first, or let D1's `--recover`-dispatch AC ride with O2's PR. This edge is exactly what D1's own discipline demands — a `[shipped-in-v1.0]` marker on a flow O2 has not yet wired would be the spec-vs-runtime drift D1 exists to prevent.
+- **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** D1 and O2 are co-grouped after R7+E8 in the implementation order, and D1 is listed before O2; land O2 first, or let D1's `--recover`-dispatch AC ride with O2's PR. This edge is exactly what D1's own discipline demands — a `[shipped-in-v1.0]` marker on a flow O2 has not yet wired would be the spec-vs-runtime drift D1 exists to prevent.
 
 ## Bite-size note
 

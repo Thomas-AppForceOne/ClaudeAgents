@@ -11,7 +11,7 @@ Concretely:
 
 Two harms follow. First, **execution fidelity**: ceremony surrounding a load-bearing instruction makes it less salient. Second, a **boundary violation**: per `CLAUDE.md`, the shipped product (`agents/`, `skills/gan/`) must never carry repo-internal process, yet the internal `specifications/*` references do exactly that — the class of leak `lint-no-stack-leak` and `test-error-text` already police on adjacent axes, with no backstop yet for spec references.
 
-D2 is a **behaviour-preserving** refactor: it removes ceremony and factors duplication while keeping every operative rule, schema, rubric, and catalog intact. It adds no primitive, splice point, runtime knob, or agent surface, so the five-question relevance filter does not apply — it earns a slot as the hygiene pass that lowers execution-fidelity risk on the most load-bearing prompt in the framework and closes the spec-reference boundary leak. It is a **standalone spec** (not folded into D1): its deliverable — a prompt refactor plus a new lint — is distinct from D1's diagnostic-message work, though it depends on D1 (below).
+D2 is a **behaviour-preserving** refactor: it removes ceremony and factors duplication while keeping every operative rule, schema, rubric, and catalog intact. It adds no primitive, splice point, runtime knob, or agent surface, so the five-question relevance filter does not apply — it earns a slot as the hygiene pass that lowers execution-fidelity risk on the most load-bearing prompt in the framework and closes the spec-reference boundary leak. It is a **standalone spec** (not folded into D1): its deliverable — a prompt refactor plus a new lint — is distinct from D1's diagnostic-message work. **It lands early** — right after R7 — establishing the lean format every later `SKILL.md` editor inherits, with its lints as the durable backstop (see Dependencies).
 
 ## Proposed change
 
@@ -70,8 +70,8 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 - **Inlined facts present.** After the spec-reference strip, the F4 forbidden-token rule, the C1 instantiation rule, and the F2 error-field list are present **inline** in the relevant prompts (not merely de-cited).
 - **`lint-no-spec-ref` green with correct scope.** Zero internal-reference forms (including possessive/bare codes) in `agents/` + `skills/gan/`, while the `--help` EXAMPLES `--spec` sample path is allowlisted and does not trip it.
 - **Safety-collapse completeness.** The collapsed halt section still expresses all five per-trigger distinctions (roles checked, counter substrate, trigger logic, error builder, gating) — verified against the checklist in §1.
-- **`lint-no-stack-leak`, `test-error-text`, and `lint-status-markers` (D1) remain green** on the refactored files. D2 lands after D1, so the status markers it adds must survive the de-verbosing.
-- **E8 and D1 content survives the collapse.** The operative-rule inventory (above) explicitly enumerates and re-asserts **E8's renegotiation-loop steps** (independent-review spawn, the two-guard finding-validation, the canonical-file re-lock, the `failed-evaluation-rejected` path) and **D1's `[shipped-in-v1.0]` / `[partial-v1.0]` / `[deferred-to-v1.1]` status markers**. A silent drop of an E8 rule or a D1 marker during the hygiene collapse is the precise risk this AC guards — D2 refactors the *post-E8, post-D1* SKILL.md, and "behaviour-preserving" must include their additions.
+- **`lint-no-stack-leak` and `test-error-text` remain green** on the refactored files. D2 lands **before** D1, so it adds no status markers itself; instead `lint-no-spec-ref` **allowlists** the `[…-v<release>]` marker tokens (§3) so D1's markers pass D2's lint when D1 lands later.
+- **The format is enforced for later editors (durability, not a one-shot pass).** Because D2 lands before E8/D1/O-series, the gates that keep the format are its **lints**, not its timing: the `agents/_house-rules.md` parity check (§2) fails CI if any later agent edit re-inlines or drops the shared rules (E8's new `gan-reviewer-independent` prompt included), and `lint-no-spec-ref` (§3) fails CI on any spec-reference a later edit introduces. A test asserts both lints gate `agents/` + `skills/gan/`, so E8's renegotiation-loop steps, D1's status markers, and the O-series surfaces land *in* the format rather than re-bloating it. The lone residual — subjective prose verbosity in new content, which no lint catches — is covered by the release-gate hygiene re-check (roadmap § "Pre-release chores and release gate"), not by D2 running last.
 
 ### Manual review checks
 
@@ -89,7 +89,7 @@ D2 edits `SKILL.md` and the agent prompts (copied every `install.sh` run) and ad
 
 - **E1** — the prompt set and `SKILL.md` D2 refactors (product artifacts, editable; the shipped E1 spec is cross-referenced, not edited).
 - **R4** — the maintainer-tooling lint/build harness the new `lint-no-spec-ref` and the house-rules parity check join.
-- **E8 (hard), D1 (hard), and the O-series SKILL.md edits (hard).** E8 rewrites the evaluator/proposer/reviewer prompts and adds the orchestrator renegotiation loop; D1 adds `SKILL.md` status markers; O2/O1/O3 add the recovery short-circuits and observability surfaces to `SKILL.md`. **D2 is the last SKILL.md editor** (roadmap slot 22) and refactors the *resulting* v1.0 prompt set. This is not a soft preference: landing before any of these would refactor text they replace and defeat D2's whole point — a later spec re-bloating `SKILL.md` after the hygiene pass undoes the execution-fidelity gain. (Roadmap was reordered so the O-series precedes D2.)
+- **R7 (hard) — D2 lands right after it.** R7 makes the trace/safety/recovery sections operative and itself edits `SKILL.md` (the worktree-creation rewrite, trace integration, F7 paths); D2 then de-verboses the *current* prompt set and installs the format-enforcing lints. **E8, D1, and the O-series land *after* D2 and conform to its format** — the inverse of an earlier draft that parked D2 last. They are not D2 dependencies: their `SKILL.md` / agent additions are gated by D2's `agents/_house-rules.md` parity check and `lint-no-spec-ref` (so the structural format survives their additions automatically), and the release-gate hygiene re-check catches any residual prose bloat. Landing D2 early gives a lean `SKILL.md` for every interim dogfood run and lets E8's new reviewer prompt build on the shared preamble from day one.
 
 ## Bite-size note
 
@@ -99,4 +99,4 @@ D2 edits `SKILL.md` and the agent prompts (copied every `install.sh` run) and ad
 2. `agents/_house-rules.md` extraction + per-agent inlining + the R4 parity check.
 3. Reference classification + inlining of behaviour-bearing facts + `lint-no-spec-ref` + the strip.
 
-Lands after E8 and D1 in the v1.0 order.
+Lands right after R7, ahead of E8 / D1 / the O-series — which then conform to the format its lints enforce.

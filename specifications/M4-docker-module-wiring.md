@@ -42,7 +42,7 @@ M4 is a **prompt-only** change (`agents/gan-generator.md`); agent content is cop
 ## Dependencies
 
 - **R7** — exposes the docker tools the rewrite calls. Must land first.
-- **E8** — owns the paired evaluator-side `ContainerHealth` gate (slot 18's other half).
+- **E8** — owns the paired evaluator-side `ContainerHealth` gate (the other half of Docker-module wiring).
 - **M2** — the shipped Docker module whose helpers back the tools; cross-referenced, not edited.
 
 ## Bite-size note
