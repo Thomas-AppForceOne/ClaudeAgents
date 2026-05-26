@@ -94,13 +94,13 @@ The numbered list below IS the v1.0 spec inventory. Each entry is one line: spec
 13. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — doc-lint enforcement + comment/string provenance. Shipped PR #29.
 14. ✅ **[E5](E5-spec-clarification.md)** — spec clarification phase. Shipped PR #30.
 15. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
-16. **Next. [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.** The keystone: exposes the shipped trace / safety / evaluator-core / docker libraries and the run-store resolver as MCP tools so the markdown orchestrator can actually call them (today it reaches only the config server). ~3–4 sprints. Everything below depends on it.
-17. **[E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.** The headline: a contract-free review pass feeds contract renegotiation so the evaluator can actually reject (not just rubber-stamp at the 7/10 bar), with forced deterministic plan execution and a recalibrated correctness/security threshold. ~4–5 sprints. The critical path. Depends on R7.
-18. **[M4](M4-docker-module-wiring.md) — Docker module wiring.** Generator-side: rewrite `agents/gan-generator.md` so a docker-active stack calls R7's docker tools instead of inventing port logic (the paired evaluator-side `ContainerHealth` gate is E8's). ~1–2 sprints. Depends on R7.
-19. **[D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.** ~2–3 sprints. Depends on R7; its `--recover` / `--list-recoverable` markers also depend on O2 (slot 20), so those land after O2.
-20. **[O2](O2-recovery.md) — minimal recovery.** `--recover` trace-driven resume (the `[partial-v1.0]` slice; full recovery/cleanup UX deferred to v1.1). ~1–2 sprints. Depends on R7; lands before O3, and its `progress-v1.json` schema must absorb the fields E8 writes (the E8↔O2 seam — O2's AC 29).
-21. **[O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.** Startup-log surface (O1) and the stderr cost/progress fuel-gauge + `telemetry/` contract (O3), backed by real trace data from R7. ~2 sprints. O3 depends on O2; O1 is independent.
-22. **[D2](D2-prompt-hygiene.md) — prompt hygiene.** De-verbose the final v1.0 SKILL.md and the six agent prompts; pure clarity, no behavioural change. ~1–2 sprints. Lands **last** among SKILL.md editors. Depends on E8, D1, and the O-series SKILL.md additions.
+16. **Next** [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
+17. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
+18. [M4](M4-docker-module-wiring.md) — Docker module wiring.
+19. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
+20. [O2](O2-recovery.md) — minimal recovery.
+21. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
+22. [D2](D2-prompt-hygiene.md) — prompt hygiene.
 23. **Pre-release chores + release gate.** See below.
 
 Execution order after R7: **R7 → E8 → {D1, O2 → O3} → D2**, with O1 and M4 (slot 18) independent. E8 (17) is the critical path; D2 (22) must be the *last* SKILL.md edit, or a later spec re-bloats what the hygiene pass just trimmed. The post-v1.0 dogfooding audit fires after slot 23.
@@ -187,10 +187,6 @@ From "framework that runs agents" to "framework that *measures* agents." Depends
 - **U4 — external spec sources (`--spec <url>`)** (from [ideas.md](ideas.md) #1). Fetch a Jira / GitHub / Linear issue or URL as the spec input via installed MCPs, persisted to run state so recovery stays deterministic.
 - **Post-run external documentation generation** (from [ideas.md](ideas.md) #4). Optional per-stack documentation module that emits/updates external markdown + mermaid architecture docs incrementally from a run's diff, resolved through the overlay cascade and structurally gated (mermaid parses; every node/edge references a symbol that still exists).
 - **Plugin marketplace + share/install flow** — gated on stable plugin/skill formats (v1.0) and survivable trust model (F4 + capability tokens, v1.1).
-
-## Branch strategy
-
-Branches and worktrees are cut from `develop` and named `feature/<spec-name>` after the spec they implement (e.g. `feature/f5-config-api-coherence`). Implementation work merges back to `develop`; `develop` merges to `main` at release boundaries (v1.0, v1.1, v1.2, v2.0). `main` never carries a partially-built release.
 
 ## Out of scope for this roadmap
 
