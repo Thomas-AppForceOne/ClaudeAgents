@@ -77,9 +77,9 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 
 ## Surface additions
 
-- **House-rules source partial at a maintainer path *outside* `agents/`** (e.g. `scripts/house-rules/house-rules.md`) + an **R4 build/check** asserting each committed agent's three named house-rules regions are byte-identical to it **and** that every `agents/*.md` carries valid subagent frontmatter. (Not under `agents/` — that glob ships to users unvalidated; see §2.)
+- **House-rules source partial at a maintainer path *outside* `agents/`** (`scripts/house-rules/house-rules.md`) + an **R4 build/check** (`scripts/house-rules/index.ts`, beside the partial) asserting each committed agent's three named house-rules regions are byte-identical to it **and** that every `agents/*.md` carries valid subagent frontmatter. (Not under `agents/` — that glob ships to users unvalidated; see §2.)
 - **New standalone lint** `lint-no-spec-ref` under `scripts/`, scoped to `agents/` + `skills/gan/` (directory walks, not file lists). No data schema, no runtime knob.
-- **CI wiring — a coordinated edit to the *locked* workflow inventory.** The CI set under `.github/workflows/` is locked (per `CLAUDE.md` and R4's "one `test-<category>.yml` per script, each `uses: ./.github/workflows/shared-setup.yml`"). D2 adds **two** new category workflows: `test-no-spec-ref.yml` (runs `lint-no-spec-ref`) and `test-house-rules.yml` (runs the house-rules named-region parity + frontmatter check), each riding `shared-setup.yml` — the same coordinated-expansion D1 does for `lint-status-markers` and Q6 did for `test-doc-lint.yml`. (Naming a workflow vs. folding into an existing one is the decision the AC "both lints gate `agents/` + `skills/gan/`" otherwise leaves unstated.)
+- **CI wiring — a coordinated edit to the *locked* workflow inventory.** The CI set under `.github/workflows/` is locked (per `CLAUDE.md` and R4's "one `test-<category>.yml` per script, each `uses: ./.github/workflows/shared-setup.yml`"). D2 adds **two** new category workflows: `test-no-spec-ref.yml` (runs `scripts/lint-no-spec-ref`) and `test-house-rules.yml` (runs the parity + frontmatter check at `scripts/house-rules/index.ts`, beside the partial), each riding `shared-setup.yml` — one script per workflow, per R4 — the same coordinated-expansion D1 does for `lint-status-markers` and Q6 did for `test-doc-lint.yml`. (Naming a workflow vs. folding into an existing one is the decision the AC "both lints gate `agents/` + `skills/gan/`" otherwise leaves unstated.)
 
 ## Acceptance criteria
 
@@ -95,7 +95,7 @@ Internal references are not uniform; some are pure ceremony and some are **load-
 
 ### Manual review checks
 
-- A reviewer diffs old vs new and confirms every removed line is ceremony (rationale, self-quote, duplicate, or a de-cited-but-inlined fact), never an operative instruction. **The reviewer is told that D2 legitimately leaves the pre-F7 `.gan-state/runs/<run-id>/` data paths in the sections it reformats — R7 relocates them to the central store later — so an *unchanged* stale path is expected, not a correctness bug D2's diff missed.**
+- A reviewer diffs old vs new and confirms every removed line is ceremony (rationale, self-quote, duplicate, or a de-cited-but-inlined fact), never an operative instruction. **The reviewer is told that D2 legitimately leaves the pre-F7 `.gan-state/runs/<run-id>/` data paths in the sections it reformats — R7 relocates them to the central store later — so an *unchanged* stale path is expected, not a correctness bug D2's diff missed. Two more expected non-changes: (1) the worktree-creation / step-8 prose is given a deliberate **light touch** (R7 rewrites it — see Dependencies), so lightly-de-verbosed worktree wording is intentional, not incomplete; (2) normalizing the proposer's truncated snapshot bullet *adds* the clause "the snapshot is the single source of truth" — redundant with the proposer's existing line, not new behaviour — so that one added line is expected, not a smuggled change.**
 
 ### Deferred-by-design
 
