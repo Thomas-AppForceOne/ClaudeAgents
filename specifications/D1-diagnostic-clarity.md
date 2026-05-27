@@ -103,11 +103,9 @@ A user who has already installed but hasn't restarted Claude Code:
 ```
 $ /gan --print-config
 {
-  "error": {
-    "code": "ConfigApiUnreachable",
-    "subReason": "notLoadedInSession",
-    "message": "The framework is installed (`~/.claude.json` registers the background service at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded it yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
-  }
+  "code": "ConfigApiUnreachable",
+  "subReason": "notLoadedInSession",
+  "message": "The framework is installed (`~/.claude.json` registers the background service at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded it yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
 }
 ```
 
@@ -116,11 +114,9 @@ A user who has not run `install.sh` at all:
 ```
 $ /gan --print-config
 {
-  "error": {
-    "code": "ConfigApiUnreachable",
-    "subReason": "notRegistered",
-    "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/taa/AppForceOne/projects/ClaudeAgents/install.sh`. Then restart Claude Code."
-  }
+  "code": "ConfigApiUnreachable",
+  "subReason": "notRegistered",
+  "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/taa/AppForceOne/projects/ClaudeAgents/install.sh`. Then restart Claude Code."
 }
 ```
 
