@@ -16,7 +16,7 @@ Rewrite `agents/gan-generator.md` so that, **when the docker module is active fo
 
 **Port *release* is not the generator's job.** The generator reserves; it does **not** call `dockerReleasePort` at sprint/attempt exit. M2's registry is deliberately persistent across runs so a live worktree keeps its allocation (`M2-docker-module.md` recovery semantics), so release is **orchestrator/cleanup-scoped** (O2's `--cleanup` removes the run and its registry entry). Wiring a per-generator-exit release would strip a port a later attempt in the same worktree still needs.
 
-The rewrite is **conditional**: a run with no docker module active is unaffected (the generator never calls the tools). It is a **prompt change only** (to `agents/gan-generator.md`) — no new Config API surface and no schema change.
+The rewrite is **conditional**: a run with no docker module active is unaffected (the generator never calls the tools). It is a **prompt change only** (to `agents/gan-generator.md`) — M4 itself adds no schema or tool surface (the docker tools it calls ship under R7).
 
 ### Five-question relevance filter
 
@@ -34,7 +34,7 @@ The rewrite is **conditional**: a run with no docker module active is unaffected
 
 ## Acceptance criteria
 
-- `agents/gan-generator.md` instructs a docker-active generator to obtain ports/names from R7's `dockerReservePort` / `dockerDiscoverPort` / `dockerContainerName` and to release with `dockerReleasePort` — verified by prompt inspection; the prompt passes `lint-no-stack-leak` and the F4 error-text discipline.
+- `agents/gan-generator.md` instructs a docker-active generator to obtain ports/names from R7's `dockerReservePort` / `dockerDiscoverPort` / `dockerContainerName` (it does **not** release — release is orchestrator/cleanup-scoped, see Proposed change) — verified by prompt inspection; the prompt passes `lint-no-stack-leak` and the F4 error-text discipline.
 - A generator run with the docker module **inactive** makes no docker-tool call (the rewrite is strictly conditional on `snapshot.modules.docker`).
 - The rewritten `gan-generator.md` keeps D2's three byte-identical house-rules regions (`hr:snapshot`, `hr:no-config-api`, `hr:errors-tail`) intact and carries zero internal spec-references — so it passes D2's `lint-no-spec-ref` and house-rules parity check (D2 lands before M4).
 - The wiring is exercised against the existing Docker dogfood project: a real run reserves its port through the registry (collision-detected via `PortInUse`) rather than hard-coding one. This is **dogfood/manual** — like R7's end-to-end checks, CI has no LLM to drive the markdown generator. *(No evaluator-side container-health AC: that gate is deferred — see Scope boundary.)*
