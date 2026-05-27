@@ -182,7 +182,7 @@ aborted-validation-failed      validateAll() failed in aborting mode (taxonomy o
 
 **`aborted-validation-failed` is taxonomy-only, never a written `progress.json` value:** an aborting-mode `validateAll()` failure halts at SKILL.md step 3 — *before* `resolveRunStore`/`acquireRunLock`/run-dir creation (R7 places the lock + first zone-2 write at step 7) — so there is no `progress.json` to carry it. It documents the abort taxonomy for completeness; the strict schema permits it but no run records it. `failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. **Note the two distinct "budget" concepts** (they never share a code): A1's `sprintBudgetExceeded` is the per-sprint *attempt* ceiling — a loop-detection halt, so it writes `failed-loop-detected`; `failed-budget` is the run-wide *resource* cap (`maxAttemptsTotal` / `maxMinutes`), a non-loop ceiling. Both render as a halted, recoverable run, but the path that writes each is unambiguous. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
-Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies. **`additionalProperties` posture (the orchestrator writes `progress.json` free-form, so this is load-bearing):** the strict schema MUST enumerate **every** field the orchestrator writes — `runId`, `status`, `currentSprint`/`currentAttempt`, `totalSprints`/`completedSprints`, `contractRevision`, `projectRoot`, `runBranch`/`baseBranch`/`startingBranch`, `workspace`, `terminal`/`terminalReason`/`terminalAt`, `overlaysAtSnapshot`, `recoveryHistory` — and set `additionalProperties: false`. An AC **reconciles** that enumerated set against the orchestrator's actual writes — and it is a **hard merge gate, not advisory**: the reconciliation fixture is a `progress.json` **committed to the repo, captured from an E8 dogfood run** (E8 ships before O2, so such a run exists) — so it provably carries `contractRevision` and the `failed-evaluation-rejected` `terminalReason` E8 writes, and is real captured output, not a hand-written mock. CI validates the **committed file** against the schema (no LLM needed at CI time — the capture happened once, at authoring), and the O2 PR does **not** merge until it validates clean. A field the orchestrator writes but the schema omits therefore fails **CI**, never a live run. This is exactly the **F5/R6 lag class** — a strict validator landing *after* the writers it validates and silently drifting from them — closed here by gating on real captured output rather than a hand-written fixture; get it wrong and the strict schema rejects every real run.
+Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies. **`additionalProperties` posture (the orchestrator writes `progress.json` free-form, so this is load-bearing):** the strict schema MUST enumerate **every** field the orchestrator writes — `runId`, `status`, `currentSprint`/`currentAttempt`, `totalSprints`/`completedSprints`, `contractRevision`, `projectRoot`, `runBranch`/`baseBranch`/`startingBranch`, `workspace`, `terminal`/`terminalReason`/`terminalAt`, `overlaysAtSnapshot`, `recoveryHistory` — and set `additionalProperties: false`. (This list is the schema's load-bearing `additionalProperties: false` reconciliation set, **not** a parallel doc-inventory table — the schema file is its single home; the AC below gates them in lockstep.) An AC **reconciles** that enumerated set against the orchestrator's actual writes — and it is a **hard merge gate, not advisory**: the reconciliation fixture is a `progress.json` **committed to the repo, captured from an E8 dogfood run** (E8 ships before O2, so such a run exists) — so it provably carries `contractRevision` and the `failed-evaluation-rejected` `terminalReason` E8 writes, and is real captured output, not a hand-written mock. CI validates the **committed file** against the schema (no LLM needed at CI time — the capture happened once, at authoring), and the O2 PR does **not** merge until it validates clean. A field the orchestrator writes but the schema omits therefore fails **CI**, never a live run. This is exactly the **F5/R6 lag class** — a strict validator landing *after* the writers it validates and silently drifting from them — closed here by gating on real captured output rather than a hand-written fixture; get it wrong and the strict schema rejects every real run.
 
 ### 3. Teardown — terminal marker, never delete
 
@@ -210,7 +210,7 @@ Failure modes:
 
 ### 4. `--list-recoverable` `[shipped-in-v1.0]`
 
-New top-level flag. Parsed at SKILL.md flag-table dispatch. Behaviour:
+Flag handler shipped by F7 (in the SKILL.md flag table); O2 specifies its behaviour. Behaviour:
 
 1. Calls `validateAll()` in non-aborting mode (per E1's recovery contract).
 2. Enumerates `<store-root>/<repo-key>/runs/*/progress.json` (per F7 — formerly
@@ -236,7 +236,7 @@ If no runs found: `No runs found at <store-root>/<repo-key>/runs/.` Exit 0.
 
 ### 5. `--recover [--run-id X]` `[partial-v1.0]`
 
-New top-level flag. Parsed at SKILL.md flag-table dispatch. Per E1's recovery contract,
+Flag handler shipped by F7 (in the SKILL.md flag table); O2 adds the status-keyed resume dispatch it falls through to (§5 step 7). Per E1's recovery contract,
 runs `validateAll()` in non-aborting mode first.
 
 1. **Resolve target run.** (Enumerate `<store-root>/<repo-key>/runs/` per F7 — repo-wide.)
@@ -583,7 +583,7 @@ Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers
 
 ## Version bump (install-affecting)
 
-O2 authors the bundled `schemas/progress-v1.json` — an installed-package change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O2's implementation PR **bumps `package.json` `version`** (the framework package version, not the `progress-v1` `schemaVersion`). The `--recover` / `--list-recoverable` / `--cleanup` dispatch lives in `SKILL.md`, which is copied every install and does not itself force the bump.
+O2 authors the bundled `schemas/progress-v1.json` — an installed-package change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O2's implementation PR **minor-bumps `package.json` `version`** (`0.MINOR.0`, e.g. `0.1.0` → next minor, per the roadmap's minor-increment discipline — the framework package version, not the `progress-v1` `schemaVersion`). The `--recover` / `--list-recoverable` / `--cleanup` dispatch lives in `SKILL.md`, which is copied every install and does not itself force the bump.
 
 ## Dependencies
 
@@ -600,9 +600,13 @@ O2 authors the bundled `schemas/progress-v1.json` — an installed-package chang
 
 ## Implementation notes
 
-- **SKILL.md changes only.** No new agent file. The flag-dispatch table
-  in SKILL.md gains three short-circuit handlers (`--list-recoverable`, `--recover
-  [--run-id X]`, `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]`).
+- **SKILL.md changes only.** No new agent file. F7 (#23) already shipped the three
+  short-circuit *handlers* (`--list-recoverable`, `--recover`, `--cleanup`) in the
+  SKILL.md flag table and the operative `--cleanup` prose; O2 **revises** them, it does
+  not add them: it (a) **authors the status-keyed resume dispatch** `--recover` falls
+  through to (§5 step 7 — absent from shipped SKILL.md), and (b) **replaces F7's operative
+  `--cleanup` destructive prose with the v1.0 `[deferred-to-v1.1]` stub** (§5.5). Leaving
+  F7's destructive `--cleanup` prose in place would fail AC 31.
 - **Recovery is independent of telemetry.** Telemetry is a separate concern owned by O3; recovery neither reads nor depends on any telemetry surface. (There is **no `--telemetry-dir` flag** — an earlier draft referenced one; it is absent from `runtime-knobs.md` and is removed here. O3 owns `--no-telemetry`.)
 - **Schema creation (not a bump).** `schemas/progress-v1.json` does **not** exist
   today, so this sprint **creates** it at v1 — covering the legacy fields (incl.
