@@ -33,7 +33,7 @@ The directory and both files live alongside the rest of the run directory in the
 
 The artifact is a `getResolvedConfig()` snapshot serialized to JSON exactly once at run start. Capturing at run start (rather than continuously) is deliberate: it answers the audit question "what was the framework's view of the project when this run began?" without re-running validation post-hoc.
 
-Schema at `schemas/telemetry-config-v1.json`. The shape mirrors `getResolvedConfig()`'s response per [F2](F2-config-api-contract.md), with the addition of a `capturedAt` timestamp envelope:
+Schema at `schemas/telemetry-config-v1.json`. The `resolvedConfig` block is the **full** `getResolvedConfig()` response per [F2](F2-config-api-contract.md) — **all ten** top-level fields (`apiVersion`, `schemaVersions`, `runtimeMode`, `stacks`, `overlay`, `discarded`, `additionalContext`, `issues`, `warnings`, `modules`), the same flat shape O1's `--print-config` emits — wrapped in a `capturedAt` timestamp envelope. (The schema must enumerate all ten or a real captured snapshot fails validation — the drift this spec exists to prevent.)
 
 ```json
 {
@@ -48,7 +48,10 @@ Schema at `schemas/telemetry-config-v1.json`. The shape mirrors `getResolvedConf
     "runtimeMode": { "noProjectCommands": false },
     "stacks": { "active": [...], "byName": {...} },
     "overlay": {...},
+    "discarded": [...],
     "additionalContext": {...},
+    "issues": [...],
+    "warnings": [...],
     "modules": {...}
   }
 }
@@ -62,7 +65,7 @@ The artifact is written exactly once at run termination, regardless of how the r
 
 | Section | Purpose |
 |---|---|
-| `disposition` | Top-level run outcome: `"success"` \| `"rejected"` \| `"halted"` \| `"aborted"` \| `"errored"`. **`rejected`** = the gate refused the work; it maps from O2's `failed-evaluation-rejected` `terminalReason` (E8's renegotiation-cap rejection) — the most important new terminal state in v1.0. Without it a gate rejection would mis-bucket as `halted` (a safety halt) or `aborted` (user-initiated). |
+| `disposition` | Top-level run outcome: `"success"` \| `"rejected"` \| `"halted"` \| `"aborted"` \| `"errored"`. **Derived from O2's `terminalReason`** (the mapping table below), **not** from the T1 trace's milestone `disposition` — which is intentionally a *narrower* vocabulary (`success`/`halted`/`aborted`/`error` — note `error`, and no `rejected` — `src/trace/events.ts`). So a reader correlating `outcome.json.disposition` against `trace/index.json.disposition` will see `errored`↔`error` and the extra `rejected` by design. **`rejected`** = the gate refused the work; it maps from O2's `failed-evaluation-rejected` (E8's renegotiation-cap rejection) — the most important new terminal state in v1.0. Without it a gate rejection would mis-bucket as `halted` (a safety halt) or `aborted` (user-initiated). |
 | `terminalReason` | Per [O2](O2-recovery.md)'s `terminalReason` codes (kebab-case ASCII). |
 | `sprints[]` | One entry per sprint that started: `{sprintNumber, status, attemptCounts: {<role>: <int>}, ...}`. |
 | `cost` | Aggregate from [T1](T1-structured-run-trace.md) trace events: `{tokensInput, tokensCached, tokensOutput, llmCallCount, toolCallCount, wallClockMs}`. |
@@ -84,7 +87,7 @@ The artifact is written exactly once at run termination, regardless of how the r
 | `aborted-planner-error` | `errored` |
 | `aborted-validation-failed` | `errored` |
 
-Rationale and the naming caveat: `rejected` = the gate or contract refused the work (E8's post-generation gate rejection, and `aborted-contract-failed` = pre-generation negotiation that could not agree a contract — both are refusals, not crashes). `halted` = an A1 safety halt (ceiling / budget / loop). `aborted` = **user-initiated only** (`aborted-by-user`). `errored` = a component failed to run (clarifier/planner error, or `validateAll()` failing in aborting mode). Note the deliberate mismatch: most `aborted-*` `terminalReason` codes do **not** map to the `aborted` *disposition* — the `aborted-` prefix is historical, while `disposition` is semantic (user-initiated vs failure). A new O2 `terminalReason` code added later must add its row here in the same PR.
+Rationale and the naming caveat: `rejected` = the gate or contract refused the work (E8's post-generation gate rejection, and `aborted-contract-failed` = pre-generation negotiation that could not agree a contract — both are refusals, not crashes). `halted` = an A1 safety halt (ceiling / budget / loop). `aborted` = **user-initiated only** (`aborted-by-user`). `errored` = a component failed to run (clarifier/planner error). The row maps `aborted-validation-failed → errored` for completeness, but per O2 that code is **taxonomy-only and never reaches `outcome.json`**: an aborting `validateAll()` halts before the run dir (hence `telemetry/`) is created, so no `outcome.json` is written for it — the only `errored` outcomes that actually appear come from `failed-clarifier-error` / `aborted-planner-error`. Note the deliberate mismatch: most `aborted-*` `terminalReason` codes do **not** map to the `aborted` *disposition* — the `aborted-` prefix is historical, while `disposition` is semantic (user-initiated vs failure). A new O2 `terminalReason` code added later must add its row here in the same PR.
 
 Schema at `schemas/telemetry-outcome-v1.json`. Example shape:
 
@@ -165,7 +168,7 @@ T1 owns the **event log** (`trace/`); O3 owns the **summary artifacts** (`teleme
 - T1 records every LLM call, tool call, agent attempt, safety halt, trust event, validation abort, milestone — appending events as the run progresses.
 - O3 records the run-start configuration view (once) and the run-end summary (once).
 
-`outcome.json`'s `cost` section is derived from T1 trace events at termination time **via R7's `aggregateRunSummary`** — the structured per-run aggregate (the markdown orchestrator does not hand-sum the events). If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but lossy** — `aggregateRunSummary` reports **`droppedEmits > 0`**, R7's structural emit-failure signal (a best-effort emit was dropped: disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`, or null when the gap is unbounded) rather than reported as a confident-but-wrong total. **The loss signal is `droppedEmits`, *not* `reconcileTraceIndex`.** A dropped cost-bearing event leaves a gapless, fully index-reconcilable trace — the index always rebuilds to equal the `events/` count — so the reconcile reports "reconciles fine" and **cannot** detect the loss; it catches only the harmless self-healing index-lag. (An earlier draft of this section derived `cost.complete` from the reconcile mismatch. That was backwards: it would have flagged only the harmless index-lag and **missed every real disk-full undercount** — precisely the silent undercount this surface forbids. Corrected to read R7's `droppedEmits` — the in-memory per-run emit-failure tally the long-lived config server holds, which is incremented at the dropped emit and, being in-memory, records the loss even under the disk-full that defeats an on-disk counter, R7 § "Trace emission is best-effort".) A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null; when `cost` is a non-null object, **`complete` is a required boolean** (`true` for a verified-complete sum, `false` when `droppedEmits > 0`) — it is never omitted, so its presence is unambiguous and both `outcome.json` examples carry it.
+`outcome.json`'s `cost` section is derived from T1 trace events at termination time **via R7's `aggregateRunSummary`** — the structured per-run aggregate (the markdown orchestrator does not hand-sum the events). If the trace is unavailable (corrupted, absent), `outcome.json` records `cost: null` rather than failing the run — the summary degrades gracefully. **If the trace is present but lossy** — `aggregateRunSummary` reports **`droppedEmits > 0`**, R7's structural emit-failure signal (a best-effort emit was dropped: disk-full/EPERM per R7's emit-failure contract) — `cost` is marked incomplete (`cost.complete: false`) rather than reported as a confident-but-wrong total. (The only `cost: null` case is the trace being unavailable, above; a lossy-but-present trace is always `complete: false` — `droppedEmits` is a finite count, so there is no "unbounded gap" signal that would warrant null.) **The loss signal is `droppedEmits`, *not* `reconcileTraceIndex`.** A dropped cost-bearing event leaves a gapless, fully index-reconcilable trace — the index always rebuilds to equal the `events/` count — so the reconcile reports "reconciles fine" and **cannot** detect the loss; it catches only the harmless self-healing index-lag. (An earlier draft of this section derived `cost.complete` from the reconcile mismatch. That was backwards: it would have flagged only the harmless index-lag and **missed every real disk-full undercount** — precisely the silent undercount this surface forbids. Corrected to read R7's `droppedEmits` — the in-memory per-run emit-failure tally the long-lived config server holds, which is incremented at the dropped emit and, being in-memory, records the loss even under the disk-full that defeats an on-disk counter, R7 § "Trace emission is best-effort".) A telemetry surface must not silently undercount: it reports either a verified-complete sum or an explicit incompleteness signal. The schema permits `cost` to be null; when `cost` is a non-null object, **`complete` is a required boolean** (`true` for a verified-complete sum, `false` when `droppedEmits > 0`) — it is never omitted, so its presence is unambiguous and both `outcome.json` examples carry it.
 
 `telemetry.tracePayloads` (T1's overlay splice point) controls *trace* payload content — it does not affect O3's artifacts. A run with `tracePayloads: "hashed"` and telemetry on still produces full `config.json` and `outcome.json` (these don't carry user-prompt content; they're configuration and aggregate metrics).
 
@@ -186,7 +189,7 @@ O3 introduces two new schema documents per F3 conventions, both pinned at v1.0 f
 | `schemas/telemetry-config-v1.json` | Validates `config.json` shape: envelope + resolved-config snapshot. |
 | `schemas/telemetry-outcome-v1.json` | Validates `outcome.json` shape: envelope + disposition + sprints + cost + safetyHalts + humanReviews. |
 
-Additive changes after v1.0 follow the project's "additive stays on `vN`" rule per [F3](F3-schema-authority.md): new optional fields, new enum values within an existing discriminator (e.g. new `disposition` values), new top-level sections (e.g. when E6 v1.2 lights up `humanReviews`). Field-rename or semantic-change forces `vN+1`.
+Additive changes after v1.0 follow the project's "additive stays on `vN`" rule per [F3](F3-schema-authority.md): new optional fields, new enum values within an existing discriminator (e.g. new `disposition` values), and constraining a v1.0-reserved array's items (E6 v1.2 gives `humanReviews` items their `{sprintNumber, userIdentity, disposition}` schema — `telemetry-outcome-v1` leaves `humanReviews` **items unconstrained** at v1.0 precisely so this lands as an in-place additive edit, not a `v2`). Field-rename or semantic-change forces `vN+1`.
 
 Readers MUST tolerate unknown fields and unknown enum values per the same forward-compat invariant T1 documents — a reader implementing only v1 knowledge skips unknown fields with a structured warning, not erroring.
 
@@ -245,7 +248,10 @@ A `config.json` for a Node web project run:
       }
     },
     "overlay": {},
+    "discarded": [],
     "additionalContext": { "planner": [], "proposer": [] },
+    "issues": [],
+    "warnings": [],
     "modules": {
       "docker": { "name": "docker", "pairsWith": "docker", "manifestPath": "..." }
     }
@@ -293,7 +299,7 @@ An `outcome.json` for a successful one-sprint run:
 
 ## Version bump (install-affecting)
 
-O3 authors the bundled `schemas/telemetry-config-v1.json` and `schemas/telemetry-outcome-v1.json` — installed-package changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O3's implementation PR **bumps `package.json` `version`**. The `--no-telemetry` flag parsing and `telemetry/` writing live in `SKILL.md` / the orchestrator (copied every install) and do not themselves force the bump; the two new bundled schemas do.
+O3 authors the bundled `schemas/telemetry-config-v1.json` and `schemas/telemetry-outcome-v1.json` — installed-package changes that take effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), O3's implementation PR **minor-bumps `package.json` `version`** (`0.MINOR.0`, per the roadmap discipline; if O3 and its slot-mate O1 land together it is one coordinated minor bump). The `--no-telemetry` flag parsing and `telemetry/` writing live in `SKILL.md` / the orchestrator (copied every install) and do not themselves force the bump; the two new bundled schemas do.
 
 ## Dependencies
 
