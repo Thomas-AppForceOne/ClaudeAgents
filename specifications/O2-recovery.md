@@ -177,12 +177,12 @@ aborted-planner-error          Planner failed (schema, refusal, etc.)
 aborted-contract-failed        INITIAL contract negotiation hit max revisions
                                (before any generator work; cf. failed-evaluation-
                                rejected, the post-generation gate rejection)
-aborted-validation-failed      validateAll() failed in aborting mode
+aborted-validation-failed      validateAll() failed in aborting mode (taxonomy only — see note)
 ```
 
-`failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. **Note the two distinct "budget" concepts** (they never share a code): A1's `sprintBudgetExceeded` is the per-sprint *attempt* ceiling — a loop-detection halt, so it writes `failed-loop-detected`; `failed-budget` is the run-wide *resource* cap (`maxAttemptsTotal` / `maxMinutes`), a non-loop ceiling. Both render as a halted, recoverable run, but the path that writes each is unambiguous. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
+**`aborted-validation-failed` is taxonomy-only, never a written `progress.json` value:** an aborting-mode `validateAll()` failure halts at SKILL.md step 3 — *before* `resolveRunStore`/`acquireRunLock`/run-dir creation (R7 places the lock + first zone-2 write at step 7) — so there is no `progress.json` to carry it. It documents the abort taxonomy for completeness; the strict schema permits it but no run records it. `failed-loop-detected` is written by all three A1 halt reasons (`roleCeilingExceeded`, `sprintBudgetExceeded`, `editOscillation`); the specific reason lives in the corresponding `safetyHalt` trace event's payload, not in `progress.json`. **Note the two distinct "budget" concepts** (they never share a code): A1's `sprintBudgetExceeded` is the per-sprint *attempt* ceiling — a loop-detection halt, so it writes `failed-loop-detected`; `failed-budget` is the run-wide *resource* cap (`maxAttemptsTotal` / `maxMinutes`), a non-loop ceiling. Both render as a halted, recoverable run, but the path that writes each is unambiguous. E5's draft preview auto-approves on timeout (not a halt), so there is no terminal code for "user did not respond." Explicit user `[c]ancel` at the action menu maps to `aborted-by-user`.
 
-Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies. **`additionalProperties` posture (the orchestrator writes `progress.json` free-form, so this is load-bearing):** the strict schema MUST enumerate **every** field the orchestrator writes — `runId`, `status`, `currentSprint`/`currentAttempt`, `totalSprints`/`completedSprints`, `contractRevision`, `projectRoot`, `runBranch`/`baseBranch`/`startingBranch`, `workspace`, `terminal`/`terminalReason`/`terminalAt`, `overlaysAtSnapshot`, `recoveryHistory` — and set `additionalProperties: false`. An AC **reconciles** that enumerated set against the orchestrator's actual writes — and it is a **hard merge gate, not advisory**: the reconciliation fixture is a `progress.json` captured from a *synthetic E8-renegotiated run* (so it provably carries `contractRevision` and the `failed-evaluation-rejected` `terminalReason` E8 writes), and the O2 PR does **not** merge until that fixture validates clean. A field the orchestrator writes but the schema omits therefore fails **CI**, never a live run. This is exactly the **F5/R6 lag class** — a strict validator landing *after* the writers it validates and silently drifting from them — closed here by gating on real captured output rather than a hand-written fixture; get it wrong and the strict schema rejects every real run.
+Schema lives at `schemas/progress-v1.json` (flat in `schemas/`, consistent with the rest of the schema set and PROJECT_CONTEXT's naming — **not** a `run-state/` subdirectory; the earlier `schemas/run-state/` path was stale); this sprint adds it to the schema set if it isn't already present. **It must include the fields E8 (which ships before O2) writes** — the `failed-evaluation-rejected` `terminalReason` value above and the `contractRevision` field — so an E8-renegotiated run validates against this schema; see Dependencies. **`additionalProperties` posture (the orchestrator writes `progress.json` free-form, so this is load-bearing):** the strict schema MUST enumerate **every** field the orchestrator writes — `runId`, `status`, `currentSprint`/`currentAttempt`, `totalSprints`/`completedSprints`, `contractRevision`, `projectRoot`, `runBranch`/`baseBranch`/`startingBranch`, `workspace`, `terminal`/`terminalReason`/`terminalAt`, `overlaysAtSnapshot`, `recoveryHistory` — and set `additionalProperties: false`. An AC **reconciles** that enumerated set against the orchestrator's actual writes — and it is a **hard merge gate, not advisory**: the reconciliation fixture is a `progress.json` **committed to the repo, captured from an E8 dogfood run** (E8 ships before O2, so such a run exists) — so it provably carries `contractRevision` and the `failed-evaluation-rejected` `terminalReason` E8 writes, and is real captured output, not a hand-written mock. CI validates the **committed file** against the schema (no LLM needed at CI time — the capture happened once, at authoring), and the O2 PR does **not** merge until it validates clean. A field the orchestrator writes but the schema omits therefore fails **CI**, never a live run. This is exactly the **F5/R6 lag class** — a strict validator landing *after* the writers it validates and silently drifting from them — closed here by gating on real captured output rather than a hand-written fixture; get it wrong and the strict schema rejects every real run.
 
 ### 3. Teardown — terminal marker, never delete
 
@@ -308,9 +308,7 @@ runs `validateAll()` in non-aborting mode first.
    Resuming from sprint 3 attempt 1.
    ```
 
-7. **Fall through to the existing resume state machine.** The state machine in
-   `skills/gan/SKILL.md` handles `clarifying`/`planning`/`negotiating`/`building`/`evaluating`
-   resume. It does not need a recovery-specific path. Specifically:
+7. **Resume via the status-keyed dispatch O2 *authors* in `SKILL.md`.** This dispatch does **not** exist today — shipped `SKILL.md`'s "Regular invocation flow" is strictly forward (validate → clarify → worktree → forward sprint loop), with no logic that reads `progress.json.status` and re-enters at the matching point. **O2's PR adds that resume-by-`status` dispatch** (the load-bearing mechanism of `--recover`): it reads `progress.json.status` ∈ `clarifying`/`planning`/`negotiating`/`building`/`evaluating` and re-enters the loop at the corresponding stage (for `building`, reset the worktree to the recorded `sprint-N-base-commit.txt` and respawn the generator; gapless trace resume per T1). E8's `negotiating` resume (E8 § "Bounding thrash") rides this same dispatch. Specifically:
    - `clarifying` resume: the orchestrator reads the most recent `clarified-spec.md`
      (and any `clarified-spec.md.round-N` from the round counter on disk), re-presents
      the draft preview with the action menu, and the user picks up where they left off.
@@ -319,7 +317,7 @@ runs `validateAll()` in non-aborting mode first.
 
 ### 5.5. `--cleanup [--run-id X] [--all] [--include-terminal] [--yes]` `[deferred-to-v1.1]`
 
-The **full** `--cleanup` surface (lands in v1.1). The current `SKILL.md` already carries `--cleanup` prose describing destructive cleanup as operative; the v1.0 PR **reduces** that to the deferred stub above — this is not a net-new flag, it is an existing over-promise being scaled back. Parsed at the SKILL.md flag-table dispatch; symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
+The **full** `--cleanup` surface (lands in v1.1). **Why a stub and not "ship what F7 already built":** F7 shipped the *tested* `src/config-server/storage/cleanup-planner.ts` (`planRunCleanup`/`executeRunCleanup`/`checkActiveRunGuard`/`isBranchMerged`, with a real-git test suite), but it is **import-only** — re-exported from `src/index.ts` with **no CLI or MCP-tool caller**, so the markdown orchestrator cannot invoke it (the same shipped-but-uncallable class R7 wires for the trace/safety/run-store libraries). The `SKILL.md` `--cleanup` prose describes the destructive steps as if operative, but it is markdown-Bash and **behaviour-unverified** (CI has no LLM). v1.0 therefore deliberately **stubs** rather than ships an unverified *destructive* operation: shipping a behaviour-unverified `rm -rf`/branch-delete is the one place "mechanism-present, behaviour-unverified" is unacceptable. The **v1.1 deliverable is to wire the already-tested `cleanup-planner.ts` as a deterministic tool/CLI** (turning the uncallable tested code into the operative path) — F7's work is consumed, not discarded. This is not a net-new flag; it is an existing over-promise scaled back to an honest stub until its tested backing is callable. Parsed at the SKILL.md flag-table dispatch; symmetric to `--recover` in resolution semantics, but **destructive** — it removes the resolved run(s) from disk rather than resuming them.
 
 **v1.0 behaviour — deferred stub.** Because `--cleanup` is `[deferred-to-v1.1]`, its v1.0 SKILL.md dispatch handler does **not** run the destructive logic below: per D1's deferred-marker discipline it prints the structured "this command requires v1.1" message and exits non-zero — it never no-ops and never partially cleans. Everything specified below is the v1.1 implementation; the v1.0 dispatch is the stub.
 
@@ -487,9 +485,10 @@ Each criterion concrete and testable.
 
 16. **Resume state machine takes over.** After successful `--recover` on a
     `building/sprint 3/attempt 1` run, the next thing the orchestrator does is reset the
-    worktree to `sprint-3-base-commit.txt` and respawn the generator for attempt 1
-    (matching SKILL.md's `building` resume branch). No duplicate counting, no branch
-    corruption.
+    worktree to the commit recorded in `sprint-3-base-commit.txt` (a run-*data* artifact read
+    from the **central store** `GAN_RUN_DIR`, not the worktree) and respawn the generator for
+    attempt 1 (via the `building` resume branch O2 authors in SKILL.md — AC verifies the dispatch
+    exists). No duplicate counting, no branch corruption.
 
 17. **Migration: stale `.gan/` directory hard error.** Per F1 acceptance criteria — a
     project with a pre-existing `.gan/` halts with a hard error instructing manual
@@ -560,10 +559,18 @@ Each criterion concrete and testable.
     stranded-self-lock guidance message (names the path) for a matching-`runId` live-pid lock, the
     generic concurrent-run refusal for a *different*-`runId` live-pid lock, and the silent
     stale-break only for a **dead**-pid lock.
+31. **`--cleanup` v1.0 stub is inert and non-destructive (CI-runnable).** Invoking `--cleanup`
+    (with any modifier) in v1.0 prints the structured `[deferred-to-v1.1]` "this command requires
+    v1.1" message, exits **non-zero**, and **mutates nothing on disk** — no central-store run dir
+    removed, no worktree/branch touched, no `git` write. A regression test asserts a seeded
+    `<store-root>/<repo-key>/runs/` tree and any gan-created worktree are byte-identical after
+    `--cleanup --all --include-terminal --yes`. (Guards M2: the one `--cleanup` behaviour v1.0
+    actually ships is the stub, so it must be tested; the destructive ACs 18–28 are the v1.1
+    `cleanup-planner`-wiring implementation.)
 
 Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers above):
 
-- **v1.0** (`--list-recoverable`, `--recover`, terminal marking, the lock, and the E8 seam): success path for 1-6, 11-16, 29, 30; failure path for 7-10, 17.
+- **v1.0** (`--list-recoverable`, `--recover`, terminal marking, the lock, the E8 seam, and the `--cleanup` stub): success path for 1-6, 11-16, 29, 30, 31; failure path for 7-10, 17. **CI-runnable vs dogfood-only:** terminal-marking / enumeration / lock-refusal / `--cleanup`-stub and the strict `progress-v1` schema-reconciliation ACs (1-6, 30, 31, §2) run in CI; the resume ACs that need the live orchestrator/LLM loop — **11** (validateAll-during-recovery report), **12** (overlay-drift surfaced), **16** (resume → base-commit reset + respawn), **29** (recover an E8-renegotiated run) — are **dogfood-only** (CI has no LLM), verified at the release-gate dogfood. The §2 reconciliation is a hard CI merge gate.
 - **Deferred to v1.1** (the full `--cleanup` surface, §5.5): success path for 18-21, 23, 25, 27; failure path for 22, 24, 26, 28. These ACs are authored here but their tests land with the v1.1 `--cleanup` implementation — the v1.0 PR does **not** gate on ACs 18-28, matching the v1.0-slice effort below (~2–3 sprints).
 
 ---
