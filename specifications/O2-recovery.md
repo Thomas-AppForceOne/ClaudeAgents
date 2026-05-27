@@ -409,13 +409,13 @@ Mechanism:
   - Verify the holding process is still alive (`kill -0 <pid>` on POSIX, equivalent on Windows).
   - **If holder alive:** the shipped `link(2)` lock throws `InvariantViolation` with `reason: ConcurrentRunInProgress` (per `run-lock.ts`), which the CLI maps to **exit 4** (`EXIT_INVARIANT_VIOLATION`, not exit 1); the message names the holder's `runId`, `pid`, `startedAt`, and the suggestion: "Wait for the other run to finish, or `kill <pid>` if it is stuck."
   - **If holder dead** (stale lock from a hard-killed previous run): break the lock, log a warning to stderr, acquire fresh, proceed.
-  - **Recovery exception — the self-lock case (closes the stranded-lock deadlock).** Because the lock records the holder's `pid`, and in the MCP-tool context that pid is the **long-lived config server** (per R7's lock-lifecycle note), a run that aborted *without* releasing — the exit-release below didn't run (SIGKILL, or the markdown orchestrator skipped the release step) — leaves a lock whose pid is **still alive** (the same server). The *alive-holder* branch above would then refuse `--recover` against a dead run, and stale-break (dead-pid only) never fires — the run would be unrecoverable except by manual `rm`. `--recover` therefore special-cases it **by `runId`, not pid**: the lock contents carry the holder's `runId`, and **if that `runId` is the exact run being recovered, the lock belongs to the interrupted run itself** — `--recover` breaks it (R7 `releaseRunLock` by key) and re-acquires, because resuming a run is by definition taking over its own lock. Only a lock whose `runId` is a *different* run is a genuine concurrent holder and still refuses with `ConcurrentRunInProgress`. (Two concurrent `--recover` on the same run still serialize: the atomic `link(2)` re-acquire lets exactly one win, the loser gets `EEXIST` and refuses — the concurrent-recover row in the edge-case table. The escape is no longer a manual `rm`.)
+  - **Recovery exception — the stranded-self-lock case (the deadlock, and why it is *not* auto-broken).** Because the lock records the holder's `pid`, and in the MCP-tool context that pid is the **long-lived config server** (per R7's lock-lifecycle note), a run that aborted *without* releasing — the exit-release below didn't run (SIGKILL, or the markdown orchestrator skipped the step) — can leave a lock whose pid is **still alive** (the server outlived the run). The *alive-holder* branch then refuses `--recover` even though the run is dead. **The tempting fix — auto-break when the lock's `runId` matches the run being recovered — is unsafe and is rejected here:** a live-pid lock with a matching `runId` is *ambiguous*, because the shared server pid cannot distinguish an **interrupted** run from one that is **actively executing in another session** which explicitly `--recover`ed the same id; auto-breaking the latter reintroduces exactly the concurrent-corruption this lock exists to prevent (and contradicts the "no bypass flag, manual `rm` is the deliberate friction" stance below). So `--recover` instead **refuses with stranded-self-lock-specific guidance**, distinct from the generic concurrent-run message: it names the holder's `runId`/`pid` and the **exact lock path**, states that the lock is *the same run you are recovering* held under a live server pid — *either* an active session *or* an interrupted run whose lock was never released — and instructs: **if no `/gan` session is running this run, the lock is stale; clear it with `rm <lockpath>` and retry.** That is the same deliberate-friction escape §8 already documents, but now **recognised and explained at the recover path** rather than surfaced as a cryptic `ConcurrentRunInProgress` that looks like a *different*-run conflict. (Safe auto-resume of a same-session stranded lock could be a v1.1 refinement *iff* a per-run liveness signal is added — but the 5-minute `recoveryHistory` heuristic that might have provided it is retired, so v1.0 stays with guided manual clearance.)
 - On orchestrator exit (success, halt, error, signal): release the lock by deleting the file.
 - The `--print-config`, `--list-recoverable`, and `--help` short-circuits do NOT acquire the lock — they are read-only and don't write zone 2. Only `--recover` and a regular `/gan` invocation acquire it.
 
 Lock semantics are best-effort cross-platform: atomic `link(2)` works on local filesystems but has known weaknesses on some network filesystems. NFS-mounted project roots will see degraded lock semantics; documented limitation. O2 introduces no new lock mechanism — it reuses the shipped `link(2)` run-lock, which already provides exactly this primitive (and is what the active-run guard in §5.5 reads).
 
-A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypassing it requires editing the lock file by hand (`rm .gan-state/run.lock`), which is a deliberate friction.
+A `--no-run-lock` flag is **not** offered in v1.0. The lock is mandatory; bypassing it requires deleting the lock file by hand (`rm <store-root>/<repo-key>/run.lock`, per F7 — formerly `<projectRoot>/.gan-state/run.lock`), which is a deliberate friction. This is the exact `rm <lockpath>` the stranded-self-lock guidance above points to.
 
 ### 9. Out of scope (v1)
 
@@ -552,12 +552,14 @@ Each criterion concrete and testable.
     (`EXIT_INVARIANT_VIOLATION`). A lock referencing a dead pid is broken and re-acquired (the
     stale-lock path). Guards the `[shipped-in-v1.0]` §8 lock — `run-lock.ts` is unit-tested, but
     this is the missing AC that the orchestrator actually acquires it on every `/gan`.
-    **And the self-lock recovery case (G3):** a `--recover` whose target `runId` **matches** a
-    still-**live-pid** lock (the stranded config-server pid of the interrupted run) **breaks and
-    re-acquires** rather than refusing — so an interrupted run is recoverable without a manual
-    `rm` — while a `--recover` whose target differs from the lock's `runId` still refuses with
-    `ConcurrentRunInProgress`. The discriminator is `runId`, not pid: "resume my own stranded run"
-    proceeds; "a different run is active" refuses.
+    **And the stranded-self-lock case (G3):** a `--recover` against a **live-pid** lock whose
+    `runId` **matches** the recovery target refuses with **stranded-self-lock-specific guidance** —
+    naming the exact lock path and the `rm` escape, a message distinct from the generic
+    different-run `ConcurrentRunInProgress` — and does **not** auto-break (which could clobber a
+    same-id run actively executing in another session). The test asserts three branches: the
+    stranded-self-lock guidance message (names the path) for a matching-`runId` live-pid lock, the
+    generic concurrent-run refusal for a *different*-`runId` live-pid lock, and the silent
+    stale-break only for a **dead**-pid lock.
 
 Tests cover at minimum, **scoped to what ships** (per the `[…]` status markers above):
 
