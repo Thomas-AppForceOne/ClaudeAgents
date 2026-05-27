@@ -2,9 +2,9 @@
 
 ## Problem
 
-The first dogfooding session caught three diagnostic surfaces producing the wrong remediation for the user's actual situation. In each case the framework has (or can obtain) the information to guide the user precisely. **Surface #1 (Config-API-unreachable) is net-new mechanism, not a refinement:** the framework has **no** preflight reachability check or `ConfigApiUnreachable` error of its own today (grep-confirmed: the code, the remediation prose, and the error enum entry are all absent), so the lumped message the session hit was Claude Code's generic MCP surface, not the framework's — D1 **introduces** the framework preflight. The other two refine existing framework messages.
+The first dogfooding session caught three diagnostic surfaces producing the wrong remediation for the user's actual situation. In each case the framework has (or can obtain) the information to guide the user precisely. **Surface #1 (Config-API-unreachable) is net-new mechanism, not a refinement:** the framework has **no** preflight reachability check or `ConfigApiUnreachable` error of its own today (grep-confirmed: the code, the remediation prose, and the error enum entry are all absent), so the lumped message the session hit was Claude Code's generic MCP surface, not the framework's — D1 **introduces** the framework preflight. The other two are **not** message-refinements: #2 is a new SKILL.md status-marker *discipline* (plus a lint), and #3 is *verify-only* (R6 already shipped the help). What unites all three is one discipline — match the surface to the user's actual state — not that they are all message edits.
 
-1. **Config-API-unreachable has no framework preflight — D1 introduces one (net-new, not polish).** Today, when the Configuration API is unreachable, the user sees only Claude Code's generic MCP-unreachable surface; the framework has no preflight of its own. A naive single remediation ("Install the framework: `bash <repo>/install.sh`. Then restart Claude Code.") is misleading for a user who already ran `install.sh` and just hit the restart-required mode — they need to restart Claude Code so the live session picks up the freshly-registered MCP server, not re-install. So D1 **builds net-new mechanism**: a framework preflight (before `validateAll()`), a new `ConfigApiUnreachable` structured-error code with a `subReason` discriminator **and its CLI exit-code-map entry**, a `~/.claude.json` read, and an MCP-reachability probe (the three sub-checks below). This is scoped as new mechanism, not a refinement of an existing lumped message — there is none in `src/`.
+1. **Config-API-unreachable has no framework preflight — D1 introduces one (net-new, not polish).** Today, when the Configuration API is unreachable, the user sees only Claude Code's generic MCP-unreachable surface; the framework has no preflight of its own. A naive single remediation ("Install the framework: `bash <repo>/install.sh`. Then restart Claude Code.") is misleading for a user who already ran `install.sh` and just hit the restart-required mode — they need to restart Claude Code so the live session picks up the freshly-registered background service, not re-install. So D1 **builds net-new mechanism**: an **orchestrator** preflight (in `SKILL.md`, before `validateAll()` or any framework API call) that reads `~/.claude.json`, stats the registered bin, and probes reachability, then emits a **hand-authored diagnostic JSON** with a `ConfigApiUnreachable` code + `subReason` discriminator (the three sub-checks below). **This is orchestrator-emitted, not a server/CLI structured error:** the preflight fires precisely when the framework's MCP server is unreachable, so the markdown orchestrator cannot call into the server to build a `ConfigServerError` — it writes the diagnostic itself. So D1 adds **no** `errors.ts` `ErrorCode` entry and **no** CLI exit-code-map entry (those would be dead code — no CLI path emits this). It reconciles with the shipped CLI-side `ApiUnreachable` (exit 5, `run-helpers.ts`): that is the `gan` *CLI*'s "can't load the library" code; D1's `ConfigApiUnreachable` is the *orchestrator*'s "MCP server unreachable in this session" sibling — distinct actors, distinct surfaces, cross-referenced so the near-homonym is intentional, not a collision.
 
 2. **SKILL.md described not-yet-operative behavior with no marking.** The orchestrator skill describes emitting trace events and running loop-detection halts as if live, but those are only operative once R7 (the runtime invocation bridge) exposes the trace/safety libraries to the markdown orchestrator. A reader — or an orchestrator implementing the skill from scratch — has no signal that the behavior is aspirational until R7 lands; the doc reads as if operative when it isn't. (The original dogfooding instance was `--recover`/`--list-recoverable`; those now ship in v1.0 — minimal recovery via O2, made operative by R7 — so the live instance of this problem is the trace/safety integration sections R7 turns real.)
 
@@ -62,34 +62,22 @@ The markers appear at section-heading level in the spec (e.g. immediately after 
 
 The orchestrator's runtime behavior aligning with the spec's markers is the contract that makes the markers meaningful. Without the runtime alignment, markers are just decoration.
 
-The discipline applies prospectively to all forward-looking specs (A1, T1, E5 as they ship in stages; future H-series, V-series, B-series, Q-series specs). When a section's behavior moves from `[deferred-to-vN]` to `[shipped-in-vN]`, the marker updates in the same PR as the implementation. When a partial implementation lands, the section either splits (operative parts marked `[shipped]`, remaining parts `[deferred]`) or carries the `[partial]` marker with explicit per-bullet annotations.
+The discipline applies prospectively to all forward-looking specs (A1, T1, E5 as they ship in stages; future H-series, V-series, B-series, Q-series specs). When a section's behavior moves from `[deferred-to-vN]` to `[shipped-in-vN]`, the marker updates in the same PR as the implementation. When a partial implementation lands, the section either splits (operative parts marked `[shipped]`, remaining parts `[deferred]`) or carries the `[partial]` marker with explicit per-bullet annotations. Concretely, `SKILL.md`'s `## Cleanup and recovery` heading covers **two** flows of different status — `--recover` `[partial-v1.0]` and `--cleanup` `[deferred-to-v1.1]` (per O2) — so the markers go **per-flag** under the heading (as the example below shows for `--recover`/`--list-recoverable`), never a single marker on the shared heading.
 
-The R4 maintainer-tooling spec gains a lint check (`lint-status-markers`) that walks every spec file and asserts:
+A new maintainer-tooling lint, **`lint-status-markers`** (a new `scripts/lint-status-markers/` joining R4's harness — **not** an edit to the shipped R4 spec), wired into CI as its own `test-status-markers.yml` per the locked CI inventory (one `test-<category>.yml` per script, riding `shared-setup.yml`, per R4). It scans **`skills/gan/SKILL.md`** (and any forward-looking spec file that opts into markers) and asserts exactly two things, both deterministic and CI-runnable with no LLM:
 
-- Every section heading in SKILL.md has a status marker (or is in a designated "non-shipped-behavior" prologue section like the spec's "Problem" / "Bite-size note" sections, which are about the spec itself rather than runtime behavior).
-- Markers reference releases that exist in the roadmap (no `[shipped-in-v9.9]` for unreleased futures).
-- Sections whose marker says `[shipped-in-v<release>]` for a release that has merged are exercised by a test that the section's behaviour actually runs — **except sections whose behaviour is LLM-driven orchestrator prose** (the R7-wired trace, safety-halt, recovery, and renegotiation sections), which CI cannot execute because CI has no LLM. Those carry the marker on the strength of their CI-tested **tool-level mechanics** (R7's parity/decision checks) plus the **release-gate dogfood**, and the lint exempts them from the behavioural-CI-test clause (recognising an explicit LLM-driven section) rather than demanding a test it cannot satisfy. Without this carve-out the rule would forbid marking operative exactly the sections R7/E8/O2 make operative.
+- Every **runtime-behavior** section heading in `SKILL.md` carries a status marker. (`SKILL.md` has no "Problem"/"Bite-size note" prologue — that carve-out is for *spec files* that opt in. `SKILL.md`'s pure-discipline/invariant sections — e.g. snapshot-freshness, per-run-state-vs-config, error-surfacing, spawn-discipline — carry `[shipped-in-v1.0]` because the invariant is operative now; they are not features and are not subject to any behavioural demand.)
+- Markers reference releases that exist in the roadmap (no `[shipped-in-v9.9]`).
 
-The lint runs in CI.
+**The lint does NOT attempt to verify a `[shipped-in-v1.0]` flow actually runs** — that is the release-gate dogfood's job. CI has no LLM, so a markdown lint cannot prove an LLM-driven orchestrator section (the R7-wired trace/safety/recovery/renegotiation flows) executes; an earlier draft's "exercised by a test except LLM-driven sections" clause is **dropped** (it named no deterministic mechanism for "is this section LLM-driven?" and had no AC). The CI-tested tool-level mechanics (R7's parity/decision checks) plus the dogfood carry behavioural assurance; the marker lint carries only marker presence + roadmap validity.
 
 ### `gan stacks --help` completeness
 
 The R3 CLI's stacks-help registry **already** lists all six subcommands and distinguishes `list` (active, detection-driven) from `available` (all shipped) — R6 (#16) shipped this. D1 **verifies** it remains complete and changes nothing; the example below documents the already-shipped output (note its header is `Flags:`, not `Options:`).
 
-The help text gets an "Active vs. available" paragraph:
+The shipped help **already includes** (R6 #16) the "Active vs. available" paragraph (rendered inside the subcommand `description`, *before* the `Flags:` block — per `src/cli/lib/help.ts`), examples like `gan stacks available` and `gan stacks customize web-node`, and the always-appended Global-flags / Examples / Exit-codes blocks. D1 verifies they remain present and **adds nothing**. `gan stacks list`'s runtime output is unchanged for scripting compatibility — tests pin the format (one stack name per line, `(none)` on empty active set).
 
-```
-Active vs. available:
-  list      = stacks whose detection rules match the current directory.
-              In a project that matches one of the framework's shipped
-              stacks, that stack appears here; otherwise `generic`
-              (the fallback) is the active stack.
-  available = every stack file the framework has on disk.
-```
-
-Examples in the help output include `gan stacks available` and `gan stacks customize web-node` so users see the new entry points. `gan stacks list`'s runtime output is unchanged for scripting compatibility — tests pin the format (one stack name per line, `(none)` on empty active set).
-
-This is help-text-only; no behavior change beyond the new paragraph.
+D1 does **not** reproduce the full `--help` output verbatim here: a hand-copied block risks drifting from the live output (e.g. the block ordering), which is the exact churn the verify-only AC forbids. The authority is the shipped `help.ts`; D1's AC asserts completeness against it.
 
 ### What D1 does not do
 
@@ -97,29 +85,29 @@ This is help-text-only; no behavior change beyond the new paragraph.
 - Provide internationalization. All diagnostic messages are English; localization is post-v2.0.
 - Provide structured-error machine output. The diagnostic messages are prose for humans; machine consumers read structured-error JSON via the F2 error model, which is unchanged.
 - Cover the orchestrator's runtime telemetry surface (per-LLM-call summary, sprint-end summary). That is T1's scope; the heartbeat and progress lines are runtime UX, not diagnostic.
+- **Add status markers to `runtime-knobs.md`.** That file is the *design inventory* of flags/knobs; per its own header the **roadmap** (not the table) is authoritative for shipped status. The marker discipline applies to `SKILL.md` (the runtime-behavior surface), not the inventory — so e.g. `runtime-knobs.md`'s `--cleanup` entry deliberately describes the full operative surface (design intent) even though v1.0 ships only O2's stub; the v1.0 deferred-state lives in `SKILL.md`'s `[deferred-to-v1.1]` marker + the roadmap, not a per-entry inventory annotation.
 
 ## Field encodings
 
 D1 introduces two new schema-bearing surfaces:
 
 - **Status-marker tokens** in spec files — `[shipped-in-v<release>]`, `[deferred-to-v<release>]`, `[partial-v<release>]`. Token format: ASCII brackets, lowercase tokens, version segment matches roadmap release labels. Lint enforces.
-- **`ConfigApiUnreachable` branching discriminator** — when the orchestrator emits the structured error, it now includes a `subReason` field with values `notRegistered` | `binMissing` | `notLoadedInSession`. The error code stays `ConfigApiUnreachable`; the discriminator lets advanced consumers (logs, future telemetry) distinguish the cases.
+- **`ConfigApiUnreachable` branching discriminator** — the orchestrator-emitted preflight diagnostic carries a `subReason` field with values `notRegistered` | `binMissing` | `notLoadedInSession`, alongside a `code: "ConfigApiUnreachable"` and `message`. This is **hand-authored JSON the orchestrator writes**, shaped *like* an F2 structured error (code + message) for familiarity, but it has **no schema home** — it is not an `errors.ts` `ErrorCode` nor an F2 `ConfigServerError` (the server is unreachable, so the orchestrator cannot build one). The discriminator lets advanced consumers (logs, future telemetry) distinguish the cases.
 
 ## Examples
+
+The preflight diagnostic is a **standalone orchestrator-emitted object**, *not* O1's `--print-config` output: when the API is unreachable the orchestrator cannot call `getResolvedConfig()`, so there is no resolved config to print and O1's flat `issues`/`warnings` shape never applies. The preflight short-circuits before O1's flow and emits its own diagnostic. (When the API *is* reachable, O1's flat resolved object is what prints — the two surfaces are disjoint.)
 
 A user who has already installed but hasn't restarted Claude Code:
 
 ```
 $ /gan --print-config
 {
-  "resolvedConfig": null,
-  "validationErrors": [
-    {
-      "code": "ConfigApiUnreachable",
-      "subReason": "notLoadedInSession",
-      "message": "The framework is installed (`~/.claude.json` registers the MCP server at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded the MCP registration yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
-    }
-  ]
+  "error": {
+    "code": "ConfigApiUnreachable",
+    "subReason": "notLoadedInSession",
+    "message": "The framework is installed (`~/.claude.json` registers the background service at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded it yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
+  }
 }
 ```
 
@@ -128,14 +116,11 @@ A user who has not run `install.sh` at all:
 ```
 $ /gan --print-config
 {
-  "resolvedConfig": null,
-  "validationErrors": [
-    {
-      "code": "ConfigApiUnreachable",
-      "subReason": "notRegistered",
-      "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/taa/AppForceOne/projects/ClaudeAgents/install.sh`. Then restart Claude Code."
-    }
-  ]
+  "error": {
+    "code": "ConfigApiUnreachable",
+    "subReason": "notRegistered",
+    "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/taa/AppForceOne/projects/ClaudeAgents/install.sh`. Then restart Claude Code."
+  }
 }
 ```
 
@@ -146,46 +131,20 @@ A SKILL.md section with status markers:
 
 `--print-config` [shipped-in-v1.0]
 - Calls `validateAll()` in non-aborting mode.
-- Calls `getResolvedConfig()`.
-- Emits an O1-shaped object on stdout.
+- Calls the resolved-config read and emits the resolved object on stdout.
 - Exit code reflects validation status.
 
 `--recover` [partial-v1.0]
-- Dispatches to the recovery flow (O2). Minimal trace-driven resume ships in
-  v1.0 (made operative by R7); the richer recovery UX lands in v1.1.
+- Dispatches to the recovery flow. Minimal trace-driven resume ships in v1.0;
+  the richer recovery UX lands in v1.1.
 
 `--list-recoverable` [shipped-in-v1.0]
-- Enumerates `<store-root>/<repo-key>/runs/*/progress.json` (central store
-  per F7) and prints recoverable runs.
+- Enumerates the central store's per-run progress files and prints recoverable runs.
 ```
 
-The `gan stacks --help` output:
+Note the example carries **only** the `[…-v1.0]` marker tokens and **no** spec-reference prose (`O1`/`O2`/`R7`/`F7`, etc.) — D2 (shipped before D1) installs `lint-no-spec-ref` over `SKILL.md`, which rejects bare phase-codes and allowlists only the marker tokens. D1's real SKILL.md edits add markers, never phase-code citations.
 
-```
-gan stacks — Inspect active or available stacks; scaffold, customize, or reset stack files.
-
-Usage:
-  gan stacks <list|available|new|where|customize|reset> [args] [--json] [--project-root DIR]
-
-Inspect active or available stacks; scaffold, customize, or reset stack files.
-  gan stacks list                       List ACTIVE stacks for this directory.
-  gan stacks available                  List ALL stacks the framework ships.
-  gan stacks new <name>                 Scaffold a new stub stack file.
-  gan stacks where [<name>]             Show where stack files resolve from.
-  gan stacks customize <name>           Copy a built-in stack into a writable tier.
-  gan stacks reset <name>               Remove a customized stack copy.
-
-  Flags:
-      --tier=project|user   Where to scaffold/customize/reset (default: project).
-      --force               (customize) Overwrite an existing higher-tier copy.
-
-  Active vs. available:
-    list      = stacks whose detection rules match the current directory.
-                In a project that matches one of the framework's shipped
-                stacks, that stack appears here; otherwise `generic`
-                (the fallback) is the active stack.
-    available = every stack file the framework has on disk.
-```
+(No verbatim `gan stacks --help` block here — it is the already-shipped R6 output; reproducing it would risk drift the verify-only AC forbids. The shipped `help.ts` is the authority: six subcommands, the "Active vs. available" paragraph rendered inside the `description` before `Flags:`, the `--tier`/`--force` flags under `Flags:`, and the appended Global-flags/Examples/Exit-codes blocks.)
 
 ## Acceptance criteria
 
@@ -195,7 +154,7 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - A `/gan --print-config` invocation against an installation where `~/.claude.json` has the entry but the registered bin path does not exist produces `ConfigApiUnreachable` with `subReason: "binMissing"` and the re-install remediation.
 - A `/gan --print-config` invocation against an installation where the entry is present, the bin exists, but the MCP server is not reachable in the current session produces `ConfigApiUnreachable` with `subReason: "notLoadedInSession"` and the restart-only remediation.
 - A `/gan --recover` invocation under v1.0 dispatches to the minimal recovery flow (O2, made operative by R7), not a "requires v1.1" short-circuit; `/gan --list-recoverable` enumerates recoverable runs. **This AC presupposes O2 has landed (see Dependencies → O2); it rides with O2's PR if D1 lands first.** A section genuinely marked `[deferred-to-v1.1]` short-circuits with the structured "requires v1.1" message and exits non-zero.
-- The `lint-status-markers` script asserts every section heading in SKILL.md has a marker (or is in a designated prologue section).
+- The `lint-status-markers` script asserts every runtime-behavior section heading in `SKILL.md` carries a marker (pure-discipline/invariant sections carry `[shipped-in-v1.0]`; `SKILL.md` has no Problem/Bite-size prologue to exempt — that carve-out is for opted-in spec files).
 - The lint script rejects markers referencing releases not present in the roadmap (e.g. `[shipped-in-v9.9]`).
 - **Verify (not rewrite):** the shipped `gan stacks --help` already advertises all six subcommands, the "Active vs. available" paragraph, and the `--tier` / `--force` flags under its **`Flags:`** header (R6 #16). D1 asserts these remain present and **does not** rename `Flags:`→`Options:` or otherwise churn the shipped output.
 - The `gan stacks list` runtime output format is unchanged (one stack name per line, `(none)` on empty set; existing tests still pass).
@@ -206,25 +165,25 @@ Inspect active or available stacks; scaffold, customize, or reset stack files.
 - All three `ConfigApiUnreachable` branches' messages obey the F4 prose-discipline rule.
 - The status markers in SKILL.md align with the actual orchestrator behavior — sections marked `[shipped-in-v1.0]` are operative; sections marked `[deferred-to-v1.1]` short-circuit with a structured "requires v1.1" message.
 
-## Version bump (install-affecting)
+## Version bump: none
 
-D1 introduces the `ConfigApiUnreachable` preflight + error code (the `gan stacks --help` output is already shipped by R6, so D1 only verifies it) — an installed-package (server + CLI) change that takes effect only via `install.sh`'s version-gated `npm install -g .`. Per the pre-1.0 install-version bump discipline (roadmap § "Pre-release chores and release gate"), D1's implementation PR **bumps `package.json` `version`**. (The `lint-status-markers` script is maintainer/CI tooling, not installed — it is not what forces the bump; the SKILL.md status markers are copied every install and likewise do not.)
+D1 changes **no installed-package surface**: the `ConfigApiUnreachable` preflight is orchestrator-emitted (hand-authored JSON in `SKILL.md`, copied every install — no `errors.ts` `ErrorCode`, no CLI command, no exit-code-map entry); the SKILL.md status markers are copied every install; the `lint-status-markers` script is maintainer/CI tooling, not installed; and `gan stacks --help` is already shipped by R6 and only verified. So no `package.json` bump is needed (per the pre-1.0 install-version bump discipline, roadmap § "Pre-release chores and release gate"). (Earlier drafts claimed a bump for a `ConfigApiUnreachable` *error code* + CLI exit-code entry; that was retracted — the preflight is orchestrator markdown, not a server/CLI change, so those entries would be dead code.)
 
 ## Dependencies
 
-- **F2** — structured-error model. D1 **introduces** the `ConfigApiUnreachable` code (it does not exist in F2/R5 today), its `subReason` discriminator, and the matching CLI exit-code-map entry — net-new error surface built on F2's model, not a discriminator added to an existing code.
+- **F2** — structured-error model (referenced, not extended). D1's preflight diagnostic is shaped *like* an F2 error (code + message + `subReason`) but is **orchestrator-authored JSON**, not a new `errors.ts` `ErrorCode` and not a CLI exit-code-map entry (the server is unreachable when it fires, so no `ConfigServerError` can be built — and there is no CLI path for `/gan --print-config`). It reconciles with the shipped CLI-side `ApiUnreachable` (the `gan` CLI's library-unreachable code, exit 5) as its orchestrator-side sibling — distinct surfaces, cross-referenced.
 - **F4** — trust prompt context; the `notRegistered` remediation may also describe the trust-prompt sequence the user will encounter on first install.
 - **E1** — orchestrator that emits the diagnostics; SKILL.md status markers ride with E1's spec ownership.
-- **R3** — CLI help registry; `gan stacks --help` rewrite is an R3 amendment.
+- **R3 (shipped) / R6 (#16)** — CLI help registry; `gan stacks --help` is **already complete** (R6 shipped the six subcommands + "Active vs. available" + flags), so D1 only **verifies** it — no R3 rewrite/amendment.
 - **R4** — maintainer tooling; the `lint-status-markers` script is a new R4 addition.
-- **O1** — observability; `--print-config` output continues to emit `validationErrors` with the new structured fields.
+- **O1** — observability; O1 owns `--print-config`'s **reachable-API** output: the flat `getResolvedConfig()` object whose own `issues`/`warnings` carry validation results — **no `validationErrors`/`resolvedConfig` wrapper** (O1 explicitly removed it). D1's `ConfigApiUnreachable` preflight is a **disjoint** surface that fires *before* O1's flow when the API is unreachable (so O1's resolved object cannot be produced); the two never co-emit, and D1 must **not** reintroduce the wrapper shape O1 dropped.
 - **O2** — the minimal recovery flow that `--recover` / `--list-recoverable` dispatch to. D1 marks those flags `[partial-v1.0]` / `[shipped-in-v1.0]` and asserts (AC, below) that they dispatch rather than short-circuit — so **O2's recovery flow must exist when that AC runs.** In the implementation order **O2 (and O1/O3) are listed before D1**, so O2's recovery flow already exists when D1's `--recover` / `--list-recoverable` marker ACs run, and D1's status-marker lint sees every SKILL.md section — E8's, O2's, and the O-series' — already added. (D1 is sequenced last among the SKILL.md editors precisely so a `[shipped-in-v1.0]` marker never lands on a flow that has not been wired — the spec-vs-runtime drift D1 exists to prevent.)
 
 ## Bite-size note
 
 Sprintable as:
 
-1. (one sprint) `ConfigApiUnreachable` branching: orchestrator preflight check, three sub-checks, remediation routing, structured-error `subReason` discriminator.
+1. (one sprint) `ConfigApiUnreachable` branching: orchestrator preflight check (in `SKILL.md`), three sub-checks, remediation routing, the orchestrator-emitted diagnostic JSON with the `subReason` discriminator (no `errors.ts`/CLI change).
 2. (one sprint) SKILL.md status markers: token vocabulary, runtime alignment (deferred-flag short-circuits print "requires v1.1"), spec edits.
 3. (one sprint) `lint-status-markers` script: parser, lint rules, CI workflow integration.
 4. (trivial) `gan stacks --help` **verification** — R6 (#16) already ships the full output; D1 asserts completeness, no rewrite.
