@@ -1,6 +1,6 @@
 # A2 — Generator scope enforcement
 
-> **Status:** targeted at v1.1. Not operative until then. Authored pre-v1.1 because the design is architectural (no usage data required) and the schema fields land in v1.0's confined-write surface so deferring would force a `schemaVersion` bump.
+> **Status:** targeted at v1.1. Not operative until then. Authored pre-v1.1 only because the design is architectural (no usage data required). Its schema additions — `roleScopes` on `stack-v1`, `safety.scopeEnforcement` on `overlay-v1` — land **with A2 in v1.1** and are **additive**, so per the schema-versioning ruling (roadmap § "Schema-versioning ruling") they edit the `v1` files in place with **no** `schemaVersion` bump. There is therefore **no** v1.0 landing requirement: an earlier draft claimed deferring the fields to v1.1 would force a bump, but the resolved additive-stays-v`N` ruling makes that false, and no v1.0 slot owns these fields.
 
 ## Problem
 

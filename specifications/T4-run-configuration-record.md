@@ -51,9 +51,9 @@ It is a new event class added additively to `run-trace-v1` (the schema admits ne
     "runId": "20260522T101500-4b2e"
   },
   "frameworkVersion": "1.1.0",
-  "apiVersion": "1",
+  "apiVersion": "0.1.0",
   "configDigest": "9f2c8a1b...e7a1",
-  "activeStacks": [{ "name": "web-node", "tier": "repo" }],
+  "activeStacks": [{ "name": "web-node", "tier": "builtin" }],
   "roles": [
     { "role": "gan-planner", "model": "opus" },
     { "role": "gan-contract-proposer", "model": "opus" },

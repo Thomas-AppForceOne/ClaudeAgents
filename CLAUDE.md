@@ -1,6 +1,6 @@
 # ClaudeAgents — Claude Code guide
 
-ClaudeAgents is a generator-discriminator framework for AI-driven software development (the `/gan` loop). **This repo is the framework itself.** The contents of `agents/` and `skills/gan/` are the **shipped product** that runs against end-user repos — never put repo-internal process (e.g. references to this repo's `specifications/roadmap.md`) into them; `lint-no-stack-leak` and `test-error-text` police that boundary.
+ClaudeAgents is a generator-discriminator framework for AI-driven software development (the `/gan` loop). **This repo is the framework itself.** The contents of `agents/` and `skills/gan/` are the **shipped product** that runs against end-user repos — never put repo-internal process (e.g. references to this repo's `specifications/roadmap.md`) into them; `lint-no-stack-leak` and `test-error-text` police the ecosystem-token and error-text parts of that boundary, and `lint-no-spec-ref` (introduced by D2) closes the spec-reference part. Until D2 ships, `SKILL.md` still carries live `specifications/*` references — that residual leak is exactly what D2 removes.
 
 ## Read these first
 

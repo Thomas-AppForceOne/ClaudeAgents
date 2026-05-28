@@ -129,7 +129,7 @@ A successful human review:
     "sequenceNumber": 47,
     "eventType": "humanReview",
     "timestamp": "2026-09-15T14:23:45.123Z",
-    "runId": "20260915-141201-a3f2"
+    "runId": "20260915T141201-a3f2"
   },
   "role": "gan-evaluator",
   "userIdentity": "thomas@example.com",
@@ -180,6 +180,7 @@ lastValidationError: "criteria[3].verdict: must be one of [pass, fail, blocked, 
 - **T1** — `humanReview` event class added via additive-discriminator rule; same `evaluator-evidence-bundle-v1.json` artifact shape.
 - **E1** — orchestrator that pauses at the evaluator boundary.
 - **E3** — evaluator pipeline harness; the deterministic plan output is included in the editor's header references.
+- **E8** — the v1.0 spec that reshapes the very evaluator boundary E6 makes pluggable. E8 adds forced deterministic plan execution (tests/lint/build/audit/secrets-scan run via R7, not reasoned about), the independent-review → contract-renegotiation loop, and a rubric recalibrated off the 7/10 "minor issues OK" band. E6 must therefore reconcile, not ignore, that boundary: (a) the human reviewer receives the **executed** evidence E8 produces — the real forced-execution results carried in the evidence bundle — in the editor's header references, not a described expectation; and (b) the human verdict operates **inside** E8's renegotiation loop — a human `fail` with unresolved `blocker` findings feeds contract renegotiation and counts against the renegotiation cap exactly as the LLM evaluator's verdict does (the human is one pluggable implementation of the review role E8 made swappable *in principle*). E6 changes *who* renders the verdict at the boundary; it does **not** alter the forced-execution or renegotiation machinery E8 owns.
 - **O2** — recovery; partially-filled bundles are recoverable.
 
 E6 has no dependency on V1 (v2.0). V1 reads from E6's output if both ship, but does not gate it.
