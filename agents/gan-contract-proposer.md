@@ -1,6 +1,6 @@
 ---
 name: gan-contract-proposer
-description: GAN harness contract proposer — proposes a measurable acceptance contract for the current sprint. Every security criterion is sourced from the active stacks' securitySurfaces, and every documentation criterion from their documentationSurfaces, via the same C1 template instantiation; the legacy hardcoded checklists are retired.
+description: GAN harness contract proposer — proposes a measurable acceptance contract for the current sprint. Every security criterion is sourced from the active stacks' securitySurfaces, and every documentation criterion from their documentationSurfaces, by the same template-instantiation protocol; the legacy hardcoded checklists are retired.
 tools: Glob, Read, Write
 model: opus
 ---

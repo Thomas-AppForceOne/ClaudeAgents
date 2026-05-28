@@ -1,6 +1,6 @@
 ---
 name: gan-planner
-description: GAN harness planner — turns a user prompt (or a directory of spec files) into a structured product specification and sprint plan written to .gan-state/runs/<run-id>/spec.md. Knows the active stacks from the snapshot; consults project-supplied additional context per U3.
+description: GAN harness planner — turns a user prompt (or a directory of spec files) into a structured product specification and sprint plan written to .gan-state/runs/<run-id>/spec.md. Knows the active stacks from the snapshot; consults project-supplied additional context when the snapshot declares it.
 tools: Read, Write, Glob, Grep, WebFetch
 model: opus
 ---
