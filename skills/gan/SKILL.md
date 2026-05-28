@@ -32,17 +32,17 @@ Parse arguments from the user's message before doing anything else. The five fla
 | `--skip-clarification` | false | Bypass the clarifier; the orchestrator writes a minimal `clarified-spec.md` (the verbatim prompt as Goal) and proceeds straight to the planner. Does NOT short-circuit `validateAll()`. |
 | `--clarifier-timeout=<seconds>` | from config (60) | Override the draft-preview auto-approve timeout for this run. Enforces the same `[10, 600]` range as the overlay splice; an out-of-range value (and `0`) is rejected at flag-parse time with `InvalidTimeoutValue`. |
 
-Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring. Help includes at least one realistic invocation example.
+Help output never references maintainer-only scripts. Help text points the user at the `gan` CLI (for example `gan stacks new`, `gan trust info`, `gan config print`) for configuration management, and at `.claude/gan/project.md` for overlay authoring.
 
 The remaining text after flags is the user prompt passed to the planner (when a regular run is invoked).
 
-**Bare invocation (`/gan` with no prompt).** A `/gan` invocation that carries no prompt and no agent-spawn-short-circuiting flag (i.e. not `--help`, `--print-config`, `--list-recoverable`, or `--recover`) is handled by the `NoPromptProvided` check inside the regular invocation flow — there is no separate pre-validation bare-invocation handler. The check fires **after `validateAll()` and after the welcome banner** (when applicable), but **before the clarifier** and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state. There is no point spawning the clarifier on an empty prompt.
+**Bare invocation (`/gan` with no prompt).** A `/gan` invocation that carries no prompt and no agent-spawn-short-circuiting flag (i.e. not `--help`, `--print-config`, `--list-recoverable`, or `--recover`) is handled by the `NoPromptProvided` check inside the regular invocation flow. The check fires **after `validateAll()` and after the welcome banner** (when applicable), but **before the clarifier** and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state.
 
 It halts with the structured error `NoPromptProvided`, carrying the exact user-facing message:
 
 > No prompt provided. Run `/gan "<your prompt here>"` to start a sprint, or `/gan --help` to see the available options.
 
-The `--help` hint is mandatory — a user typing `/gan` blind is asking "what does this thing do?", and the answer must point them at the discovery surface. The ordering is `validateAll()` → welcome banner → `NoPromptProvided`; see "Regular invocation flow" below for the precise step placement.
+The `--help` hint is mandatory. The ordering is `validateAll()` → welcome banner → `NoPromptProvided`; see "Regular invocation flow" below for the precise step placement.
 
 ## Welcome banner
 
@@ -50,19 +50,19 @@ The first time `/gan` is invoked **as a regular sprint invocation** (not as a `-
 
 **Detection.** The marker file at `~/.claude/gan/welcomed` is the welcomed-state signal. Its presence — not its content — is what counts. The file is a zero-byte sentinel and lives under `~/.claude/gan/` (zone 1, configuration tier per F1). The orchestrator checks for the file at startup; absence triggers the banner.
 
-**Short-circuit exemption.** The banner does NOT fire on `--help`, `--print-config`, `--list-recoverable`, `--recover`, or `--cleanup`. A user running `--help` for orientation should see help text, not a banner. A user running `--print-config` to debug is already debugging and needs the print output. A user running `--cleanup` is reclaiming disk space, not asking for a tutorial. The banner fires only when the orchestrator is about to spawn agents on a first-run system.
+**Short-circuit exemption.** The banner does NOT fire on `--help`, `--print-config`, `--list-recoverable`, `--recover`, or `--cleanup`. The banner fires only when the orchestrator is about to spawn agents on a first-run system.
 
 **Banner content** covers the bullets named in `specifications/I2-install-user-facing-surfaces.md` § "Banner content": what ClaudeAgents is, the pipeline shape (clarifier → planner → contract → generator → evaluator), what trust prompts and the clarifier draft preview look like, what `.gan-state/` accumulates, when to use `--no-project-commands`, where to find docs, and that both `gan` and `/gan` exist with separate purposes. The orchestrator renders this as prose that obeys the F4 prose-discipline rule (the bare ecosystem tokens enumerated under F4 — including the package-manager and runtime names — must appear inside backticks; see F4 for the canonical list).
 
 **Marker-write timing.** The marker is written **after** the banner finishes printing but **before** any downstream agent fires. Ctrl-C during banner display does not write the marker — the user gets a re-show on next run. A user who wants to re-read the banner can `rm ~/.claude/gan/welcomed`.
 
-**`--skip-welcome` flag.** Passing this flag writes the marker without printing the banner. Useful for scripted invocations that don't want even the informational banner output. Idempotent — the marker write is a no-op when the file already exists.
+**`--skip-welcome` flag.** Passing this flag writes the marker without printing the banner. Idempotent — the marker write is a no-op when the file already exists.
 
-**Non-TTY behavior.** When stdin/stdout are not a TTY (CI, automated scripts), the banner is skipped silently and the marker is created. The first-run experience is shaped for interactive humans; non-interactive contexts should not hit prose output they cannot read.
+**Non-TTY behavior.** When stdin/stdout are not a TTY (CI, automated scripts), the banner is skipped silently and the marker is created.
 
 ## Help short-circuit
 
-`--help` runs **before** `validateAll()`. The orchestrator prints the help text to stdout and exits 0. There is no validation, no snapshot, no worktree, and no agent is spawned. A user with a broken project configuration can still discover how to inspect or recover it without first fixing validation. This is the only flag that skips validation entirely.
+`--help` runs **before** `validateAll()`. The orchestrator prints the help text to stdout and exits 0. There is no validation, no snapshot, no worktree, and no agent is spawned. This is the only flag that skips validation entirely.
 
 ### Help text template
 
@@ -136,7 +136,7 @@ OUTPUT
 
 ## Inspection and recovery short-circuits
 
-`--print-config`, `--recover`, `--list-recoverable`, and `--cleanup` call `validateAll()` in **non-aborting mode**: any structured errors are captured and surfaced alongside the partial resolved view (for `--print-config`) or in the recovery / cleanup report (for `--recover` / `--list-recoverable` / `--cleanup`). The user can inspect a known-broken project's configuration or reclaim its run state without first fixing validation — this is exactly when fail-open behaviour is most useful.
+`--print-config`, `--recover`, `--list-recoverable`, and `--cleanup` call `validateAll()` in **non-aborting mode**: any structured errors are captured and surfaced alongside the partial resolved view (for `--print-config`) or in the recovery / cleanup report (for `--recover` / `--list-recoverable` / `--cleanup`). The user can inspect a known-broken project's configuration or reclaim its run state without first fixing validation.
 
 Specifics:
 
@@ -150,7 +150,7 @@ No sprint work runs in any of these paths.
 
 Per `specifications/O2-recovery.md`, re-anchored to the central store by `specifications/F7-central-run-data-store-and-worktree-execution.md` § 4. Run *data* lives in the central, repo-keyed store at `<store-root>/<repo-key>/runs/<run-id>/` (not under `<projectRoot>/.gan-state/runs/`), and the serialization lock is `<store-root>/<repo-key>/run.lock` (not `<projectRoot>/.gan-state/run.lock`). The `<repo-key>` is derived from the repo's main-worktree root, so all linked worktrees of one repo share the same store directory and lock — recovery enumeration and the lock are repo-wide.
 
-**Recovery worktree-anchor (`--recover`).** Enumeration is repo-wide, but *resuming* is bound to the worktree the run executed in. `--recover` reads `progress.json.workspace.worktreePath`; when the current invocation is not that worktree it refuses (non-zero) with `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists, recovery refuses with the same path plus guidance to recreate it (the run data is safe in the central store; the worktree it must resume into is gone). The run is still *listed* by `--list-recoverable` from any worktree — enumeration is discovery, not resume.
+**Recovery worktree-anchor (`--recover`).** Enumeration is repo-wide, but *resuming* is bound to the worktree the run executed in. `--recover` reads `progress.json.workspace.worktreePath`; when the current invocation is not that worktree it refuses (non-zero) with `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists, recovery refuses with the same path plus guidance to recreate it. The run is still *listed* by `--list-recoverable` from any worktree.
 
 `--cleanup` is destructive. It **always** deletes the target run(s)' central-store directory; for a gan-created workspace it also drops the run worktree and handles the run branch by merge status. A user-owned (case 1a) worktree and branch are never touched. The orchestrator executes these steps without spawning agents.
 
@@ -170,7 +170,7 @@ Per `specifications/O2-recovery.md`, re-anchored to the central store by `specif
        - **Merged** → `git branch -D <branch>` locally, and `git push <remote> --delete <branch>` on the remote when a tracking branch exists.
        - **Not merged** → warn (naming the branch) and do **not** delete it without confirmation or `--yes`.
    - **user-owned (case 1a, `createdByGan: false`):** never touch the worktree or branch.
-   - **Always:** `rm -rf <store-root>/<repo-key>/runs/<runId>` (the central-store run directory — the source-of-truth artifact).
+   - **Always:** `rm -rf <store-root>/<repo-key>/runs/<runId>` (the central-store run directory).
    - Per-step failures other than the final central-store `rm` are logged as a per-run warning and do not abort the batch. A failed `rm` aborts the batch with exit 1 and the run id of the failure.
 6. **Single `git worktree prune`** at the end of the batch (not per-run).
 7. **Report.** Print one summary line: `Cleaned up <N> runs. Freed <X> MB.` If any per-run warnings fired, append `<M> run(s) had teardown warnings; see above.`
@@ -181,7 +181,7 @@ Per `specifications/O2-recovery.md`, re-anchored to the central store by `specif
 - `.claude/gan/` — read-only.
 - `.gan-cache/` — left untouched (regenerable but not run-state).
 
-The orchestrator's only writes are the central-store run-directory deletion (`<store-root>/<repo-key>/runs/<runId>/`) and the git worktree / branch operations on gan-created workspaces. Anything else is a bug.
+The orchestrator's only writes are the central-store run-directory deletion (`<store-root>/<repo-key>/runs/<runId>/`) and the git worktree / branch operations on gan-created workspaces.
 
 ## Regular invocation flow
 
@@ -193,7 +193,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
 4. **`NoPromptProvided` check.** If the invocation carries no prompt and no agent-spawn-short-circuiting flag (not `--help`, `--print-config`, `--list-recoverable`, or `--recover`), halt here with the structured error `NoPromptProvided` and the exact user-facing message reproduced in the "Bare invocation" section above. This check runs **after** `validateAll()` (step 3) and **after** the welcome banner (step 2), but **before** the clarifier and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state. (See "Bare invocation" above.)
 5. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
 
-   **Enrich the snapshot with active-stack bodies before spawn.** The F2 `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Without this enrichment step, agents see undefined per-stack commands and silently degrade to graceful-fallback paths even when the stack file declared the command. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
+   **Enrich the snapshot with active-stack bodies before spawn.** The F2 `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
 6. **Print the startup log** (per O1 part A). One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
 
    **First-run nudge.** When the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line, verbatim: `No recognised ecosystem stack — running with generic defaults. For richer behaviour, run \`gan stacks new <name>\` to scaffold a stack file, or fork an existing one from \`stacks/\` as a starting point.` The note appears even when log verbosity is reduced.
@@ -204,7 +204,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
    warning: <code>: <message>
    ```
 
-   where `<code>` is the warning's machine code (e.g. `StackOverrideShrinkage`) and `<message>` is the warning's prose, both read verbatim from the warning. A snapshot carrying N warnings yields exactly N such lines; a snapshot with an empty `warnings` array emits none. Like the first-run nudge, these lines are **non-suppressible**: reduced log verbosity and any verbosity flag do not silence them, and v1.0 ships no per-warning suppression switch. A user silences a warning only by correcting the overlay it flags (for example, listing every detected stack in `stack.override`, or removing a per-stack command override) — never by a flag. The warnings tell the user their overlay was accepted but did not have the effect they intended, so they are always visible at startup.
+   where `<code>` is the warning's machine code (e.g. `StackOverrideShrinkage`) and `<message>` is the warning's prose, both read verbatim from the warning. A snapshot carrying N warnings yields exactly N such lines; a snapshot with an empty `warnings` array emits none. Like the first-run nudge, these lines are **non-suppressible**: reduced log verbosity and any verbosity flag do not silence them, and v1.0 ships no per-warning suppression switch. A user silences a warning only by correcting the overlay it flags (for example, listing every detected stack in `stack.override`, or removing a per-stack command override) — never by a flag.
 
 7. **Clarification phase.** Unless `--skip-clarification` was passed, spawn `gan-clarifier` with the user prompt, the captured snapshot, the union of every per-agent `additionalContext`, and the bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool (it unions the active stacks' scope globs and returns a scope-filtered, ignore-pruned, structure-only listing). The clarifier writes `clarified-spec.md` under the run's state directory and the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The orchestrator then renders the draft preview and resolves the user's action (see "Clarification phase" below). The approved `clarified-spec.md` is the planner's primary input — and the proposer reads it for criteria derivation. With `--skip-clarification`, the orchestrator (not the clarifier) writes the minimal `clarified-spec.md` itself and proceeds. This phase runs after the snapshot is captured and the startup log is printed, and before the worktree and sprint loop.
 8. **Create the worktree.** Use `.gan-state/runs/<run-id>/worktree` per F1's zone 2. Record run metadata in `.gan-state/runs/<run-id>/progress.json`. The `<run-id>` follows the established `<YYYYMMDDTHHMMSS>-<4 hex>` form.
@@ -216,7 +216,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 
-   **No between-sprint prompt.** The loop runs fully autonomously: the orchestrator advances from each sprint to the next without pausing, and never asks the user to choose between autonomous and per-sprint-pause execution. No such prompt exists.
+   **No between-sprint prompt.** The loop runs fully autonomously: the orchestrator advances from each sprint to the next without pausing, and never asks the user to choose between autonomous and per-sprint-pause execution.
 
    **Before each attempt of any role** (including the single-attempt clarifier and planner), the orchestrator runs the three triggers described under "Safety halts — shared contract": the per-role ceiling check (for multi-attempt roles), the sprint-wide budget check (for every role), and — before each generator attempt specifically — the edit-oscillation check. If any check halts, the orchestrator does not spawn the next attempt; it halts the sprint per the halt contract. Only when no check halts does it proceed to the spawn.
 
@@ -224,9 +224,9 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
 ## Snapshot freshness rule
 
-The captured snapshot is **frozen across user-side edits** for the entire run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are not picked up until the next `/gan` invocation. This is a deliberate consistency choice — a contract issued in sprint N must remain meaningful when evaluated in sprint N+1.
+The captured snapshot is **frozen across user-side edits** for the entire run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are not picked up until the next `/gan` invocation.
 
-When any agent's API call returns `{ mutated: true, ... }` (per F2's mutation indicator), the orchestrator records the per-sprint OR of every agent's `mutated` flag; if any agent in the prior sprint produced `mutated: true`, the orchestrator **always** re-snapshots via `getResolvedConfig()` before spawning the next agent. There is no "may" — re-snapshot-after-true-mutation is unconditional. A `mutated: false` result (e.g. duplicate-skip append) does **not** trigger a re-snapshot; durable state is unchanged so downstream-agent visibility remains the same.
+When any agent's API call returns `{ mutated: true, ... }` (per F2's mutation indicator), the orchestrator records the per-sprint OR of every agent's `mutated` flag; if any agent in the prior sprint produced `mutated: true`, the orchestrator **always** re-snapshots via `getResolvedConfig()` before spawning the next agent. Re-snapshot-after-true-mutation is unconditional. A `mutated: false` result (e.g. duplicate-skip append) does **not** trigger a re-snapshot.
 
 ## Safety halts — shared contract
 
@@ -234,7 +234,7 @@ The framework runs three independent triggers that can halt a sprint mid-loop: a
 
 **Timing.** Every trigger is evaluated at attempt-start boundaries — immediately before the orchestrator would spawn the next attempt. An attempt already in flight runs to completion; no trigger cancels work mid-attempt. All triggers that apply at a given boundary are evaluated together; if any says halt, the orchestrator halts.
 
-**Mechanism — the trace is the only counter.** No trigger maintains its own counter file. The orchestrator reconstructs the per-role attempt counts (and, for oscillation, the generator's per-attempt edit-fingerprint history with post-rejection flags) from the run's `agentAttempt` events via `reconstructRecoveryState`, then feeds that state into the appropriate pure decision helper (`checkRoleCeiling`, `checkSprintBudget`, `detectEditOscillation`). Reconstructing from the trace is what lets `--recover` resume with the same state the original run had — a separate counter or fingerprint file would be a second source of truth recovery could not rebuild.
+**Mechanism — the trace is the only counter.** No trigger maintains its own counter file. The orchestrator reconstructs the per-role attempt counts (and, for oscillation, the generator's per-attempt edit-fingerprint history with post-rejection flags) from the run's `agentAttempt` events via `reconstructRecoveryState`, then feeds that state into the appropriate pure decision helper (`checkRoleCeiling`, `checkSprintBudget`, `detectEditOscillation`).
 
 **Effective safety config — resolved once, then fed to every check.** At run start the orchestrator resolves the *effective* safety config (seed defaults; the merged overlay's `safety.*` block including `safety.attemptCeilings.<role>`, `safety.sprintBudget`, and `safety.oscillationDetection`; and the one-off runtime flags) with the framework's pure effective-safety-config resolver. Precedence is **flags > overlay > defaults**. The resolved values feed every check; the seed defaults are never consulted directly. `--max-attempts=<n>` is the coarse one-off override: it applies a uniform per-role ceiling of `n` to every multi-attempt role and derives the sprint budget as `n × roleCount + 4` (the `+4` covers the clarifier, planner, reviewer, and evaluator). An overlay raising one role's ceiling leaves the other roles at their seed defaults — an unspecified role is never dropped.
 
@@ -242,9 +242,9 @@ The framework runs three independent triggers that can halt a sprint mid-loop: a
 
 1. Builds a `safetyHalt` trace event with `buildLoopDetectedBody` (the body carries `safetyClass = "loopDetected"` plus the trigger-specific `role` and payload) and emits it through the run's trace emitter.
 2. Surfaces a `LoopDetected` structured error built by the trigger's error builder (see below). Every error renders user-facing prose that points at the run's trace directory under the central store and tells the user to re-run with `--recover`.
-3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code — one code shared by all three triggers, distinct from the validation/contract exit codes so a caller can tell a halt apart from a contract failure.
+3. Marks the sprint halted and exits with the framework's `LoopDetected` exit code — one code shared by all three triggers, distinct from the validation/contract exit codes.
 
-A halted sprint is recoverable via `--recover`. Unless the user changes the prompt (or raises the relevant ceiling/budget/flag), the next attempt halts again on the same condition — by design, so a halt is not silently undone.
+A halted sprint is recoverable via `--recover`. Unless the user changes the prompt (or raises the relevant ceiling/budget/flag), the next attempt halts again on the same condition.
 
 **Terminal-reason and recovery.** When a halt fires, the orchestrator marks the run terminal with `terminalReason: "failed-loop-detected"` (the kebab-case loop-halt reason) so `--recover` can find and resume it. On `--recover`, the framework reconstructs counters from `agentAttempt` events via `reconstructRecoveryState` and derives the starting state from that reconstruction:
 
@@ -262,7 +262,7 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 
 ### Trigger 2 — Sprint-wide attempt budget
 
-- **Roles checked.** Every role — including the single-attempt clarifier and planner and the once-per-output reviewer and evaluator. Their attempts are real work and count toward the sprint-wide total even though no per-role ceiling applies to them.
+- **Roles checked.** Every role — including the single-attempt clarifier and planner and the once-per-output reviewer and evaluator. Every role's attempts count toward the sprint-wide total even though no per-role ceiling applies to them.
 - **Counter substrate.** The summed per-role attempt counts reconstructed from `agentAttempt` events (the same accounting the per-role check uses).
 - **Trigger logic.** Halts when summed attempts ≥ the effective budget. The effective budget is `overlay safety.sprintBudget`, else the `--max-attempts`-derived `n × roleCount + 4` when `--max-attempts` was passed, else the seed default 12 (the sum of the seed per-role ceilings — proposer 3 + generator 3 — plus headroom for the four roles that carry no per-role ceiling).
 - **Error builder.** `createSprintBudgetError` — same `LoopDetected` error code, with `reason = "sprintBudgetExceeded"` and the synthetic `role = "sprint"`. The synthetic role denotes the aggregate budget; it is not itself a multi-attempt role and is never per-role-ceiling-checked. The message names the combined attempt count and the budget, points at the trace directory, and tells the user to adjust the prompt or raise the budget and re-run with `--recover`.
@@ -270,18 +270,18 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 
 ### Trigger 3 — Edit-oscillation detection
 
-- **Roles checked.** The generator role only. A generator that keeps re-proposing the same change (or alternating between two changes) is not converging even before its per-role ceiling is reached; this trigger halts it sooner.
-- **Counter substrate.** The generator's per-attempt edit-fingerprint history, paired with a post-rejection flag per attempt. Both come from the trace: the fingerprints from the edit sets recorded per attempt (normalized so that whitespace-only, comment-only, and reordering-only differences collapse to the same fingerprint), and the post-rejection flag reconstructed from the rejection the evaluator recorded before the attempt. The pure detector compares attempts by the fingerprint value the fingerprinting layer already produced; it does not re-derive its own fingerprint, so the normalization rules and the oscillation triggers cannot drift apart.
+- **Roles checked.** The generator role only.
+- **Counter substrate.** The generator's per-attempt edit-fingerprint history, paired with a post-rejection flag per attempt. Both come from the trace: the fingerprints from the edit sets recorded per attempt (normalized so that whitespace-only, comment-only, and reordering-only differences collapse to the same fingerprint), and the post-rejection flag reconstructed from the rejection the evaluator recorded before the attempt. The pure detector compares attempts by the fingerprint value the fingerprinting layer already produced; it does not re-derive its own fingerprint.
 - **Trigger logic.** Two independent sub-triggers, either of which halts on its own:
   - **Direct-repeat-on-second** — the same fingerprint recurs a third time across the history (the *second* repeat). The halt waits for the second repeat because a single isolated repeat could be an instructed revert.
   - **3-cycle** — an attempt's fingerprint equals the one from two attempts earlier (an A → B → A alternation), catching a generator swinging between two interpretations even when no two adjacent attempts repeat.
-  - **Post-rejection guard.** A repeat is only counted toward either sub-trigger when the repeating attempt followed an evaluator rejection. A generator that reverts a partial edit because the evaluator instructed it to ("undo that") is doing instructed work, not oscillating, so an otherwise-matching repeat that did not follow a rejection does not halt — without this guard the detector would fire on instructed reverts.
+  - **Post-rejection guard.** A repeat is only counted toward either sub-trigger when the repeating attempt followed an evaluator rejection. An otherwise-matching repeat that did not follow a rejection does not halt — a generator reverting a partial edit because the evaluator instructed it to ("undo that") is doing instructed work, not oscillating.
 - **Error builder.** `createEditOscillationError` — same `LoopDetected` error code, with `reason = "editOscillation"` and `role = "gan-generator"`. The `safetyHalt` event's payload evidence is `{ fingerprintSequence, detectedPattern }`. The message names the attempt count and whether the generator repeated one edit or alternated between two, points at the trace directory, and tells the user to adjust the prompt and re-run with `--recover`.
 - **Gating.** Gated by the resolved effective-safety config's `oscillationDetection` boolean (overlay `safety.oscillationDetection`, else default `true`). When `true`, the orchestrator consults the detector. When `false`, the orchestrator skips the check entirely and a generator that repeats fingerprints proceeds up to its per-role ceiling without an `editOscillation` halt; only ceiling and budget apply. The gate is on the call site (whether the orchestrator consults the detector), not on the detector itself.
 
 ## Per-run state versus configuration
 
-Per-run state — `progress.json`, sprint contracts, evaluator feedback, generator artefacts — lives directly under `.gan-state/runs/<run-id>/` (zone 2). It is **not** Configuration API territory. The API is for framework configuration; per-run state is for sprint orchestration. Distinct lanes.
+Per-run state — `progress.json`, sprint contracts, evaluator feedback, generator artefacts — lives directly under `.gan-state/runs/<run-id>/` (zone 2). It is **not** Configuration API territory. The API is for framework configuration; per-run state is for sprint orchestration.
 
 The orchestrator is the sole writer of `progress.json`. Sub-agents may read it but never write it; they communicate state transitions via stdout status lines that the orchestrator parses.
 
@@ -299,7 +299,7 @@ Before spawning agents at sprint start, the orchestrator exports three absolute-
 - `GAN_WORKTREE` — the resolved worktree. This is the user's own worktree when the run reuses a task-named worktree, or the run-scoped worktree the framework created otherwise. Writes anywhere under it are in-bounds.
 - `GAN_RUN_DIR` — the central-store run directory that holds the run's artefacts, its `trace/` subtree, and its `telemetry/` subtree. Only the declared artefact subpaths under it are in-bounds.
 
-The hook derives its zones from `GAN_WORKTREE` and `GAN_RUN_DIR` rather than from the project root, because the worktree is not always a fixed sub-path of the project and the run directory lives in the central store outside the project tree. It stays a pure deny-gate: it allows writes inside those two zones and denies everything else (`~/.claude/`, the home directory generally, the module-state directory, the ephemeral cache, and any path outside both zones). `gan hooks status` reports the resolved `GAN_WORKTREE` and `GAN_RUN_DIR` for the active run, or notes that the command is running outside a run.
+The hook derives its zones from `GAN_WORKTREE` and `GAN_RUN_DIR`. It stays a pure deny-gate: it allows writes inside those two zones and denies everything else (`~/.claude/`, the home directory generally, the module-state directory, the ephemeral cache, and any path outside both zones). `gan hooks status` reports the resolved `GAN_WORKTREE` and `GAN_RUN_DIR` for the active run, or notes that the command is running outside a run.
 
 ## Trust integration
 
@@ -311,7 +311,7 @@ The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set a
 
 ## Clarification phase
 
-After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool — which unions the active stacks' scope globs and returns a structure-only listing, scope-filtered and pruned of paths the project's own ignore file excludes (so it never enumerates dependency or build-output trees). The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
+After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool — which unions the active stacks' scope globs and returns a structure-only listing, scope-filtered and pruned of paths the project's own ignore file excludes. The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
 
 **Draft preview + action menu.** After the clarifier produces `clarified-spec.md`, the orchestrator renders the full document to the terminal — its `Goal`, `In scope`, `Out of scope`, `Assumptions`, `User actions`, and `Constraints` sections — and below it presents the action menu:
 
@@ -329,25 +329,25 @@ Proceed with this spec? [a]pprove / [e]dit / "evolve: <text>" / [c]ancel
 
 **Timeout.** The orchestrator waits for input with a default 60-second timeout, resolved from the `clarifier.draftTimeoutSeconds` overlay splice (default `60`). `--clarifier-timeout=<seconds>` overrides it for one run; both paths enforce the `[10, 600]` range, and an out-of-range value (and `0`) is rejected with the structured error `InvalidTimeoutValue` before any agent fires. On timeout with no input, the orchestrator **auto-approves the current draft** and proceeds to the planner; the clarified spec records the auto-approval explicitly (an `autoApprovedOnTimeout` user action noting the draft was auto-approved on timeout).
 
-**Evolution rounds.** A run allows **up to three rounds total** — the initial round plus at most two evolutions. An `evolve: <text>` response re-runs the clarifier with the **original prompt + the accumulated `additionalContext` + the user's evolution text**, producing a fresh `clarified-spec.md` presented via the same draft-preview surface; this counts as one round. The orchestrator preserves each prior-round draft at `clarified-spec.md.round-N` (where `N` is the round number) so the evolution audit trail is recoverable, and `raw-prompt.md` stays the verbatim original — evolutions layer on top, history is never rewritten. Reaching the **third round forces the user to choose approve / edit / cancel**; further evolution attempts are rejected. If a regenerated draft fails schema validation, the orchestrator surfaces the structured error inline, keeps the prior round's draft authoritative, re-presents the action menu against that prior draft, and the failed regeneration still **counts as one round**.
+**Evolution rounds.** A run allows **up to three rounds total** — the initial round plus at most two evolutions. An `evolve: <text>` response re-runs the clarifier with the **original prompt + the accumulated `additionalContext` + the user's evolution text**, producing a fresh `clarified-spec.md` presented via the same draft-preview surface; this counts as one round. The orchestrator preserves each prior-round draft at `clarified-spec.md.round-N` (where `N` is the round number); `raw-prompt.md` stays the verbatim original — history is never rewritten. Reaching the **third round forces the user to choose approve / edit / cancel**; further evolution attempts are rejected. If a regenerated draft fails schema validation, the orchestrator surfaces the structured error inline, keeps the prior round's draft authoritative, re-presents the action menu against that prior draft, and the failed regeneration still **counts as one round**.
 
 **Editor flow (`[e]dit`).** The orchestrator resolves the editor command via the chain `$EDITOR` → `$VISUAL` → `vi`. If none resolves to an executable on `$PATH`, it halts with the structured error `EditorNotConfigured`, naming all three checked variables and telling the user to set one. It spawns the editor on `clarified-spec.md` and imposes **no sub-timeout** on the editor. On editor exit it **re-validates** the edited `clarified-spec.md` against the same document schema `validateAll()` uses; on validation failure it shows the structured error inline and re-opens the editor on the same file; on success it re-renders the edited draft and re-prompts the action menu. The editor flow does **not** consume an evolution round (only `evolve: <text>` does). Ctrl-C **inside the editor** is treated as "abandon edit; re-render the previous draft and re-prompt the action menu" — it does not cancel the run.
 
-**Signal handling.** Ctrl-C **at the action menu** is treated identically to typing `[c]ancel`: the run halts with the structured error `UserCancelled` and the orchestrator writes the kebab-case terminal reason `aborted-by-user` to `progress.json` (`progress.json.terminalReason`). Run state is preserved, so `--recover` can resume from the same draft if the user changes their mind. This is distinct from Ctrl-C inside the editor, which abandons the edit rather than cancelling the run.
+**Signal handling.** Ctrl-C **at the action menu** is treated identically to typing `[c]ancel`: the run halts with the structured error `UserCancelled` and the orchestrator writes the kebab-case terminal reason `aborted-by-user` to `progress.json` (`progress.json.terminalReason`). Run state is preserved, so `--recover` can resume from the same draft. This is distinct from Ctrl-C inside the editor, which abandons the edit rather than cancelling the run.
 
 **`--skip-clarification`.** This flag bypasses the clarifier entirely. The **orchestrator** (not the clarifier — it is bypassed) writes the minimal `clarified-spec.md`: `Goal` = the verbatim user prompt; `In scope`, `Out of scope`, and `User actions` empty; `Assumptions` a single entry stating the user invoked `--skip-clarification` and downstream agents proceed with the raw prompt as goal; `Constraints` derived from `additionalContext` and the active stacks. `raw-prompt.md` is preserved alongside. The flag does **not** short-circuit `validateAll()` — clarification happens after validation in the pipeline — and the run proceeds straight to the planner with this minimal spec.
 
-**No-ambiguity case.** When the clarifier produces a `clarified-spec.md` with **zero blockers and no assumptions worth recording**, the orchestrator does **not** present the draft preview or action menu — it proceeds directly to the planner. The user is not interrupted for an empty spec. This is the single-round skip case; the clarifier's attempt is still part of the audit trail even when its output is minimal.
+**No-ambiguity case.** When the clarifier produces a `clarified-spec.md` with **zero blockers and no assumptions worth recording**, the orchestrator does **not** present the draft preview or action menu — it proceeds directly to the planner. The clarifier's attempt is still recorded in the audit trail.
 
 **Trace.** The clarifier emits `agentAttempt`, `llmCall`, `clarifierFinding`, and `clarifierUserAction` events per round, and a `safetyHalt` of class `clarifierCancelled` when the user cancels at the action menu.
 
 ## Run-trace integration points
 
-Every `/gan` run writes a structured, append-only event log to `.gan-state/runs/<run-id>/trace/` via the framework's trace library: the orchestrator holds one trace emitter for the run and emits a typed event at each milestone, agent attempt, LLM call, and tool call (`orchestratorMilestone`, `agentAttempt`, `llmCall`, `toolCall`). The trace is the read-substrate for loop detection, recovery, and later cost/accuracy phases — downstream phases read trace events rather than inventing their own logging. The trace lives entirely under `.gan-state/` and is never transmitted off-machine.
+Every `/gan` run writes a structured, append-only event log to `.gan-state/runs/<run-id>/trace/` via the framework's trace library: the orchestrator holds one trace emitter for the run and emits a typed event at each milestone, agent attempt, LLM call, and tool call (`orchestratorMilestone`, `agentAttempt`, `llmCall`, `toolCall`). The trace is the read-substrate for loop detection, recovery, and later cost/accuracy phases. The trace lives entirely under `.gan-state/` and is never transmitted off-machine.
 
-The orchestrator/skill runtime wires the following integration points. Each names the framework helper or formatter it calls — those are the unit-tested seams the runtime composes; the timing and placement below are the orchestrator's responsibility.
+The orchestrator/skill runtime wires the following integration points. Each names the framework helper or formatter it calls.
 
-- **Agent-attempt heartbeat (stderr).** Before an agent's **first** LLM call in an attempt, the orchestrator emits one heartbeat line to stderr so a watching user knows the tool has not frozen. The line is produced by the `formatHeartbeat(role)` formatter and renders exactly `[<role>] thinking...` — metadata only, no payload content. Emitted once per attempt.
+- **Agent-attempt heartbeat (stderr).** Before an agent's **first** LLM call in an attempt, the orchestrator emits one heartbeat line to stderr. The line is produced by the `formatHeartbeat(role)` formatter and renders exactly `[<role>] thinking...` — metadata only, no payload content. Emitted once per attempt.
 
 - **Per-LLM-call and sprint-end summaries (stderr).** When each LLM call completes, the orchestrator emits the one-line cost/latency summary produced by `formatLlmCallSummary` (reading the `llmCall` event's metric fields). At every sprint termination — graceful completion, loop-detection halt, validation abort, user cancel, or error — it emits the cumulative line produced by `formatSprintSummary` / `formatSprintSummaryFromEvents`, aggregated from the trace. These lines go unconditionally to stderr and carry operational metadata only (token counts, latency, cache-hit status, counts and sums); never prompt or response content, and no dollar cost.
 
