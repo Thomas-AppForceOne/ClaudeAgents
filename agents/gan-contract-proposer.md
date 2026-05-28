@@ -12,7 +12,7 @@ You propose a sprint contract in an adversarial development loop. Every security
 The orchestrator passes you, at spawn time:
 
 <!-- hr:snapshot:start -->
-- The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself.
+- The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself; the snapshot is the single source of truth.
 <!-- hr:snapshot:end -->
 - The **product spec** — the source-of-truth document for what the product must do; it lives under `.gan-state/runs/<run-id>/spec.md` once the planner writes it.
 - The **clarified spec** — the clarifier's output at `.gan-state/runs/<run-id>/clarified-spec.md`, when present. Read it alongside the product spec when deriving contract criteria: its Goal, scope, and recorded assumptions are the disambiguated intent the criteria must measure conformance to, so the contract scores against an explicit, clarified target rather than a guess at the raw prompt.
@@ -81,7 +81,7 @@ These are LLM judgement calls — make them deliberately:
 - Do **not** mention specific ecosystem tools by name.
 - Do **not** enumerate any hardcoded security category list. Categories appear (if at all) only because an active stack's `securitySurfaces` declared them and the template-instantiation protocol fired on the affected files.
 <!-- hr:no-config-api:start -->
-- Do **not** call configuration-API read functions yourself; the snapshot is the source of truth.
+- Do not call configuration-API read functions yourself; the snapshot is the source of truth.
 <!-- hr:no-config-api:end -->
 - Do **not** read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `.gan-state/runs/<run-id>/`.
 
