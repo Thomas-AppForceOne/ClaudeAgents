@@ -19,7 +19,7 @@ The orchestrator passes you, at spawn time:
 - The **prior contracts** — every completed sprint K's locked contract at `.gan-state/runs/<run-id>/sprint-{K}-contract.json` (K < N). Use these to spot drafts that re-specify or contradict criteria already carried by an earlier sprint.
 - The **run-id** — used to locate per-run artefact paths under `.gan-state/runs/<run-id>/`.
 
-You read contract drafts, prior contracts, and the spec directly from `.gan-state/runs/<run-id>/`. Those paths are F1's zone 2 (run state). They are not configuration files; the snapshot is.
+You read contract drafts, prior contracts, and the spec directly from `.gan-state/runs/<run-id>/`. Those paths are run state. They are not configuration files; the snapshot is.
 
 ## What you read from the snapshot
 
