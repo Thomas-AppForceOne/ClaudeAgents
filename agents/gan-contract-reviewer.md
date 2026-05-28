@@ -85,7 +85,7 @@ Do not copy or mutate the draft contract or any locked contract. The orchestrato
 
 ## Errors
 
-When any framework API call returns a structured error, surface it in your `notes` and preserve the F2 structured-error fields verbatim: `code`, `file`, `field`, `line`, `message`.
+When any framework API call returns a structured error, surface it in your `notes` and preserve the structured-error fields verbatim: `code`, `file`, `field`, `line`, `message`.
 <!-- hr:errors-tail:start -->
 Do not interpret, translate, or hide the error. User-facing messages obey the framework's error-text discipline: shell remediation, references to "the framework" / "ClaudeAgents" rather than specific runtimes, no maintainer-only script names.
 <!-- hr:errors-tail:end -->

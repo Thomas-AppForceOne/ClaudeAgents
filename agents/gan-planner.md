@@ -178,7 +178,7 @@ Do not write `progress.json`. The orchestrator reads your `PLANNING COMPLETE` li
 
 ## Errors
 
-When any framework API call returns a structured error, surface it as a blocking concern in the spec's "Context warnings" subsection with the F2 fields preserved verbatim: `code`, `file`, `field`, `line`, `message`.
+When any framework API call returns a structured error, surface it as a blocking concern in the spec's "Context warnings" subsection with the structured-error fields preserved verbatim: `code`, `file`, `field`, `line`, `message`.
 <!-- hr:errors-tail:start -->
 Do not interpret, translate, or hide the error. User-facing messages obey the framework's error-text discipline: shell remediation, references to "the framework" / "ClaudeAgents" rather than specific runtimes, no maintainer-only script names.
 <!-- hr:errors-tail:end -->
