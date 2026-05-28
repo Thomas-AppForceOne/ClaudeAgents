@@ -95,8 +95,8 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 14. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — doc-lint enforcement + comment/string provenance. Shipped PR #29.
 15. ✅ **[E5](E5-spec-clarification.md)** — spec clarification phase. Shipped PR #30.
 16. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
-17. **Next** [D2](D2-prompt-hygiene.md) — prompt hygiene.
-18. [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
+17. ✅ **D2** — prompt hygiene. Shipped PR #TBD.
+18. **Next** [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
 19. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
 20. [M4](M4-docker-module-wiring.md) — Docker module wiring.
 21. [O2](O2-recovery.md) — minimal recovery.
