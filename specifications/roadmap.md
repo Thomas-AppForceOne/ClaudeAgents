@@ -90,18 +90,19 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 9. ✅ **[H1](H1-framework-owned-confinement-hook.md)** — framework-owned confinement hook. Shipped PR #21.
 10. ✅ **[F7](F7-central-run-data-store-and-worktree-execution.md)** — centralized run-data store + worktree-aware execution. Shipped PR #23.
 11. ✅ **[F8](F8-centralized-module-state-store.md)** — centralized repo-keyed module-state store. Shipped PR #24.
-12. ✅ **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. Shipped PR #27.
-13. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — doc-lint enforcement + comment/string provenance. Shipped PR #29.
-14. ✅ **[E5](E5-spec-clarification.md)** — spec clarification phase. Shipped PR #30.
-15. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
-16. **Next** [D2](D2-prompt-hygiene.md) — prompt hygiene.
-17. [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
-18. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
-19. [M4](M4-docker-module-wiring.md) — Docker module wiring.
-20. [O2](O2-recovery.md) — minimal recovery.
-21. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
-22. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
-23. **Pre-release chores + release gate.** See below.
+12. ✅ **[Q5](Q5-documentation-quality-enforcement.md)** — documentation-quality enforcement. Shipped PR #25.
+13. ✅ **[A1](A1-loop-and-thrash-detection.md)** — loop & thrash detection. Shipped PR #27.
+14. ✅ **[Q6](Q6-doc-lint-and-provenance.md)** — doc-lint enforcement + comment/string provenance. Shipped PR #29.
+15. ✅ **[E5](E5-spec-clarification.md)** — spec clarification phase. Shipped PR #30.
+16. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
+17. **Next** [D2](D2-prompt-hygiene.md) — prompt hygiene.
+18. [R7](R7-runtime-invocation-bridge.md) — runtime invocation bridge.
+19. [E8](E8-independent-review-and-forced-verification.md) — independent adversarial review & forced verification.
+20. [M4](M4-docker-module-wiring.md) — Docker module wiring.
+21. [O2](O2-recovery.md) — minimal recovery.
+22. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
+23. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
+24. **Pre-release chores + release gate.** See below.
 
 ### Known gaps accepted at v1.0
 
@@ -166,7 +167,6 @@ Builds on real trace data (now flowing, post-R7) and v1.0 user reports. The them
 Requires production usage data the v1.0 → v1.1 cycle produces. The theme is **enforce and reproduce**: budget ceilings, destructive-action guards, and reproducible verdicts that harden the E8 gate against drift.
 
 - **Q1** — diff acceptance feedback loop (`.gan-state/feedback/`; per-stack acceptance/churn/revert rates).
-- ✅ **Q5** — documentation-quality enforcement. **(Deliberate exception to this section's "requires production usage data" framing, written down so it is not a silent bend of the organizing principle: documentation-quality is architectural and self-contained — it needs no usage data — so Q5 shipped *early*, PR #25, as the foundation that v1.0 slot 13's [Q6](Q6-doc-lint-and-provenance.md) (#29) completes. The Q5/Q6 doc-quality pair effectively shipped in the v1.0 cycle and was never gated on v1.0→v1.1 data; it is listed here only for Q-series lineage. The "requires usage data" rule governs the unshipped measurement/enforcement specs in this section — Q1, A3, A5, E6, T3.)** Two new optional stack-schema fields source a project's documentation standard from config (`documentationSurfaces`, instantiated as gating contract criteria via C1's template-instantiation protocol exactly like `securitySurfaces`; `docLintCmd`, a deterministic baseline-relative doc-lint run by evaluator-core), enforced in three layers (default stack convention, deterministic lint, evaluator-scored gating criteria) with the per-rule gates-vs-warns split on the deterministic layer. Supersedes/extends C1 (schema), E1/E2 (proposer + evaluator prompts), and E3 (evaluator-core) via the new-spec mechanism; those shipped specs are not edited — this entry is their cross-reference. Shipped PR #25. Extended by [Q6](Q6-doc-lint-and-provenance.md) (#29), which delivers Q5's deferred `docLintCmd` tool + a CI presence gate + a comment-provenance `documentationSurfaces` entry.
 - **A3** — framework-owned destructive-action guard.
 - **A5** — LLM-sampling reproducibility on verdict roles (pinned temperature/seed on the evaluator, the E8 review agent, and the contract-reviewer). Directly stabilises the E8 gate: a verdict that flips run-to-run on the same input is the failure mode A5 closes.
 - **[E6](E6-pluggable-evaluator-role.md)** — pluggable evaluator role (swap LLM evaluator for a human reviewer at the same contract boundary). Natural extension of E8's independent-review seam: E8 makes the review role pluggable in principle; E6 makes a human one of the options.
