@@ -94,6 +94,8 @@ Tests run via vitest. CI is one workflow file per category:
 - `test-stack-lint.yml` — runs `scripts/lint-stacks/`.
 - `test-schemas.yml` — runs `scripts/publish-schemas/` in dry-run mode (drift check).
 - `test-no-stack-leak.yml` — runs `scripts/lint-no-stack-leak/` (multi-stack guard rail).
+- `test-no-spec-ref.yml` — runs `scripts/lint-no-spec-ref/` (no internal phase-code references or `specifications/<CODE>` paths in `agents/` and `skills/gan/`, outside the line/region allowlist).
+- `test-house-rules.yml` — runs `scripts/house-rules/` (byte-identity of the three named house-rules regions across every `agents/*.md`, plus subagent-frontmatter validity).
 - `test-error-text.yml` — error-message readability check (no Node/npm leaks into user-facing output).
 - `test-doc-lint.yml` — runs `scripts/doc-lint/` via `npm run doc-lint` over the PR diff; gates (blocker) on export-doc presence only, with the required-sections / commented-out-code heuristics running advisory (non-blocking) in the same invocation.
 - Plus a shared `shared-setup.yml` reusable workflow.
