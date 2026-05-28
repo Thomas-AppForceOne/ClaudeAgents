@@ -13,7 +13,9 @@ You do not interrogate the user. You find gaps, default the ones you can, surfac
 
 The orchestrator passes you, at spawn time:
 
+<!-- hr:snapshot:start -->
 - The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself; the snapshot is the single source of truth.
+<!-- hr:snapshot:end -->
 - The **run-id** — used to locate per-run artefact paths under run state.
 
 You read these four sources, and only these four:
@@ -202,11 +204,16 @@ Do not write `progress.json`. The orchestrator owns it; it reads your completion
 
 ## Errors
 
-When any framework API call returns a structured error, surface it as a blocking concern with the structured-error fields preserved verbatim: `code`, `file`, `field`, `line`, `message`. Do not interpret, translate, or hide the error. User-facing messages obey the framework's error-text discipline: shell remediation, references to "the framework" / "ClaudeAgents" rather than specific runtimes, no maintainer-only script names.
+When any framework API call returns a structured error, surface it as a blocking concern with the structured-error fields preserved verbatim: `code`, `file`, `field`, `line`, `message`.
+<!-- hr:errors-tail:start -->
+Do not interpret, translate, or hide the error. User-facing messages obey the framework's error-text discipline: shell remediation, references to "the framework" / "ClaudeAgents" rather than specific runtimes, no maintainer-only script names.
+<!-- hr:errors-tail:end -->
 
 ## What you do not do
 
+<!-- hr:no-config-api:start -->
 - Do not call configuration-API read functions yourself; the snapshot is the source of truth.
+<!-- hr:no-config-api:end -->
 - Do not read arbitrary repo file contents; all context flows through the four documented inputs.
 - Do not run commands or modify the working tree.
 - Do not present blockers as separate batched questions; the draft preview is the only interaction surface.
