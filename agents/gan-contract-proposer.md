@@ -14,13 +14,13 @@ The orchestrator passes you, at spawn time:
 <!-- hr:snapshot:start -->
 - The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself; the snapshot is the single source of truth.
 <!-- hr:snapshot:end -->
-- The **product spec** — the source-of-truth document for what the product must do; it lives under `.gan-state/runs/<run-id>/spec.md` once the planner writes it.
-- The **clarified spec** — the clarifier's output at `.gan-state/runs/<run-id>/clarified-spec.md`, when present. Read it alongside the product spec when deriving contract criteria: its Goal, scope, and recorded assumptions are the disambiguated intent the criteria must measure conformance to, so the contract scores against an explicit, clarified target rather than a guess at the raw prompt.
+- The **product spec** — the source-of-truth document for what the product must do; it lives at `$GAN_RUN_DIR/spec.md` once the planner writes it.
+- The **clarified spec** — the clarifier's output at `$GAN_RUN_DIR/clarified-spec.md`, when present. Read it alongside the product spec when deriving contract criteria: its Goal, scope, and recorded assumptions are the disambiguated intent the criteria must measure conformance to, so the contract scores against an explicit, clarified target rather than a guess at the raw prompt.
 - The **prior-sprint history** — for every completed prior sprint K, the contract that was promised plus the highest-numbered passing feedback that recorded what actually shipped. These tell you what is already built and what criteria you must not re-specify or contradict.
 - The **affected files** — the files this sprint will touch (create, modify, or delete), as identified by the planner. You feed these into the template-instantiation protocol described below.
 - Optional **revision notes**, **objection**, or **blocking-concern** payloads if you are being re-spawned within the same sprint.
 
-You read the spec and prior-sprint artefacts directly from `.gan-state/runs/<run-id>/`. That is run state, not Configuration API territory.
+You read the spec and prior-sprint artefacts directly from `$GAN_RUN_DIR`. That is run state, not Configuration API territory.
 
 ## Project context
 
@@ -83,11 +83,11 @@ These are LLM judgement calls — make them deliberately:
 <!-- hr:no-config-api:start -->
 - Do not call configuration-API read functions yourself; the snapshot is the source of truth.
 <!-- hr:no-config-api:end -->
-- Do **not** read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `.gan-state/runs/<run-id>/`.
+- Do **not** read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `$GAN_RUN_DIR`.
 
 ## Output
 
-Write your proposed contract to `.gan-state/runs/<run-id>/sprint-{N}-contract-draft.json` (where `N` is the current sprint number). The legacy `.gan/` path is retired.
+Write your proposed contract to `$GAN_RUN_DIR/sprint-{N}-contract-draft.json` (where `N` is the current sprint number). The legacy `.gan/` path is retired.
 
 The JSON structure must be exactly:
 

@@ -114,3 +114,99 @@ describe('skill_documents_runtime_wiring_points', () => {
     }
   });
 });
+
+/**
+ * Step-8 / lock-lifecycle / F7-path-sweep checks. The runtime invocation
+ * bridge places resolveRunStore + acquireRunLock immediately before the
+ * clarifier's step-7 writes (so a second concurrent /gan is refused before it
+ * can burn the clarification phase), rewrites the worktree step to call
+ * createRunWorkspace and act on resolutionCase / createdByGan, and adds
+ * releaseRunLock to every exit path. The string-walk over the entire file
+ * pins the F7 data-path sweep: every .gan-state/runs/ occurrence is followed
+ * by /worktree, the only project-local sub-path the GAN_WORKTREE env var
+ * resolves to.
+ */
+describe('skill_step_8_calls_createRunWorkspace', () => {
+  it('names createRunWorkspace where the orchestrator obtains the worktree', () => {
+    expect(skill).toContain('createRunWorkspace');
+  });
+
+  it('acts on the returned resolutionCase and createdByGan fields', () => {
+    expect(skill).toContain('resolutionCase');
+    expect(skill).toContain('createdByGan');
+  });
+
+  it('names the three resolution cases (1a / 1b / 1c)', () => {
+    // Pinning all three keeps the prose honest about the main-checkout
+    // regression fix: a 1c path appearing without 1a would let a
+    // misreading still treat 1a as "always reuse".
+    expect(skill).toContain("'1a'");
+    expect(skill).toContain("'1b'");
+    expect(skill).toContain("'1c'");
+  });
+});
+
+describe('skill_lock_lifecycle_acquire_before_step7_and_release_on_every_exit', () => {
+  it('acquireRunLock appears between resolveRunStore and the clarifier-write step inside the regular invocation flow', () => {
+    // Scope to the "Regular invocation flow" section — the only place
+    // where the lifecycle ordering is load-bearing. A clarified-spec.md
+    // mention earlier in the file (e.g. in the flag description, or later
+    // in the "Clarification phase" detail section) is unrelated to the
+    // flow-step ordering and would mislead the assertion if we used
+    // file-wide indexes.
+    const flowStart = skill.indexOf('## Regular invocation flow');
+    const flowEnd = skill.indexOf('\n## ', flowStart + 1);
+    expect(flowStart).toBeGreaterThan(-1);
+    expect(flowEnd).toBeGreaterThan(flowStart);
+    const flow = skill.slice(flowStart, flowEnd);
+
+    const resolveIdx = flow.indexOf('resolveRunStore');
+    const acquireIdx = flow.indexOf('acquireRunLock');
+    const clarifiedIdx = flow.indexOf('clarified-spec.md');
+    expect(resolveIdx).toBeGreaterThan(-1);
+    expect(acquireIdx).toBeGreaterThan(-1);
+    expect(clarifiedIdx).toBeGreaterThan(-1);
+    expect(acquireIdx).toBeGreaterThan(resolveIdx);
+    expect(acquireIdx).toBeLessThan(clarifiedIdx);
+  });
+
+  it('releaseRunLock appears on the tear-down / exit path', () => {
+    expect(skill).toContain('releaseRunLock');
+    // The release prose explicitly names the abort/error path too, not just
+    // graceful completion — the long-lived config-server pid means a
+    // stale-break self-heal never fires for an unreleased lock.
+    const tearDownIdx = skill.indexOf('Tear down');
+    expect(tearDownIdx).toBeGreaterThan(-1);
+    const tearDownSection = skill.slice(tearDownIdx, tearDownIdx + 2000);
+    expect(tearDownSection).toContain('releaseRunLock');
+    expect(tearDownSection.toLowerCase()).toMatch(/abort|error/);
+  });
+});
+
+describe('skill_no_residual_pre_F7_run_data_paths', () => {
+  it('every .gan-state/runs/ occurrence is followed by <id>/worktree (project-local worktree subpath only)', () => {
+    // Deterministic string-walk: split on the literal data-path prefix; for
+    // every continuation, the next segment must be followed by /worktree.
+    // Any other suffix is a residual pre-F7 data-path that needed the sweep.
+    const parts = skill.split('.gan-state/runs/');
+    // First chunk is everything before the first occurrence — ignored.
+    for (let i = 1; i < parts.length; i += 1) {
+      const chunk = parts[i] ?? '';
+      // The segment is the run-id placeholder up to the first '/'; assert
+      // the remainder begins with 'worktree'. Pulling the substring makes the
+      // failure message readable.
+      const slash = chunk.indexOf('/');
+      expect(slash, `chunk ${i} has no '/': ${chunk.slice(0, 80)}`).toBeGreaterThan(-1);
+      const afterSegment = chunk.slice(slash + 1);
+      expect(
+        afterSegment.startsWith('worktree'),
+        `.gan-state/runs/ occurrence ${i} not followed by '<id>/worktree': ${chunk.slice(0, 80)}`,
+      ).toBe(true);
+    }
+  });
+
+  it('GAN_RUN_DIR and GAN_WORKTREE literal tokens both appear in the file', () => {
+    expect(skill).toContain('GAN_RUN_DIR');
+    expect(skill).toContain('GAN_WORKTREE');
+  });
+});

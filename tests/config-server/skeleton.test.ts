@@ -277,7 +277,15 @@ describe('MCP handshake (subprocess)', () => {
     expect(names).not.toContain('getStackConventions');
 
     for (const name of names) {
-      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+      // The dispatcher unions F2 with R5 (trustList) and the run-context
+      // tools introduced by the runtime invocation bridge; the F2-only
+      // assertion would re-fail every additive tool group after R5. The
+      // dispatch set is the broader invariant — every advertised name must
+      // be one the dispatcher will accept.
+      expect(
+        DISPATCH_TOOL_NAMES,
+        `tool '${name}' is not in DISPATCH_TOOL_NAMES`,
+      ).toContain(name);
     }
   });
 });

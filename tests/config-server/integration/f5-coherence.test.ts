@@ -34,7 +34,6 @@ import path from 'node:path';
 import {
   buildToolList,
   DISPATCH_TOOL_NAMES,
-  F2_TOOL_NAMES,
 } from '../../../src/config-server/index.js';
 import {
   ResolvedConfigCache,

@@ -37,7 +37,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { F2_TOOL_NAMES } from '../../../src/config-server/index.js';
+import { DISPATCH_TOOL_NAMES } from '../../../src/config-server/index.js';
 import { initGitRepo, useTempModuleStateStore } from '../../helpers/module-state-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -228,7 +228,13 @@ describe('integration: MCP handshake (subprocess)', () => {
     expect(names).not.toContain('getOverlayField');
     expect(names).not.toContain('getStackConventions');
     for (const name of names) {
-      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+      // The dispatcher unions F2 with R5 (trustList) and the run-context
+      // tools; the F2-only assertion would re-fail every additive tool
+      // group after R5. The dispatch set is the broader invariant.
+      expect(
+        DISPATCH_TOOL_NAMES,
+        `tool '${name}' is not in DISPATCH_TOOL_NAMES`,
+      ).toContain(name);
     }
 
     rpc.send({
