@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /*
- * Regression check: no second MCP server is registered, and the package
- * version stays on 0.1.0 (the bump is sprint 6 work). Loads ./package.json
- * from cwd, asserts the bin map set-equals { claudeagents-config-server, gan }
- * and version === '0.1.0'. Exits non-zero on any deviation with a precise
- * message naming what diverged.
+ * Regression check: no second MCP server is registered.
+ * Loads ./package.json from cwd and asserts the bin map set-equals
+ * { claudeagents-config-server, gan }. Exits non-zero on any deviation
+ * with a precise message naming what diverged. The package version is
+ * deliberately NOT pinned here — version bumps are routine, the "no second
+ * MCP server" invariant is what this sentinel guards.
  *
  * Run from the worktree root: `node scripts/checks/no-second-mcp-server.mjs`.
  */
@@ -34,14 +35,6 @@ if (actualBins.length !== expectedBins.length || actualBins.some((n, i) => n !==
     `no-second-mcp-server: package.json bin set diverged. expected=[${expectedBins.join(
       ', ',
     )}] actual=[${actualBins.join(', ')}]`,
-  );
-  process.exit(1);
-}
-
-const expectedVersion = '0.1.0';
-if (pkg.version !== expectedVersion) {
-  console.error(
-    `no-second-mcp-server: package.json version diverged. expected=${expectedVersion} actual=${pkg.version}`,
   );
   process.exit(1);
 }
