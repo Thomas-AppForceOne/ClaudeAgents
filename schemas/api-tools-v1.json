@@ -137,6 +137,28 @@
         "type": "object"
       }
     },
+    "buildEvaluatorPlan": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "type": "object"
+          },
+          "sprintPlan": {
+            "type": "object"
+          },
+          "worktreeState": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "snapshot",
+          "sprintPlan",
+          "worktreeState"
+        ],
+        "type": "object"
+      }
+    },
     "buildLoopDetectedBody": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1040,6 +1062,7 @@
     "appendToModuleState",
     "appendToOverlayField",
     "appendToStackField",
+    "buildEvaluatorPlan",
     "buildLoopDetectedBody",
     "buildTrustEventBody",
     "buildValidationAbortBody",

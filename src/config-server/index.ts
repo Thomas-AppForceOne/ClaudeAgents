@@ -97,6 +97,7 @@ import {
   createSprintBudgetErrorTool as runCreateSprintBudgetError,
   detectEditOscillationTool as runDetectEditOscillation,
 } from './tools/safety.js';
+import { buildEvaluatorPlanTool as runBuildEvaluatorPlan } from './tools/evaluator-tools.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -199,10 +200,19 @@ export const SAFETY_TOOL_NAMES: readonly string[] = [
 ] as const;
 
 /**
+ * Tool names introduced by the runtime invocation bridge's evaluator-core
+ * surface — a single thin handler behind the shipped deterministic
+ * `buildEvaluatorPlan` library function. Kept in its own list so the
+ * additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ */
+export const EVALUATOR_TOOL_NAMES: readonly string[] = ['buildEvaluatorPlan'] as const;
+
+/**
  * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace
- * ∪ safety). A `tools/call` for a name outside this set is rejected as an
- * unknown tool. Note this is a superset of the *advertised* list —
- * advertising additionally requires a registered handler (see
+ * ∪ safety ∪ evaluator). A `tools/call` for a name outside this set is
+ * rejected as an unknown tool. Note this is a superset of the *advertised*
+ * list — advertising additionally requires a registered handler (see
  * {@link buildToolList}).
  */
 export const DISPATCH_TOOL_NAMES: readonly string[] = [
@@ -211,6 +221,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...RUN_CONTEXT_TOOL_NAMES,
   ...TRACE_TOOL_NAMES,
   ...SAFETY_TOOL_NAMES,
+  ...EVALUATOR_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -938,6 +949,29 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       });
     },
   },
+  buildEvaluatorPlan: {
+    // The library's three positional arguments (snapshot, sprintPlan,
+    // worktreeState) are carried on the MCP wire as one object with the same
+    // three named fields; the boundary asserts each is a plain non-array
+    // object so the library never sees a non-object where its sub-builders
+    // expect structured input. Field-level shape validation is the library's
+    // job — the boundary is presence + shape only.
+    required: ['snapshot', 'sprintPlan', 'worktreeState'],
+    handler: (args) => {
+      const snapshot = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'snapshot');
+      const sprintPlan = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'sprintPlan');
+      const worktreeState = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'worktreeState');
+      return runBuildEvaluatorPlan({
+        snapshot: snapshot as unknown as Parameters<typeof runBuildEvaluatorPlan>[0]['snapshot'],
+        sprintPlan: sprintPlan as unknown as Parameters<
+          typeof runBuildEvaluatorPlan
+        >[0]['sprintPlan'],
+        worktreeState: worktreeState as unknown as Parameters<
+          typeof runBuildEvaluatorPlan
+        >[0]['worktreeState'],
+      });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
@@ -1263,6 +1297,27 @@ function requireTraceDirArg(args: Record<string, unknown>, tool: string): string
     });
   }
   return v;
+}
+
+// Extract a required plain-object argument by name for the evaluator-plan
+// tool. The downstream library reads its three structured inputs
+// (snapshot, sprintPlan, worktreeState) by field; an array or non-object
+// value at the boundary would otherwise reach the library and surface as a
+// harder-to-trace failure, so the wrapper asserts the shape up front.
+function requirePlanObjectArg(
+  args: Record<string, unknown>,
+  tool: string,
+  fieldName: string,
+): Record<string, unknown> {
+  const v = args[fieldName];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: fieldName,
+      message: `Tool '${tool}' requires a '${fieldName}' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
 }
 
 // Require that `fieldName` is present (own key) and not `undefined`, returning
