@@ -1,6 +1,6 @@
 {
   "name": "@claudeagents/config-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ClaudeAgents config MCP server (R1 skeleton).",
   "private": true,
   "type": "module",

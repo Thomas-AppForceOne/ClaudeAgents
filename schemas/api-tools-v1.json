@@ -2,7 +2,7 @@
   "$id": "https://claudeagents.dev/schemas/api-tools-v1.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool except `getApiVersion` takes at minimum `projectRoot: string`. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
+  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. The catalog spans two classes of tools: project-rooted tools take at minimum `projectRoot: string` (except `getApiVersion`, which takes no arguments); run-scoped tools introduced by R7 take `runDir` and/or `repoKey` instead of `projectRoot` — see each tool's `inputSchema` for the authoritative shape. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
   "properties": {
     "acquireRunLock": {
       "inputSchema": {
