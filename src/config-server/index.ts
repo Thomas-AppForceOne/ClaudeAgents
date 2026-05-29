@@ -76,6 +76,19 @@ import {
   acquireRunLockTool as runAcquireRunLock,
   releaseRunLockTool as runReleaseRunLock,
 } from './tools/run-lock.js';
+import {
+  aggregateRunSummaryTool as runAggregateRunSummary,
+  buildLoopDetectedBodyTool as runBuildLoopDetectedBody,
+  buildTrustEventBodyTool as runBuildTrustEventBody,
+  buildValidationAbortBodyTool as runBuildValidationAbortBody,
+  buildValidationAbortFromCodeTool as runBuildValidationAbortFromCode,
+  emitTraceEventTool as runEmitTraceEvent,
+  formatHeartbeatTool as runFormatHeartbeat,
+  formatLlmCallSummaryTool as runFormatLlmCallSummary,
+  reconcileTraceIndexTool as runReconcileTraceIndex,
+  reconstructRecoveryStateTool as runReconstructRecoveryState,
+  runSprintSummaryTool as runRunSprintSummary,
+} from './tools/trace.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -85,7 +98,6 @@ import {
  * shown to clients.
  */
 export const F2_TOOL_NAMES: readonly string[] = [
-
   'getApiVersion',
   'getResolvedConfig',
   'getStack',
@@ -140,8 +152,28 @@ export const RUN_CONTEXT_TOOL_NAMES: readonly string[] = [
 ] as const;
 
 /**
- * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context). A
- * `tools/call` for a name outside this set is rejected as an unknown tool.
+ * Tool names introduced by the runtime invocation bridge's trace surface —
+ * the eleven thin handlers behind the shared trace library functions. Kept
+ * in its own list so the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ */
+export const TRACE_TOOL_NAMES: readonly string[] = [
+  'emitTraceEvent',
+  'runSprintSummary',
+  'formatHeartbeat',
+  'formatLlmCallSummary',
+  'aggregateRunSummary',
+  'reconcileTraceIndex',
+  'reconstructRecoveryState',
+  'buildTrustEventBody',
+  'buildValidationAbortBody',
+  'buildValidationAbortFromCode',
+  'buildLoopDetectedBody',
+] as const;
+
+/**
+ * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace).
+ * A `tools/call` for a name outside this set is rejected as an unknown tool.
  * Note this is a superset of the *advertised* list — advertising additionally
  * requires a registered handler (see {@link buildToolList}).
  */
@@ -149,6 +181,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...F2_TOOL_NAMES,
   ...R5_TOOL_NAMES,
   ...RUN_CONTEXT_TOOL_NAMES,
+  ...TRACE_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -274,7 +307,6 @@ export async function createMcpServer(): Promise<Server> {
   const logger = getLogger();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-
     const tools = buildToolList().map(({ name, description, inputSchema }) => ({
       name,
       description,
@@ -675,6 +707,117 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runReleaseRunLock({ repoKey });
     },
   },
+  emitTraceEvent: {
+    required: ['runDir', 'event'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'emitTraceEvent');
+      const event = requireEventPayload(args, 'emitTraceEvent');
+      // The shipped library validates the event shape on reconcile (the
+      // schema-check pass); the boundary asserts presence + object shape
+      // and leaves field-level validation to the library, so the cast here
+      // is safe by construction.
+      return runEmitTraceEvent({
+        runDir,
+        event: event as unknown as Parameters<typeof runEmitTraceEvent>[0]['event'],
+      });
+    },
+  },
+  runSprintSummary: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'runSprintSummary');
+      return runRunSprintSummary({ runDir });
+    },
+  },
+  formatHeartbeat: {
+    required: ['role'],
+    handler: (args) => {
+      const role = requireRoleArg(args, 'formatHeartbeat');
+      return runFormatHeartbeat({ role });
+    },
+  },
+  formatLlmCallSummary: {
+    required: ['metrics'],
+    handler: (args) => {
+      const metrics = requireMetricsArg(args, 'formatLlmCallSummary');
+      // The downstream formatter reads only the documented LlmCallMetrics
+      // fields; extra keys on the boundary object are silently ignored.
+      return runFormatLlmCallSummary({
+        metrics: metrics as unknown as Parameters<typeof runFormatLlmCallSummary>[0]['metrics'],
+      });
+    },
+  },
+  aggregateRunSummary: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'aggregateRunSummary');
+      return runAggregateRunSummary({ runDir });
+    },
+  },
+  reconcileTraceIndex: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconcileTraceIndex');
+      return runReconcileTraceIndex({ runDir });
+    },
+  },
+  reconstructRecoveryState: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconstructRecoveryState');
+      return runReconstructRecoveryState({ runDir });
+    },
+  },
+  buildTrustEventBody: {
+    required: ['resolution'],
+    handler: (args) => {
+      const resolution = requireTrustResolutionArg(args, 'buildTrustEventBody');
+      return runBuildTrustEventBody({
+        resolution: resolution as unknown as Parameters<
+          typeof runBuildTrustEventBody
+        >[0]['resolution'],
+      });
+    },
+  },
+  buildValidationAbortBody: {
+    required: ['stage', 'error'],
+    handler: (args) => {
+      const stage = requireValidationStageArg(args, 'buildValidationAbortBody');
+      const error = requireF2ErrorArg(args, 'buildValidationAbortBody');
+      return runBuildValidationAbortBody({
+        stage: stage as unknown as Parameters<typeof runBuildValidationAbortBody>[0]['stage'],
+        error: error as unknown as Parameters<typeof runBuildValidationAbortBody>[0]['error'],
+      });
+    },
+  },
+  buildValidationAbortFromCode: {
+    required: ['stage', 'code'],
+    handler: (args) => {
+      const stage = requireValidationStageArg(args, 'buildValidationAbortFromCode');
+      const code = requireErrorCodeArg(args, 'buildValidationAbortFromCode');
+      const details = optionalErrorDetailsArg(args);
+      const typedStage = stage as unknown as Parameters<
+        typeof runBuildValidationAbortFromCode
+      >[0]['stage'];
+      const typedCode = code as unknown as Parameters<
+        typeof runBuildValidationAbortFromCode
+      >[0]['code'];
+      return runBuildValidationAbortFromCode(
+        details !== undefined
+          ? { stage: typedStage, code: typedCode, details }
+          : { stage: typedStage, code: typedCode },
+      );
+    },
+  },
+  buildLoopDetectedBody: {
+    required: ['halt'],
+    handler: (args) => {
+      const halt = requireLoopHaltArg(args, 'buildLoopDetectedBody');
+      return runBuildLoopDetectedBody({
+        halt: halt as unknown as Parameters<typeof runBuildLoopDetectedBody>[0]['halt'],
+      });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
@@ -786,6 +929,153 @@ function readValue(args: Record<string, unknown>, key: string = 'value'): unknow
   return args[key];
 }
 
+// Extract a required non-empty `runDir` string for the trace tools. runDir
+// is the run's directory under the store; the handler joins 'trace' to it
+// internally, so the caller cannot misroute the trace by passing a
+// trace-root-shaped path.
+function requireRunDir(args: Record<string, unknown>, tool: string): string {
+  const s = args['runDir'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'runDir',
+      message: `Tool '${tool}' requires a non-empty 'runDir' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract a required event payload (any plain object) — the library
+// overwrites `sequenceNumber` and validates against the trace schema on
+// reconcile, so the boundary only enforces presence + shape (must be a
+// non-array object).
+function requireEventPayload(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['event'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'event',
+      message: `Tool '${tool}' requires an 'event' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required non-empty `role` string for formatHeartbeat. The
+// formatter accepts any string but the boundary rejects an empty role so
+// the heartbeat line cannot widen into a confusing `[] thinking...`.
+function requireRoleArg(args: Record<string, unknown>, tool: string): string {
+  const s = args['role'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'role',
+      message: `Tool '${tool}' requires a non-empty 'role' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract the `metrics` object for formatLlmCallSummary — the formatter
+// reads only the documented LlmCallMetrics fields, so any extra keys the
+// caller mistakenly attaches (e.g. raw prompt text) are silently dropped
+// by the formatter, preserving the metadata-only contract.
+function requireMetricsArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['metrics'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'metrics',
+      message: `Tool '${tool}' requires a 'metrics' object in its input.`,
+    });
+  }
+  // Cast to the typed shape downstream; the formatter only reads the
+  // documented LlmCallMetrics fields and ignores extras.
+  return v as Record<string, unknown>;
+}
+
+// Extract the `resolution` object for buildTrustEventBody. The downstream
+// builder is a pure mapping; the boundary check is presence + shape.
+function requireTrustResolutionArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['resolution'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'resolution',
+      message: `Tool '${tool}' requires a 'resolution' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract the validation stage discriminant for the abort-body builders.
+// The library accepts any string but the boundary documents the closed set.
+function requireValidationStageArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['stage'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'stage',
+      message: `Tool '${tool}' requires a non-empty 'stage' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract the F2-like error object for buildValidationAbortBody.
+function requireF2ErrorArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['error'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'error',
+      message: `Tool '${tool}' requires an 'error' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required error-code string. The code is forwarded to
+// createError, which validates it against the closed ErrorCode union; the
+// boundary check is presence + string shape only.
+function requireErrorCodeArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['code'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'code',
+      message: `Tool '${tool}' requires a non-empty 'code' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Read an optional error-details object for buildValidationAbortFromCode.
+function optionalErrorDetailsArg(
+  args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const v = args['details'];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined;
+  return v as Record<string, unknown>;
+}
+
+// Extract the LoopDetectionHalt object for buildLoopDetectedBody.
+function requireLoopHaltArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['halt'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'halt',
+      message: `Tool '${tool}' requires a 'halt' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
 // Require that `fieldName` is present (own key) and not `undefined`, returning
 // its value, or throw MalformedInput. Unlike a type check this permits any
 // value — including `null`/`false`/`0`/`""` — so a deliberate falsy payload is
@@ -846,12 +1136,10 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       continue;
     }
     if (k === 'key') {
-
       out['keyPresent'] = typeof args[k] === 'string';
       continue;
     }
     if (k === 'entryKey') {
-
       out['entryKeyPresent'] = typeof args[k] === 'string';
       continue;
     }
@@ -951,7 +1239,6 @@ export async function runCli(): Promise<void> {
 const invokedAsBin = (() => {
   if (typeof process.argv[1] !== 'string') return false;
   try {
-
     const here = fileURLToPath(import.meta.url);
     let entry = path.resolve(process.argv[1]);
     try {

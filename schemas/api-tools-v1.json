@@ -24,6 +24,21 @@
         "type": "object"
       }
     },
+    "aggregateRunSummary": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "appendToModuleState": {
       "inputSchema": {
         "additionalProperties": false,
@@ -122,6 +137,76 @@
         "type": "object"
       }
     },
+    "buildLoopDetectedBody": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "halt": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "halt"
+        ],
+        "type": "object"
+      }
+    },
+    "buildTrustEventBody": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "resolution": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "resolution"
+        ],
+        "type": "object"
+      }
+    },
+    "buildValidationAbortBody": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "stage": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "error"
+        ],
+        "type": "object"
+      }
+    },
+    "buildValidationAbortFromCode": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          },
+          "stage": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "code"
+        ],
+        "type": "object"
+      }
+    },
     "createRunWorkspace": {
       "inputSchema": {
         "additionalProperties": false,
@@ -145,6 +230,54 @@
         "required": [
           "subject",
           "runId"
+        ],
+        "type": "object"
+      }
+    },
+    "emitTraceEvent": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "object"
+          },
+          "runDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir",
+          "event"
+        ],
+        "type": "object"
+      }
+    },
+    "formatHeartbeat": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      }
+    },
+    "formatLlmCallSummary": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "metrics"
         ],
         "type": "object"
       }
@@ -391,6 +524,36 @@
         "type": "object"
       }
     },
+    "reconcileTraceIndex": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
+    "reconstructRecoveryState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "registerModule": {
       "inputSchema": {
         "additionalProperties": false,
@@ -547,6 +710,21 @@
           }
         },
         "required": [],
+        "type": "object"
+      }
+    },
+    "runSprintSummary": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
         "type": "object"
       }
     },
@@ -734,10 +912,18 @@
   },
   "required": [
     "acquireRunLock",
+    "aggregateRunSummary",
     "appendToModuleState",
     "appendToOverlayField",
     "appendToStackField",
+    "buildLoopDetectedBody",
+    "buildTrustEventBody",
+    "buildValidationAbortBody",
+    "buildValidationAbortFromCode",
     "createRunWorkspace",
+    "emitTraceEvent",
+    "formatHeartbeat",
+    "formatLlmCallSummary",
     "getActiveStacks",
     "getApiVersion",
     "getBoundedDirectoryListing",
@@ -752,12 +938,15 @@
     "getTrustDiff",
     "getTrustState",
     "listModules",
+    "reconcileTraceIndex",
+    "reconstructRecoveryState",
     "registerModule",
     "releaseRunLock",
     "removeFromModuleState",
     "removeFromOverlayField",
     "removeFromStackField",
     "resolveRunStore",
+    "runSprintSummary",
     "setModuleState",
     "setOverlayField",
     "trustApprove",
