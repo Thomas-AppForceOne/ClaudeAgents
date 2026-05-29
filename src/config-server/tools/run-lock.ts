@@ -16,10 +16,7 @@
  * stateless alternative; both the handle and path forms funnel through the
  * same `releaseRunLockAtPath` to keep "one implementation per invariant".
  */
-import {
-  resolveRunLockPath,
-  resolveStoreRoot,
-} from '../storage/run-store.js';
+import { resolveRunLockPath, resolveStoreRoot } from '../storage/run-store.js';
 import {
   acquireRunLock as libraryAcquireRunLock,
   releaseRunLockAtPath as libraryReleaseRunLockAtPath,
@@ -76,9 +73,7 @@ export type AcquireRunLockResult = RunLockHandle;
  *   held by a live pid — propagated from the library through the F2 error
  *   factory.
  */
-export function acquireRunLockTool(
-  input: AcquireRunLockInput,
-): AcquireRunLockResult {
+export function acquireRunLockTool(input: AcquireRunLockInput): AcquireRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
   return libraryAcquireRunLock({ lockPath, runId: input.runId });
 }
@@ -122,9 +117,7 @@ export interface ReleaseRunLockResult {
  * @param input see {@link ReleaseRunLockInput}.
  * @returns `{ lockPath }` — the path the release targeted.
  */
-export function releaseRunLockTool(
-  input: ReleaseRunLockInput,
-): ReleaseRunLockResult {
+export function releaseRunLockTool(input: ReleaseRunLockInput): ReleaseRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
   libraryReleaseRunLockAtPath(lockPath);
   return { lockPath };

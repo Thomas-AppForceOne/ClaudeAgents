@@ -13,14 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -135,9 +128,7 @@ describe('resolveRunStore tool — purity and addressability', () => {
     // Join the same components the tool returned and assert string-equal;
     // this catches a future refactor that subtly diverges runDir from the
     // documented shape (e.g. drops the 'runs' segment).
-    expect(result.runDir).toBe(
-      path.join(result.storeRoot, result.repoKey, 'runs', result.runId),
-    );
+    expect(result.runDir).toBe(path.join(result.storeRoot, result.repoKey, 'runs', result.runId));
   });
 
   it('returned repoKey is byte-identical to a direct computeRepoKey import', () => {

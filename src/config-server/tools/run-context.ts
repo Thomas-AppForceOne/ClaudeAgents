@@ -24,10 +24,7 @@ import {
   resolveRunStore as libraryResolveRunStore,
   type ResolvedRunStore,
 } from '../storage/run-store.js';
-import {
-  resolveWorkspace,
-  type ResolvedWorkspace,
-} from '../storage/worktree-resolver.js';
+import { resolveWorkspace, type ResolvedWorkspace } from '../storage/worktree-resolver.js';
 
 /**
  * Input to {@link resolveRunStoreTool}.
@@ -76,9 +73,7 @@ export interface ResolveRunStoreResult extends ResolvedRunStore {
  * @throws when `fromDir` (or `process.cwd()`) is not inside a git repository,
  *   propagated from the library worktree-root discovery.
  */
-export function resolveRunStoreTool(
-  input: ResolveRunStoreInput = {},
-): ResolveRunStoreResult {
+export function resolveRunStoreTool(input: ResolveRunStoreInput = {}): ResolveRunStoreResult {
   // Mint when the caller did not pass one. Doing the mint in the tool layer
   // (rather than the library) is what makes the same tool call valid at both
   // run start ("give me a fresh runId") and recovery ("re-resolve this id") —
@@ -136,9 +131,7 @@ export interface CreateRunWorkspaceInput {
  *   has uncommitted changes; git command failures propagate. (Errors come
  *   from the underlying library; this handler adds no error vocabulary.)
  */
-export function createRunWorkspaceTool(
-  input: CreateRunWorkspaceInput,
-): ResolvedWorkspace {
+export function createRunWorkspaceTool(input: CreateRunWorkspaceInput): ResolvedWorkspace {
   // Derive projectRoot from the same library function resolveRunStore uses, so
   // the worktree always lands under the run's repo regardless of what the
   // markdown orchestrator might otherwise pass. resolveRunStoreTool gives us
