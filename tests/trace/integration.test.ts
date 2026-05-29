@@ -29,6 +29,7 @@ import {
   buildValidationAbortBody,
   buildValidationAbortFromCode,
 } from '../../src/trace/integration.js';
+import { aggregateSprintSummary } from '../../src/trace/progress.js';
 import { createError } from '../../src/config-server/errors.js';
 import { getRunTraceValidator } from '../../src/config-server/validation/schema-check.js';
 
@@ -189,5 +190,92 @@ describe('validation_abort_builder_preserves_f2_payload_verbatim', () => {
     const body = buildValidationAbortBody('config', plain);
     expect(body.errorCode).toBe('CustomCode');
     expect(body.errorPayload).toEqual(plain);
+  });
+});
+
+/**
+ * Sprint-2 additive: the `toolCalls` counter on aggregateSprintSummary +
+ * SprintSummaryAggregate. The field is the lone new domain logic R7
+ * introduces; the test pins the three property claims (a) the field
+ * exists on the returned aggregate, (b) it equals the count of `toolCall`
+ * events in the input, (c) it is 0 on a trace with no `toolCall` events.
+ *
+ * The extension uses the same `aggregateSprintSummary` import the rest of
+ * the suite uses — no second counting loop is added; the criterion's
+ * "single-implementation" claim is pinned by inspection of the source
+ * file (one counting loop in src/trace/progress.ts).
+ */
+describe('toolCalls counter — additive on aggregateSprintSummary', () => {
+  const baseEnv = {
+    timestamp: '2026-05-22T17:00:00.000Z',
+    runId: RUN_ID,
+  };
+
+  it('toolCalls field exists on the SprintSummaryAggregate', () => {
+    const summary = aggregateSprintSummary([]);
+    expect(summary).toHaveProperty('toolCalls');
+    expect(summary.toolCalls).toBe(0);
+  });
+
+  it('toolCalls equals the count of toolCall events in the input', () => {
+    const events = [
+      {
+        ...baseEnv,
+        sequenceNumber: 0,
+        eventType: 'toolCall',
+        tool: 'someTool',
+        role: 'gan-generator',
+        argumentsRef: 'payloads/0-gan-generator-arguments.json',
+        resultRef: 'payloads/0-gan-generator-result.json',
+        disposition: 'completed',
+        latencyMs: 5,
+      },
+      {
+        ...baseEnv,
+        sequenceNumber: 1,
+        eventType: 'toolCall',
+        tool: 'otherTool',
+        role: 'gan-generator',
+        argumentsRef: 'payloads/1-gan-generator-arguments.json',
+        resultRef: 'payloads/1-gan-generator-result.json',
+        disposition: 'completed',
+        latencyMs: 10,
+      },
+      {
+        ...baseEnv,
+        sequenceNumber: 2,
+        eventType: 'agentAttempt',
+        role: 'gan-generator',
+        attemptNumber: 1,
+        inputDigest: 'a'.repeat(64),
+        outputArtifactPath: 'attempt-0.md',
+        disposition: 'completed',
+      },
+    ];
+    // The events are stripped to the fields the aggregator reads; the
+    // cast is safe because aggregateSprintSummary discriminates on
+    // eventType and reads only documented fields.
+    const summary = aggregateSprintSummary(
+      events as unknown as Parameters<typeof aggregateSprintSummary>[0],
+    );
+    expect(summary.toolCalls).toBe(2);
+    expect(summary.agents).toBe(1);
+    expect(summary.calls).toBe(0);
+  });
+
+  it('toolCalls is 0 on a trace with no toolCall events', () => {
+    const summary = aggregateSprintSummary([
+      {
+        ...baseEnv,
+        sequenceNumber: 0,
+        eventType: 'agentAttempt',
+        role: 'gan-generator',
+        attemptNumber: 1,
+        inputDigest: 'a'.repeat(64),
+        outputArtifactPath: 'attempt-0.md',
+        disposition: 'completed',
+      },
+    ] as unknown as Parameters<typeof aggregateSprintSummary>[0]);
+    expect(summary.toolCalls).toBe(0);
   });
 });

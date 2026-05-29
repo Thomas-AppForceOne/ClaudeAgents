@@ -85,9 +85,25 @@ export {
   aggregateSprintSummary,
   formatSprintSummary,
   formatSprintSummaryFromEvents,
+  runSprintSummary,
+  aggregateRunSummary,
   type LlmCallMetrics,
   type SprintSummaryAggregate,
+  type RunSummaryAggregate,
 } from './progress.js';
+
+export {
+  appendTraceEvent,
+  type AppendTraceEventResult,
+  type AppendTraceEventError,
+  type TraceEventInput,
+} from './append.js';
+
+export {
+  incrementDroppedEmits,
+  getDroppedEmits,
+  resetDroppedEmitsForTests,
+} from './dropped-emits.js';
 
 export {
   verifyEvidenceBundle,
