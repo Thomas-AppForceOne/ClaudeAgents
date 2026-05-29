@@ -350,6 +350,10 @@ describe('emit failure — non-agentAttempt does not abort the run; droppedEmits
     expect(res.ok).toBe(false);
     expect(typeof res.warning).toBe('string');
     expect(getDroppedEmits(runDir)).toBe(before + 1);
+    // The drop result surfaces the post-increment tally so a caller does not
+    // need a second tool call to learn the count.
+    expect(res.droppedEmits).toBe(getDroppedEmits(runDir));
+    expect(res.droppedEmits).toBeGreaterThan(0);
 
     chmodSync(path.join(runDir, 'trace', 'events'), 0o700);
   });
@@ -418,6 +422,10 @@ describe('agentAttempt emit failure retries once then surfaces structured warnin
     // more than one extra.
     expect(attempts).toBe(2);
     expect(mockedDroppedEmits.getDroppedEmits(runDir)).toBe(1);
+    // The drop result surfaces the post-increment tally from the mocked
+    // dropped-emits module so the caller sees the count in-band.
+    expect(res.droppedEmits).toBe(mockedDroppedEmits.getDroppedEmits(runDir));
+    expect(res.droppedEmits).toBeGreaterThan(0);
 
     vi.doUnmock('../../../src/trace/append.js');
     vi.resetModules();

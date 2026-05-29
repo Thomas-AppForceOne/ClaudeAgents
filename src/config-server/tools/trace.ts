@@ -25,7 +25,7 @@ import {
   type AppendTraceEventResult,
   type TraceEventInput,
 } from '../../trace/append.js';
-import { incrementDroppedEmits } from '../../trace/dropped-emits.js';
+import { getDroppedEmits, incrementDroppedEmits } from '../../trace/dropped-emits.js';
 import {
   buildLoopDetectedBody as libraryBuildLoopDetectedBody,
   buildTrustEventBody as libraryBuildTrustEventBody,
@@ -153,9 +153,9 @@ function buildDropResult(runDir: string, error: unknown): EmitTraceEventResult {
   // Re-read the tally rather than tracking it in a local — incrementDroppedEmits
   // is the single source of truth, and reading it back guarantees the result
   // reflects exactly what aggregateRunSummary will report on the same instant.
-  // Note: importing getDroppedEmits here would introduce a cycle with progress.ts;
-  // instead, we surface the warning string and let the caller call
-  // aggregateRunSummary if they need the precise count.
+  // Tally read via getDroppedEmits — dropped-emits.ts is a leaf module with
+  // zero imports, no cycle.
+  const droppedEmits = getDroppedEmits(runDir);
   const message =
     error instanceof Error
       ? error.message
@@ -163,6 +163,7 @@ function buildDropResult(runDir: string, error: unknown): EmitTraceEventResult {
   return {
     ok: false,
     warning: message,
+    droppedEmits,
   };
 }
 
