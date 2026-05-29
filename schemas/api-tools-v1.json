@@ -380,6 +380,126 @@
         "type": "object"
       }
     },
+    "dockerCheckContainerHealth": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expectStatus": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeoutSeconds": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "port",
+          "path",
+          "expectStatus",
+          "timeoutSeconds"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerContainerName": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerDiscoverPort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "containerPattern": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "envVar": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fallbackPort": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "dockerReleasePort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath",
+          "port"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerReservePort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "containerName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath",
+          "port",
+          "containerName"
+        ],
+        "type": "object"
+      }
+    },
     "emitTraceEvent": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1074,6 +1194,11 @@
     "createRunWorkspace",
     "createSprintBudgetError",
     "detectEditOscillation",
+    "dockerCheckContainerHealth",
+    "dockerContainerName",
+    "dockerDiscoverPort",
+    "dockerReleasePort",
+    "dockerReservePort",
     "emitTraceEvent",
     "formatHeartbeat",
     "formatLlmCallSummary",

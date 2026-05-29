@@ -98,6 +98,20 @@ import {
   detectEditOscillationTool as runDetectEditOscillation,
 } from './tools/safety.js';
 import { buildEvaluatorPlanTool as runBuildEvaluatorPlan } from './tools/evaluator-tools.js';
+// Docker tool handlers are intentionally imported from the local tools file
+// (which uses dynamic `import()` per-handler) rather than from
+// `../modules/docker/*` directly. A top-level static import of any path under
+// `src/modules/docker/*` would execute that module's import-time
+// `docker --version` prerequisite check, crashing every config tool on every
+// host without a docker binary. The static-scan guard in the docker tool
+// tests pins this property as a regression.
+import {
+  dockerCheckContainerHealth as runDockerCheckContainerHealth,
+  dockerContainerName as runDockerContainerName,
+  dockerDiscoverPort as runDockerDiscoverPort,
+  dockerReleasePort as runDockerReleasePort,
+  dockerReservePort as runDockerReservePort,
+} from './tools/docker-tools.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -209,9 +223,26 @@ export const SAFETY_TOOL_NAMES: readonly string[] = [
 export const EVALUATOR_TOOL_NAMES: readonly string[] = ['buildEvaluatorPlan'] as const;
 
 /**
+ * Tool names introduced by the runtime invocation bridge's docker-module
+ * surface — five thin, lazy-loaded wrappers over the shipped docker module
+ * library functions (`PortRegistry.register` / `.release`, `discoverPort`,
+ * `waitForHealthy`, `nameForWorktree`). Kept in its own list so the additive
+ * surface stays auditable; unioned into {@link DISPATCH_TOOL_NAMES}. Each
+ * handler dynamically imports its library function inside the handler body
+ * so the server boots cleanly on a host without a `docker` binary.
+ */
+export const DOCKER_TOOL_NAMES: readonly string[] = [
+  'dockerReservePort',
+  'dockerReleasePort',
+  'dockerDiscoverPort',
+  'dockerCheckContainerHealth',
+  'dockerContainerName',
+] as const;
+
+/**
  * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace
- * ∪ safety ∪ evaluator). A `tools/call` for a name outside this set is
- * rejected as an unknown tool. Note this is a superset of the *advertised*
+ * ∪ safety ∪ evaluator ∪ docker). A `tools/call` for a name outside this set
+ * is rejected as an unknown tool. Note this is a superset of the *advertised*
  * list — advertising additionally requires a registered handler (see
  * {@link buildToolList}).
  */
@@ -222,6 +253,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...TRACE_TOOL_NAMES,
   ...SAFETY_TOOL_NAMES,
   ...EVALUATOR_TOOL_NAMES,
+  ...DOCKER_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -972,6 +1004,83 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       });
     },
   },
+  dockerReservePort: {
+    // Caller-supplies-port semantics: the registry refuses cross-worktree
+    // collisions via PortInUse; no free-port allocator is implied. The
+    // wrapper's dynamic import inside the handler is what keeps the docker
+    // module's import-time prerequisite check from running at server boot.
+    required: ['worktreePath', 'port', 'containerName'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerReservePort');
+      const port = requirePortArg(args, 'dockerReservePort');
+      const containerName = requireContainerNameArg(args, 'dockerReservePort');
+      return runDockerReservePort({ worktreePath, port, containerName });
+    },
+  },
+  dockerReleasePort: {
+    // The library's release(worktreePath) keys on the worktree alone; the
+    // tool surface carries port for catalog symmetry with reserve.
+    required: ['worktreePath', 'port'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerReleasePort');
+      const port = requirePortArg(args, 'dockerReleasePort');
+      return runDockerReleasePort({ worktreePath, port });
+    },
+  },
+  dockerDiscoverPort: {
+    // Every layer input is optional; the library skips a layer whose inputs
+    // are absent. No fields are required at the dispatch level so the
+    // declarative tool surface matches the library's behaviour — a no-arg
+    // call exhausts every layer and throws PortNotDiscovered.
+    required: [],
+    handler: (args) => {
+      const input: Parameters<typeof runDockerDiscoverPort>[0] = {};
+      const envVar = args['envVar'];
+      if (typeof envVar === 'string' && envVar.length > 0) input.envVar = envVar;
+      const worktreePath = args['worktreePath'];
+      if (typeof worktreePath === 'string' && worktreePath.length > 0) {
+        input.worktreePath = worktreePath;
+      }
+      const containerPattern = args['containerPattern'];
+      if (typeof containerPattern === 'string' && containerPattern.length > 0) {
+        input.containerPattern = containerPattern;
+      }
+      const fallbackPort = args['fallbackPort'];
+      if (typeof fallbackPort === 'number' && Number.isFinite(fallbackPort)) {
+        input.fallbackPort = fallbackPort;
+      }
+      return runDockerDiscoverPort(input);
+    },
+  },
+  dockerCheckContainerHealth: {
+    // Wraps waitForHealthy(port, options). The contract acknowledged
+    // ambiguity between {containerName} and {port,...}; this surface is
+    // pinned to the library's port-based shape to keep the wrapper
+    // free of new domain logic (a containerName-to-port resolution layer
+    // would add behaviour beyond the library).
+    required: ['port', 'path', 'expectStatus', 'timeoutSeconds'],
+    handler: (args) => {
+      const port = requirePortArg(args, 'dockerCheckContainerHealth');
+      const pathArg = requireHttpPathArg(args, 'dockerCheckContainerHealth');
+      const expectStatus = requireExpectStatusArg(args, 'dockerCheckContainerHealth');
+      const timeoutSeconds = requireTimeoutSecondsArg(args, 'dockerCheckContainerHealth');
+      return runDockerCheckContainerHealth({
+        port,
+        path: pathArg,
+        expectStatus,
+        timeoutSeconds,
+      });
+    },
+  },
+  dockerContainerName: {
+    // Wraps nameForWorktree(worktreePath). Deterministic, pure; the library
+    // canonicalises internally so the wrapper does no pre-processing.
+    required: ['worktreePath'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerContainerName');
+      return runDockerContainerName({ worktreePath });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
@@ -1318,6 +1427,100 @@ function requirePlanObjectArg(
     });
   }
   return v as Record<string, unknown>;
+}
+
+// Extract a required non-empty worktreePath string. The library
+// canonicalises internally, so the boundary only asserts presence + string
+// shape. Empty strings are rejected up front because a blank worktree key
+// would collapse multiple distinct workspaces into one registry slot.
+function requireWorktreePathArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['worktreePath'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'worktreePath',
+      message: `Tool '${tool}' requires a non-empty 'worktreePath' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required integer-shaped port in the valid host-port range. A
+// fractional or out-of-range value is rejected at the boundary so the
+// library never sees a value it cannot honour as a TCP port.
+function requirePortArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['port'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 65535) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'port',
+      message: `Tool '${tool}' requires an integer 'port' in 0..65535.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required non-empty containerName string. The library's
+// PortRegistry stores this string verbatim; the boundary rejects empty
+// strings so a registry entry never carries an unusable name.
+function requireContainerNameArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['containerName'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'containerName',
+      message: `Tool '${tool}' requires a non-empty 'containerName' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required non-empty HTTP path string for the health check. A
+// path missing its leading slash would still construct a syntactically
+// valid URL but with surprising parse results; rejecting an empty string is
+// the minimal guard that preserves the library's URL templating.
+function requireHttpPathArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['path'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'path',
+      message: `Tool '${tool}' requires a non-empty 'path' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required integer HTTP status code. The library compares this to
+// the live response's `status`, which is itself integer-typed; pinning the
+// type at the boundary prevents an accidental string from silently failing
+// every equality check inside the polling loop.
+function requireExpectStatusArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['expectStatus'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 100 || v > 599) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'expectStatus',
+      message: `Tool '${tool}' requires an integer 'expectStatus' in 100..599.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required non-negative finite timeout in seconds. A negative or
+// non-finite budget would make the library's totalBudgetMs computation
+// degenerate; the boundary pins the value at the same shape the library
+// safely consumes.
+function requireTimeoutSecondsArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['timeoutSeconds'];
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'timeoutSeconds',
+      message: `Tool '${tool}' requires a non-negative finite 'timeoutSeconds' number.`,
+    });
+  }
+  return v;
 }
 
 // Require that `fieldName` is present (own key) and not `undefined`, returning
