@@ -89,6 +89,14 @@ import {
   reconstructRecoveryStateTool as runReconstructRecoveryState,
   runSprintSummaryTool as runRunSprintSummary,
 } from './tools/trace.js';
+import {
+  checkRoleCeilingTool as runCheckRoleCeiling,
+  checkSprintBudgetTool as runCheckSprintBudget,
+  createEditOscillationErrorTool as runCreateEditOscillationError,
+  createLoopDetectedErrorTool as runCreateLoopDetectedError,
+  createSprintBudgetErrorTool as runCreateSprintBudgetError,
+  detectEditOscillationTool as runDetectEditOscillation,
+} from './tools/safety.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -172,16 +180,37 @@ export const TRACE_TOOL_NAMES: readonly string[] = [
 ] as const;
 
 /**
- * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace).
- * A `tools/call` for a name outside this set is rejected as an unknown tool.
- * Note this is a superset of the *advertised* list — advertising additionally
- * requires a registered handler (see {@link buildToolList}).
+ * Tool names introduced by the runtime invocation bridge's safety surface —
+ * the six thin handlers behind the shared safety library functions. Kept in
+ * its own list so the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch. The three halt-decision
+ * tools (`checkRoleCeiling`, `checkSprintBudget`, `detectEditOscillation`)
+ * and the three matching error-builder tools (`createLoopDetectedError`,
+ * `createSprintBudgetError`, `createEditOscillationError`) live together
+ * because they share the `LoopDetected` halt contract.
+ */
+export const SAFETY_TOOL_NAMES: readonly string[] = [
+  'checkRoleCeiling',
+  'checkSprintBudget',
+  'detectEditOscillation',
+  'createLoopDetectedError',
+  'createSprintBudgetError',
+  'createEditOscillationError',
+] as const;
+
+/**
+ * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace
+ * ∪ safety). A `tools/call` for a name outside this set is rejected as an
+ * unknown tool. Note this is a superset of the *advertised* list —
+ * advertising additionally requires a registered handler (see
+ * {@link buildToolList}).
  */
 export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...F2_TOOL_NAMES,
   ...R5_TOOL_NAMES,
   ...RUN_CONTEXT_TOOL_NAMES,
   ...TRACE_TOOL_NAMES,
+  ...SAFETY_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -818,6 +847,97 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       });
     },
   },
+  checkRoleCeiling: {
+    // `role` is the only structurally-mandatory field on the library's
+    // CheckRoleCeilingInput — `attemptState`, `ceilings`, and `evidence` are
+    // optional or undefined-permitting on the library side. The boundary
+    // honours the library's contract verbatim so a tool call's required-keys
+    // surface matches what a direct library import would accept.
+    required: ['role'],
+    handler: (args) => {
+      const role = requireRoleArg(args, 'checkRoleCeiling');
+      const input = args['input'];
+      // Allow both a flat-shaped call (role + attemptState/ceilings/evidence
+      // at the top) and a nested `input` object call. Either shape unpacks
+      // into the library's CheckRoleCeilingInput verbatim — the tool does no
+      // field renaming, just a passthrough.
+      const source =
+        input !== undefined && typeof input === 'object' && input !== null && !Array.isArray(input)
+          ? (input as Record<string, unknown>)
+          : args;
+      return runCheckRoleCeiling({
+        role,
+        attemptState: source['attemptState'] as Parameters<
+          typeof runCheckRoleCeiling
+        >[0]['attemptState'],
+        ceilings: source['ceilings'] as Parameters<typeof runCheckRoleCeiling>[0]['ceilings'],
+        evidence: source['evidence'] as Parameters<typeof runCheckRoleCeiling>[0]['evidence'],
+      });
+    },
+  },
+  checkSprintBudget: {
+    required: ['attemptStateByRole'],
+    handler: (args) => {
+      const stateMap = requireAttemptStateByRoleArg(args, 'checkSprintBudget');
+      const budgetRaw = args['budget'];
+      const budget =
+        typeof budgetRaw === 'number' && Number.isFinite(budgetRaw) ? budgetRaw : undefined;
+      const input: Parameters<typeof runCheckSprintBudget>[0] = {
+        attemptStateByRole: stateMap as Parameters<
+          typeof runCheckSprintBudget
+        >[0]['attemptStateByRole'],
+      };
+      if (budget !== undefined) input.budget = budget;
+      return runCheckSprintBudget(input);
+    },
+  },
+  detectEditOscillation: {
+    required: ['history'],
+    handler: (args) => {
+      const history = requireFingerprintHistoryArg(args, 'detectEditOscillation');
+      const ceilingRaw = args['oscillationDetection'];
+      const oscillationDetection =
+        typeof ceilingRaw === 'number' && Number.isFinite(ceilingRaw) ? ceilingRaw : undefined;
+      const input: Parameters<typeof runDetectEditOscillation>[0] = {
+        history: history as Parameters<typeof runDetectEditOscillation>[0]['history'],
+      };
+      if (oscillationDetection !== undefined) input.oscillationDetection = oscillationDetection;
+      return runDetectEditOscillation(input);
+    },
+  },
+  createLoopDetectedError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createLoopDetectedError');
+      const traceDir = requireTraceDirArg(args, 'createLoopDetectedError');
+      return runCreateLoopDetectedError({
+        fields: fields as unknown as Parameters<typeof runCreateLoopDetectedError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
+  createSprintBudgetError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createSprintBudgetError');
+      const traceDir = requireTraceDirArg(args, 'createSprintBudgetError');
+      return runCreateSprintBudgetError({
+        fields: fields as unknown as Parameters<typeof runCreateSprintBudgetError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
+  createEditOscillationError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createEditOscillationError');
+      const traceDir = requireTraceDirArg(args, 'createEditOscillationError');
+      return runCreateEditOscillationError({
+        fields: fields as unknown as Parameters<typeof runCreateEditOscillationError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
@@ -1074,6 +1194,75 @@ function requireLoopHaltArg(args: Record<string, unknown>, tool: string): Record
     });
   }
   return v as Record<string, unknown>;
+}
+
+// Extract the `attemptStateByRole` map for checkSprintBudget. The library
+// sums own keys via hasOwnProperty and skips forbidden-key entries; the
+// boundary only asserts the input is a plain object so the library never sees
+// a non-object value where it expects a map.
+function requireAttemptStateByRoleArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['attemptStateByRole'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'attemptStateByRole',
+      message: `Tool '${tool}' requires an 'attemptStateByRole' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract the fingerprint history array for detectEditOscillation. The
+// library compares opaque fingerprint strings positionally; the boundary
+// only asserts the input is an array so the library never sees a non-array
+// where it expects a positional history.
+function requireFingerprintHistoryArg(args: Record<string, unknown>, tool: string): unknown[] {
+  const v = args['history'];
+  if (!Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'history',
+      message: `Tool '${tool}' requires a 'history' array in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract the LoopDetectedFields object for the three error-builder tools.
+// The library reads the documented fields verbatim and constructs the error;
+// the boundary only asserts the input is a plain object so the library never
+// sees a non-object where it expects structured halt fields.
+function requireLoopDetectedFieldsArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['fields'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'fields',
+      message: `Tool '${tool}' requires a 'fields' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required non-empty `traceDir` string for the three error-builder
+// tools. traceDir is templated into the user-facing prose message; an empty
+// path would render a confusing message and the boundary rejects it up front.
+function requireTraceDirArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['traceDir'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'traceDir',
+      message: `Tool '${tool}' requires a non-empty 'traceDir' string in its input.`,
+    });
+  }
+  return v;
 }
 
 // Require that `fieldName` is present (own key) and not `undefined`, returning

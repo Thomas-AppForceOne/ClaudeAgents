@@ -207,6 +207,91 @@
         "type": "object"
       }
     },
+    "checkRoleCeiling": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptState": {
+            "type": "object"
+          },
+          "ceilings": {
+            "type": "object"
+          },
+          "evidence": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "input": {
+            "type": "object"
+          },
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      }
+    },
+    "checkSprintBudget": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptStateByRole": {
+            "type": "object"
+          },
+          "budget": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "attemptStateByRole"
+        ],
+        "type": "object"
+      }
+    },
+    "createEditOscillationError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
+    "createLoopDetectedError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
     "createRunWorkspace": {
       "inputSchema": {
         "additionalProperties": false,
@@ -230,6 +315,45 @@
         "required": [
           "subject",
           "runId"
+        ],
+        "type": "object"
+      }
+    },
+    "createSprintBudgetError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
+    "detectEditOscillation": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "history": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oscillationDetection": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "history"
         ],
         "type": "object"
       }
@@ -920,7 +1044,13 @@
     "buildTrustEventBody",
     "buildValidationAbortBody",
     "buildValidationAbortFromCode",
+    "checkRoleCeiling",
+    "checkSprintBudget",
+    "createEditOscillationError",
+    "createLoopDetectedError",
     "createRunWorkspace",
+    "createSprintBudgetError",
+    "detectEditOscillation",
     "emitTraceEvent",
     "formatHeartbeat",
     "formatLlmCallSummary",
