@@ -13,6 +13,12 @@ specifications/REVIEW_RESPONSE*.md
 .gan-state/
 .gan-cache/
 
+# Run artifacts from the user-level review skills (~/.claude/skills/review-*,
+# spec-review-*). Each invocation writes a timestamped subdir; they're local
+# scratch, not part of the repo.
+.claude/review-runs/
+.claude/spec-review-runs/
+
 # R1 toolchain artifacts.
 dist/
 node_modules/
