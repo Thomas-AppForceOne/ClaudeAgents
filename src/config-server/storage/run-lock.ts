@@ -226,8 +226,28 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
  * release-after-break are both safe.
  */
 export function releaseRunLock(handle: RunLockHandle): void {
+  releaseRunLockAtPath(handle.lockPath);
+}
+
+/**
+ * Release the repo's run lock when only the file path is known — the path
+ * form an MCP-tool pair uses, since a JS lock handle cannot survive the
+ * round-trip between two separate tool calls. Re-deriving the path from
+ * `repoKey` on the release side (the caller composes
+ * `resolveRunLockPath(resolveStoreRoot(), repoKey)`) is the documented stateless
+ * alternative to threading the handle; both the handle and path forms must
+ * funnel through the same delete to keep "one implementation per invariant".
+ *
+ * Idempotent for the same reason as {@link releaseRunLock}: an already-missing
+ * lock file (released, never acquired, or broken by another acquirer) is not an
+ * error here.
+ *
+ * @param lockPath the lock file path; typically built from
+ *   `resolveRunLockPath(storeRoot, repoKey)` on the caller side.
+ */
+export function releaseRunLockAtPath(lockPath: string): void {
   try {
-    unlinkSync(handle.lockPath);
+    unlinkSync(lockPath);
   } catch {
     // Already gone; nothing to release.
   }
