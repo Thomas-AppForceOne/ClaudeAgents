@@ -68,6 +68,14 @@ import {
   trustRevoke as runTrustRevoke,
   updateStackField as runUpdateStackField,
 } from './tools/writes.js';
+import {
+  createRunWorkspaceTool as runCreateRunWorkspace,
+  resolveRunStoreTool as runResolveRunStore,
+} from './tools/run-context.js';
+import {
+  acquireRunLockTool as runAcquireRunLock,
+  releaseRunLockTool as runReleaseRunLock,
+} from './tools/run-lock.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -119,12 +127,29 @@ export const F2_TOOL_NAMES: readonly string[] = [
 export const R5_TOOL_NAMES: readonly string[] = ['trustList'] as const;
 
 /**
- * Every tool name the dispatcher will accept (F2 ∪ R5). A `tools/call` for a
- * name outside this set is rejected as an unknown tool. Note this is a superset
- * of the *advertised* list — advertising additionally requires a registered
- * handler (see {@link buildToolList}).
+ * Tool names introduced by the runtime invocation bridge — the run-context
+ * resolver/creator pair and the release-by-key run-lock pair. Kept separate
+ * from {@link F2_TOOL_NAMES} so the additive surface stays auditable; unioned
+ * into {@link DISPATCH_TOOL_NAMES} for the actual dispatch.
  */
-export const DISPATCH_TOOL_NAMES: readonly string[] = [...F2_TOOL_NAMES, ...R5_TOOL_NAMES];
+export const RUN_CONTEXT_TOOL_NAMES: readonly string[] = [
+  'resolveRunStore',
+  'createRunWorkspace',
+  'acquireRunLock',
+  'releaseRunLock',
+] as const;
+
+/**
+ * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context). A
+ * `tools/call` for a name outside this set is rejected as an unknown tool.
+ * Note this is a superset of the *advertised* list — advertising additionally
+ * requires a registered handler (see {@link buildToolList}).
+ */
+export const DISPATCH_TOOL_NAMES: readonly string[] = [
+  ...F2_TOOL_NAMES,
+  ...R5_TOOL_NAMES,
+  ...RUN_CONTEXT_TOOL_NAMES,
+];
 
 // The slice of package.json this server cares about (name + version).
 interface PackageMeta {
@@ -196,7 +221,11 @@ export interface ToolListEntry {
  */
 export function buildToolList(): ToolListEntry[] {
   const props = (apiToolsV1.properties ?? {}) as Record<string, { inputSchema?: unknown }>;
-  return F2_TOOL_NAMES.filter((name) =>
+  // Advertise every dispatcher-known name (F2 + R5 + run-context) that has a
+  // registered handler. Earlier this filtered F2 names only, leaving R5 and
+  // later additive tools dispatchable-but-unadvertised; we expand to the full
+  // dispatch set so a markdown orchestrator can discover the run-context pair.
+  return DISPATCH_TOOL_NAMES.filter((name) =>
     Object.prototype.hasOwnProperty.call(TOOL_HANDLERS, name),
   ).map((name) => {
     const schemaEntry = props[name];
@@ -600,6 +629,52 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runRegisterModule({ projectRoot, name, manifest });
     },
   },
+  resolveRunStore: {
+    // Neither fromDir nor runId is required: a no-argument call mints a fresh
+    // runId and resolves from process.cwd(), the run-start shape. Recovery and
+    // cleanup pass an explicit runId; both shapes are valid.
+    required: [],
+    handler: (args) => {
+      const input: { fromDir?: string; runId?: string } = {};
+      const fromDir = args['fromDir'];
+      if (typeof fromDir === 'string' && fromDir.length > 0) input.fromDir = fromDir;
+      const runId = args['runId'];
+      if (typeof runId === 'string' && runId.length > 0) input.runId = runId;
+      return runResolveRunStore(input);
+    },
+  },
+  createRunWorkspace: {
+    required: ['subject', 'runId'],
+    handler: (args) => {
+      const subject = requireSubject(args, 'createRunWorkspace');
+      const runId = requireRunId(args, 'createRunWorkspace');
+      const input: {
+        subject: string;
+        runId: string;
+        fromDir?: string;
+        newWorktree?: boolean;
+      } = { subject, runId };
+      const fromDir = args['fromDir'];
+      if (typeof fromDir === 'string' && fromDir.length > 0) input.fromDir = fromDir;
+      if (typeof args['newWorktree'] === 'boolean') input.newWorktree = args['newWorktree'];
+      return runCreateRunWorkspace(input);
+    },
+  },
+  acquireRunLock: {
+    required: ['repoKey', 'runId'],
+    handler: (args) => {
+      const repoKey = requireRepoKey(args, 'acquireRunLock');
+      const runId = requireRunId(args, 'acquireRunLock');
+      return runAcquireRunLock({ repoKey, runId });
+    },
+  },
+  releaseRunLock: {
+    required: ['repoKey'],
+    handler: (args) => {
+      const repoKey = requireRepoKey(args, 'releaseRunLock');
+      return runReleaseRunLock({ repoKey });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
@@ -654,6 +729,54 @@ function requireEntryKey(args: Record<string, unknown>, tool: string): string {
     });
   }
   return k;
+}
+
+// Extract a required non-empty `subject` string for createRunWorkspace.
+// Subject seeds the branch slug; an empty subject would yield a malformed
+// branch name, so the tool boundary rejects it up front (the underlying
+// library would not).
+function requireSubject(args: Record<string, unknown>, tool: string): string {
+  const s = args['subject'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'subject',
+      message: `Tool '${tool}' requires a non-empty 'subject' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract a required non-empty `runId` string. acquireRunLock and
+// createRunWorkspace both need it; resolveRunStore treats it as optional and
+// mints when absent, so this helper is reused only by the required-input
+// tools.
+function requireRunId(args: Record<string, unknown>, tool: string): string {
+  const s = args['runId'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'runId',
+      message: `Tool '${tool}' requires a non-empty 'runId' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract a required non-empty `repoKey` string for the lock tool pair.
+// repoKey identifies the repository whose run lock is being addressed; the
+// path is derived server-side from it, so a missing or empty key would be a
+// silent misroute of the lock file rather than a noisy failure.
+function requireRepoKey(args: Record<string, unknown>, tool: string): string {
+  const s = args['repoKey'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'repoKey',
+      message: `Tool '${tool}' requires a non-empty 'repoKey' string in its input.`,
+    });
+  }
+  return s;
 }
 
 // Read an optional argument as-is, without presence/type validation

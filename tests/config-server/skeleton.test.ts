@@ -15,6 +15,7 @@ import {
 import { getLogger } from '../../src/config-server/logging/logger.js';
 import {
   buildToolList,
+  DISPATCH_TOOL_NAMES,
   F2_TOOL_NAMES,
   getApiVersion,
 } from '../../src/config-server/index.js';
@@ -173,11 +174,19 @@ describe('buildToolList', () => {
     expect(names).not.toContain('getStackConventions');
   });
 
-  it('every advertised tool is a known F2 tool', () => {
-
+  it('every advertised tool is in the dispatcher-known set', () => {
+    // Previously this asserted F2_TOOL_NAMES exclusively; the dispatcher now
+    // unions F2 with R5 (trustList) and the run-context tool group, and the
+    // advertised list expanded with it. The dispatch set is the broader
+    // invariant — every advertised name must be one the dispatcher will
+    // accept; F2 alone would re-introduce the dispatchable-but-undiscoverable
+    // gap the union closed.
     const advertised = new Set(buildToolList().map((t) => t.name));
     for (const name of advertised) {
-      expect(F2_TOOL_NAMES, `tool '${name}' is not in F2_TOOL_NAMES`).toContain(name);
+      expect(
+        DISPATCH_TOOL_NAMES,
+        `tool '${name}' is not in DISPATCH_TOOL_NAMES`,
+      ).toContain(name);
     }
   });
 

@@ -4,6 +4,26 @@
   "additionalProperties": false,
   "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool except `getApiVersion` takes at minimum `projectRoot: string`. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
   "properties": {
+    "acquireRunLock": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "repoKey": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoKey",
+          "runId"
+        ],
+        "type": "object"
+      }
+    },
     "appendToModuleState": {
       "inputSchema": {
         "additionalProperties": false,
@@ -98,6 +118,33 @@
           "name",
           "fieldPath",
           "value"
+        ],
+        "type": "object"
+      }
+    },
+    "createRunWorkspace": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromDir": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "newWorktree": {
+            "type": "boolean"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "subject": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "runId"
         ],
         "type": "object"
       }
@@ -383,6 +430,21 @@
         "type": "object"
       }
     },
+    "releaseRunLock": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "repoKey": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoKey"
+        ],
+        "type": "object"
+      }
+    },
     "removeFromModuleState": {
       "inputSchema": {
         "additionalProperties": false,
@@ -468,6 +530,23 @@
           "fieldPath",
           "value"
         ],
+        "type": "object"
+      }
+    },
+    "resolveRunStore": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromDir": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
         "type": "object"
       }
     },
@@ -654,9 +733,11 @@
     }
   },
   "required": [
+    "acquireRunLock",
     "appendToModuleState",
     "appendToOverlayField",
     "appendToStackField",
+    "createRunWorkspace",
     "getActiveStacks",
     "getApiVersion",
     "getBoundedDirectoryListing",
@@ -672,9 +753,11 @@
     "getTrustState",
     "listModules",
     "registerModule",
+    "releaseRunLock",
     "removeFromModuleState",
     "removeFromOverlayField",
     "removeFromStackField",
+    "resolveRunStore",
     "setModuleState",
     "setOverlayField",
     "trustApprove",

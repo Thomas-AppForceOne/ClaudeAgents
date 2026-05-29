@@ -33,6 +33,7 @@ import path from 'node:path';
 
 import {
   buildToolList,
+  DISPATCH_TOOL_NAMES,
   F2_TOOL_NAMES,
 } from '../../../src/config-server/index.js';
 import {
@@ -102,9 +103,17 @@ describe('F5 slice 1 — tools/list excludes NotImplemented stubs', () => {
     expect(names).not.toContain('getStackConventions');
   });
 
-  it('every advertised tool is a known F2 tool name', () => {
+  it('every advertised tool is a dispatcher-known tool name', () => {
+    // The dispatcher set unions F2 with R5 (trustList) and the run-context
+    // tools introduced by the runtime invocation bridge; the F2-only assertion
+    // would re-fail every additive tool group after R5. The advertise-set is
+    // the loosest still-correct invariant: an advertised tool the dispatcher
+    // would reject is the actual bug this protects against.
     for (const tool of buildToolList()) {
-      expect(F2_TOOL_NAMES, `tool '${tool.name}' is not in F2_TOOL_NAMES`).toContain(tool.name);
+      expect(
+        DISPATCH_TOOL_NAMES,
+        `tool '${tool.name}' is not in DISPATCH_TOOL_NAMES`,
+      ).toContain(tool.name);
     }
   });
 
