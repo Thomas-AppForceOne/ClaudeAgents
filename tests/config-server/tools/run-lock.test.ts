@@ -1,0 +1,168 @@
+/**
+ * Run-lock tool tests — round-trip-by-key, live-holder refusal with
+ * ConcurrentRunInProgress, the acquired lock readable by readRunLock, idempotent
+ * release, and tool-vs-library parity for the new release-by-key path.
+ *
+ * The store-root is pointed at a scratch directory via GAN_RUNS_DATA so the
+ * lock file never lands under a developer's real central store; vi.stubEnv
+ * scrubs any inherited shell value at every `beforeEach`.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { ConfigServerError } from '../../../src/config-server/errors.js';
+import {
+  readRunLock,
+  releaseRunLockAtPath as libraryReleaseRunLockAtPath,
+} from '../../../src/config-server/storage/run-lock.js';
+import {
+  resolveRunLockPath,
+  resolveStoreRoot,
+} from '../../../src/config-server/storage/run-store.js';
+import {
+  acquireRunLockTool,
+  releaseRunLockTool,
+} from '../../../src/config-server/tools/run-lock.js';
+
+const tmpDirs: string[] = [];
+
+function makeTmp(prefix = 'r7-run-lock-'): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const d of tmpDirs.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
+});
+
+describe('run-lock tools — acquire/release by key', () => {
+  // A synthetic repoKey is enough — the lock tools derive the path entirely
+  // from `repoKey` plus the resolved storeRoot, and never read the worktree.
+  // Using a fixed key keeps the assertions simple and lets each test isolate
+  // its lock file under a fresh storeRoot.
+  const repoKey = 'r7-test-repo-deadbeef0000';
+  let storeRoot: string;
+
+  beforeEach(() => {
+    storeRoot = makeTmp('r7-store-');
+    vi.stubEnv('GAN_RUNS_DATA', storeRoot);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('acquireRunLock writes the lock file; readRunLock returns a record whose runId matches', () => {
+    const runId = '20260522T180000-acq1';
+    const result = acquireRunLockTool({ repoKey, runId });
+    expect(existsSync(result.lockPath)).toBe(true);
+
+    // Companion-check: the written lock is readable (a runId-less lock would
+    // be treated as garbage by readRunLock and silently broken by the next
+    // acquire — the explicit readback guards against that regression).
+    const contents = readRunLock(result.lockPath);
+    expect(contents).toBeDefined();
+    expect(contents?.runId).toBe(runId);
+  });
+
+  it('round-trip-by-key: acquire → release({ repoKey }) → re-acquire succeeds', () => {
+    const runId = '20260522T180000-rt01';
+    const first = acquireRunLockTool({ repoKey, runId });
+    expect(existsSync(first.lockPath)).toBe(true);
+
+    // Release by repoKey only — no JS handle threaded between the two calls.
+    // This is the M1 stranding fix: without it the markdown orchestrator
+    // could not release the lock at all (the shipped handle-taking release
+    // cannot survive an MCP boundary).
+    const released = releaseRunLockTool({ repoKey });
+    expect(released.lockPath).toBe(first.lockPath);
+    expect(existsSync(first.lockPath)).toBe(false);
+
+    // Immediate re-acquire on the same repoKey must succeed cleanly.
+    const second = acquireRunLockTool({ repoKey, runId: '20260522T180000-rt02' });
+    expect(existsSync(second.lockPath)).toBe(true);
+  });
+
+  it('live holder: second acquire on the same repoKey is refused with ConcurrentRunInProgress', () => {
+    // The first acquire records the current pid, which is necessarily alive
+    // during the test. The second acquire therefore hits the live-holder
+    // branch of the library's `acquireRunLock` and throws — the F2 error
+    // factory wraps it as InvariantViolation(reason=ConcurrentRunInProgress)
+    // with shell remediation in the message.
+    const runId = '20260522T180000-liv1';
+    acquireRunLockTool({ repoKey, runId });
+
+    let caught: unknown;
+    try {
+      acquireRunLockTool({ repoKey, runId: '20260522T180000-liv2' });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ConfigServerError);
+    const err = caught as ConfigServerError;
+    expect(err.code).toBe('InvariantViolation');
+    // The reason is part of the structured payload, not the typed surface.
+    expect((err as unknown as { reason: string }).reason).toBe('ConcurrentRunInProgress');
+    // The remediation names a shell command (kill <pid>) per the F4
+    // user-facing error-text discipline.
+    expect(err.message).toMatch(/kill \d+/);
+  });
+
+  it('release is idempotent: a second release after the lock is already gone does not throw', () => {
+    const runId = '20260522T180000-idem';
+    acquireRunLockTool({ repoKey, runId });
+    releaseRunLockTool({ repoKey });
+    // Already gone; the second release must be a no-op rather than a throw,
+    // because the orchestrator's exit-path handlers may issue release on a
+    // path the lock was already released on (graceful + abort overlap).
+    expect(() => releaseRunLockTool({ repoKey })).not.toThrow();
+  });
+
+  it('release on a lock that was never acquired is also a no-op', () => {
+    // Safety net: a buggy orchestrator could call release before any acquire
+    // (e.g. an error path that races the acquire). The tool must not throw.
+    expect(() => releaseRunLockTool({ repoKey })).not.toThrow();
+  });
+
+  it('tool-vs-library parity: releaseRunLockTool funnels through the shared releaseRunLockAtPath', () => {
+    // Acquire via the tool, release via a direct library import of the shared
+    // path-form release: both paths must address the same lock file (the
+    // round trip works regardless of which side issued the delete).
+    const runId = '20260522T180000-prty';
+    const acquired = acquireRunLockTool({ repoKey, runId });
+    expect(existsSync(acquired.lockPath)).toBe(true);
+
+    // Compute the path the same way the tool does, then call the library
+    // function directly — the shared "one implementation per invariant" path.
+    const expectedLockPath = resolveRunLockPath(resolveStoreRoot(), repoKey);
+    expect(expectedLockPath).toBe(acquired.lockPath);
+    libraryReleaseRunLockAtPath(expectedLockPath);
+    expect(existsSync(expectedLockPath)).toBe(false);
+
+    // And a fresh acquire on the same key still succeeds — the library
+    // release left the lock fully cleared, as the tool's release would.
+    const reacquired = acquireRunLockTool({ repoKey, runId: '20260522T180000-prt2' });
+    expect(existsSync(reacquired.lockPath)).toBe(true);
+  });
+
+  it('tool-vs-library parity: acquireRunLockTool dispatches through the shipped acquire (lock paths match)', () => {
+    // The tool computes the lock path the same way the release tool does
+    // (resolveStoreRoot + resolveRunLockPath); the library `acquireRunLock`
+    // takes that path as an input. Asserting the tool's returned `lockPath`
+    // equals the path the same path-resolver pair produces pins that the
+    // tool layer adds no second path derivation behind the lock.
+    const runId = '20260522T180000-acq2';
+    const acquired = acquireRunLockTool({ repoKey, runId });
+    const directPath = resolveRunLockPath(resolveStoreRoot(), repoKey);
+    expect(acquired.lockPath).toBe(directPath);
+  });
+});
