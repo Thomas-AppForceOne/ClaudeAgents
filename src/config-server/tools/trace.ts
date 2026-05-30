@@ -26,6 +26,7 @@ import {
   type TraceEventInput,
 } from '../../trace/append.js';
 import { getDroppedEmits, incrementDroppedEmits } from '../../trace/dropped-emits.js';
+import { AGENT_ATTEMPT_EVENT_TYPE } from '../../trace/events.js';
 import {
   buildLoopDetectedBody as libraryBuildLoopDetectedBody,
   buildTrustEventBody as libraryBuildTrustEventBody,
@@ -117,7 +118,7 @@ export interface EmitTraceEventInput {
 export function emitTraceEventTool(input: EmitTraceEventInput): EmitTraceEventResult {
   const { runDir, event } = input;
   const eventType = (event as { eventType?: string }).eventType;
-  const isAgentAttempt = eventType === 'agentAttempt';
+  const isAgentAttempt = eventType === AGENT_ATTEMPT_EVENT_TYPE;
 
   // First write attempt — same code path regardless of event class. The
   // class only affects how a failure is handled below.

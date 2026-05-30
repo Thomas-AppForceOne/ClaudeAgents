@@ -156,6 +156,15 @@ export interface ClarifierUserActionEvent extends TraceEnvelope {
 }
 
 /**
+ * The `eventType` discriminant for {@link AgentAttemptEvent}, named so the
+ * special handling the emit path gives this class (the one-retry-on-failure
+ * policy) keys off a single shared identifier rather than a bare string
+ * literal. A rename of the class then surfaces at every site that compares
+ * against it instead of silently leaving a stale copy behind.
+ */
+export const AGENT_ATTEMPT_EVENT_TYPE = 'agentAttempt';
+
+/**
  * Discriminated union of every known trace event, narrowable by `eventType`.
  */
 export type TraceEvent =
@@ -177,7 +186,7 @@ export type TraceEvent =
  */
 export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'orchestratorMilestone',
-  'agentAttempt',
+  AGENT_ATTEMPT_EVENT_TYPE,
   'llmCall',
   'toolCall',
   'safetyHalt',

@@ -136,4 +136,4 @@ export type {
   TrustEventEvent,
   ValidationAbortEvent,
 } from './events.js';
-export { KNOWN_EVENT_TYPES } from './events.js';
+export { KNOWN_EVENT_TYPES, AGENT_ATTEMPT_EVENT_TYPE } from './events.js';
