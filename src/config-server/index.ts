@@ -1654,7 +1654,6 @@ export function requireHttpPathArg(args: Record<string, unknown>, tool: string):
   // Reject any C0 control byte (U+0000-U+001F), DEL (U+007F), space, and
   // the `?`/`#` delimiters that would carry the request off the path
   // component or desync URL parsing.
-  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001F\u007F ?#]/.test(v)) {
     throw rejectHttpPathShape(tool);
   }
