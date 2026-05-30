@@ -257,6 +257,61 @@ describe('createRunWorkspace tool — cases 1b and 1c create the worktree', () =
     }
   });
 
+  it('uses a supplied mainWorktreeRoot directly rather than re-deriving the projectRoot from cwd', () => {
+    // I-017: when the caller threads back the root resolveRunStore already
+    // computed at run start, the tool must use it as projectRoot directly and
+    // skip the second `git rev-parse --git-common-dir`. Proven with two
+    // distinct repos: cwd is repoA (so the worktree-creation git commands have
+    // a real repo to run in), but the supplied mainWorktreeRoot is repoB. The
+    // worktree path is computed under projectRoot, so it must land under
+    // repoB — the supplied value — not under repoA, which is what an internal
+    // re-derivation from cwd would have produced.
+    const repoA = initRepo();
+    const repoB = initRepo();
+    const runId = '20260522T180000-mwr1';
+    const cwd = process.cwd();
+    try {
+      process.chdir(repoA);
+      const ws = createRunWorkspaceTool({
+        subject: 'Add Export',
+        runId,
+        mainWorktreeRoot: repoB,
+      });
+      expect(ws.createdByGan).toBe(true);
+      // Landed under repoB (supplied), proving the supplied value drove
+      // projectRoot — re-derivation from cwd (repoA) would have used repoA.
+      // (Compare on existence, not an exact string, because the returned path
+      // is canonicalised — `/tmp` resolves to `/private/tmp` on macOS.)
+      const underB = path.join(repoB, '.gan-state', 'runs', runId, 'worktree');
+      const underA = path.join(repoA, '.gan-state', 'runs', runId, 'worktree');
+      expect(existsSync(underB)).toBe(true);
+      expect(existsSync(underA)).toBe(false);
+      // And the returned path names repoB's runs tree, not repoA's.
+      expect(ws.worktreePath).toContain(path.join('runs', runId, 'worktree'));
+      expect(ws.worktreePath).toContain(path.basename(repoB));
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it('falls back to internal derivation when mainWorktreeRoot is absent (backward compatible)', () => {
+    // The omitted-value path must still work: run from inside the repo so the
+    // internal resolveRunStore derivation picks it up, exactly as before the
+    // optional input existed.
+    const repo = initRepo();
+    const runId = '20260522T180000-mwr2';
+    const cwd = process.cwd();
+    try {
+      process.chdir(repo);
+      const ws = createRunWorkspaceTool({ subject: 'Add Export', runId });
+      expect(ws.resolutionCase).toBe('1c');
+      const runScoped = path.join(repo, '.gan-state', 'runs', runId, 'worktree');
+      expect(existsSync(runScoped)).toBe(true);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   // The orchestrator-flag-dispatch invariant ("createRunWorkspace is NOT
   // invoked on --recover/--cleanup paths") was previously asserted here over a
   // test-local `dispatchOrchestrator` helper — a tautology that mirrored what

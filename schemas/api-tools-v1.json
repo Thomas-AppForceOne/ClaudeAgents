@@ -551,6 +551,10 @@
             "minLength": 1,
             "type": "string"
           },
+          "mainWorktreeRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
           "newWorktree": {
             "type": "boolean"
           },

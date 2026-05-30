@@ -772,10 +772,18 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
         subject: string;
         runId: string;
         fromDir?: string;
+        mainWorktreeRoot?: string;
         newWorktree?: boolean;
       } = { subject, runId };
       const fromDir = args['fromDir'];
       if (typeof fromDir === 'string' && fromDir.length > 0) input.fromDir = fromDir;
+      // Optional: the main-worktree root resolveRunStore already computed at
+      // run start. When threaded back here it lets the handler skip a second
+      // `git rev-parse`; when absent the handler re-derives it.
+      const mainWorktreeRoot = args['mainWorktreeRoot'];
+      if (typeof mainWorktreeRoot === 'string' && mainWorktreeRoot.length > 0) {
+        input.mainWorktreeRoot = mainWorktreeRoot;
+      }
       if (typeof args['newWorktree'] === 'boolean') input.newWorktree = args['newWorktree'];
       return runCreateRunWorkspace(input);
     },

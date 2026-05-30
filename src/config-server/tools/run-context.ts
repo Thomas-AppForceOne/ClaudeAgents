@@ -96,7 +96,15 @@ export function resolveRunStoreTool(input: ResolveRunStoreInput = {}): ResolveRu
  *   path is `<projectRoot>/.gan-state/runs/<runId>/worktree`, so the id is
  *   not derivable inside the handler.
  * @property fromDir directory inside the repo used to discover the main
- *   worktree root; defaults to `process.cwd()`.
+ *   worktree root; defaults to `process.cwd()`. Ignored when
+ *   `mainWorktreeRoot` is supplied (the root is then already known).
+ * @property mainWorktreeRoot the repo's main worktree root, as already
+ *   resolved by {@link resolveRunStoreTool} at run start (step 7 of the
+ *   orchestration). When supplied, the handler uses it directly as
+ *   `projectRoot` and skips the second `git rev-parse --git-common-dir` +
+ *   path-resolution pass; when absent, the handler re-derives it internally
+ *   (backward compatible — a caller that does not thread the value still
+ *   works, it just pays the extra git read).
  * @property newWorktree when `true`, force case 1c (always create new). Same
  *   semantics as the underlying library option.
  */
@@ -104,6 +112,7 @@ export interface CreateRunWorkspaceInput {
   subject: string;
   runId: string;
   fromDir?: string;
+  mainWorktreeRoot?: string;
   newWorktree?: boolean;
 }
 
@@ -123,13 +132,19 @@ export type CreateRunWorkspaceResult = ResolvedWorkspace & { mutated: boolean };
 /**
  * Resolve and create the run's worktree.
  *
- * Why `projectRoot` is derived internally rather than caller-supplied:
- * `resolveWorkspace` writes a worktree under `<projectRoot>/.gan-state/runs/`,
- * and a markdown orchestrator that could pass any path here would also be
- * able to redirect the write outside the repo. The handler instead resolves
- * the main-worktree root the same way `resolveRunStore` does and uses that
- * as `projectRoot` — the worktree always lands under the repo the run was
- * started from, by construction.
+ * Why `projectRoot` is derived from worktree-root discovery rather than taken
+ * as a free `projectRoot`: `resolveWorkspace` writes a worktree under
+ * `<projectRoot>/.gan-state/runs/`, and a markdown orchestrator that could
+ * pass any path here would also be able to redirect the write outside the
+ * repo. The handler instead uses the repo's main-worktree root — the same
+ * value `resolveRunStore` produces — as `projectRoot`, so the worktree always
+ * lands under the repo the run was started from, by construction.
+ *
+ * The root is resolved once at run start (step 7's `resolveRunStore`). To
+ * avoid a second `git rev-parse --git-common-dir` here, the caller may thread
+ * that value back in as `input.mainWorktreeRoot`; when supplied it is used
+ * directly. When absent the handler re-derives it (one extra git read), so an
+ * older caller that does not thread the value still works.
  *
  * Side effects: cases 1b and 1c run `git worktree add` (and 1b additionally
  * runs `git checkout` to free the current checkout). Case 1a performs only
@@ -145,19 +160,23 @@ export type CreateRunWorkspaceResult = ResolvedWorkspace & { mutated: boolean };
  *   from the underlying library; this handler adds no error vocabulary.)
  */
 export function createRunWorkspaceTool(input: CreateRunWorkspaceInput): CreateRunWorkspaceResult {
-  // Derive projectRoot from the same library function resolveRunStore uses, so
-  // the worktree always lands under the run's repo regardless of what the
-  // markdown orchestrator might otherwise pass. resolveRunStoreTool gives us
-  // mainWorktreeRoot for free; reuse it to keep one source of truth.
-  const store = resolveRunStoreTool(
-    input.fromDir !== undefined
-      ? { runId: input.runId, fromDir: input.fromDir }
-      : { runId: input.runId },
-  );
+  // projectRoot is the repo's main-worktree root — the same value
+  // resolveRunStore produces — so the worktree always lands under the run's
+  // repo regardless of what the markdown orchestrator might otherwise pass.
+  // When the caller threads back the value resolveRunStore already resolved at
+  // run start, use it directly; otherwise re-derive it (one extra git read,
+  // backward compatible) via the same resolveRunStoreTool path.
+  const projectRoot =
+    input.mainWorktreeRoot ??
+    resolveRunStoreTool(
+      input.fromDir !== undefined
+        ? { runId: input.runId, fromDir: input.fromDir }
+        : { runId: input.runId },
+    ).mainWorktreeRoot;
   const opts: Parameters<typeof resolveWorkspace>[0] = {
     subject: input.subject,
     runId: input.runId,
-    projectRoot: store.mainWorktreeRoot,
+    projectRoot,
   };
   if (input.fromDir !== undefined) opts.fromDir = input.fromDir;
   if (input.newWorktree !== undefined) opts.newWorktree = input.newWorktree;
