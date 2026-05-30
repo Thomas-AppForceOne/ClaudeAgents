@@ -237,6 +237,19 @@ export interface RunSummaryAggregate extends SprintSummaryAggregate {
  *   not derived from the on-disk events (a dropped emit by definition
  *   leaves no trace).
  *
+ * Process-local `droppedEmits` contract (read before depending on it): the
+ * disk-derived fields are identical from any process that can read the run
+ * dir, but `droppedEmits` reflects only the in-memory tally of the process
+ * that recorded the failures. It is meaningful when called inside the
+ * long-lived config-server process that did the emitting; a separate process
+ * (a CLI, a test, a cross-process import) sees `0` here even when the
+ * emitting process's tally is positive. This is the honest documented
+ * contract, not a defect: the tally is in-memory by design so a disk-full or
+ * unwritable run dir — the exact failure it flags — cannot also defeat the
+ * counter. A consumer that needs the drop count must read it from the
+ * emitting process (e.g. via the MCP tool against the running server), not by
+ * importing this function into a fresh process.
+ *
  * Side effects: a directory scan of `<runDir>/trace/events/`; no writes.
  */
 export function aggregateRunSummary(runDir: string): RunSummaryAggregate {

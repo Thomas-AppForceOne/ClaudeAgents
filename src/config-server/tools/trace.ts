@@ -7,26 +7,25 @@
  * domain logic — the dual-callable-surface rule applies to every entry
  * point in this module.
  *
- * Emit-failure semantics live here too. `emitTraceEvent` swallows write
+ * Emit-failure semantics do NOT live here: they live in the shared
+ * `emitTraceEvent` layer in `../../trace/emit.js`, which swallows write
  * failures for non-`agentAttempt` events (incrementing the in-memory
  * `droppedEmits` tally instead of throwing) and retries exactly once on
- * `agentAttempt` failures before surfacing a structured warning — the
- * "structured warning, not abort" contract the spec names. The run loop
- * continues regardless; `droppedEmits` is the sole signal the orchestrator
- * sees that an emit was lost.
+ * `agentAttempt` failures before surfacing a structured warning. Putting the
+ * policy in one shared layer is what makes the MCP tool and a direct library
+ * import behave identically for equal inputs — the dual-callable rule. The
+ * tool wrapper below simply forwards to that shared function.
  */
 
 import path from 'node:path';
 
 import { createError } from '../errors.js';
 
+import { type AppendTraceEventResult, type TraceEventInput } from '../../trace/append.js';
 import {
-  appendTraceEvent as libraryAppendTraceEvent,
-  type AppendTraceEventResult,
-  type TraceEventInput,
-} from '../../trace/append.js';
-import { getDroppedEmits, incrementDroppedEmits } from '../../trace/dropped-emits.js';
-import { AGENT_ATTEMPT_EVENT_TYPE } from '../../trace/events.js';
+  emitTraceEvent as libraryEmitTraceEvent,
+  type EmitTraceEventResult,
+} from '../../trace/emit.js';
 import {
   buildLoopDetectedBody as libraryBuildLoopDetectedBody,
   buildTrustEventBody as libraryBuildTrustEventBody,
@@ -58,22 +57,11 @@ import type { ErrorCode } from '../errors.js';
 
 /**
  * Result of {@link emitTraceEventTool}: the assigned sequence number on
- * success, or a structured warning the caller can surface.
- *
- * @property ok `true` on a successful write, `false` on a dropped emit.
- * @property sequenceNumber present iff `ok === true`.
- * @property warning the structured warning message on a dropped emit; the
- *   run loop typically logs it and continues without aborting.
- * @property droppedEmits the post-increment count for the run after a drop;
- *   the caller does not need to read this back from `aggregateRunSummary`
- *   to know an emit was lost.
+ * success, or a structured warning the caller can surface. The shape is the
+ * shared {@link EmitTraceEventResult} the library's `emitTraceEvent` returns —
+ * re-exported here so a tool-test importer needs only this single module.
  */
-export interface EmitTraceEventResult {
-  ok: boolean;
-  sequenceNumber?: number;
-  warning?: string;
-  droppedEmits?: number;
-}
+export type { EmitTraceEventResult };
 
 /**
  * Input to {@link emitTraceEventTool}.
@@ -93,79 +81,18 @@ export interface EmitTraceEventInput {
 
 /**
  * Append a trace event to the run's trace, with emit-failure semantics that
- * never abort the run.
- *
- * Two failure paths:
- * - **non-`agentAttempt` event:** any write error is caught, the in-memory
- *   `droppedEmits` tally for the `runDir` is incremented, and a structured
- *   warning is returned. The orchestrator surfaces the warning but the
- *   sprint loop keeps going — losing a single non-attempt event is
- *   recoverable; aborting on it would be worse than continuing.
- * - **`agentAttempt` event:** the failure path retries exactly once. If the
- *   retry also fails the tally is incremented and the structured warning is
- *   returned. The retry count is **exactly one** — not zero (so a transient
- *   collision still has a chance) and not more (so a real disk fault is
- *   surfaced quickly rather than spinning).
- *
- * The handler is the single owner of those policies; a caller that imports
- * `appendTraceEvent` directly bypasses them deliberately, because the
- * library is the lower layer used both here and by recovery code that
- * wants the raw throw.
+ * never abort the run. A byte-thin forward to the shared
+ * {@link libraryEmitTraceEvent} — the single owner of the one-retry-on-
+ * `agentAttempt`, increment-`droppedEmits`, structured-warning policy. A
+ * caller importing `emitTraceEvent` from the trace barrel gets the identical
+ * behaviour, because the policy lives in that one shared layer rather than
+ * here.
  *
  * @param input see {@link EmitTraceEventInput}.
  * @returns see {@link EmitTraceEventResult}.
  */
 export function emitTraceEventTool(input: EmitTraceEventInput): EmitTraceEventResult {
-  const { runDir, event } = input;
-  const eventType = (event as { eventType?: string }).eventType;
-  const isAgentAttempt = eventType === AGENT_ATTEMPT_EVENT_TYPE;
-
-  // First write attempt — same code path regardless of event class. The
-  // class only affects how a failure is handled below.
-  try {
-    const res = libraryAppendTraceEvent(runDir, event);
-    return { ok: true, sequenceNumber: res.sequenceNumber };
-  } catch (firstError) {
-    if (!isAgentAttempt) {
-      // Non-agentAttempt: no retry. Increment and surface the warning.
-      incrementDroppedEmits(runDir);
-      return buildDropResult(runDir, firstError);
-    }
-
-    // agentAttempt: retry exactly once. A second failure is treated as a
-    // real disk-level fault (not a transient collision) and surfaced as the
-    // structured warning, with droppedEmits incremented.
-    try {
-      const res = libraryAppendTraceEvent(runDir, event);
-      return { ok: true, sequenceNumber: res.sequenceNumber };
-    } catch (secondError) {
-      incrementDroppedEmits(runDir);
-      return buildDropResult(runDir, secondError);
-    }
-  }
-}
-
-/**
- * Compose the structured-warning result the tool returns on a dropped emit.
- * Reads the post-increment tally so the caller does not need a second tool
- * call to learn the count.
- */
-function buildDropResult(runDir: string, error: unknown): EmitTraceEventResult {
-  // Re-read the tally rather than tracking it in a local — incrementDroppedEmits
-  // is the single source of truth, and reading it back guarantees the result
-  // reflects exactly what aggregateRunSummary will report on the same instant.
-  // Tally read via getDroppedEmits — dropped-emits.ts is a leaf module with
-  // zero imports, no cycle.
-  const droppedEmits = getDroppedEmits(runDir);
-  const message =
-    error instanceof Error
-      ? error.message
-      : `The framework could not append a trace event for run dir '${runDir}'.`;
-  return {
-    ok: false,
-    warning: message,
-    droppedEmits,
-  };
+  return libraryEmitTraceEvent(input.runDir, input.event);
 }
 
 /**

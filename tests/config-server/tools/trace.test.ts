@@ -33,6 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { appendTraceEvent, type TraceEventInput } from '../../../src/trace/append.js';
+import { emitTraceEvent as libraryEmitTraceEvent } from '../../../src/trace/emit.js';
 import {
   aggregateRunSummary as libraryAggregateRunSummary,
   formatHeartbeat as libraryFormatHeartbeat,
@@ -120,6 +121,53 @@ describe('emitTraceEvent — tool routes through appendTraceEvent', () => {
     const viaLib = appendTraceEvent(runDirB, attempt(0));
     expect(viaTool.ok).toBe(true);
     expect(viaTool.sequenceNumber).toBe(viaLib.sequenceNumber);
+  });
+});
+
+describe('emitTraceEvent — dual-callable: tool and direct library import share the failure policy', () => {
+  it('the tool forwards to the same shared library function (no second policy copy)', () => {
+    const runDirTool = makeTmp();
+    const runDirLib = makeTmp();
+    const viaTool = emitTraceEventTool({ runDir: runDirTool, event: attempt(0) });
+    const viaLib = libraryEmitTraceEvent(runDirLib, attempt(0));
+    expect(viaTool).toEqual(viaLib);
+    expect(viaTool.ok).toBe(true);
+  });
+
+  it('a direct library import gets the same one-retry + droppedEmits increment on agentAttempt failure', async () => {
+    // Mock the raw write path to always throw, then re-import emit.js so it
+    // resolves to the mocked appendTraceEvent. The shared policy — retry once
+    // for agentAttempt, increment the tally, return a structured warning —
+    // must fire on the direct library call exactly as it does for the tool.
+    vi.resetModules();
+    let attempts = 0;
+    vi.doMock('../../../src/trace/append.js', async () => {
+      return {
+        appendTraceEvent: (..._args: unknown[]) => {
+          attempts += 1;
+          const err = new Error('synthetic EACCES') as Error & { code?: string };
+          err.code = 'EACCES';
+          throw err;
+        },
+      };
+    });
+
+    const runDir = makeTmp();
+    const mockedEmit = await import('../../../src/trace/emit.js');
+    const mockedDroppedEmits = await import('../../../src/trace/dropped-emits.js');
+    mockedDroppedEmits.resetDroppedEmitsForTests();
+
+    // Direct library call — NOT through the tool wrapper.
+    const res = mockedEmit.emitTraceEvent(runDir, attempt(0));
+    expect(res.ok).toBe(false);
+    expect(typeof res.warning).toBe('string');
+    // agentAttempt retries exactly once: initial + one retry = two attempts.
+    expect(attempts).toBe(2);
+    expect(mockedDroppedEmits.getDroppedEmits(runDir)).toBe(1);
+    expect(res.droppedEmits).toBe(1);
+
+    vi.doUnmock('../../../src/trace/append.js');
+    vi.resetModules();
   });
 });
 
@@ -518,6 +566,7 @@ describe('droppedEmits — in-memory, no disk artefact, process-scoped', () => {
     const sources = [
       'src/trace/append.ts',
       'src/trace/dropped-emits.ts',
+      'src/trace/emit.ts',
       'src/config-server/tools/trace.ts',
     ].map((p) => path.resolve(here, '..', '..', '..', p));
     for (const file of sources) {
@@ -539,11 +588,12 @@ describe('droppedEmits — in-memory, no disk artefact, process-scoped', () => {
 // ---------- positive subprocess-bypass guard (criterion #47) ----------
 
 describe('no child_process / subprocess token in slice-2 sources', () => {
-  it('static scan: src/trace/append.ts, src/trace/dropped-emits.ts, src/trace/progress.ts, src/config-server/tools/trace.ts, src/config-server/index.ts (slice-2 additions) carry no exec/spawn/child_process token', () => {
+  it('static scan: src/trace/append.ts, src/trace/dropped-emits.ts, src/trace/emit.ts, src/trace/progress.ts, src/config-server/tools/trace.ts, src/config-server/index.ts (slice-2 additions) carry no exec/spawn/child_process token', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const sources = [
       'src/trace/append.ts',
       'src/trace/dropped-emits.ts',
+      'src/trace/emit.ts',
       'src/config-server/tools/trace.ts',
     ].map((p) => path.resolve(here, '..', '..', '..', p));
 

@@ -99,6 +99,8 @@ export {
   type TraceEventInput,
 } from './append.js';
 
+export { emitTraceEvent, type EmitTraceEventResult } from './emit.js';
+
 export {
   incrementDroppedEmits,
   getDroppedEmits,
