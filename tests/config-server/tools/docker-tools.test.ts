@@ -52,7 +52,7 @@ import { nameForWorktree } from '../../../src/modules/docker/ContainerNaming.js'
 import { discoverPort } from '../../../src/modules/docker/PortDiscovery.js';
 import { waitForHealthy } from '../../../src/modules/docker/ContainerHealth.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
-import { requireHttpPathArg } from '../../../src/config-server/index.js';
+import { requireHttpPathArg, requireWorktreePathArg } from '../../../src/config-server/index.js';
 import { ConfigServerError } from '../../../src/config-server/errors.js';
 import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
 import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
@@ -374,6 +374,34 @@ describe('docker tools', () => {
       const u = new URL(seen[0]);
       expect(u.host).toBe('localhost:7900');
       expect(u.username).toBe('');
+    });
+  });
+
+  // ---------- 1c. worktreePath cannot redirect the registry store ----------
+
+  describe('worktreePath is constrained so it cannot redirect the registry store', () => {
+    const TOOL = 'dockerReservePort';
+
+    it('accepts an absolute, normalised worktree path', () => {
+      expect(requireWorktreePathArg({ worktreePath: '/repo/wt-a' }, TOOL)).toBe('/repo/wt-a');
+    });
+
+    it('rejects a relative worktree path (would vary the store address per call)', () => {
+      expect(() => requireWorktreePathArg({ worktreePath: 'wt-a' }, TOOL)).toThrow(
+        ConfigServerError,
+      );
+    });
+
+    it('rejects a `..`/traversal worktree path', () => {
+      expect(() =>
+        requireWorktreePathArg({ worktreePath: '/repo/../../etc/wt' }, TOOL),
+      ).toThrow(ConfigServerError);
+    });
+
+    it('rejects a NUL-bearing worktree path', () => {
+      expect(() => requireWorktreePathArg({ worktreePath: '/repo/wt\0junk' }, TOOL)).toThrow(
+        ConfigServerError,
+      );
     });
   });
 

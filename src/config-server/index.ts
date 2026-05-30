@@ -1041,6 +1041,11 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       if (typeof envVar === 'string' && envVar.length > 0) input.envVar = envVar;
       const worktreePath = args['worktreePath'];
       if (typeof worktreePath === 'string' && worktreePath.length > 0) {
+        // Same store-redirection guard the other docker tools apply via
+        // requireWorktreePathArg — the discover layer-2 registry is addressed
+        // by this path too, so an unconstrained value could dodge collision
+        // detection just as a reserve call could.
+        assertWorktreePathShape(worktreePath, 'dockerDiscoverPort');
         input.worktreePath = worktreePath;
       }
       const containerPattern = args['containerPattern'];
@@ -1512,11 +1517,29 @@ function requirePlanObjectArg(
   return v as Record<string, unknown>;
 }
 
-// Extract a required non-empty worktreePath string. The library
-// canonicalises internally, so the boundary only asserts presence + string
-// shape. Empty strings are rejected up front because a blank worktree key
-// would collapse multiple distinct workspaces into one registry slot.
-function requireWorktreePathArg(args: Record<string, unknown>, tool: string): string {
+// Extract a required worktreePath string, constrained to an absolute,
+// normalised path. The library canonicalises internally and `PortRegistry`
+// uses this value both as the registry *key* and (downstream, via the
+// constructor's projectRoot) as the directory from which the repo-scoped
+// module-state store is addressed — so an unconstrained value is two trust
+// assumptions, not one:
+//
+//   - A blank or relative worktree key would collapse distinct workspaces
+//     into one registry slot, or vary the store address per call so the
+//     cross-worktree `PortInUse` collision check never fires.
+//   - A `..`/traversal or NUL-bearing value could steer the store address
+//     away from the worktree's real repo root.
+//
+// Requiring an absolute, already-normalised path (no `..` segments, no NUL)
+// refutes both up front. The repo-key derivation that follows downstream
+// still anchors the store to the worktree's real common git dir, so two
+// worktrees of one repo share one registry; this boundary only refuses the
+// shapes that would let a caller dodge that anchoring. Returns the value
+// unchanged for the library to canonicalise.
+//
+// Exported so the boundary check can be exercised directly in unit tests —
+// see {@link requireRepoKey} for the same rationale.
+export function requireWorktreePathArg(args: Record<string, unknown>, tool: string): string {
   const v = args['worktreePath'];
   if (typeof v !== 'string' || v.length === 0) {
     throw createError('MalformedInput', {
@@ -1525,7 +1548,25 @@ function requireWorktreePathArg(args: Record<string, unknown>, tool: string): st
       message: `Tool '${tool}' requires a non-empty 'worktreePath' string in its input.`,
     });
   }
+  assertWorktreePathShape(v, tool);
   return v;
+}
+
+// Refute a worktreePath that is relative, non-normalised, or NUL-bearing —
+// the shapes that would let a caller redirect the registry's module-state
+// store away from the worktree's real repo. Shared so `dockerDiscoverPort`
+// (which reads `worktreePath` inline) can apply the same guard.
+function assertWorktreePathShape(v: string, tool: string): void {
+  if (v.includes('\0') || !path.isAbsolute(v) || path.normalize(v) !== v) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'worktreePath',
+      message:
+        `Tool '${tool}' requires 'worktreePath' to be an absolute, normalised ` +
+        `path with no '..' segments or NUL bytes, so it cannot redirect the ` +
+        `port registry's module-state store away from the worktree's repo.`,
+    });
+  }
 }
 
 // Extract a required integer-shaped port in the valid host-port range. A
