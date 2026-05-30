@@ -13,7 +13,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,6 +144,11 @@ describe('resolveRunStore tool — purity and addressability', () => {
   });
 
   it('writes nothing under runDir, storeRoot, or repoStoreDir', () => {
+    // Snapshot the store root before the call. mkdtemp created it empty, so a
+    // pure resolver must leave it exactly as it found it — capturing the
+    // before-state means an eager mkdir at resolve time (of any name, not just
+    // the repoKey one) trips the comparison rather than slipping past.
+    const storeBefore = readdirSync(storeRoot);
     const result = resolveRunStoreTool({ fromDir: repoRoot });
     // The store root may not exist yet (pure resolver), and the run dir
     // certainly must not — the writing tool is createRunWorkspace.
@@ -146,7 +159,11 @@ describe('resolveRunStore tool — purity and addressability', () => {
     const storeStats = statSync(result.storeRoot);
     expect(storeStats.isDirectory()).toBe(true);
     // The library makes no claim about creating <storeRoot>/<repoKey>; assert
-    // the resolved path is absent.
+    // the resolved path is absent and the store-root listing is unchanged —
+    // the <storeRoot>/<repoKey>/ tree, runDir, and repoStoreDir must all stay
+    // uncreated. A future eager-mkdir at resolve time fails here.
+    expect(readdirSync(result.storeRoot)).toEqual(storeBefore);
+    expect(readdirSync(result.storeRoot)).toEqual([]);
   });
 
   it('explicit runId re-resolves byte-identical runDir / repoKey / runLockPath (addressability)', () => {
