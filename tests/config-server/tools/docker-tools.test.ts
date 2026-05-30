@@ -618,13 +618,18 @@ describe('docker tools', () => {
       expect(binNames).toEqual(['claudeagents-config-server', 'gan']);
     });
 
-    it('GAN_TRUST=strict in a CI-shaped environment: the dispatch surface still fails closed (no bypass)', () => {
-      // The strict-mode failure is enforced by the existing trust gate
-      // at the agent/validateAll layer, not in the tool. The criterion
-      // here is structural — the new dispatch entries do not introduce
-      // a code path that would skip the gate under GAN_TRUST=strict.
-      // The scan covers every conditional that would gate on trust
-      // value; the docker tool surface has none.
+    it('no GAN_TRUST reference appears in the docker tool body or the slice-5 dispatch entries (source scan)', () => {
+      // This is a SOURCE SCAN, not a runtime exercise of strict mode. The
+      // strict-mode fail-closed behaviour itself lives at the agent/validateAll
+      // trust gate, not in the docker tool or its dispatch entries, so it
+      // cannot be driven from this layer — setting GAN_TRUST=strict here would
+      // change nothing because there is no trust code path to gate. The real
+      // GAN_TRUST=strict fail-closed behaviour is covered by runTrustCheck in
+      // tests/config-server/trust/integration.test.ts (cases (d)/(e)) and
+      // tests/config-server/tools/validate-trust-phase.test.ts. What this case
+      // pins is the complementary structural property: the slice-5 dispatch
+      // entries introduce no code path that would skip the gate, evidenced by
+      // the absence of any GAN_TRUST reference in the docker surface.
       const toolFile = path.resolve(repoRoot, 'src/config-server/tools/docker-tools.ts');
       const indexFile = path.resolve(repoRoot, 'src/config-server/index.ts');
       const toolText = readFileSync(toolFile, 'utf8');
