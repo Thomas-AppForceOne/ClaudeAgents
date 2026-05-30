@@ -52,6 +52,8 @@ import { nameForWorktree } from '../../../src/modules/docker/ContainerNaming.js'
 import { discoverPort } from '../../../src/modules/docker/PortDiscovery.js';
 import { waitForHealthy } from '../../../src/modules/docker/ContainerHealth.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { requireHttpPathArg } from '../../../src/config-server/index.js';
+import { ConfigServerError } from '../../../src/config-server/errors.js';
 import { _resetModuleRegistrationCacheForTests } from '../../../src/config-server/storage/module-loader.js';
 import { _resetPackageRootCacheForTests } from '../../../src/config-server/package-root.js';
 import {
@@ -317,6 +319,61 @@ describe('docker tools', () => {
       const allocateDecl = /^\s+(?:public\s+)?allocate\s*\(/m;
       expect(text).not.toMatch(reserveDecl);
       expect(text).not.toMatch(allocateDecl);
+    });
+  });
+
+  // ---------- 1b. Health-check path is confined to the localhost origin ----------
+
+  describe('dockerCheckContainerHealth: path is confined to the localhost origin', () => {
+    const TOOL = 'dockerCheckContainerHealth';
+
+    it('accepts a plain path-absolute request path', () => {
+      expect(requireHttpPathArg({ path: '/health' }, TOOL)).toBe('/health');
+      expect(requireHttpPathArg({ path: '/a/b/c' }, TOOL)).toBe('/a/b/c');
+    });
+
+    it('rejects a userinfo-injection path that would relocate the host', () => {
+      // `@evil.tld/x` concatenated after `http://localhost:<port>` parses as
+      // a request to evil.tld with localhost as userinfo — the SSRF primitive.
+      expect(() => requireHttpPathArg({ path: '@evil.tld/x' }, TOOL)).toThrow(ConfigServerError);
+    });
+
+    it('rejects a scheme-relative `//host` path', () => {
+      expect(() => requireHttpPathArg({ path: '//evil.tld/x' }, TOOL)).toThrow(ConfigServerError);
+    });
+
+    it('rejects control bytes, whitespace, and the ?/# delimiters', () => {
+      expect(() => requireHttpPathArg({ path: '/a\r\nb' }, TOOL)).toThrow(ConfigServerError);
+      expect(() => requireHttpPathArg({ path: '/a b' }, TOOL)).toThrow(ConfigServerError);
+      expect(() => requireHttpPathArg({ path: '/a?b' }, TOOL)).toThrow(ConfigServerError);
+      expect(() => requireHttpPathArg({ path: '/a#b' }, TOOL)).toThrow(ConfigServerError);
+      expect(() => requireHttpPathArg({ path: '/a b' }, TOOL)).toThrow(ConfigServerError);
+    });
+
+    it('rejects a path that does not begin with a slash', () => {
+      expect(() => requireHttpPathArg({ path: 'health' }, TOOL)).toThrow(ConfigServerError);
+    });
+
+    it('library neutralises a host-relocating path: fetch only ever hits the localhost origin', async () => {
+      // Defence in depth: even if a malicious path bypassed the boundary, the
+      // library builds the URL via the WHATWG URL API against a fixed base, so
+      // the only host the fetch impl ever sees is the localhost origin.
+      const seen: string[] = [];
+      const recordingFetch: typeof fetch = async (input) => {
+        seen.push(String(input));
+        return new Response('ok', { status: 200 });
+      };
+      await waitForHealthy(7900, {
+        // `@evil.tld/x` assigned to pathname cannot move the host.
+        path: '/@evil.tld/x',
+        expectStatus: 200,
+        timeoutSeconds: 1,
+        fetchImpl: recordingFetch,
+      });
+      expect(seen).toHaveLength(1);
+      const u = new URL(seen[0]);
+      expect(u.host).toBe('localhost:7900');
+      expect(u.username).toBe('');
     });
   });
 

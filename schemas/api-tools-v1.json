@@ -393,7 +393,9 @@
             "type": "integer"
           },
           "path": {
+            "description": "Localhost-relative request path; a single leading '/', no scheme-relative '//', and no control bytes, whitespace, '?', or '#'. Keeps the health probe pinned to the localhost origin.",
             "minLength": 1,
+            "pattern": "^/(?!/)[^\\u0000-\\u001f\\u007f ?#]*$",
             "type": "string"
           },
           "port": {

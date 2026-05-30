@@ -1558,11 +1558,20 @@ function requireContainerNameArg(args: Record<string, unknown>, tool: string): s
   return v;
 }
 
-// Extract a required non-empty HTTP path string for the health check. A
-// path missing its leading slash would still construct a syntactically
-// valid URL but with surprising parse results; rejecting an empty string is
-// the minimal guard that preserves the library's URL templating.
-function requireHttpPathArg(args: Record<string, unknown>, tool: string): string {
+// Extract a required HTTP path string for the health check, constrained so it
+// can only address a path on the fixed localhost origin the library builds.
+// The path is consumed downstream as the relative-reference argument to the
+// WHATWG `URL` constructor against a `http://127.0.0.1:<port>` base; a value
+// that does not begin with a single `/` (e.g. `@evil.tld/x`, `//evil.tld`, or
+// a scheme-relative `http:...`) can relocate the resolved host away from
+// localhost, turning the probe into an SSRF primitive. Control bytes and
+// whitespace (`\r`, `\n`, space, tab) and the `?`/`#` delimiters likewise
+// desync URL parsing. The boundary rejects all of these so only a genuine
+// path-absolute reference reaches the library.
+//
+// Exported so the boundary check can be exercised directly in unit tests —
+// see {@link requireRepoKey} for the same rationale.
+export function requireHttpPathArg(args: Record<string, unknown>, tool: string): string {
   const v = args['path'];
   if (typeof v !== 'string' || v.length === 0) {
     throw createError('MalformedInput', {
@@ -1571,7 +1580,33 @@ function requireHttpPathArg(args: Record<string, unknown>, tool: string): string
       message: `Tool '${tool}' requires a non-empty 'path' string in its input.`,
     });
   }
+  // Must be path-absolute (a single leading slash) but not protocol- or
+  // scheme-relative (`//host` resolves the authority, not the path).
+  if (v[0] !== '/' || v[1] === '/') {
+    throw rejectHttpPathShape(tool);
+  }
+  // Reject any C0 control byte (U+0000-U+001F), DEL (U+007F), space, and
+  // the `?`/`#` delimiters that would carry the request off the path
+  // component or desync URL parsing.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001F\u007F ?#]/.test(v)) {
+    throw rejectHttpPathShape(tool);
+  }
   return v;
+}
+
+// Shared rejection for a health-check `path` that could escape the fixed
+// localhost origin or desync URL parsing.
+function rejectHttpPathShape(tool: string): ConfigServerError {
+  return createError('MalformedInput', {
+    tool,
+    field: 'path',
+    message:
+      `Tool '${tool}' requires 'path' to be a localhost-relative request path: ` +
+      `a single leading '/', no scheme-relative '//' prefix, and no control ` +
+      `bytes, whitespace, '?', or '#'. This keeps the health probe pinned to ` +
+      `the localhost origin and prevents the URL from being redirected.`,
+  });
 }
 
 // Extract a required integer HTTP status code. The library compares this to

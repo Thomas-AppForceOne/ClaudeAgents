@@ -231,7 +231,10 @@ export async function dockerDiscoverPort(
  * — the handler does not re-implement it.
  *
  * @property port host port the service is bound to.
- * @property path HTTP path to poll, including the leading slash.
+ * @property path localhost-relative request path to poll. Must be
+ *   path-absolute (a single leading `/`, never a scheme-relative `//`) and
+ *   free of control bytes, whitespace, `?`, and `#`; the boundary rejects
+ *   anything else so the probe cannot be redirected off the localhost origin.
  * @property expectStatus the response status that signals healthy.
  * @property timeoutSeconds overall budget across all polls.
  */
