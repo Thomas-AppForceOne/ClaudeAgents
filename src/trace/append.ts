@@ -6,16 +6,41 @@
  * counter, but unsafe to call concurrently with the runtime emission tool
  * because two callers could race onto the same `events/<seq>.json`. This
  * module is the alternative: a per-call function that derives the next
- * sequence from `index.json` (the fast path) and writes the event file with
- * **exclusive-create** semantics (`O_EXCL` / `wx` flag), so a race surfaces
- * as `EEXIST` rather than silently clobbering an existing event.
+ * sequence from a per-process floor / `index.json` (the fast path) and writes
+ * the event file with **exclusive-create** semantics (`O_EXCL` / `wx` flag),
+ * so a race surfaces as `EEXIST` rather than silently clobbering an existing
+ * event.
  *
- * On `EEXIST` the function re-derives the highest sequence by reading the
- * **authoritative `events/` directory** — never `index.json`, which lags
- * concurrent writers by design — and retries up to a bounded ceiling. On
- * retry exhaustion (a real disk-level pathology, not a normal race) it
- * surfaces a structured warning rather than throwing, so the run loop can
- * record the drop and continue.
+ * Two sequencing problems live in this file and are deliberately kept apart:
+ *
+ *  1. **Cold derivation** — "I do not know where the tail is — consult disk."
+ *     Genuinely O(N). Right for the first emit in a process and right for
+ *     `reconcileIndex` at run termination / `--recover`. Implemented by
+ *     {@link deriveSequenceFromEventsDirectory} and only called on the cold
+ *     path (the very first emit per `(process, traceRoot)` after `index.json`
+ *     is also missing/stale).
+ *  2. **Steady-state / forward probe** — "I just observed slot K; the next
+ *     free slot is K+1, K+2, …" — O(1) per probe. The kernel's `O_EXCL`
+ *     already arbitrates the cross-process race per filename, so the
+ *     in-process emitter only needs a monotonically advancing floor; on
+ *     `EEXIST` we simply `candidate += 1` and retry. No `readdirSync` on the
+ *     success path or the retry path.
+ *
+ * Why per-process is safe (concurrency invariant):
+ *  - Within one process: {@link seqFloorByTraceRoot} is a module-scope `Map`;
+ *    only `appendTraceEvent` reads/writes it. No mutex needed — Node's
+ *    single-threaded event loop runs each `appendTraceEvent` call to
+ *    completion before the next (the function is fully synchronous).
+ *  - Across processes: `openSync(target, 'wx')` is the *only* correctness
+ *    boundary. Two processes that both compute candidate K race in the
+ *    kernel; exactly one wins; the loser sees EEXIST and probes forward.
+ *    The in-memory floor is a per-process *hint*, not a global lock —
+ *    `reconcileIndex` is the authoritative rebuild path (`index.json` is a
+ *    derived cache).
+ *  - A stale `seqFloor` is self-correcting: if process B advances disk past
+ *    A's floor while A is idle, A's next emit collides on `wx`, walks
+ *    forward via the probe-forward retry, and on success raises its own
+ *    `seqFloor` to the winning slot + 1.
  *
  * The function deliberately does NOT route through {@link TraceEmitter}.
  * `TraceEmitter.persist` writes the event via plain overwrite, which would
@@ -36,13 +61,31 @@ import { eventsDir, eventFilename, indexPath } from './store.js';
 import { type TraceIndex } from './reconcile.js';
 
 /**
- * Bound on the EEXIST retry loop. Sized for "a real concurrent run". A handful
- * of writers might collide once or twice before the sequence re-derivation
- * picks a free slot; exhausting eight retries means the directory is in a
- * pathological state (disk full, permission flip mid-run) and the call should
- * surface a structured warning rather than spin.
+ * Bound on the EEXIST retry loop. Each retry is O(1) (single increment +
+ * one exclusive-create open attempt) under the per-process floor + forward
+ * probe design, so the ceiling can be generous without affecting steady-state
+ * cost. Sized at 64 to comfortably absorb realistic cross-process contention
+ * bursts (each loser walks past the winners' slot rather than recomputing the
+ * same candidate). Exhausting the ceiling means the directory is in a
+ * pathological state (disk full, permission flip mid-run, an unrelated
+ * process spamming files at the same slot range) — the call surfaces a
+ * structured warning rather than spinning.
  */
-const APPEND_RETRY_LIMIT = 8;
+const APPEND_RETRY_LIMIT = 64;
+
+/**
+ * Per-process, per-traceRoot monotonic floor for the next sequence number to
+ * attempt. Keyed by absolute `traceRoot` so multiple runs sharing one Node
+ * process coexist without interference. The map is populated lazily on the
+ * first emit per `(process, traceRoot)` and incremented on every successful
+ * write; it is never read or written by anything except `appendTraceEvent`.
+ *
+ * Lifetime: a single integer per traceRoot. The map outlives one run within
+ * a long-lived process by design — the bound is "runs handled per process",
+ * which is small in practice — and a stale entry across a process restart is
+ * impossible because the map lives in process memory only.
+ */
+const seqFloorByTraceRoot = new Map<string, number>();
 
 /**
  * Outcome of an {@link appendTraceEvent} call.
@@ -95,11 +138,18 @@ export function appendTraceEvent(runDir: string, event: TraceEventInput): Append
   // place, so do it eagerly rather than inside the retry loop.
   mkdirSync(evDir, { recursive: true });
 
-  // Fast path: derive the next sequence from index.json (O(1)). The index can
-  // be stale under concurrent writers, but that is exactly what the EEXIST
-  // retry below is for — we read the cache first, fall back to scanning the
-  // authoritative events directory only when we collide.
-  let candidate = deriveSequenceFromIndex(traceRoot);
+  // Candidate derivation, fast → slow:
+  //  1. Per-process floor (`seqFloorByTraceRoot`) — O(1), populated on every
+  //     prior successful emit in this process.
+  //  2. `deriveSequenceFromIndex` (read `index.json.totalEvents`) — O(1) JSON
+  //     read; the cache the previous emit wrote.
+  //  3. `deriveSequenceFromEventsDirectory` — O(N) directory scan; the
+  //     genuine cold path (first emit in a process when the index is also
+  //     missing/stale), and also the path `reconcileIndex` takes at run end.
+  //
+  // After this initial pick, the retry loop walks `candidate += 1` on EEXIST
+  // — no further rescans, success or failure.
+  let candidate = pickInitialCandidate(traceRoot);
 
   for (let attempt = 0; attempt < APPEND_RETRY_LIMIT; attempt += 1) {
     const target = path.join(evDir, eventFilename(candidate));
@@ -109,10 +159,16 @@ export function appendTraceEvent(runDir: string, event: TraceEventInput): Append
     } as TraceEvent;
     try {
       writeExclusively(target, stableStringify(persistedEvent));
+      // Raise the per-process floor to past-the-win so the next call in this
+      // process starts at K+1 with zero disk reads. A racing process may
+      // have written K+1 in the meantime; that surfaces as EEXIST on the
+      // next call's first attempt and the forward probe handles it without
+      // a rescan.
+      seqFloorByTraceRoot.set(traceRoot, candidate + 1);
       // Index update is best-effort and a derived cache; reconcileIndex
       // rebuilds it from the authoritative events directory at any time, so
       // a transient undercount mid-race is acceptable.
-      bestEffortUpdateIndex(traceRoot, candidate, persistedEvent);
+      bestEffortIncrementIndex(traceRoot, persistedEvent);
       return { sequenceNumber: candidate };
     } catch (e) {
       if (!isEexistError(e)) {
@@ -121,20 +177,55 @@ export function appendTraceEvent(runDir: string, event: TraceEventInput): Append
         // the caller can record the drop.
         throw e;
       }
-      // Collision: re-derive the highest sequence from the authoritative
-      // events/ directory (NOT the lagging index.json) and try one past it.
-      candidate = deriveSequenceFromEventsDirectory(traceRoot);
+      // Forward probe: another writer (this process or a contending one)
+      // already wrote `candidate`. Walking forward is sound because the
+      // kernel's `O_EXCL` semantics guarantee the slot we just tried is
+      // taken; no rescan can give us better information than `candidate +
+      // 1`. Costs one integer increment per probe — vs the old O(N)
+      // `readdirSync` per probe — so APPEND_RETRY_LIMIT can be generous.
+      candidate += 1;
     }
   }
 
   // The retry ceiling is reached only when the events directory is in a
-  // pathological state (every collision keeps happening). Surface a
-  // structured warning rather than spinning; the caller drops the emit and
+  // pathological state (every probe in the bounded window collides). Surface
+  // a structured warning rather than spinning; the caller drops the emit and
   // increments droppedEmits.
   throw createError('MalformedInput', {
     field: 'sequenceNumber',
     message: `The framework could not append a trace event after ${APPEND_RETRY_LIMIT} retries; the events directory at '${evDir}' appears to be in a pathological state. Inspect the directory and remove any stray files: rm -rf '${evDir}'/<offending-file>.json, then re-run.`,
   });
+}
+
+/**
+ * Three-tier candidate pick for the very first attempt of an
+ * `appendTraceEvent` call. Returns the smallest sequence number a forward
+ * probe should *start* from for the current `(process, traceRoot)`:
+ *
+ *  - if this process has emitted before for this traceRoot, use the
+ *    in-memory floor (O(1), no disk);
+ *  - else if `index.json` carries a usable `totalEvents`, use that (one
+ *    JSON read, O(1));
+ *  - else fall back to scanning `events/` (the genuine cold path; also the
+ *    `--recover` path where the in-memory state is gone but the disk is
+ *    authoritative). O(N), runs at most once per `(process, traceRoot)` on
+ *    the steady-state happy path.
+ *
+ * Notes on staleness:
+ *  - A per-process floor that is *behind* disk (another process wrote
+ *    forward of us while we were idle) is self-correcting: the very first
+ *    write attempt will collide on `wx`, the retry loop walks forward via
+ *    `candidate += 1`, and on success we raise our floor to past-the-win.
+ *  - A per-process floor that is *ahead* of disk is structurally
+ *    impossible: we only ever increment after a confirmed successful
+ *    `O_EXCL` write at that slot.
+ */
+function pickInitialCandidate(traceRoot: string): number {
+  const memo = seqFloorByTraceRoot.get(traceRoot);
+  if (memo !== undefined) return memo;
+  const fromIndex = deriveSequenceFromIndex(traceRoot);
+  if (fromIndex > 0) return fromIndex;
+  return deriveSequenceFromEventsDirectory(traceRoot);
 }
 
 /**
@@ -145,8 +236,8 @@ export function appendTraceEvent(runDir: string, event: TraceEventInput): Append
 function deriveSequenceFromIndex(traceRoot: string): number {
   try {
     // Lazy require so this fast path does not pay readdir cost on the happy
-    // case. We only read JSON; on any error we fall to 0 and the EEXIST
-    // re-derivation does the real work.
+    // case. We only read JSON; on any error we fall to 0 and the cold-path
+    // events-directory scan does the real work.
     const raw = readFileBestEffort(indexPath(traceRoot));
     if (raw === null) return 0;
     const parsed = JSON.parse(raw) as Partial<TraceIndex>;
@@ -160,8 +251,11 @@ function deriveSequenceFromIndex(traceRoot: string): number {
 
 /**
  * Scan `events/` and return one past the highest sequence number on disk.
- * This is the authoritative re-derivation used on `EEXIST` — `index.json`
- * could be stale, but the directory listing cannot be.
+ * This is the genuine cold-start oracle — `index.json` may be stale by many
+ * writes when a process attaches to an existing run, but the directory
+ * listing cannot be. Called at most once per `(process, traceRoot)` on the
+ * happy path (the first emit, when both the in-memory floor and the index
+ * are absent/zero).
  */
 function deriveSequenceFromEventsDirectory(traceRoot: string): number {
   const evDir = eventsDir(traceRoot);
@@ -213,28 +307,45 @@ function writeExclusively(target: string, content: string): void {
 }
 
 /**
- * Best-effort recompute and write of `index.json`. On any error this is a
- * no-op — `reconcileIndex` exists precisely to rebuild the index from the
- * authoritative events directory, so a transient miss here is benign.
+ * Best-effort O(1) increment of `index.json.totalEvents`. On every error
+ * this is a no-op — `reconcileIndex` exists precisely to rebuild the index
+ * from the authoritative events directory, so a transient miss or undercount
+ * here is benign.
+ *
+ * Why this is O(1) and the prior implementation was not: the old
+ * `bestEffortUpdateIndex` did a full `readdirSync` + `.filter` + `.length`
+ * to recompute `totalEvents` from scratch on every successful emit, turning
+ * the per-emit cost into O(N) and the per-run cost into O(N^2) (see
+ * I-009 in the review). The cheap correct primitive is to read the prior
+ * `totalEvents` from the cache, `+= 1`, and atomic-write — the cache is
+ * derived, so a transient under-count under cross-process contention is
+ * absorbed by `reconcileIndex` at run end (the authoritative rebuild path).
+ *
+ * Cross-process correctness: two processes that both read prior=K and write
+ * K+1 will produce an under-count of one on the cache (last write wins).
+ * That is the exact transient `reconcileIndex` exists to absorb — the
+ * spec's "index is a derived cache" licence at `src/trace/reconcile.ts`
+ * (the authoritative rebuild path, unchanged by this design).
  */
-function bestEffortUpdateIndex(traceRoot: string, _seq: number, ev: TraceEvent): void {
+function bestEffortIncrementIndex(traceRoot: string, ev: TraceEvent): void {
   try {
-    // The index is a derived cache; we keep it eventually-consistent by
-    // counting the on-disk files (cheap directory scan, no JSON parse) and
-    // rewriting the totalEvents-only shape. reconcileIndex rebuilds the full
-    // countByClass / firstTimestamp / lastTimestamp at run termination, so a
-    // transient mid-run shape that carries only totalEvents is acceptable.
-    const evDir = eventsDir(traceRoot);
-    let names: string[];
-    try {
-      names = readdirSync(evDir);
-    } catch {
-      return;
-    }
-    const total = names.filter((n) => n.endsWith('.json')).length;
+    const raw = readFileBestEffort(indexPath(traceRoot));
+    const prior = raw ? (JSON.parse(raw) as Partial<TraceIndex>) : undefined;
+    const priorTotal =
+      prior &&
+      typeof prior.totalEvents === 'number' &&
+      Number.isInteger(prior.totalEvents) &&
+      prior.totalEvents >= 0
+        ? prior.totalEvents
+        : 0;
+    // We only seed `totalEvents` here; `reconcileIndex` rebuilds the full
+    // shape (countByClass, firstTimestamp, lastTimestamp, disposition) from
+    // the authoritative events directory at run termination, so a transient
+    // mid-run shape carrying only totalEvents is acceptable — it is the same
+    // partial shape the prior implementation wrote.
     const indexShape: TraceIndex = {
       runId: ev.runId,
-      totalEvents: total,
+      totalEvents: priorTotal + 1,
       countByClass: {},
     };
     atomicWriteFile(indexPath(traceRoot), stableStringify(indexShape));
