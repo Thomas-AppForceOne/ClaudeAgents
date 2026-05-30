@@ -369,7 +369,7 @@ export function buildToolList(): ToolListEntry[] {
  * Registers two request handlers: `ListTools` (returns the
  * {@link buildToolList} catalogue) and `CallTool` (validates the name against
  * {@link DISPATCH_TOOL_NAMES}, logs an anonymised start record, dispatches via
- * {@link dispatchRead}, and maps success/failure to MCP responses).
+ * {@link dispatchTool}, and maps success/failure to MCP responses).
  *
  * @returns the configured (but not yet connected) server.
  *
@@ -424,7 +424,7 @@ export async function createMcpServer(): Promise<Server> {
         tool: toolName,
         anonymisedArgs: anonymiseToolArgs(args),
       });
-      const result = await dispatchRead(toolName, args, logger);
+      const result = await dispatchTool(toolName, args, logger);
       if (result !== UNHANDLED) {
         logger.info('tools/call: ok', { tool: toolName, code: 'OK' });
         return successResponse(result);
@@ -473,7 +473,7 @@ function errorResponse(err: ConfigServerError): {
   };
 }
 
-// Sentinel returned by dispatchRead when no handler exists for a (recognised)
+// Sentinel returned by dispatchTool when no handler exists for a (recognised)
 // tool name. A unique Symbol so it can never collide with a real tool result,
 // including `undefined`/`null`.
 const UNHANDLED = Symbol('unhandled');
@@ -1116,11 +1116,10 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
   },
 };
 
-// Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
-// sentinel when no handler is registered (the caller then reports
-// NotImplemented). Despite the `Read` name it dispatches every tool kind
-// (read/write/validate).
-async function dispatchRead(
+// Look up and run the handler for `toolName`, regardless of kind
+// (read/write/validate). Returns the {@link UNHANDLED} sentinel when no handler
+// is registered (the caller then reports NotImplemented).
+async function dispatchTool(
   toolName: string,
   args: Record<string, unknown>,
   logger: ReturnType<typeof getLogger>,
