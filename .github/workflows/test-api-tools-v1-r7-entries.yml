@@ -1,0 +1,10 @@
+name: test-api-tools-v1-r7-entries
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+jobs:
+  run:
+    uses: ./.github/workflows/shared-setup.yml
+    with:
+      run: npm run api-tools-v1-r7-entries

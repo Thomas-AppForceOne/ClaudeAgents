@@ -1,10 +1,10 @@
 /**
  * Structural tests for the CI workflow files under `.github/workflows`.
  *
- * The CI surface is a single reusable `shared-setup.yml` plus nine per-category
- * workflows that all call it. This suite pins that layout and the conventions
- * that keep it consistent: exactly the ten expected `.yml` files exist (no
- * stray `.yaml`), the shared workflow is `workflow_call`-triggered and pins a
+ * The CI surface is a single reusable `shared-setup.yml` plus a set of
+ * per-category workflows that all call it. This suite pins that layout and the
+ * conventions that keep it consistent: exactly the expected `.yml` files exist
+ * (no stray `.yaml`), the shared workflow is `workflow_call`-triggered and pins a
  * Node version in the supported range while running `npm ci` + `npm run
  * build`, every category workflow triggers on push and pull_request, reuses
  * shared-setup, and never re-declares its own Node setup. Each `npm run <name>`
@@ -37,6 +37,8 @@ const CATEGORY_WORKFLOWS = [
   'test-schemas.yml',
   'test-no-stack-leak.yml',
   'test-no-spec-ref.yml',
+  'test-no-second-mcp-server.yml',
+  'test-api-tools-v1-r7-entries.yml',
   'test-house-rules.yml',
   'test-error-text.yml',
   'test-doc-lint.yml',
@@ -115,7 +117,7 @@ function nodeVersionInRange(version: string): boolean {
 }
 
 describe('workflows: directory layout', () => {
-  it('contains exactly the ten expected `.yml` files', () => {
+  it('contains exactly the expected `.yml` files', () => {
     const entries = readdirSync(WORKFLOWS_DIR).sort();
     expect(entries).toEqual(EXPECTED_FILES);
   });
@@ -266,6 +268,11 @@ describe('workflows: per-file command substrings', () => {
   it('test-doc-lint.yml runs `npm run doc-lint`', () => {
     const raw = readWorkflow('test-doc-lint.yml');
     expect(raw).toContain('npm run doc-lint');
+  });
+
+  it('test-api-tools-v1-r7-entries.yml runs `npm run api-tools-v1-r7-entries`', () => {
+    const raw = readWorkflow('test-api-tools-v1-r7-entries.yml');
+    expect(raw).toContain('npm run api-tools-v1-r7-entries');
   });
 });
 

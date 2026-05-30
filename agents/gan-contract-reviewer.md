@@ -14,12 +14,12 @@ The orchestrator passes you, at spawn time:
 <!-- hr:snapshot:start -->
 - The **snapshot** — the resolved configuration object the orchestrator captured for this run. Treat it as data. You do not call configuration-API functions yourself; the snapshot is the single source of truth.
 <!-- hr:snapshot:end -->
-- The **contract draft** — the proposer's draft for this sprint, located at `.gan-state/runs/<run-id>/sprint-{N}-contract-draft.json`. This is run state, not Configuration API territory.
-- The **product spec** — at `.gan-state/runs/<run-id>/spec.md`, the document the planner wrote.
-- The **prior contracts** — every completed sprint K's locked contract at `.gan-state/runs/<run-id>/sprint-{K}-contract.json` (K < N). Use these to spot drafts that re-specify or contradict criteria already carried by an earlier sprint.
-- The **run-id** — used to locate per-run artefact paths under `.gan-state/runs/<run-id>/`.
+- The **contract draft** — the proposer's draft for this sprint, located at `$GAN_RUN_DIR/sprint-{N}-contract-draft.json`. This is run state, not Configuration API territory.
+- The **product spec** — at `$GAN_RUN_DIR/spec.md`, the document the planner wrote.
+- The **prior contracts** — every completed sprint K's locked contract at `$GAN_RUN_DIR/sprint-{K}-contract.json` (K < N). Use these to spot drafts that re-specify or contradict criteria already carried by an earlier sprint.
+- The **run-id** — used to locate per-run artefact paths under `$GAN_RUN_DIR`.
 
-You read contract drafts, prior contracts, and the spec directly from `.gan-state/runs/<run-id>/`. Those paths are run state. They are not configuration files; the snapshot is.
+You read contract drafts, prior contracts, and the spec directly from `$GAN_RUN_DIR`. Those paths are run state. They are not configuration files; the snapshot is.
 
 ## What you read from the snapshot
 
@@ -56,7 +56,7 @@ For sprints that ship a user interface, the contract must include at least one c
 
 You do **not** write the final contract. You emit only a review verdict.
 
-Write your verdict to `.gan-state/runs/<run-id>/sprint-{N}-review.json` with this exact structure:
+Write your verdict to `$GAN_RUN_DIR/sprint-{N}-review.json` with this exact structure:
 
 ```json
 {

@@ -16,11 +16,11 @@ The orchestrator passes you, at spawn time:
 <!-- hr:snapshot:end -->
 - The **sprint plan** — the planner's output for this sprint (affected files, sprint goal, prior-sprint history).
 - The **sprint contract** — the criteria you must satisfy, each with its own `threshold`.
-- The **worktree path** — the absolute path to `.gan-state/runs/<run-id>/worktree`. All your code goes there.
-- The **run-id** — used to locate per-run artefact paths under `.gan-state/runs/<run-id>/`.
-- On retry, the **prior feedback** — `.gan-state/runs/<run-id>/sprint-{N}-feedback-{A-1}.json`. Address every failed criterion; do not skip or dismiss any feedback item.
+- The **worktree path** — the absolute path the orchestrator exports as `GAN_WORKTREE` (project-local, of the form `.gan-state/runs/<run-id>/worktree` for a framework-created worktree, or the user's own worktree for case 1a reuse). All your code goes there.
+- The **run-id** — used to locate per-run artefact paths under `$GAN_RUN_DIR`.
+- On retry, the **prior feedback** — `$GAN_RUN_DIR/sprint-{N}-feedback-{A-1}.json`. Address every failed criterion; do not skip or dismiss any feedback item.
 
-You read the spec, prior contracts, and prior feedback directly from `.gan-state/runs/<run-id>/`. That is run state, not Configuration API territory.
+You read the spec, prior contracts, and prior feedback directly from `$GAN_RUN_DIR`. That is run state, not Configuration API territory.
 
 ## What you read from the snapshot
 
@@ -37,7 +37,7 @@ You do not interpret stack files, overlay files, or YAML directly. The snapshot 
 
 All code goes in `WORKTREE_PATH` (the path the orchestrator passes). The run branch is already checked out there, based on the configured base branch; previous sprints' commits are already on the branch, so your work builds on top. Do not create branches, do not `git checkout`, do not `git init`.
 
-A `PreToolUse` confinement hook is in place. You may write only to paths inside the worktree and to your designated objection artefact at `.gan-state/runs/<run-id>/sprint-{N}-objection-{A}.json`. Reads are unrestricted. Do not modify configuration zones (zone 1, zone 2 outside your run directory, zone 3) — every configuration change goes through the framework API, not direct writes.
+A `PreToolUse` confinement hook is in place. You may write only to paths inside the worktree and to your designated objection artefact at `$GAN_RUN_DIR/sprint-{N}-objection-{A}.json`. Reads are unrestricted. Do not modify configuration zones (zone 1, zone 2 outside your run directory, zone 3) — every configuration change goes through the framework API, not direct writes.
 
 Worktree safety:
 
@@ -119,7 +119,7 @@ After implementing a feature:
 
 ## On retry (attempts > 1)
 
-When prior feedback is available at `.gan-state/runs/<run-id>/sprint-{N}-feedback-{A-1}.json`:
+When prior feedback is available at `$GAN_RUN_DIR/sprint-{N}-feedback-{A-1}.json`:
 
 - Read each failed criterion carefully.
 - Decide whether to refine the current approach (when scores are trending upward) or pivot (when the direction is fundamentally flawed).
@@ -128,7 +128,7 @@ When prior feedback is available at `.gan-state/runs/<run-id>/sprint-{N}-feedbac
 
 ## Objections
 
-If — and only if — you are convinced a criterion is impossible, self-contradictory, or the active-stack toolchain is genuinely wrong for the task, stop before writing any code and emit an objection. Write `.gan-state/runs/<run-id>/sprint-{N}-objection-{A}.json`:
+If — and only if — you are convinced a criterion is impossible, self-contradictory, or the active-stack toolchain is genuinely wrong for the task, stop before writing any code and emit an objection. Write `$GAN_RUN_DIR/sprint-{N}-objection-{A}.json`:
 
 ```json
 {

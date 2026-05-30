@@ -10,7 +10,11 @@
  * than throwing.
  */
 
-import type { AgentAttemptEvent, LlmCallEvent, TraceEvent } from './events.js';
+import path from 'node:path';
+
+import { getDroppedEmits } from './dropped-emits.js';
+import type { AgentAttemptEvent, LlmCallEvent, ToolCallEvent, TraceEvent } from './events.js';
+import { scanEvents } from './reconcile.js';
 
 /**
  * Per-call metrics for a single LLM call summary line.
@@ -74,16 +78,24 @@ export function formatWallclock(elapsedMs: number): string {
  *
  * @property calls number of LLM-call events.
  * @property agents number of agent-attempt events.
+ * @property toolCalls number of `toolCall` events. Counted alongside `calls`
+ *   and `agents` because the runtime now records tool invocations explicitly
+ *   and the per-run summary surfaces the count for cost / observability
+ *   reporting. Always populated by the shipped aggregator; optional in the
+ *   type so external constructors stay source-compatible across additive
+ *   bumps (per PROJECT_CONTEXT § Conventions, "Schema discipline — TS
+ *   analog").
  * @property tokensInput / tokensOutput / tokensCached summed token counts
  *   across all LLM calls.
  * @property elapsedMs span between the first and last timestamped event; `0`
  *   when fewer than two timestamps are present.
  */
 export interface SprintSummaryAggregate {
-
   calls: number;
 
   agents: number;
+
+  toolCalls?: number;
 
   tokensInput: number;
 
@@ -108,6 +120,7 @@ export interface SprintSummaryAggregate {
 export function aggregateSprintSummary(events: readonly TraceEvent[]): SprintSummaryAggregate {
   let calls = 0;
   let agents = 0;
+  let toolCalls = 0;
   let tokensInput = 0;
   let tokensOutput = 0;
   let tokensCached = 0;
@@ -127,17 +140,23 @@ export function aggregateSprintSummary(events: readonly TraceEvent[]): SprintSum
       tokensOutput += call.tokensOutput;
       tokensCached += call.tokensCached;
     } else if (ev.eventType === 'agentAttempt') {
-
       // We only count agent attempts, none of their fields feed the aggregate.
       // The narrowing cast + void documents that the type was checked while
       // making the deliberate non-use explicit (satisfies no-unused-expressions).
       void (ev as AgentAttemptEvent);
       agents += 1;
+    } else if (ev.eventType === 'toolCall') {
+      // Same shape as the agentAttempt branch: count-only, no fields feed
+      // the aggregate. The single counting loop here is the only place
+      // toolCalls is computed — the runtime tool layer reads the field this
+      // loop writes, never re-counts independently.
+      void (ev as ToolCallEvent);
+      toolCalls += 1;
     }
   }
 
   const elapsedMs = firstMs !== undefined && lastMs !== undefined ? lastMs - firstMs : 0;
-  return { calls, agents, tokensInput, tokensOutput, tokensCached, elapsedMs };
+  return { calls, agents, toolCalls, tokensInput, tokensOutput, tokensCached, elapsedMs };
 }
 
 /**
@@ -158,4 +177,84 @@ export function formatSprintSummary(aggregate: SprintSummaryAggregate): string {
  */
 export function formatSprintSummaryFromEvents(events: readonly TraceEvent[]): string {
   return formatSprintSummary(aggregateSprintSummary(events));
+}
+
+/**
+ * Disk-reading wrapper over {@link formatSprintSummaryFromEvents}: scan the
+ * run's trace events directory, then format the one-line roll-up.
+ *
+ * @param runDir absolute path to the run directory. The trace root
+ *   (`<runDir>/trace`) is computed internally so callers never construct it.
+ * @returns the `[sprint-summary] …` string the in-memory formatter would
+ *   produce for the same events.
+ *
+ * Failure modes: an absent / unreadable trace directory yields the empty
+ * roll-up (`scanEvents` tolerates the missing directory by returning an
+ * empty result), so the call is safe on a fresh run dir. Per-file scan
+ * failures are folded into corruption counters by `scanEvents` and do not
+ * propagate here.
+ */
+export function runSprintSummary(runDir: string): string {
+  const traceRoot = path.join(runDir, 'trace');
+  const { events } = scanEvents(traceRoot);
+  return formatSprintSummaryFromEvents(events);
+}
+
+/**
+ * Extended sprint-summary aggregate returned by {@link aggregateRunSummary}.
+ *
+ * The shape is the existing {@link SprintSummaryAggregate} (now including
+ * `toolCalls`) plus the in-memory per-run `droppedEmits` tally — the only
+ * field that does **not** come from the events on disk. Holding the two
+ * facts in one object lets a single tool call surface both the trace's own
+ * counts and the runtime's drop signal at the same wall-clock instant.
+ *
+ * @property droppedEmits the count of emit failures the long-lived
+ *   config-server process has recorded for this `runDir`. **In-memory**:
+ *   a separate Node process that imports `aggregateRunSummary` will see
+ *   `0` here even when this process's tally is positive. The on-disk
+ *   alternative was rejected because the failure domain it exists to flag
+ *   (a disk-full or unwritable run dir) would also prevent the counter
+ *   itself from being written. Always populated by the shipped aggregator;
+ *   optional in the type so external constructors stay source-compatible
+ *   across additive bumps (per PROJECT_CONTEXT § Conventions, "Schema
+ *   discipline — TS analog").
+ */
+export interface RunSummaryAggregate extends SprintSummaryAggregate {
+  droppedEmits?: number;
+}
+
+/**
+ * Disk-reading wrapper over {@link aggregateSprintSummary} that also reads
+ * the in-memory `droppedEmits` tally from the long-lived config-server
+ * process.
+ *
+ * @param runDir absolute path to the run directory. The trace root
+ *   (`<runDir>/trace`) is computed internally so callers never construct it.
+ * @returns the extended aggregate — every shipped `SprintSummaryAggregate`
+ *   numeric field equals `aggregateSprintSummary(events)` over the events
+ *   read from disk; `droppedEmits` is read from {@link getDroppedEmits},
+ *   not derived from the on-disk events (a dropped emit by definition
+ *   leaves no trace).
+ *
+ * Process-local `droppedEmits` contract (read before depending on it): the
+ * disk-derived fields are identical from any process that can read the run
+ * dir, but `droppedEmits` reflects only the in-memory tally of the process
+ * that recorded the failures. It is meaningful when called inside the
+ * long-lived config-server process that did the emitting; a separate process
+ * (a CLI, a test, a cross-process import) sees `0` here even when the
+ * emitting process's tally is positive. This is the honest documented
+ * contract, not a defect: the tally is in-memory by design so a disk-full or
+ * unwritable run dir — the exact failure it flags — cannot also defeat the
+ * counter. A consumer that needs the drop count must read it from the
+ * emitting process (e.g. via the MCP tool against the running server), not by
+ * importing this function into a fresh process.
+ *
+ * Side effects: a directory scan of `<runDir>/trace/events/`; no writes.
+ */
+export function aggregateRunSummary(runDir: string): RunSummaryAggregate {
+  const traceRoot = path.join(runDir, 'trace');
+  const { events } = scanEvents(traceRoot);
+  const base = aggregateSprintSummary(events);
+  return { ...base, droppedEmits: getDroppedEmits(runDir) };
 }

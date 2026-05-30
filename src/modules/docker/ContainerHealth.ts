@@ -45,7 +45,27 @@ export async function waitForHealthy(
 ): Promise<true> {
   const fetchImpl: typeof fetch = options.fetchImpl ?? fetch;
   const host = options.host ?? 'localhost';
-  const url = `http://${host}:${port}${options.path}`;
+  // Build the probe URL with the WHATWG `URL` API against a fixed
+  // `http://<host>:<port>` base rather than string concatenation. The base
+  // pins the origin; assigning the caller's path to `pathname` cannot move
+  // the host, port, or userinfo. A path that is not a plain path-absolute
+  // reference (e.g. `@evil.tld/x`, `//evil.tld`, or one carrying a
+  // `?`/`#`/control byte) is therefore neutralised here even if it ever
+  // reaches the library without passing the wire-boundary check. The base is
+  // refused if it cannot host a service, and any residual host/origin drift
+  // is rejected outright.
+  const base = new URL(`http://${host}:${port}/`);
+  const target = new URL(base.toString());
+  target.pathname = options.path;
+  if (target.host !== base.host || target.username !== '' || target.password !== '') {
+    throw createError('MalformedInput', {
+      message:
+        `ContainerHealth.waitForHealthy refuses a path that relocates the ` +
+        `request origin away from '${base.host}': received path '${options.path}'.`,
+      path: options.path,
+    });
+  }
+  const url = target.toString();
   const totalBudgetMs = Math.max(0, Math.floor(options.timeoutSeconds * 1000));
   const start = Date.now();
 

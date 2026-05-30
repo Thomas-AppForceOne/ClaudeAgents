@@ -1,6 +1,6 @@
 {
   "name": "@claudeagents/config-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ClaudeAgents config MCP server (R1 skeleton).",
   "private": true,
   "type": "module",
@@ -36,7 +36,9 @@
     "lint-no-spec-ref": "node dist/scripts/lint-no-spec-ref/index.js",
     "lint-error-text": "node dist/scripts/lint-error-text/index.js",
     "doc-lint": "node dist/scripts/doc-lint/index.js",
-    "house-rules": "node dist/scripts/house-rules/index.js"
+    "house-rules": "node dist/scripts/house-rules/index.js",
+    "no-second-mcp-server": "node scripts/checks/no-second-mcp-server.mjs",
+    "api-tools-v1-r7-entries": "node scripts/checks/api-tools-v1-r7-entries.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

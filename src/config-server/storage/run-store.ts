@@ -49,6 +49,18 @@ export const RUN_ID_PATTERN = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$/;
 export const REPO_KEY_HASH_TAIL = /-[0-9a-f]{12}$/;
 
 /**
+ * Whole-key shape of a value produced by {@link computeRepoKey}:
+ * `<basename>-<12 hex>` where the basename is a `path.basename`-shaped string
+ * (no `/`, `\`, NUL, or `..` segments) drawn from a canonicalised worktree
+ * root. Used by the R7 MCP boundary to refute a caller-supplied `repoKey`
+ * that does not match the producer's shape — so a free-form string can never
+ * misroute the lock or trace paths via `path.join` traversal. The character
+ * class matches the basename half of `computeRepoKey`'s output (Unicode
+ * letters/digits, `.`, `_`, `-`) and the `-<12 hex>` tail mirrors
+ * {@link REPO_KEY_HASH_TAIL}. */
+export const REPO_KEY_PATTERN = /^[A-Za-z0-9._-]+-[0-9a-f]{12}$/;
+
+/**
  * Resolve the run-store root by precedence: `GAN_RUNS_DATA` env var → marker
  * file → `~/.gan-runs-data`.
  *
@@ -204,6 +216,22 @@ export function resolveRunStore(opts: {
  * The timestamp is in UTC (so ids sort chronologically regardless of the
  * machine's timezone) and a 2-byte random suffix disambiguates ids generated
  * within the same second. Conforms to {@link RUN_ID_PATTERN}.
+ *
+ * Suffix width and uniqueness scope — the format is fixed at 4 hex chars (16
+ * bits, 65,536 values per UTC second) and must stay that way: {@link
+ * RUN_ID_PATTERN} and the run-dir recovery enumeration both depend on it, so
+ * widening the suffix would diverge from the run-id format the rest of the
+ * system pins. The consequence is that run ids are unique *per repository*,
+ * not globally:
+ *  - Same-repo collisions cannot cause two live runs to share an id —
+ *    {@link acquireRunLock} enforces single-active-run-per-repo, so a colliding
+ *    second run is refused before it gets going.
+ *  - Cross-repo same-second collisions are possible (two repos minting the same
+ *    `<timestamp>-<suffix>` in the same UTC second) but benign — each repo's run
+ *    lives under its own `<storeRoot>/<repoKey>/runs/<runId>` tree, so nothing
+ *    is overwritten. The only effect is that a run id alone is ambiguous as a
+ *    global identifier: telemetry consumers (e.g. an O3 cost rollup) must join
+ *    on `(repoKey, runId)`, never on `runId` by itself.
  *
  * @param now clock seam; defaults to the current time. Injected in tests for a
  *   deterministic timestamp.

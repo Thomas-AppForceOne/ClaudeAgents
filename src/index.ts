@@ -87,6 +87,7 @@ export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
 export {
   acquireRunLock,
   releaseRunLock,
+  releaseRunLockAtPath,
   readRunLock,
   defaultIsAlive,
 } from './config-server/storage/run-lock.js';

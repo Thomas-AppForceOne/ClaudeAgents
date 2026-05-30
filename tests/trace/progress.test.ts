@@ -204,6 +204,10 @@ describe('sprint_end_summary_formatter_aggregates_exact_string', () => {
     expect(agg).toEqual({
       calls: 0,
       agents: 0,
+      // The additive `toolCalls` counter is part of the SprintSummaryAggregate
+      // shape returned by the aggregator; an empty trace yields 0 for it
+      // alongside every other count.
+      toolCalls: 0,
       tokensInput: 0,
       tokensOutput: 0,
       tokensCached: 0,

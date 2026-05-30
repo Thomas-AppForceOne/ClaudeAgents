@@ -33,6 +33,11 @@ import { getLogger } from './logging/logger.js';
 import { packageRoot as resolvePackageRoot } from './package-root.js';
 import { apiToolsV1 } from './schemas-bundled.js';
 import {
+  REPO_KEY_PATTERN,
+  RUN_ID_PATTERN,
+  resolveStoreRoot,
+} from './storage/run-store.js';
+import {
   getActiveStacks as readGetActiveStacks,
   getBoundedDirectoryListing as readGetBoundedDirectoryListing,
   getMergedSplicePoints as readGetMergedSplicePoints,
@@ -68,6 +73,50 @@ import {
   trustRevoke as runTrustRevoke,
   updateStackField as runUpdateStackField,
 } from './tools/writes.js';
+import {
+  createRunWorkspaceTool as runCreateRunWorkspace,
+  resolveRunStoreTool as runResolveRunStore,
+} from './tools/run-context.js';
+import {
+  acquireRunLockTool as runAcquireRunLock,
+  releaseRunLockTool as runReleaseRunLock,
+} from './tools/run-lock.js';
+import {
+  aggregateRunSummaryTool as runAggregateRunSummary,
+  buildLoopDetectedBodyTool as runBuildLoopDetectedBody,
+  buildTrustEventBodyTool as runBuildTrustEventBody,
+  buildValidationAbortBodyTool as runBuildValidationAbortBody,
+  buildValidationAbortFromCodeTool as runBuildValidationAbortFromCode,
+  emitTraceEventTool as runEmitTraceEvent,
+  formatHeartbeatTool as runFormatHeartbeat,
+  formatLlmCallSummaryTool as runFormatLlmCallSummary,
+  reconcileTraceIndexTool as runReconcileTraceIndex,
+  reconstructRecoveryStateTool as runReconstructRecoveryState,
+  runSprintSummaryTool as runSprintSummaryHandler,
+} from './tools/trace.js';
+import {
+  checkRoleCeilingTool as runCheckRoleCeiling,
+  checkSprintBudgetTool as runCheckSprintBudget,
+  createEditOscillationErrorTool as runCreateEditOscillationError,
+  createLoopDetectedErrorTool as runCreateLoopDetectedError,
+  createSprintBudgetErrorTool as runCreateSprintBudgetError,
+  detectEditOscillationTool as runDetectEditOscillation,
+} from './tools/safety.js';
+import { buildEvaluatorPlanTool as runBuildEvaluatorPlan } from './tools/evaluator-tools.js';
+// Docker tool handlers are intentionally imported from the local tools file
+// (which uses dynamic `import()` per-handler) rather than from
+// `../modules/docker/*` directly. A top-level static import of any path under
+// `src/modules/docker/*` would execute that module's import-time
+// `docker --version` prerequisite check, crashing every config tool on every
+// host without a docker binary. The static-scan guard in the docker tool
+// tests pins this property as a regression.
+import {
+  dockerCheckContainerHealth as runDockerCheckContainerHealth,
+  dockerContainerName as runDockerContainerName,
+  dockerDiscoverPort as runDockerDiscoverPort,
+  dockerReleasePort as runDockerReleasePort,
+  dockerReservePort as runDockerReservePort,
+} from './tools/docker-tools.js';
 
 /**
  * The advertised tool surface: the core read, write, and validate tools
@@ -77,7 +126,6 @@ import {
  * shown to clients.
  */
 export const F2_TOOL_NAMES: readonly string[] = [
-
   'getApiVersion',
   'getResolvedConfig',
   'getStack',
@@ -119,12 +167,99 @@ export const F2_TOOL_NAMES: readonly string[] = [
 export const R5_TOOL_NAMES: readonly string[] = ['trustList'] as const;
 
 /**
- * Every tool name the dispatcher will accept (F2 ∪ R5). A `tools/call` for a
- * name outside this set is rejected as an unknown tool. Note this is a superset
- * of the *advertised* list — advertising additionally requires a registered
- * handler (see {@link buildToolList}).
+ * Tool names introduced by the runtime invocation bridge — the run-context
+ * resolver/creator pair and the release-by-key run-lock pair. Kept separate
+ * from {@link F2_TOOL_NAMES} so the additive surface stays auditable; unioned
+ * into {@link DISPATCH_TOOL_NAMES} for the actual dispatch.
  */
-export const DISPATCH_TOOL_NAMES: readonly string[] = [...F2_TOOL_NAMES, ...R5_TOOL_NAMES];
+export const RUN_CONTEXT_TOOL_NAMES: readonly string[] = [
+  'resolveRunStore',
+  'createRunWorkspace',
+  'acquireRunLock',
+  'releaseRunLock',
+] as const;
+
+/**
+ * Tool names introduced by the runtime invocation bridge's trace surface —
+ * the eleven thin handlers behind the shared trace library functions. Kept
+ * in its own list so the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ */
+export const TRACE_TOOL_NAMES: readonly string[] = [
+  'emitTraceEvent',
+  'runSprintSummary',
+  'formatHeartbeat',
+  'formatLlmCallSummary',
+  'aggregateRunSummary',
+  'reconcileTraceIndex',
+  'reconstructRecoveryState',
+  'buildTrustEventBody',
+  'buildValidationAbortBody',
+  'buildValidationAbortFromCode',
+  'buildLoopDetectedBody',
+] as const;
+
+/**
+ * Tool names introduced by the runtime invocation bridge's safety surface —
+ * the six thin handlers behind the shared safety library functions. Kept in
+ * its own list so the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch. The three halt-decision
+ * tools (`checkRoleCeiling`, `checkSprintBudget`, `detectEditOscillation`)
+ * and the three matching error-builder tools (`createLoopDetectedError`,
+ * `createSprintBudgetError`, `createEditOscillationError`) live together
+ * because they share the `LoopDetected` halt contract.
+ */
+export const SAFETY_TOOL_NAMES: readonly string[] = [
+  'checkRoleCeiling',
+  'checkSprintBudget',
+  'detectEditOscillation',
+  'createLoopDetectedError',
+  'createSprintBudgetError',
+  'createEditOscillationError',
+] as const;
+
+/**
+ * Tool names introduced by the runtime invocation bridge's evaluator-core
+ * surface — a single thin handler behind the shipped deterministic
+ * `buildEvaluatorPlan` library function. Kept in its own list so the
+ * additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ */
+export const EVALUATOR_TOOL_NAMES: readonly string[] = ['buildEvaluatorPlan'] as const;
+
+/**
+ * Tool names introduced by the runtime invocation bridge's docker-module
+ * surface — five thin, lazy-loaded wrappers over the shipped docker module
+ * library functions (`PortRegistry.register` / `.release`, `discoverPort`,
+ * `waitForHealthy`, `nameForWorktree`). Kept in its own list so the additive
+ * surface stays auditable; unioned into {@link DISPATCH_TOOL_NAMES}. Each
+ * handler dynamically imports its library function inside the handler body
+ * so the server boots cleanly on a host without a `docker` binary.
+ */
+export const DOCKER_TOOL_NAMES: readonly string[] = [
+  'dockerReservePort',
+  'dockerReleasePort',
+  'dockerDiscoverPort',
+  'dockerCheckContainerHealth',
+  'dockerContainerName',
+] as const;
+
+/**
+ * Every tool name the dispatcher will accept (F2 ∪ R5 ∪ run-context ∪ trace
+ * ∪ safety ∪ evaluator ∪ docker). A `tools/call` for a name outside this set
+ * is rejected as an unknown tool. Note this is a superset of the *advertised*
+ * list — advertising additionally requires a registered handler (see
+ * {@link buildToolList}).
+ */
+export const DISPATCH_TOOL_NAMES: readonly string[] = [
+  ...F2_TOOL_NAMES,
+  ...R5_TOOL_NAMES,
+  ...RUN_CONTEXT_TOOL_NAMES,
+  ...TRACE_TOOL_NAMES,
+  ...SAFETY_TOOL_NAMES,
+  ...EVALUATOR_TOOL_NAMES,
+  ...DOCKER_TOOL_NAMES,
+];
 
 // The slice of package.json this server cares about (name + version).
 interface PackageMeta {
@@ -195,8 +330,15 @@ export interface ToolListEntry {
  * @returns the list of advertisable {@link ToolListEntry}s.
  */
 export function buildToolList(): ToolListEntry[] {
-  const props = (apiToolsV1.properties ?? {}) as Record<string, { inputSchema?: unknown }>;
-  return F2_TOOL_NAMES.filter((name) =>
+  const props = (apiToolsV1.properties ?? {}) as Record<
+    string,
+    { inputSchema?: unknown; description?: unknown }
+  >;
+  // Advertise every dispatcher-known name (F2 + R5 + run-context) that has a
+  // registered handler. Earlier this filtered F2 names only, leaving R5 and
+  // later additive tools dispatchable-but-unadvertised; we expand to the full
+  // dispatch set so a markdown orchestrator can discover the run-context pair.
+  return DISPATCH_TOOL_NAMES.filter((name) =>
     Object.prototype.hasOwnProperty.call(TOOL_HANDLERS, name),
   ).map((name) => {
     const schemaEntry = props[name];
@@ -204,9 +346,17 @@ export function buildToolList(): ToolListEntry[] {
       schemaEntry && typeof schemaEntry === 'object' && schemaEntry.inputSchema
         ? (schemaEntry.inputSchema as Record<string, unknown>)
         : { type: 'object', additionalProperties: false, properties: {} };
+    // Prefer a per-tool catalog `description` when the schema entry supplies
+    // one — that is where a tool documents behaviour an LLM caller must know
+    // (e.g. that a "Check" tool actually BLOCKS while polling). Fall back to
+    // the generic auto-string for entries that carry no bespoke description.
+    const description =
+      schemaEntry && typeof schemaEntry === 'object' && typeof schemaEntry.description === 'string'
+        ? schemaEntry.description
+        : `ClaudeAgents config-server tool: ${name}`;
     return {
       name,
-      description: `ClaudeAgents config-server tool: ${name}`,
+      description,
       required: TOOL_HANDLERS[name].required,
       inputSchema,
     };
@@ -219,7 +369,7 @@ export function buildToolList(): ToolListEntry[] {
  * Registers two request handlers: `ListTools` (returns the
  * {@link buildToolList} catalogue) and `CallTool` (validates the name against
  * {@link DISPATCH_TOOL_NAMES}, logs an anonymised start record, dispatches via
- * {@link dispatchRead}, and maps success/failure to MCP responses).
+ * {@link dispatchTool}, and maps success/failure to MCP responses).
  *
  * @returns the configured (but not yet connected) server.
  *
@@ -245,7 +395,6 @@ export async function createMcpServer(): Promise<Server> {
   const logger = getLogger();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-
     const tools = buildToolList().map(({ name, description, inputSchema }) => ({
       name,
       description,
@@ -275,7 +424,7 @@ export async function createMcpServer(): Promise<Server> {
         tool: toolName,
         anonymisedArgs: anonymiseToolArgs(args),
       });
-      const result = await dispatchRead(toolName, args, logger);
+      const result = await dispatchTool(toolName, args, logger);
       if (result !== UNHANDLED) {
         logger.info('tools/call: ok', { tool: toolName, code: 'OK' });
         return successResponse(result);
@@ -324,7 +473,7 @@ function errorResponse(err: ConfigServerError): {
   };
 }
 
-// Sentinel returned by dispatchRead when no handler exists for a (recognised)
+// Sentinel returned by dispatchTool when no handler exists for a (recognised)
 // tool name. A unique Symbol so it can never collide with a real tool result,
 // including `undefined`/`null`.
 const UNHANDLED = Symbol('unhandled');
@@ -600,13 +749,377 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runRegisterModule({ projectRoot, name, manifest });
     },
   },
+  resolveRunStore: {
+    // Neither fromDir nor runId is required: a no-argument call mints a fresh
+    // runId and resolves from process.cwd(), the run-start shape. Recovery and
+    // cleanup pass an explicit runId; both shapes are valid.
+    required: [],
+    handler: (args) => {
+      const input: { fromDir?: string; runId?: string } = {};
+      const fromDir = args['fromDir'];
+      if (typeof fromDir === 'string' && fromDir.length > 0) input.fromDir = fromDir;
+      const runId = args['runId'];
+      if (typeof runId === 'string' && runId.length > 0) input.runId = runId;
+      return runResolveRunStore(input);
+    },
+  },
+  createRunWorkspace: {
+    required: ['subject', 'runId'],
+    handler: (args) => {
+      const subject = requireSubject(args, 'createRunWorkspace');
+      const runId = requireRunId(args, 'createRunWorkspace');
+      const input: {
+        subject: string;
+        runId: string;
+        fromDir?: string;
+        mainWorktreeRoot?: string;
+        newWorktree?: boolean;
+      } = { subject, runId };
+      const fromDir = args['fromDir'];
+      if (typeof fromDir === 'string' && fromDir.length > 0) input.fromDir = fromDir;
+      // Optional: the main-worktree root resolveRunStore already computed at
+      // run start. When threaded back here it lets the handler skip a second
+      // `git rev-parse`; when absent the handler re-derives it.
+      const mainWorktreeRoot = args['mainWorktreeRoot'];
+      if (typeof mainWorktreeRoot === 'string' && mainWorktreeRoot.length > 0) {
+        input.mainWorktreeRoot = mainWorktreeRoot;
+      }
+      if (typeof args['newWorktree'] === 'boolean') input.newWorktree = args['newWorktree'];
+      return runCreateRunWorkspace(input);
+    },
+  },
+  acquireRunLock: {
+    required: ['repoKey', 'runId'],
+    handler: (args, ctx) => {
+      const repoKey = requireRepoKey(args, 'acquireRunLock');
+      const runId = requireRunId(args, 'acquireRunLock');
+      // Route stale-break notices through the structured logger so they join
+      // the same stream as the other R7 tools instead of escaping onto raw
+      // stderr (the library's bare default).
+      return runAcquireRunLock(
+        { repoKey, runId },
+        { warn: (line) => ctx.logger.warn('run-lock: stale-break', { line }) },
+      );
+    },
+  },
+  releaseRunLock: {
+    // `runId` is required so the path-form release can prove holder identity
+    // before unlinking — a delayed, stale release from a superseded run that
+    // only knows `repoKey` must not delete a live successor's lock. See
+    // `releaseRunLockTool` for the mismatch-as-silent-no-op contract.
+    required: ['repoKey', 'runId'],
+    handler: (args) => {
+      const repoKey = requireRepoKey(args, 'releaseRunLock');
+      const runId = requireRunId(args, 'releaseRunLock');
+      return runReleaseRunLock({ repoKey, runId });
+    },
+  },
+  emitTraceEvent: {
+    required: ['runDir', 'event'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'emitTraceEvent');
+      const event = requireEventPayload(args, 'emitTraceEvent');
+      // The shipped library validates the event shape on reconcile (the
+      // schema-check pass); the boundary asserts presence + object shape
+      // and leaves field-level validation to the library, so the cast here
+      // is safe by construction.
+      return runEmitTraceEvent({
+        runDir,
+        event: event as unknown as Parameters<typeof runEmitTraceEvent>[0]['event'],
+      });
+    },
+  },
+  runSprintSummary: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'runSprintSummary');
+      return runSprintSummaryHandler({ runDir });
+    },
+  },
+  formatHeartbeat: {
+    required: ['role'],
+    handler: (args) => {
+      const role = requireRoleArg(args, 'formatHeartbeat');
+      return runFormatHeartbeat({ role });
+    },
+  },
+  formatLlmCallSummary: {
+    required: ['metrics'],
+    handler: (args) => {
+      const metrics = requireMetricsArg(args, 'formatLlmCallSummary');
+      // The downstream formatter reads only the documented LlmCallMetrics
+      // fields; extra keys on the boundary object are silently ignored.
+      return runFormatLlmCallSummary({
+        metrics: metrics as unknown as Parameters<typeof runFormatLlmCallSummary>[0]['metrics'],
+      });
+    },
+  },
+  aggregateRunSummary: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'aggregateRunSummary');
+      return runAggregateRunSummary({ runDir });
+    },
+  },
+  reconcileTraceIndex: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconcileTraceIndex');
+      return runReconcileTraceIndex({ runDir });
+    },
+  },
+  reconstructRecoveryState: {
+    required: ['runDir'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconstructRecoveryState');
+      return runReconstructRecoveryState({ runDir });
+    },
+  },
+  buildTrustEventBody: {
+    required: ['resolution'],
+    handler: (args) => {
+      const resolution = requireTrustResolutionArg(args, 'buildTrustEventBody');
+      return runBuildTrustEventBody({
+        resolution: resolution as unknown as Parameters<
+          typeof runBuildTrustEventBody
+        >[0]['resolution'],
+      });
+    },
+  },
+  buildValidationAbortBody: {
+    required: ['stage', 'error'],
+    handler: (args) => {
+      const stage = requireValidationStageArg(args, 'buildValidationAbortBody');
+      const error = requireF2ErrorArg(args, 'buildValidationAbortBody');
+      return runBuildValidationAbortBody({
+        stage: stage as unknown as Parameters<typeof runBuildValidationAbortBody>[0]['stage'],
+        error: error as unknown as Parameters<typeof runBuildValidationAbortBody>[0]['error'],
+      });
+    },
+  },
+  buildValidationAbortFromCode: {
+    required: ['stage', 'code'],
+    handler: (args) => {
+      const stage = requireValidationStageArg(args, 'buildValidationAbortFromCode');
+      const code = requireErrorCodeArg(args, 'buildValidationAbortFromCode');
+      const details = optionalErrorDetailsArg(args);
+      const typedStage = stage as unknown as Parameters<
+        typeof runBuildValidationAbortFromCode
+      >[0]['stage'];
+      const typedCode = code as unknown as Parameters<
+        typeof runBuildValidationAbortFromCode
+      >[0]['code'];
+      return runBuildValidationAbortFromCode(
+        details !== undefined
+          ? { stage: typedStage, code: typedCode, details }
+          : { stage: typedStage, code: typedCode },
+      );
+    },
+  },
+  buildLoopDetectedBody: {
+    required: ['halt'],
+    handler: (args) => {
+      const halt = requireLoopHaltArg(args, 'buildLoopDetectedBody');
+      return runBuildLoopDetectedBody({
+        halt: halt as unknown as Parameters<typeof runBuildLoopDetectedBody>[0]['halt'],
+      });
+    },
+  },
+  checkRoleCeiling: {
+    // Flat-shape boundary, matching sibling safety tools (`checkSprintBudget`,
+    // `detectEditOscillation`, `buildEvaluatorPlan`): `attemptState`, `ceilings`
+    // and `evidence` are read directly off `args`. The library's
+    // `CheckRoleCeilingInput` is constructed here from the flat wire shape so
+    // wire and library disagree only on shape, never on contract.
+    required: ['attemptState', 'ceilings', 'evidence', 'role'],
+    handler: (args) => {
+      const role = requireRoleArg(args, 'checkRoleCeiling');
+      return runCheckRoleCeiling({
+        role,
+        attemptState: args['attemptState'] as Parameters<
+          typeof runCheckRoleCeiling
+        >[0]['attemptState'],
+        ceilings: args['ceilings'] as Parameters<typeof runCheckRoleCeiling>[0]['ceilings'],
+        evidence: args['evidence'] as Parameters<typeof runCheckRoleCeiling>[0]['evidence'],
+      });
+    },
+  },
+  checkSprintBudget: {
+    required: ['attemptStateByRole'],
+    handler: (args) => {
+      const stateMap = requireAttemptStateByRoleArg(args, 'checkSprintBudget');
+      const budgetRaw = args['budget'];
+      const budget =
+        typeof budgetRaw === 'number' && Number.isFinite(budgetRaw) ? budgetRaw : undefined;
+      const input: Parameters<typeof runCheckSprintBudget>[0] = {
+        attemptStateByRole: stateMap as Parameters<
+          typeof runCheckSprintBudget
+        >[0]['attemptStateByRole'],
+      };
+      if (budget !== undefined) input.budget = budget;
+      return runCheckSprintBudget(input);
+    },
+  },
+  detectEditOscillation: {
+    required: ['history'],
+    handler: (args) => {
+      const history = requireFingerprintHistoryArg(args, 'detectEditOscillation');
+      const ceilingRaw = args['oscillationDetection'];
+      const oscillationDetection =
+        typeof ceilingRaw === 'number' && Number.isFinite(ceilingRaw) ? ceilingRaw : undefined;
+      const input: Parameters<typeof runDetectEditOscillation>[0] = {
+        history: history as Parameters<typeof runDetectEditOscillation>[0]['history'],
+      };
+      if (oscillationDetection !== undefined) input.oscillationDetection = oscillationDetection;
+      return runDetectEditOscillation(input);
+    },
+  },
+  createLoopDetectedError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createLoopDetectedError');
+      const traceDir = requireTraceDirArg(args, 'createLoopDetectedError');
+      return runCreateLoopDetectedError({
+        fields: fields as unknown as Parameters<typeof runCreateLoopDetectedError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
+  createSprintBudgetError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createSprintBudgetError');
+      const traceDir = requireTraceDirArg(args, 'createSprintBudgetError');
+      return runCreateSprintBudgetError({
+        fields: fields as unknown as Parameters<typeof runCreateSprintBudgetError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
+  createEditOscillationError: {
+    required: ['fields', 'traceDir'],
+    handler: (args) => {
+      const fields = requireLoopDetectedFieldsArg(args, 'createEditOscillationError');
+      const traceDir = requireTraceDirArg(args, 'createEditOscillationError');
+      return runCreateEditOscillationError({
+        fields: fields as unknown as Parameters<typeof runCreateEditOscillationError>[0]['fields'],
+        traceDir,
+      });
+    },
+  },
+  buildEvaluatorPlan: {
+    // The library's three positional arguments (snapshot, sprintPlan,
+    // worktreeState) are carried on the MCP wire as one object with the same
+    // three named fields; the boundary asserts each is a plain non-array
+    // object so the library never sees a non-object where its sub-builders
+    // expect structured input. Field-level shape validation is the library's
+    // job — the boundary is presence + shape only.
+    required: ['snapshot', 'sprintPlan', 'worktreeState'],
+    handler: (args) => {
+      const snapshot = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'snapshot');
+      const sprintPlan = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'sprintPlan');
+      const worktreeState = requirePlanObjectArg(args, 'buildEvaluatorPlan', 'worktreeState');
+      return runBuildEvaluatorPlan({
+        snapshot: snapshot as unknown as Parameters<typeof runBuildEvaluatorPlan>[0]['snapshot'],
+        sprintPlan: sprintPlan as unknown as Parameters<
+          typeof runBuildEvaluatorPlan
+        >[0]['sprintPlan'],
+        worktreeState: worktreeState as unknown as Parameters<
+          typeof runBuildEvaluatorPlan
+        >[0]['worktreeState'],
+      });
+    },
+  },
+  dockerReservePort: {
+    // Caller-supplies-port semantics: the registry refuses cross-worktree
+    // collisions via PortInUse; no free-port allocator is implied. The
+    // wrapper's dynamic import inside the handler is what keeps the docker
+    // module's import-time prerequisite check from running at server boot.
+    required: ['worktreePath', 'port', 'containerName'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerReservePort');
+      const port = requirePortArg(args, 'dockerReservePort');
+      const containerName = requireContainerNameArg(args, 'dockerReservePort');
+      return runDockerReservePort({ worktreePath, port, containerName });
+    },
+  },
+  dockerReleasePort: {
+    // The library's release(worktreePath) keys on the worktree alone; the
+    // tool surface mirrors that contract, so `port` is not part of the
+    // input or the result. `released` reflects whether the library actually
+    // removed an entry vs. a no-op on an unregistered worktree.
+    required: ['worktreePath'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerReleasePort');
+      return runDockerReleasePort({ worktreePath });
+    },
+  },
+  dockerDiscoverPort: {
+    // Every layer input is individually optional; the library skips a layer
+    // whose inputs are absent. No single field is required, but the catalog
+    // schema sets minProperties:1 so a structurally-empty `{}` call is
+    // rejected at the boundary rather than exhausting every layer and
+    // surfacing the library's PortNotDiscovered throw at runtime.
+    required: [],
+    handler: (args) => {
+      const input: Parameters<typeof runDockerDiscoverPort>[0] = {};
+      const envVar = args['envVar'];
+      if (typeof envVar === 'string' && envVar.length > 0) input.envVar = envVar;
+      const worktreePath = args['worktreePath'];
+      if (typeof worktreePath === 'string' && worktreePath.length > 0) {
+        // Same store-redirection guard the other docker tools apply via
+        // requireWorktreePathArg — the discover layer-2 registry is addressed
+        // by this path too, so an unconstrained value could dodge collision
+        // detection just as a reserve call could.
+        assertWorktreePathShape(worktreePath, 'dockerDiscoverPort');
+        input.worktreePath = worktreePath;
+      }
+      const containerPattern = args['containerPattern'];
+      if (typeof containerPattern === 'string' && containerPattern.length > 0) {
+        input.containerPattern = containerPattern;
+      }
+      const fallbackPort = args['fallbackPort'];
+      if (typeof fallbackPort === 'number' && Number.isFinite(fallbackPort)) {
+        input.fallbackPort = fallbackPort;
+      }
+      return runDockerDiscoverPort(input);
+    },
+  },
+  dockerCheckContainerHealth: {
+    // Wraps waitForHealthy(port, options). The contract acknowledged
+    // ambiguity between {containerName} and {port,...}; this surface is
+    // pinned to the library's port-based shape to keep the wrapper
+    // free of new domain logic (a containerName-to-port resolution layer
+    // would add behaviour beyond the library).
+    required: ['port', 'path', 'expectStatus', 'timeoutSeconds'],
+    handler: (args) => {
+      const port = requirePortArg(args, 'dockerCheckContainerHealth');
+      const pathArg = requireHttpPathArg(args, 'dockerCheckContainerHealth');
+      const expectStatus = requireExpectStatusArg(args, 'dockerCheckContainerHealth');
+      const timeoutSeconds = requireTimeoutSecondsArg(args, 'dockerCheckContainerHealth');
+      return runDockerCheckContainerHealth({
+        port,
+        path: pathArg,
+        expectStatus,
+        timeoutSeconds,
+      });
+    },
+  },
+  dockerContainerName: {
+    // Wraps nameForWorktree(worktreePath). Deterministic, pure; the library
+    // canonicalises internally so the wrapper does no pre-processing.
+    required: ['worktreePath'],
+    handler: (args) => {
+      const worktreePath = requireWorktreePathArg(args, 'dockerContainerName');
+      return runDockerContainerName({ worktreePath });
+    },
+  },
 };
 
-// Look up and run the handler for `toolName`. Returns the {@link UNHANDLED}
-// sentinel when no handler is registered (the caller then reports
-// NotImplemented). Despite the `Read` name it dispatches every tool kind
-// (read/write/validate).
-async function dispatchRead(
+// Look up and run the handler for `toolName`, regardless of kind
+// (read/write/validate). Returns the {@link UNHANDLED} sentinel when no handler
+// is registered (the caller then reports NotImplemented).
+async function dispatchTool(
   toolName: string,
   args: Record<string, unknown>,
   logger: ReturnType<typeof getLogger>,
@@ -656,11 +1169,566 @@ function requireEntryKey(args: Record<string, unknown>, tool: string): string {
   return k;
 }
 
+// Extract a required non-empty `subject` string for createRunWorkspace.
+// Subject seeds the branch slug; an empty subject would yield a malformed
+// branch name, so the tool boundary rejects it up front (the underlying
+// library would not).
+function requireSubject(args: Record<string, unknown>, tool: string): string {
+  const s = args['subject'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'subject',
+      message: `Tool '${tool}' requires a non-empty 'subject' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract a required non-empty `runId` string. acquireRunLock and
+// createRunWorkspace both need it; resolveRunStore treats it as optional and
+// mints when absent, so this helper is reused only by the required-input
+// tools.
+function requireRunId(args: Record<string, unknown>, tool: string): string {
+  const s = args['runId'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'runId',
+      message: `Tool '${tool}' requires a non-empty 'runId' string in its input.`,
+    });
+  }
+  return s;
+}
+
+/**
+ * Extract a required `repoKey` string shaped exactly like a value produced
+ * by `computeRepoKey` (`<basename>-<12 hex>`, matched against
+ * {@link REPO_KEY_PATTERN}). Pre-R7 the repoKey was server-derived and
+ * never crossed the wire, so its shape was a construction-time invariant;
+ * once R7 promoted it to a tool input the invariant became a trust
+ * assumption a caller can break. A free-form string would let
+ * `path.join(storeRoot, repoKey, …)` resolve outside `storeRoot` via `..`
+ * segments and cause `mkdirSync(..., { recursive: true })` + `linkSync`
+ * to land the lock file under an attacker-chosen path. The pattern match
+ * refutes that whole class up front.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * the dispatcher table itself is module-private, but the helpers it relies
+ * on are auditable as named exports.
+ */
+export function requireRepoKey(args: Record<string, unknown>, tool: string): string {
+  const s = args['repoKey'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'repoKey',
+      message: `Tool '${tool}' requires a non-empty 'repoKey' string in its input.`,
+    });
+  }
+  if (!REPO_KEY_PATTERN.test(s)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'repoKey',
+      message:
+        `Tool '${tool}' requires 'repoKey' to match the producer's shape ` +
+        `(\`<basename>-<12 hex>\` per computeRepoKey); reject path traversal, ` +
+        `path separators, NUL, and any other characters at the wire boundary.`,
+    });
+  }
+  return s;
+}
+
 // Read an optional argument as-is, without presence/type validation
 // (defaults to the `value` key). Used for payloads the impl validates itself,
 // e.g. a module manifest.
 function readValue(args: Record<string, unknown>, key: string = 'value'): unknown {
   return args[key];
+}
+
+/**
+ * Extract a required `runDir` string shaped exactly like the value
+ * `resolveRunStore` mints — i.e. an absolute, normalised path that decomposes
+ * as `<storeRoot>/<repoKey>/runs/<runId>` with `<repoKey>` and `<runId>`
+ * shape-matching their canonical regexes. Pre-R7 the value was server-side
+ * only; once it became a wire input every downstream syscall
+ * (`mkdirSync(..., { recursive: true })`, `openSync('wx')`, `path.join(.., 'trace')`,
+ * `path.basename(runDir)`) inherited a trust assumption the wire layer must
+ * re-impose. A free-form `runDir` would let the trace tools create arbitrary
+ * directories anywhere the server uid can write, scan unrelated directories
+ * via the summary readers, and inject `..` into `reconcileTraceIndex`'s
+ * `path.basename`-derived `runId`. Decomposing against `resolveStoreRoot()` +
+ * the two known patterns refutes that class wholesale.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ */
+export function requireRunDir(args: Record<string, unknown>, tool: string): string {
+  const s = args['runDir'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'runDir',
+      message: `Tool '${tool}' requires a non-empty 'runDir' string in its input.`,
+    });
+  }
+  // Reject NUL bytes outright — `path.normalize` accepts them and POSIX
+  // syscalls would silently truncate.
+  if (s.includes('\0')) {
+    throw rejectRunDirShape(tool);
+  }
+  // Absolute + normalised: `..` segments and `\\` separators (on POSIX) are
+  // rejected by the equality with `path.normalize`; Windows treats `\\` as
+  // a separator but the runtime canonicalises POSIX-style separators by the
+  // time the value reaches here.
+  if (!path.isAbsolute(s) || path.normalize(s) !== s) {
+    throw rejectRunDirShape(tool);
+  }
+  // Decompose against `<storeRoot>/<repoKey>/runs/<runId>` and refute any
+  // value outside that layout. The store root is resolved per call (cheap;
+  // env/marker lookups don't read disk).
+  const storeRoot = resolveStoreRoot();
+  const sep = path.sep;
+  if (!(s === storeRoot || s.startsWith(storeRoot + sep))) {
+    throw rejectRunDirShape(tool);
+  }
+  const tail = s.slice(storeRoot.length + 1); // drop leading separator
+  const parts = tail.split(sep);
+  // Expect exactly three components: <repoKey>/runs/<runId>.
+  if (
+    parts.length !== 3 ||
+    parts[1] !== 'runs' ||
+    !REPO_KEY_PATTERN.test(parts[0]) ||
+    !RUN_ID_PATTERN.test(parts[2])
+  ) {
+    throw rejectRunDirShape(tool);
+  }
+  return s;
+}
+
+// Shared `runDir`-rejection error. Branched out so every refutation reads the
+// same prose; the boundary surface stays one MalformedInput per check.
+function rejectRunDirShape(tool: string): ConfigServerError {
+  return createError('MalformedInput', {
+    tool,
+    field: 'runDir',
+    message:
+      `Tool '${tool}' requires 'runDir' to be an absolute, normalised path ` +
+      `under the resolved store root, shaped as ` +
+      `\`<storeRoot>/<repoKey>/runs/<runId>\` with the producer's repoKey and ` +
+      `runId regexes; reject path traversal, relative paths, NUL, and any ` +
+      `value outside the run-store layout at the wire boundary.`,
+  });
+}
+
+// Extract a required event payload (any plain object) — the library
+// overwrites `sequenceNumber` and validates against the trace schema on
+// reconcile, so the boundary only enforces presence + shape (must be a
+// non-array object).
+function requireEventPayload(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['event'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'event',
+      message: `Tool '${tool}' requires an 'event' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required non-empty `role` string for formatHeartbeat. The
+// formatter accepts any string but the boundary rejects an empty role so
+// the heartbeat line cannot widen into a confusing `[] thinking...`.
+function requireRoleArg(args: Record<string, unknown>, tool: string): string {
+  const s = args['role'];
+  if (typeof s !== 'string' || s.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'role',
+      message: `Tool '${tool}' requires a non-empty 'role' string in its input.`,
+    });
+  }
+  return s;
+}
+
+// Extract the `metrics` object for formatLlmCallSummary — the formatter
+// reads only the documented LlmCallMetrics fields, so any extra keys the
+// caller mistakenly attaches (e.g. raw prompt text) are silently dropped
+// by the formatter, preserving the metadata-only contract.
+function requireMetricsArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['metrics'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'metrics',
+      message: `Tool '${tool}' requires a 'metrics' object in its input.`,
+    });
+  }
+  // Cast to the typed shape downstream; the formatter only reads the
+  // documented LlmCallMetrics fields and ignores extras.
+  return v as Record<string, unknown>;
+}
+
+// Extract the `resolution` object for buildTrustEventBody. The downstream
+// builder is a pure mapping; the boundary check is presence + shape.
+function requireTrustResolutionArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['resolution'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'resolution',
+      message: `Tool '${tool}' requires a 'resolution' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract the validation stage discriminant for the abort-body builders.
+// The library accepts any string but the boundary documents the closed set.
+function requireValidationStageArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['stage'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'stage',
+      message: `Tool '${tool}' requires a non-empty 'stage' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract the F2-like error object for buildValidationAbortBody.
+function requireF2ErrorArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['error'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'error',
+      message: `Tool '${tool}' requires an 'error' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required error-code string. The code is forwarded to
+// createError, which validates it against the closed ErrorCode union; the
+// boundary check is presence + string shape only.
+function requireErrorCodeArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['code'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'code',
+      message: `Tool '${tool}' requires a non-empty 'code' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Read an optional error-details object for buildValidationAbortFromCode.
+function optionalErrorDetailsArg(
+  args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const v = args['details'];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined;
+  return v as Record<string, unknown>;
+}
+
+// Extract the LoopDetectionHalt object for buildLoopDetectedBody.
+function requireLoopHaltArg(args: Record<string, unknown>, tool: string): Record<string, unknown> {
+  const v = args['halt'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'halt',
+      message: `Tool '${tool}' requires a 'halt' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract the `attemptStateByRole` map for checkSprintBudget. The library
+// sums own keys via hasOwnProperty and skips forbidden-key entries; the
+// boundary only asserts the input is a plain object so the library never sees
+// a non-object value where it expects a map.
+function requireAttemptStateByRoleArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['attemptStateByRole'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'attemptStateByRole',
+      message: `Tool '${tool}' requires an 'attemptStateByRole' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract the fingerprint history array for detectEditOscillation. The
+// library compares opaque fingerprint strings positionally; the boundary
+// only asserts the input is an array so the library never sees a non-array
+// where it expects a positional history.
+function requireFingerprintHistoryArg(args: Record<string, unknown>, tool: string): unknown[] {
+  const v = args['history'];
+  if (!Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'history',
+      message: `Tool '${tool}' requires a 'history' array in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract the LoopDetectedFields object for the three error-builder tools.
+// The library reads the documented fields verbatim and constructs the error;
+// the boundary only asserts the input is a plain object so the library never
+// sees a non-object where it expects structured halt fields.
+function requireLoopDetectedFieldsArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['fields'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'fields',
+      message: `Tool '${tool}' requires a 'fields' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required non-empty `traceDir` string for the three error-builder
+// tools. traceDir is templated into the user-facing prose message; an empty
+// path would render a confusing message and the boundary rejects it up front.
+function requireTraceDirArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['traceDir'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'traceDir',
+      message: `Tool '${tool}' requires a non-empty 'traceDir' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required plain-object argument by name for the evaluator-plan
+// tool. The downstream library reads its three structured inputs
+// (snapshot, sprintPlan, worktreeState) by field; an array or non-object
+// value at the boundary would otherwise reach the library and surface as a
+// harder-to-trace failure, so the wrapper asserts the shape up front.
+function requirePlanObjectArg(
+  args: Record<string, unknown>,
+  tool: string,
+  fieldName: string,
+): Record<string, unknown> {
+  const v = args[fieldName];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: fieldName,
+      message: `Tool '${tool}' requires a '${fieldName}' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// Extract a required worktreePath string, constrained to an absolute,
+// normalised path. The library canonicalises internally and `PortRegistry`
+// uses this value both as the registry *key* and (downstream, via the
+// constructor's projectRoot) as the directory from which the repo-scoped
+// module-state store is addressed — so an unconstrained value is two trust
+// assumptions, not one:
+//
+//   - A blank or relative worktree key would collapse distinct workspaces
+//     into one registry slot, or vary the store address per call so the
+//     cross-worktree `PortInUse` collision check never fires.
+//   - A `..`/traversal or NUL-bearing value could steer the store address
+//     away from the worktree's real repo root.
+//
+// Requiring an absolute, already-normalised path (no `..` segments, no NUL)
+// refutes both up front. The repo-key derivation that follows downstream
+// still anchors the store to the worktree's real common git dir, so two
+// worktrees of one repo share one registry; this boundary only refuses the
+// shapes that would let a caller dodge that anchoring. Returns the value
+// unchanged for the library to canonicalise.
+//
+/**
+ * Validate the `worktreePath` tool argument and return it unchanged for the
+ * library to canonicalise. The rationale comment above states why the shape
+ * is constrained at the boundary; the accepted shape is a non-empty,
+ * absolute, already-normalised path (no `..` segments, no NUL).
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `worktreePath` string.
+ * @throws `MalformedInput` when the value is missing or a disallowed shape.
+ */
+export function requireWorktreePathArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['worktreePath'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'worktreePath',
+      message: `Tool '${tool}' requires a non-empty 'worktreePath' string in its input.`,
+    });
+  }
+  assertWorktreePathShape(v, tool);
+  return v;
+}
+
+// Refute a worktreePath that is relative, non-normalised, or NUL-bearing —
+// the shapes that would let a caller redirect the registry's module-state
+// store away from the worktree's real repo. Shared so `dockerDiscoverPort`
+// (which reads `worktreePath` inline) can apply the same guard.
+function assertWorktreePathShape(v: string, tool: string): void {
+  if (v.includes('\0') || !path.isAbsolute(v) || path.normalize(v) !== v) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'worktreePath',
+      message:
+        `Tool '${tool}' requires 'worktreePath' to be an absolute, normalised ` +
+        `path with no '..' segments or NUL bytes, so it cannot redirect the ` +
+        `port registry's module-state store away from the worktree's repo.`,
+    });
+  }
+}
+
+// Extract a required integer-shaped port in the valid host-port range. A
+// fractional or out-of-range value is rejected at the boundary so the
+// library never sees a value it cannot honour as a TCP port.
+function requirePortArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['port'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 65535) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'port',
+      message: `Tool '${tool}' requires an integer 'port' in 0..65535.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required non-empty containerName string. The library's
+// PortRegistry stores this string verbatim; the boundary rejects empty
+// strings so a registry entry never carries an unusable name.
+function requireContainerNameArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['containerName'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'containerName',
+      message: `Tool '${tool}' requires a non-empty 'containerName' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required HTTP path string for the health check, constrained so it
+// can only address a path on the fixed localhost origin the library builds.
+// The path is consumed downstream as the relative-reference argument to the
+// WHATWG `URL` constructor against a `http://127.0.0.1:<port>` base; a value
+// that does not begin with a single `/` (e.g. `@evil.tld/x`, `//evil.tld`, or
+// a scheme-relative `http:...`) can relocate the resolved host away from
+// localhost, turning the probe into an SSRF primitive. Control bytes and
+// whitespace (`\r`, `\n`, space, tab) and the `?`/`#` delimiters likewise
+// desync URL parsing. The boundary rejects all of these so only a genuine
+// path-absolute reference reaches the library.
+//
+/**
+ * Validate the `path` tool argument for a health-check probe and return it
+ * unchanged. The rationale comment above states why the shape is constrained;
+ * the accepted shape is a non-empty, path-absolute reference (a single leading
+ * `/`) free of control bytes, whitespace, and the `?`/`#` delimiters, so the
+ * resolved request cannot leave the fixed localhost origin.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `path` string.
+ * @throws `MalformedInput` when the value is missing or a disallowed shape.
+ */
+export function requireHttpPathArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['path'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'path',
+      message: `Tool '${tool}' requires a non-empty 'path' string in its input.`,
+    });
+  }
+  // Must be path-absolute (a single leading slash) but not protocol- or
+  // scheme-relative (`//host` resolves the authority, not the path).
+  if (v[0] !== '/' || v[1] === '/') {
+    throw rejectHttpPathShape(tool);
+  }
+  // Reject any C0 control byte (U+0000-U+001F), DEL (U+007F), space, and
+  // the `?`/`#` delimiters that would carry the request off the path
+  // component or desync URL parsing.
+  if (/[\u0000-\u001F\u007F ?#]/.test(v)) {
+    throw rejectHttpPathShape(tool);
+  }
+  return v;
+}
+
+// Shared rejection for a health-check `path` that could escape the fixed
+// localhost origin or desync URL parsing.
+function rejectHttpPathShape(tool: string): ConfigServerError {
+  return createError('MalformedInput', {
+    tool,
+    field: 'path',
+    message:
+      `Tool '${tool}' requires 'path' to be a localhost-relative request path: ` +
+      `a single leading '/', no scheme-relative '//' prefix, and no control ` +
+      `bytes, whitespace, '?', or '#'. This keeps the health probe pinned to ` +
+      `the localhost origin and prevents the URL from being redirected.`,
+  });
+}
+
+// Extract a required integer HTTP status code. The library compares this to
+// the live response's `status`, which is itself integer-typed; pinning the
+// type at the boundary prevents an accidental string from silently failing
+// every equality check inside the polling loop.
+function requireExpectStatusArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['expectStatus'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 100 || v > 599) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'expectStatus',
+      message: `Tool '${tool}' requires an integer 'expectStatus' in 100..599.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required non-negative finite timeout in seconds. A negative or
+// non-finite budget would make the library's totalBudgetMs computation
+// degenerate; the boundary pins the value at the same shape the library
+// safely consumes.
+function requireTimeoutSecondsArg(args: Record<string, unknown>, tool: string): number {
+  const v = args['timeoutSeconds'];
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'timeoutSeconds',
+      message: `Tool '${tool}' requires a non-negative finite 'timeoutSeconds' number.`,
+    });
+  }
+  return v;
 }
 
 // Require that `fieldName` is present (own key) and not `undefined`, returning
@@ -723,12 +1791,10 @@ function anonymiseToolArgs(args: Record<string, unknown>): Record<string, unknow
       continue;
     }
     if (k === 'key') {
-
       out['keyPresent'] = typeof args[k] === 'string';
       continue;
     }
     if (k === 'entryKey') {
-
       out['entryKeyPresent'] = typeof args[k] === 'string';
       continue;
     }
@@ -828,7 +1894,6 @@ export async function runCli(): Promise<void> {
 const invokedAsBin = (() => {
   if (typeof process.argv[1] !== 'string') return false;
   try {
-
     const here = fileURLToPath(import.meta.url);
     let entry = path.resolve(process.argv[1]);
     try {

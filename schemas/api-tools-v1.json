@@ -2,8 +2,46 @@
   "$id": "https://claudeagents.dev/schemas/api-tools-v1.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. Every tool except `getApiVersion` takes at minimum `projectRoot: string`. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
+  "description": "draft-07 catalog of F2 tool input schemas. Each entry under `properties` is a plain catalog record whose `inputSchema` is a complete JSON Schema describing that tool's parameters. By argument shape the catalog spans four classes: project-rooted tools take at minimum `projectRoot: string` (except `getApiVersion`, which takes no arguments); run-scoped tools take `runDir` and/or `repoKey`; worktree-scoped tools take `worktreePath` (the docker tools); and pure-data tools take no scope at all — they transform their inputs only (e.g. `buildEvaluatorPlan`, `buildLoopDetectedBody`, `checkRoleCeiling`, `formatHeartbeat`, the `create*Error` builders). See each tool's `inputSchema` for the authoritative shape. Audited against the runtime parameter validators in `src/config-server/index.ts` at v1.0 release per F5 § Parameter-shape consistency; v1.1 introduces a contract test that enforces parity automatically.",
   "properties": {
+    "acquireRunLock": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "repoKey": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoKey",
+          "runId"
+        ],
+        "type": "object"
+      }
+    },
+    "aggregateRunSummary": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "appendToModuleState": {
       "inputSchema": {
         "additionalProperties": false,
@@ -98,6 +136,727 @@
           "name",
           "fieldPath",
           "value"
+        ],
+        "type": "object"
+      }
+    },
+    "buildEvaluatorPlan": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "additionalProperties": true,
+            "properties": {
+              "activeStacks": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "mergedSplicePoints": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "activeStacks",
+              "mergedSplicePoints"
+            ],
+            "type": "object"
+          },
+          "sprintPlan": {
+            "additionalProperties": true,
+            "properties": {
+              "affectedFiles": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "criteria": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "affectedFiles",
+              "criteria"
+            ],
+            "type": "object"
+          },
+          "worktreeState": {
+            "additionalProperties": true,
+            "properties": {
+              "fileContents": {
+                "type": "object"
+              },
+              "files": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "snapshot",
+          "sprintPlan",
+          "worktreeState"
+        ],
+        "type": "object"
+      }
+    },
+    "buildLoopDetectedBody": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "halt": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "halt"
+        ],
+        "type": "object"
+      }
+    },
+    "buildTrustEventBody": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "resolution": {
+            "additionalProperties": true,
+            "properties": {
+              "contentHash": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "promptVariant": {
+                "enum": [
+                  "subsequentChange",
+                  "initialIntroduction"
+                ],
+                "type": "string"
+              },
+              "userChoice": {
+                "enum": [
+                  "view",
+                  "approve",
+                  "runWithoutProjectCommands",
+                  "cancel"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "promptVariant",
+              "userChoice",
+              "contentHash"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "resolution"
+        ],
+        "type": "object"
+      }
+    },
+    "buildValidationAbortBody": {
+      "description": "Builds a validation-abort body by wrapping an already-caught error OBJECT (with `code`/`message`). Use this when you have the thrown error in hand. To build from an explicit code plus a details bag instead, use `buildValidationAbortFromCode`.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": true,
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "number"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "stage": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "error"
+        ],
+        "type": "object"
+      }
+    },
+    "buildValidationAbortFromCode": {
+      "description": "Builds a validation-abort body from an explicit error CODE plus an optional details bag — no thrown error needed. Use this to raise an abort you are constructing yourself. To wrap an already-caught error object instead, use `buildValidationAbortBody`.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "details": {
+            "description": "Optional free-form error-details bag forwarded verbatim to the error factory; no fixed keys, so it stays an open object rather than a pinned shape.",
+            "type": "object"
+          },
+          "stage": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "code"
+        ],
+        "type": "object"
+      }
+    },
+    "checkRoleCeiling": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptState": {
+            "additionalProperties": true,
+            "properties": {
+              "attemptCount": {
+                "type": "number"
+              },
+              "highestAttemptNumber": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "attemptCount",
+              "highestAttemptNumber"
+            ],
+            "type": "object"
+          },
+          "ceilings": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "attemptNumber": {
+                  "type": "number"
+                },
+                "outputArtifactPath": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attemptNumber",
+                "outputArtifactPath",
+                "summary"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "attemptState",
+          "ceilings",
+          "evidence",
+          "role"
+        ],
+        "type": "object"
+      }
+    },
+    "checkSprintBudget": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptStateByRole": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "properties": {
+                "attemptCount": {
+                  "type": "number"
+                },
+                "highestAttemptNumber": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "attemptCount",
+                "highestAttemptNumber"
+              ],
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "budget": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "attemptStateByRole"
+        ],
+        "type": "object"
+      }
+    },
+    "createEditOscillationError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
+    "createLoopDetectedError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
+    "createRunWorkspace": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromDir": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mainWorktreeRoot": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "newWorktree": {
+            "type": "boolean"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "subject": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "runId"
+        ],
+        "type": "object"
+      }
+    },
+    "createSprintBudgetError": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
+            "type": "object"
+          },
+          "traceDir": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "traceDir"
+        ],
+        "type": "object"
+      }
+    },
+    "detectEditOscillation": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "history": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "fingerprint": {
+                  "type": "string"
+                },
+                "followedRejection": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "fingerprint",
+                "followedRejection"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oscillationDetection": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "history"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerCheckContainerHealth": {
+      "description": "BLOCKS while polling the container's HTTP surface until it answers with `expectStatus`, or until `timeoutSeconds` elapses — it is a waiter, not a one-shot probe, and may block for up to `timeoutSeconds`. Resolves with the observed status on success; throws TimeoutError if the budget is exhausted without a match.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expectStatus": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Localhost-relative request path; a single leading '/', no scheme-relative '//', and no control bytes, whitespace, '?', or '#'. Keeps the health probe pinned to the localhost origin.",
+            "minLength": 1,
+            "pattern": "^/(?!/)[^\\u0000-\\u001f\\u007f ?#]*$",
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeoutSeconds": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "port",
+          "path",
+          "expectStatus",
+          "timeoutSeconds"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerContainerName": {
+      "description": "Derives (computes / gets) the deterministic container name for a worktree. Pure naming function — no Docker call, no I/O; the same `worktreePath` always yields the same name.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerDiscoverPort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "containerPattern": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "envVar": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fallbackPort": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "dockerReleasePort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath"
+        ],
+        "type": "object"
+      }
+    },
+    "dockerReservePort": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "containerName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktreePath": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktreePath",
+          "port",
+          "containerName"
+        ],
+        "type": "object"
+      }
+    },
+    "emitTraceEvent": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "additionalProperties": true,
+            "properties": {
+              "eventType": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "eventType"
+            ],
+            "type": "object"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir",
+          "event"
+        ],
+        "type": "object"
+      }
+    },
+    "formatHeartbeat": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      }
+    },
+    "formatLlmCallSummary": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "additionalProperties": true,
+            "properties": {
+              "cacheHit": {
+                "type": "boolean"
+              },
+              "latencyMs": {
+                "type": "number"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tokensCached": {
+                "type": "number"
+              },
+              "tokensInput": {
+                "type": "number"
+              },
+              "tokensOutput": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "role",
+              "tokensInput",
+              "tokensOutput",
+              "tokensCached",
+              "latencyMs",
+              "cacheHit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "metrics"
         ],
         "type": "object"
       }
@@ -344,6 +1103,38 @@
         "type": "object"
       }
     },
+    "reconcileTraceIndex": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
+    "reconstructRecoveryState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "registerModule": {
       "inputSchema": {
         "additionalProperties": false,
@@ -379,6 +1170,28 @@
         "required": [
           "projectRoot",
           "name"
+        ],
+        "type": "object"
+      }
+    },
+    "releaseRunLock": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "repoKey": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoKey",
+          "runId"
         ],
         "type": "object"
       }
@@ -467,6 +1280,40 @@
           "name",
           "fieldPath",
           "value"
+        ],
+        "type": "object"
+      }
+    },
+    "resolveRunStore": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromDir": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "runSprintSummary": {
+      "description": "Formats (computes) the human-readable sprint-summary STRING for a run by scanning its trace events — the rendered `[sprint-summary] …` roll-up. For the structured aggregate object instead, use `aggregateRunSummary`.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
         ],
         "type": "object"
       }
@@ -654,9 +1501,31 @@
     }
   },
   "required": [
+    "acquireRunLock",
+    "aggregateRunSummary",
     "appendToModuleState",
     "appendToOverlayField",
     "appendToStackField",
+    "buildEvaluatorPlan",
+    "buildLoopDetectedBody",
+    "buildTrustEventBody",
+    "buildValidationAbortBody",
+    "buildValidationAbortFromCode",
+    "checkRoleCeiling",
+    "checkSprintBudget",
+    "createEditOscillationError",
+    "createLoopDetectedError",
+    "createRunWorkspace",
+    "createSprintBudgetError",
+    "detectEditOscillation",
+    "dockerCheckContainerHealth",
+    "dockerContainerName",
+    "dockerDiscoverPort",
+    "dockerReleasePort",
+    "dockerReservePort",
+    "emitTraceEvent",
+    "formatHeartbeat",
+    "formatLlmCallSummary",
     "getActiveStacks",
     "getApiVersion",
     "getBoundedDirectoryListing",
@@ -671,10 +1540,15 @@
     "getTrustDiff",
     "getTrustState",
     "listModules",
+    "reconcileTraceIndex",
+    "reconstructRecoveryState",
     "registerModule",
+    "releaseRunLock",
     "removeFromModuleState",
     "removeFromOverlayField",
     "removeFromStackField",
+    "resolveRunStore",
+    "runSprintSummary",
     "setModuleState",
     "setOverlayField",
     "trustApprove",

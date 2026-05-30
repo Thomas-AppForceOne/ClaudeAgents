@@ -85,9 +85,27 @@ export {
   aggregateSprintSummary,
   formatSprintSummary,
   formatSprintSummaryFromEvents,
+  runSprintSummary,
+  aggregateRunSummary,
   type LlmCallMetrics,
   type SprintSummaryAggregate,
+  type RunSummaryAggregate,
 } from './progress.js';
+
+export {
+  appendTraceEvent,
+  type AppendTraceEventResult,
+  type AppendTraceEventError,
+  type TraceEventInput,
+} from './append.js';
+
+export { emitTraceEvent, type EmitTraceEventResult } from './emit.js';
+
+export {
+  incrementDroppedEmits,
+  getDroppedEmits,
+  resetDroppedEmitsForTests,
+} from './dropped-emits.js';
 
 export {
   verifyEvidenceBundle,
@@ -120,4 +138,4 @@ export type {
   TrustEventEvent,
   ValidationAbortEvent,
 } from './events.js';
-export { KNOWN_EVENT_TYPES } from './events.js';
+export { KNOWN_EVENT_TYPES, AGENT_ATTEMPT_EVENT_TYPE } from './events.js';

@@ -42,8 +42,11 @@ const promptPath = path.join(repoRoot, 'agents', 'gan-evaluator.md');
 const prompt = readFileSync(promptPath, 'utf8');
 
 describe('evaluator_prompt_documents_bundle_shape', () => {
-  it('writes the artifact to the attempt-letter feedback path', () => {
-    expect(prompt).toContain('.gan-state/runs/<run-id>/sprint-{N}-feedback-{attempt-letter}.json');
+  it('writes the artifact to the attempt-letter feedback path under the central-store run dir', () => {
+    // The pre-F7 project-local literal was swept to the GAN_RUN_DIR form
+    // so the evaluator's write lands in an H1-allowed zone; the
+    // sprint-N-feedback-attempt-letter.json filename pattern is preserved.
+    expect(prompt).toContain('$GAN_RUN_DIR/sprint-{N}-feedback-{attempt-letter}.json');
   });
 
   it('documents the T1 evidence-bundle top-level shape', () => {
