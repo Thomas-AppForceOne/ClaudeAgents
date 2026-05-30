@@ -118,6 +118,47 @@ describe('appendTraceEvent — happy path', () => {
   });
 });
 
+function makeLlmCall(timestamp: string, role = 'gan-generator'): TraceEventInput {
+  return {
+    eventType: 'llmCall',
+    timestamp,
+    runId: RUN_ID,
+    model: 'claude',
+    role,
+    promptRef: 'b'.repeat(64),
+    responseRef: 'c'.repeat(64),
+    tokensInput: 10,
+    tokensCached: 0,
+    tokensOutput: 5,
+    latencyMs: 100,
+    cacheHit: false,
+  } as TraceEventInput;
+}
+
+describe('appendTraceEvent — per-append index carries incremental countByClass', () => {
+  it('index.json between appends reflects correct per-class counts, not all-zero buckets', () => {
+    const runDir = makeTmp();
+    appendTraceEvent(runDir, makeAgentAttempt('2026-05-22T12:30:00.000Z'));
+    appendTraceEvent(runDir, makeAgentAttempt('2026-05-22T12:30:01.000Z'));
+    appendTraceEvent(runDir, makeLlmCall('2026-05-22T12:30:02.000Z'));
+
+    // A mid-run reader (progress UI, summary tool) consulting index.json must
+    // see correct per-class buckets, not a correct totalEvents over zeroed
+    // countByClass — the incremental write carries the prior counts forward.
+    const idxPath = path.join(runDir, 'trace', 'index.json');
+    const idx = JSON.parse(readFileSync(idxPath, 'utf8'));
+    expect(idx.totalEvents).toBe(3);
+    expect(idx.countByClass).toEqual({ agentAttempt: 2, llmCall: 1 });
+    // The summed buckets equal totalEvents — the cache is internally
+    // consistent without a full reconcile.
+    const summed = Object.values(idx.countByClass).reduce(
+      (acc: number, n) => acc + (n as number),
+      0,
+    );
+    expect(summed).toBe(idx.totalEvents);
+  });
+});
+
 describe('appendTraceEvent — EEXIST collision recovery', () => {
   it('on EEXIST re-derives the highest sequence from the authoritative events/ directory and retries', () => {
     const runDir = makeTmp();

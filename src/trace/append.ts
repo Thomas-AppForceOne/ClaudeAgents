@@ -307,25 +307,39 @@ function writeExclusively(target: string, content: string): void {
 }
 
 /**
- * Best-effort O(1) increment of `index.json.totalEvents`. On every error
- * this is a no-op — `reconcileIndex` exists precisely to rebuild the index
- * from the authoritative events directory, so a transient miss or undercount
- * here is benign.
+ * Best-effort O(1) increment of `index.json` for one freshly-written event:
+ * bump `totalEvents` and the `countByClass` bucket for the event's class,
+ * carrying the prior counts forward. On every error this is a no-op —
+ * `reconcileIndex` exists precisely to rebuild the index from the
+ * authoritative events directory, so a transient miss or undercount here is
+ * benign.
  *
  * Why this is O(1) and the prior implementation was not: the old
  * `bestEffortUpdateIndex` did a full `readdirSync` + `.filter` + `.length`
  * to recompute `totalEvents` from scratch on every successful emit, turning
- * the per-emit cost into O(N) and the per-run cost into O(N^2) (see
- * I-009 in the review). The cheap correct primitive is to read the prior
- * `totalEvents` from the cache, `+= 1`, and atomic-write — the cache is
- * derived, so a transient under-count under cross-process contention is
- * absorbed by `reconcileIndex` at run end (the authoritative rebuild path).
+ * the per-emit cost into O(N) and the per-run cost into O(N^2). The cheap
+ * correct primitive is to read the prior counts from the cache, `+= 1` the
+ * total and the one touched bucket, and atomic-write — no directory scan.
+ * The cache is derived, so a transient under-count under cross-process
+ * contention is absorbed by `reconcileIndex` at run end (the authoritative
+ * rebuild path).
+ *
+ * Carrying `countByClass` forward (rather than writing it empty) matters
+ * because a mid-run reader of `index.json` — a tail-following progress UI,
+ * the summary tool — would otherwise see a correct `totalEvents` but
+ * all-zero per-class buckets between appends. The incremental count keeps
+ * the cache internally consistent without reintroducing the O(N) rescan.
  *
  * Cross-process correctness: two processes that both read prior=K and write
- * K+1 will produce an under-count of one on the cache (last write wins).
- * That is the exact transient `reconcileIndex` exists to absorb — the
- * spec's "index is a derived cache" licence at `src/trace/reconcile.ts`
- * (the authoritative rebuild path, unchanged by this design).
+ * K+1 produce an under-count of one on the cache (last write wins). That is
+ * the exact transient `reconcileIndex` exists to absorb (the index is a
+ * derived cache; the events directory is authoritative).
+ *
+ * Prototype-pollution safety: the prior `countByClass` is parsed from an
+ * on-disk file we do not fully trust, and the event class becomes an object
+ * key. The forward-carry therefore rehomes the buckets onto a null-prototype
+ * object and rejects pollution keys, mirroring the guard `buildIndex` applies
+ * on the rebuild path.
  */
 function bestEffortIncrementIndex(traceRoot: string, ev: TraceEvent): void {
   try {
@@ -338,20 +352,54 @@ function bestEffortIncrementIndex(traceRoot: string, ev: TraceEvent): void {
       prior.totalEvents >= 0
         ? prior.totalEvents
         : 0;
-    // We only seed `totalEvents` here; `reconcileIndex` rebuilds the full
-    // shape (countByClass, firstTimestamp, lastTimestamp, disposition) from
-    // the authoritative events directory at run termination, so a transient
-    // mid-run shape carrying only totalEvents is acceptable — it is the same
-    // partial shape the prior implementation wrote.
+    const countByClass = carryForwardCountByClass(prior?.countByClass, ev.eventType);
+    // We seed `totalEvents` and `countByClass` here; `reconcileIndex` rebuilds
+    // the full shape (including firstTimestamp, lastTimestamp, disposition)
+    // from the authoritative events directory at run termination, so the
+    // mid-run shape intentionally omits those timestamp/disposition fields.
     const indexShape: TraceIndex = {
       runId: ev.runId,
       totalEvents: priorTotal + 1,
-      countByClass: {},
+      countByClass,
     };
     atomicWriteFile(indexPath(traceRoot), stableStringify(indexShape));
   } catch {
     // index is a cache; reconciliation is the recovery path.
   }
+}
+
+// Pollution keys that must never index the carried-forward count map; an
+// on-disk index carrying one of these as a class name is treated as hostile
+// and its bucket is dropped (the same set buildIndex's rebuild path guards).
+const POLLUTION_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Build the next `countByClass` from the prior on-disk map plus one increment
+ * for `eventType`. Copies only non-negative-integer buckets onto a fresh
+ * null-prototype object and skips prototype-pollution keys, so a tampered
+ * index cannot smuggle a bad prototype or a non-numeric bucket into the cache.
+ * Never throws.
+ */
+function carryForwardCountByClass(
+  prior: Record<string, number> | undefined,
+  eventType: string,
+): Record<string, number> {
+  const next: Record<string, number> = Object.create(null) as Record<string, number>;
+  if (prior && typeof prior === 'object') {
+    for (const key of Object.keys(prior)) {
+      if (POLLUTION_KEYS.has(key)) continue;
+      const value = prior[key];
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+        next[key] = value;
+      }
+    }
+  }
+  if (!POLLUTION_KEYS.has(eventType)) {
+    next[eventType] = (next[eventType] ?? 0) + 1;
+  }
+  // Copy onto a plain object so the persisted index serialises normally (the
+  // null-prototype accumulator is an implementation detail).
+  return { ...next };
 }
 
 /**
