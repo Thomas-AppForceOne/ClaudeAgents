@@ -39,6 +39,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import {
   dockerCheckContainerHealth,
@@ -193,6 +195,31 @@ describe('docker tools', () => {
       });
       expect(viaTool.port).toBe(viaLib);
       expect(viaTool.port).toBe(7400);
+    });
+
+    it('dockerCheckContainerHealth: success returns the observed status, not a vacuous always-true literal', async () => {
+      // Stand up a tiny localhost server that answers the expected status, so
+      // the tool's success path is exercised end-to-end. The return must carry
+      // the concrete observedStatus rather than a constant `{ healthy: true }`.
+      const server: Server = createServer((_req, res) => {
+        res.statusCode = 200;
+        res.end('ok');
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        const port = (server.address() as AddressInfo).port;
+        const result = await dockerCheckContainerHealth({
+          port,
+          path: '/health',
+          expectStatus: 200,
+          timeoutSeconds: 2,
+        });
+        expect(result).toEqual({ observedStatus: 200 });
+        // The vacuous always-true field is gone from the success shape.
+        expect((result as Record<string, unknown>).healthy).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     });
 
     it('dockerCheckContainerHealth: tool delegates to waitForHealthy without re-implementing the polling loop', async () => {

@@ -311,6 +311,19 @@ export interface DockerCheckContainerHealthInput {
 }
 
 /**
+ * Result of {@link dockerCheckContainerHealth} on success.
+ *
+ * @property observedStatus the HTTP status code that signalled health — equal
+ *   to the requested `expectStatus`, returned so the caller has the concrete
+ *   observed value rather than a constant. (The unhealthy outcome is the
+ *   thrown `TimeoutError`, not a field on this shape; success implies the
+ *   expected status was observed within the budget.)
+ */
+export interface DockerCheckContainerHealthResult {
+  observedStatus: number;
+}
+
+/**
  * Poll a container's HTTP surface until it responds with the expected
  * status, or until the timeout elapses.
  *
@@ -319,14 +332,21 @@ export interface DockerCheckContainerHealthInput {
  * does not re-implement the per-poll bound, the inter-poll sleep, or the
  * timeout-error construction.
  *
+ * The success/failure split is throw-on-failure by the library's contract:
+ * the call resolves only when the expected status was observed and throws
+ * `TimeoutError` otherwise. The result therefore carries the concrete
+ * `observedStatus` (the status that confirmed health) rather than a vacuous
+ * always-true boolean — a caller branches on the thrown error for the
+ * unhealthy case, and reads `observedStatus` for the confirmed value.
+ *
  * @param input see {@link DockerCheckContainerHealthInput}.
- * @returns `{ healthy: true }` when the library returns `true`.
+ * @returns `{ observedStatus }` — the status code that signalled health.
  * @throws `TimeoutError` propagated verbatim from the library when the
  *   budget is exhausted without a matching response.
  */
 export async function dockerCheckContainerHealth(
   input: DockerCheckContainerHealthInput,
-): Promise<{ healthy: true }> {
+): Promise<DockerCheckContainerHealthResult> {
   // Dynamic import of the docker library — same boot-without-Docker
   // invariant as above. waitForHealthy itself uses the stdlib fetch
   // against `http://localhost:<port>`, so a Docker-less host produces
@@ -336,12 +356,15 @@ export async function dockerCheckContainerHealth(
   const { waitForHealthy } = await importDockerModule(
     () => import('../../modules/docker/ContainerHealth.js'),
   );
+  // waitForHealthy resolves only when a response matched expectStatus, so the
+  // status that confirmed health is exactly expectStatus; throw-on-failure
+  // means there is no other resolved outcome to distinguish.
   await waitForHealthy(input.port, {
     path: input.path,
     expectStatus: input.expectStatus,
     timeoutSeconds: input.timeoutSeconds,
   });
-  return { healthy: true };
+  return { observedStatus: input.expectStatus };
 }
 
 /**
