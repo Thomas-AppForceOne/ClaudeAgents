@@ -285,7 +285,7 @@ export function buildValidationAbortFromCodeTool(
  * Input to {@link buildLoopDetectedBodyTool}.
  *
  * @property halt the loop-detection halt details. The `reason` discriminator
- *   (`roleCeilingExceeded` / `sprintBudgetExceeded` / `editOscillationDetected`)
+ *   (`roleCeilingExceeded` / `sprintBudgetExceeded` / `editOscillation`)
  *   appears verbatim on the returned `payload.reason`.
  */
 export interface BuildLoopDetectedBodyInput {
