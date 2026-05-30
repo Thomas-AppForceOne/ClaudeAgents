@@ -26,7 +26,15 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -132,31 +140,31 @@ function dispatcherFor(child: ChildProcessWithoutNullStreams): PendingDispatcher
   };
 }
 
-// Curate a PATH string that excludes any directory containing a `docker`
-// binary. The parent process's PATH is split into entries; each entry is
-// kept only if it does NOT contain a `docker` binary. This preserves the
-// system bins the server needs (git for repo-key derivation, sh, etc.)
-// while guaranteeing the docker prerequisite check fails on the child.
-function curatedPathExcludingDocker(): string {
+// Build a PATH under which `docker --version` fails, while every other system
+// binary the server needs (git for repo-key derivation, sh, the coreutils)
+// stays reachable. A throwaway directory holding a `docker` stub that always
+// exits non-zero is prepended to the full parent PATH, so the stub shadows any
+// real docker the host has. The module prerequisite runs `docker --version`
+// through `execFileSync`, which throws on the stub's non-zero exit exactly as
+// it would on a genuinely-absent binary, so the prereq still reports
+// `ModulePrerequisiteFailed`.
+//
+// Shadowing, rather than removing every directory that contains a `docker`
+// binary, is what keeps the rest of the toolchain intact: on hosts where
+// docker shares a directory with the essentials — a Linux runner carries
+// docker, git, and sh all in `/usr/bin` — removing that directory would strip
+// git too, and the server's repo-key git call would then fail with a different
+// error class before the docker prerequisite ever ran.
+function pathWithDockerNeutralised(): string {
+  const shadowDir = mkdtempSync(path.join(tmpdir(), 'r7-s5-docker-shadow-'));
+  tmpDirs.push(shadowDir);
+  const stub = path.join(shadowDir, 'docker');
+  writeFileSync(stub, '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+  // Set the executable bit explicitly: writeFileSync's mode is subject to the
+  // process umask, so a restrictive umask could leave the stub non-executable.
+  chmodSync(stub, 0o755);
   const parentPath = process.env.PATH ?? '';
-  const entries = parentPath.split(path.delimiter);
-  const filtered: string[] = [];
-  for (const entry of entries) {
-    if (entry.length === 0) continue;
-    // Probe each directory for a `docker` entry; existsSync returns
-    // false for a missing path, so a non-existent entry is skipped
-    // silently.
-    const candidate = path.join(entry, 'docker');
-    if (existsSync(candidate)) continue;
-    filtered.push(entry);
-  }
-  // Guard: at least one entry should remain so git and sh can resolve.
-  // If filtering removed everything (unlikely on a developer machine),
-  // fall back to /usr/bin:/bin which always carries git.
-  if (filtered.length === 0) {
-    return ['/usr/bin', '/bin'].join(path.delimiter);
-  }
-  return filtered.join(path.delimiter);
+  return parentPath.length > 0 ? `${shadowDir}${path.delimiter}${parentPath}` : shadowDir;
 }
 
 // Spawn the built server as a child node process with a curated PATH (no
@@ -171,16 +179,15 @@ function spawnServerWithoutDocker(
   stderrChunks: string[];
   exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 } {
-  const curatedPath = curatedPathExcludingDocker();
+  const curatedPath = pathWithDockerNeutralised();
   const child = spawn(process.execPath, [distEntry], {
     stdio: ['pipe', 'pipe', 'pipe'],
     // PATH isolation lives ONLY in the child env — the parent vitest
     // process keeps its own PATH untouched so a sibling case in this
     // file or in another test file cannot observe a mutated parent
-    // env. We strip out the parent's PATH explicitly and substitute
-    // the curated dir; everything else is inherited so the child
-    // resolves the same module-state store and package root the test
-    // staged.
+    // env. The child's PATH is the parent's with a docker-shadowing dir
+    // prepended; everything else is inherited so the child resolves the
+    // same module-state store and package root the test staged.
     env: {
       ...process.env,
       PATH: curatedPath,
