@@ -37,6 +37,7 @@ const CATEGORY_WORKFLOWS = [
   'test-schemas.yml',
   'test-no-stack-leak.yml',
   'test-no-spec-ref.yml',
+  'test-no-second-mcp-server.yml',
   'test-house-rules.yml',
   'test-error-text.yml',
   'test-doc-lint.yml',
