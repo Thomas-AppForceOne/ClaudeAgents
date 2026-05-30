@@ -217,6 +217,22 @@ export function resolveRunStore(opts: {
  * machine's timezone) and a 2-byte random suffix disambiguates ids generated
  * within the same second. Conforms to {@link RUN_ID_PATTERN}.
  *
+ * Suffix width and uniqueness scope — the format is fixed at 4 hex chars (16
+ * bits, 65,536 values per UTC second) and must stay that way: {@link
+ * RUN_ID_PATTERN} and the run-dir recovery enumeration both depend on it, so
+ * widening the suffix would diverge from the run-id format the rest of the
+ * system pins. The consequence is that run ids are unique *per repository*,
+ * not globally:
+ *  - Same-repo collisions cannot cause two live runs to share an id —
+ *    {@link acquireRunLock} enforces single-active-run-per-repo, so a colliding
+ *    second run is refused before it gets going.
+ *  - Cross-repo same-second collisions are possible (two repos minting the same
+ *    `<timestamp>-<suffix>` in the same UTC second) but benign — each repo's run
+ *    lives under its own `<storeRoot>/<repoKey>/runs/<runId>` tree, so nothing
+ *    is overwritten. The only effect is that a run id alone is ambiguous as a
+ *    global identifier: telemetry consumers (e.g. an O3 cost rollup) must join
+ *    on `(repoKey, runId)`, never on `runId` by itself.
+ *
  * @param now clock seam; defaults to the current time. Injected in tests for a
  *   deterministic timestamp.
  * @returns the run id string.
