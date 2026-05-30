@@ -233,8 +233,16 @@ describe('formatHeartbeat — metadata only', () => {
   it('payload-like content the caller passes is not echoed (role is the only input)', () => {
     // Even though the schema forbids extra args at the MCP boundary, the
     // library formatter only reads the role argument — so a caller that
-    // bypasses the schema cannot smuggle payload content into the line.
-    const viaTool = formatHeartbeatTool({ role: 'gan-evaluator' } as never);
+    // bypasses the schema and smuggles a SECRET-bearing extra field cannot
+    // get it into the line. The extra field must carry the sentinel so the
+    // assertion exercises the leak path: were the formatter to start echoing
+    // extra keys, this would fail.
+    const viaTool = formatHeartbeatTool({
+      role: 'gan-evaluator',
+      extra: 'SECRET-PAYLOAD',
+    } as never);
+    expect(viaTool).toContain('gan-evaluator');
+    expect(viaTool).not.toContain('SECRET-PAYLOAD');
     expect(viaTool).not.toContain('SECRET');
   });
 });
