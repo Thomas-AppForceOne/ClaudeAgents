@@ -135,7 +135,8 @@ describe('PortRegistry', () => {
     mkdirSync(wt, { recursive: true });
     reg.register(wt, 9000, 'app-x');
     expect(reg.lookup(wt)).not.toBeNull();
-    reg.release(wt);
+    // release() returns true when an entry was actually removed.
+    expect(reg.release(wt)).toBe(true);
     expect(reg.lookup(wt)).toBeNull();
     expect(reg.getAll()).toHaveLength(0);
   });
@@ -165,7 +166,9 @@ describe('PortRegistry', () => {
 
   it('release on absent worktree is a silent no-op', () => {
     const reg = new PortRegistry(scratch);
-    expect(() => reg.release(path.join(scratch, 'never-registered'))).not.toThrow();
+    // No throw, and the boolean return reflects the no-op (false), not a
+    // hardcoded success — the field is a real state observation.
+    expect(reg.release(path.join(scratch, 'never-registered'))).toBe(false);
   });
 
   // Durability across instances: state survives in the file, not in object memory.

@@ -460,19 +460,13 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "port": {
-            "maximum": 65535,
-            "minimum": 0,
-            "type": "integer"
-          },
           "worktreePath": {
             "minLength": 1,
             "type": "string"
           }
         },
         "required": [
-          "worktreePath",
-          "port"
+          "worktreePath"
         ],
         "type": "object"
       }

@@ -105,7 +105,9 @@ if (missing.length > 0) {
 // caller that omits one fails at the schema layer rather than at runtime.
 const fieldChecks = {
   dockerReservePort: ['worktreePath', 'port', 'containerName'],
-  dockerReleasePort: ['worktreePath', 'port'],
+  // dockerReleasePort: library keys on worktreePath alone (idempotent release),
+  // so the wire shape mirrors that — `port` is intentionally absent here.
+  dockerReleasePort: ['worktreePath'],
   dockerCheckContainerHealth: ['port', 'path', 'expectStatus', 'timeoutSeconds'],
   dockerContainerName: ['worktreePath'],
 };

@@ -144,15 +144,19 @@ export class PortRegistry {
    * Release the allocation for `worktreePath`, if any.
    *
    * @param worktreePath worktree to release; canonicalised for the key.
+   * @returns `true` when an entry was actually removed; `false` when the
+   *   worktree had no live allocation and the call was a silent no-op.
    *   Side effect: persists only when an entry was actually removed; releasing
    *   an unregistered worktree is a silent no-op (no write).
    */
-  release(worktreePath: string): void {
+  release(worktreePath: string): boolean {
     const key = canonicalizePath(worktreePath);
     const blob = this.load();
     if (deleteEntry(blob, key)) {
       this.persist(blob);
+      return true;
     }
+    return false;
   }
 
   // Load and validate the registry from module state, pruning entries for

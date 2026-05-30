@@ -165,8 +165,13 @@ describe('docker tools', () => {
       const registry = new PortRegistry(scratch);
       registry.register(wt, 7300, 'app-release');
       expect(registry.lookup(wt)).not.toBeNull();
-      await dockerReleasePort({ worktreePath: wt, port: 7300 });
+      const result = await dockerReleasePort({ worktreePath: wt });
+      expect(result).toEqual({ worktreePath: wt, released: true });
       expect(new PortRegistry(scratch).lookup(wt)).toBeNull();
+      // Releasing again is a no-op; `released` reflects the library's real
+      // signal rather than a hardcoded `true`.
+      const noop = await dockerReleasePort({ worktreePath: wt });
+      expect(noop).toEqual({ worktreePath: wt, released: false });
     });
 
     it('dockerDiscoverPort: tool resolves the registry layer to the same port the library does', async () => {
@@ -410,7 +415,7 @@ describe('docker tools', () => {
       // Release through the tool, then re-spawn — the second child's
       // read must see the entry gone, confirming the release also
       // crosses the persistence boundary.
-      await dockerReleasePort({ worktreePath: wt, port: 7801 });
+      await dockerReleasePort({ worktreePath: wt });
       const child2 = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
         env: process.env,
         encoding: 'utf8',

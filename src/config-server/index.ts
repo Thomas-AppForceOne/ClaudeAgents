@@ -1020,12 +1020,13 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
   },
   dockerReleasePort: {
     // The library's release(worktreePath) keys on the worktree alone; the
-    // tool surface carries port for catalog symmetry with reserve.
-    required: ['worktreePath', 'port'],
+    // tool surface mirrors that contract, so `port` is not part of the
+    // input or the result. `released` reflects whether the library actually
+    // removed an entry vs. a no-op on an unregistered worktree.
+    required: ['worktreePath'],
     handler: (args) => {
       const worktreePath = requireWorktreePathArg(args, 'dockerReleasePort');
-      const port = requirePortArg(args, 'dockerReleasePort');
-      return runDockerReleasePort({ worktreePath, port });
+      return runDockerReleasePort({ worktreePath });
     },
   },
   dockerDiscoverPort: {

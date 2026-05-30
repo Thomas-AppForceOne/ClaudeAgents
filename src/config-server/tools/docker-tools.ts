@@ -109,22 +109,20 @@ export async function dockerReservePort(
  * Input to {@link dockerReleasePort}.
  *
  * @property worktreePath the worktree whose allocation is being released.
- * @property port the port the caller believes is allocated; carried for
- *   the catalog input shape but not consulted by the underlying
- *   `PortRegistry.release(worktreePath)`, which keys on the worktree
- *   alone.
  */
 export interface DockerReleasePortInput {
   worktreePath: string;
-  port: number;
 }
 
 /**
  * Result echoed back to the caller on success.
+ *
+ * @property worktreePath the worktree the release targeted.
+ * @property released `true` when the worktree had a live allocation that was
+ *   removed; `false` when the call was a no-op because no entry existed.
  */
 export interface DockerReleasePortResult {
   worktreePath: string;
-  port: number;
   released: boolean;
 }
 
@@ -137,9 +135,9 @@ export interface DockerReleasePortResult {
  * different failure mode for the unregistered case.
  *
  * @param input see {@link DockerReleasePortInput}.
- * @returns the input echoed plus `released: true` for confirmation; the
- *   library does not distinguish "released" from "no-op", so the field is
- *   a structural acknowledgement, not a state observation.
+ * @returns `{ worktreePath, released }` where `released` reflects whether the
+ *   library actually removed an entry (`true`) or the call was a no-op on an
+ *   unregistered worktree (`false`).
  */
 export async function dockerReleasePort(
   input: DockerReleasePortInput,
@@ -151,11 +149,10 @@ export async function dockerReleasePort(
   // and never persists, so its prereq check is similarly skipped).
   const { PortRegistry } = await import('../../modules/docker/PortRegistry.js');
   const registry = new PortRegistry(input.worktreePath);
-  registry.release(input.worktreePath);
+  const released = registry.release(input.worktreePath);
   return {
     worktreePath: input.worktreePath,
-    port: input.port,
-    released: true,
+    released,
   };
 }
 
