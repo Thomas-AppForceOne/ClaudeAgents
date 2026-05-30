@@ -384,6 +384,7 @@
       }
     },
     "dockerCheckContainerHealth": {
+      "description": "BLOCKS while polling the container's HTTP surface until it answers with `expectStatus`, or until `timeoutSeconds` elapses — it is a waiter, not a one-shot probe, and may block for up to `timeoutSeconds`. Resolves with the observed status on success; throws TimeoutError if the budget is exhausted without a match.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

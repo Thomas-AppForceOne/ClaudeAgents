@@ -330,7 +330,10 @@ export interface ToolListEntry {
  * @returns the list of advertisable {@link ToolListEntry}s.
  */
 export function buildToolList(): ToolListEntry[] {
-  const props = (apiToolsV1.properties ?? {}) as Record<string, { inputSchema?: unknown }>;
+  const props = (apiToolsV1.properties ?? {}) as Record<
+    string,
+    { inputSchema?: unknown; description?: unknown }
+  >;
   // Advertise every dispatcher-known name (F2 + R5 + run-context) that has a
   // registered handler. Earlier this filtered F2 names only, leaving R5 and
   // later additive tools dispatchable-but-unadvertised; we expand to the full
@@ -343,9 +346,17 @@ export function buildToolList(): ToolListEntry[] {
       schemaEntry && typeof schemaEntry === 'object' && schemaEntry.inputSchema
         ? (schemaEntry.inputSchema as Record<string, unknown>)
         : { type: 'object', additionalProperties: false, properties: {} };
+    // Prefer a per-tool catalog `description` when the schema entry supplies
+    // one — that is where a tool documents behaviour an LLM caller must know
+    // (e.g. that a "Check" tool actually BLOCKS while polling). Fall back to
+    // the generic auto-string for entries that carry no bespoke description.
+    const description =
+      schemaEntry && typeof schemaEntry === 'object' && typeof schemaEntry.description === 'string'
+        ? schemaEntry.description
+        : `ClaudeAgents config-server tool: ${name}`;
     return {
       name,
-      description: `ClaudeAgents config-server tool: ${name}`,
+      description,
       required: TOOL_HANDLERS[name].required,
       inputSchema,
     };

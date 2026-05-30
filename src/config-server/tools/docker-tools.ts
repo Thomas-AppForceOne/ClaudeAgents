@@ -327,6 +327,12 @@ export interface DockerCheckContainerHealthResult {
  * Poll a container's HTTP surface until it responds with the expected
  * status, or until the timeout elapses.
  *
+ * BLOCKS: this is a *waiter*, not a one-shot probe. Despite the `Check` name
+ * (pinned on the wire), the call polls in a loop and does not resolve until
+ * either the expected status is observed or `timeoutSeconds` elapses — so a
+ * caller may block for up to `timeoutSeconds`. Size `timeoutSeconds`
+ * accordingly; a one-shot yes/no is not what this tool provides.
+ *
  * Thin wrapper around the shipped `waitForHealthy(port, options)`. The
  * handler forwards each input field as the library's named option; it
  * does not re-implement the per-poll bound, the inter-poll sleep, or the

@@ -399,6 +399,20 @@ describe('api-tools-v1 schema: R7 wire-boundary patterns (defence in depth)', ()
     // PortNotDiscovered at runtime once every layer is exhausted.
     expect(props['dockerDiscoverPort']?.inputSchema?.minProperties).toBe(1);
   });
+
+  it('dockerCheckContainerHealth catalog description telegraphs that it BLOCKS', () => {
+    // The wire name ("Check") reads as a one-shot probe, but the tool polls
+    // up to timeoutSeconds. The catalog description must say so, and it must
+    // reach the advertised tool list an LLM caller reads.
+    const desc = (
+      apiToolsV1.properties as Record<string, { description?: string }>
+    )?.['dockerCheckContainerHealth']?.description;
+    expect(desc).toMatch(/BLOCKS|block/);
+    expect(desc).toMatch(/timeoutSeconds/);
+
+    const advertised = buildToolList().find((t) => t.name === 'dockerCheckContainerHealth');
+    expect(advertised?.description).toBe(desc);
+  });
 });
 
 describe('MCP handshake (subprocess)', () => {
