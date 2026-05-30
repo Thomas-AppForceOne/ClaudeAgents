@@ -435,6 +435,7 @@
     "dockerDiscoverPort": {
       "inputSchema": {
         "additionalProperties": false,
+        "minProperties": 1,
         "properties": {
           "containerPattern": {
             "minLength": 1,

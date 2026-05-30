@@ -1030,10 +1030,11 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
     },
   },
   dockerDiscoverPort: {
-    // Every layer input is optional; the library skips a layer whose inputs
-    // are absent. No fields are required at the dispatch level so the
-    // declarative tool surface matches the library's behaviour — a no-arg
-    // call exhausts every layer and throws PortNotDiscovered.
+    // Every layer input is individually optional; the library skips a layer
+    // whose inputs are absent. No single field is required, but the catalog
+    // schema sets minProperties:1 so a structurally-empty `{}` call is
+    // rejected at the boundary rather than exhausting every layer and
+    // surfacing the library's PortNotDiscovered throw at runtime.
     required: [],
     handler: (args) => {
       const input: Parameters<typeof runDockerDiscoverPort>[0] = {};

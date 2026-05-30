@@ -354,7 +354,13 @@ describe('api-tools-v1 schema: R7 wire-boundary patterns (defence in depth)', ()
   // "two homes for one fact, both must agree" rule.
   const props = (apiToolsV1.properties ?? {}) as Record<
     string,
-    { inputSchema?: { properties?: Record<string, { pattern?: string }>; required?: string[] } }
+    {
+      inputSchema?: {
+        properties?: Record<string, { pattern?: string }>;
+        required?: string[];
+        minProperties?: number;
+      };
+    }
   >;
 
   it('acquireRunLock pins a pattern on `repoKey` (REPO_KEY_PATTERN)', () => {
@@ -385,6 +391,13 @@ describe('api-tools-v1 schema: R7 wire-boundary patterns (defence in depth)', ()
     expect(props[name]?.inputSchema?.properties?.['runDir']?.pattern).toBe(
       '^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$',
     );
+  });
+
+  it('dockerDiscoverPort requires at least one discovery layer (minProperties:1)', () => {
+    // Every layer is individually optional, but a structurally-empty `{}`
+    // call must be rejected at the catalog boundary rather than throwing
+    // PortNotDiscovered at runtime once every layer is exhausted.
+    expect(props['dockerDiscoverPort']?.inputSchema?.minProperties).toBe(1);
   });
 });
 

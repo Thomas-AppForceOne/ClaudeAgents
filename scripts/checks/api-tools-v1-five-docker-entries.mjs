@@ -129,7 +129,9 @@ for (const [tool, fields] of Object.entries(fieldChecks)) {
 
 // dockerDiscoverPort has every field optional (no required[]) — but the
 // inputSchema must still pin the shape so a caller cannot smuggle in an
-// unknown field.
+// unknown field, and must require at least one layer so a structurally-empty
+// `{}` call is rejected at the catalog rather than throwing PortNotDiscovered
+// at runtime.
 const discoverEntry = props['dockerDiscoverPort'];
 const discoverSchema =
   discoverEntry && typeof discoverEntry === 'object' ? discoverEntry.inputSchema : undefined;
@@ -140,6 +142,13 @@ if (
 ) {
   console.error(
     'api-tools-v1-five-docker-entries: dockerDiscoverPort.inputSchema must pin additionalProperties:false',
+  );
+  process.exit(1);
+}
+if (discoverSchema.minProperties !== 1) {
+  console.error(
+    'api-tools-v1-five-docker-entries: dockerDiscoverPort.inputSchema must set minProperties:1 ' +
+      'so a no-layer call is rejected at the catalog, not at runtime',
   );
   process.exit(1);
 }
