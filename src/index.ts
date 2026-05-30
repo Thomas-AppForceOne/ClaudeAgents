@@ -266,6 +266,25 @@ export type {
   EffectiveStartingCountersInput,
 } from './safety/index.js';
 
+// Independent-review subsystem: the typed bundle model and the pure
+// reproduction-gate function. Only the public surface is re-exported here;
+// internal helpers stay file-local in src/agents/independent-review.
+export { validateFindings } from './agents/independent-review/index.js';
+export type {
+  CommandFinding,
+  CommandRunner,
+  CommandRunnerResult,
+  DropReason,
+  DroppedFindingRecord,
+  Finding,
+  FindingKind,
+  IndependentReviewBundle,
+  InspectionFinding,
+  ReviewSummary,
+  Severity,
+  ValidateFindingsResult,
+} from './agents/independent-review/index.js';
+
 export type { Issue } from './config-server/validation/schema-check.js';
 export type { Warning, WarningCode, WarningDetails } from './config-server/warnings.js';
 export type {
