@@ -244,12 +244,17 @@ export function releaseRunLock(handle: RunLockHandle): void {
  *
  * @param lockPath the lock file path; typically built from
  *   `resolveRunLockPath(storeRoot, repoKey)` on the caller side.
+ * @returns `true` when a lock file was actually removed, `false` when there was
+ *   nothing to delete (an already-missing file). Lets a caller distinguish a
+ *   real release from the idempotent no-op without re-stat'ing the path.
  */
-export function releaseRunLockAtPath(lockPath: string): void {
+export function releaseRunLockAtPath(lockPath: string): boolean {
   try {
     unlinkSync(lockPath);
+    return true;
   } catch {
     // Already gone; nothing to release.
+    return false;
   }
 }
 

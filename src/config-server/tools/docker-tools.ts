@@ -115,12 +115,18 @@ export interface DockerReservePortInput {
 
 /**
  * Result the handler echoes back to the caller on success — the three input
- * fields confirming the reservation persisted.
+ * fields confirming the reservation persisted, plus the F2 mutation indicator.
+ *
+ * @property mutated always `true`: the library `register` throws `PortInUse`
+ *   on a conflict and otherwise persists the reservation, so a normal return
+ *   always means durable state changed. Surfaced under the uniform F2
+ *   `mutated` name alongside the other R7 write tools.
  */
 export interface DockerReservePortResult {
   worktreePath: string;
   port: number;
   containerName: string;
+  mutated: true;
 }
 
 /**
@@ -133,7 +139,7 @@ export interface DockerReservePortResult {
  * scan, no free-port allocation — caller supplies the candidate port.
  *
  * @param input see {@link DockerReservePortInput}.
- * @returns `{ worktreePath, port, containerName }` confirming the
+ * @returns `{ worktreePath, port, containerName, mutated: true }` confirming the
  *   reservation persisted.
  * @throws `PortInUse` propagated verbatim from the library when the port
  *   is already held by a different worktree (the registry's
@@ -157,10 +163,13 @@ export async function dockerReservePort(
   );
   const registry = new PortRegistry(input.worktreePath);
   registry.register(input.worktreePath, input.port, input.containerName);
+  // register() either persisted the reservation or threw PortInUse; reaching
+  // here means it persisted, so the F2 mutation indicator is always true.
   return {
     worktreePath: input.worktreePath,
     port: input.port,
     containerName: input.containerName,
+    mutated: true,
   };
 }
 
@@ -179,10 +188,16 @@ export interface DockerReleasePortInput {
  * @property worktreePath the worktree the release targeted.
  * @property released `true` when the worktree had a live allocation that was
  *   removed; `false` when the call was a no-op because no entry existed.
+ * @property mutated the F2 mutation indicator; equal to `released` — a removed
+ *   allocation changed durable state, a no-op on an unregistered worktree did
+ *   not. Surfaced under the uniform name so the orchestrator branches on the
+ *   same field across every R7 write tool (`released` is kept for the
+ *   release-specific reading).
  */
 export interface DockerReleasePortResult {
   worktreePath: string;
   released: boolean;
+  mutated: boolean;
 }
 
 /**
@@ -194,9 +209,9 @@ export interface DockerReleasePortResult {
  * different failure mode for the unregistered case.
  *
  * @param input see {@link DockerReleasePortInput}.
- * @returns `{ worktreePath, released }` where `released` reflects whether the
- *   library actually removed an entry (`true`) or the call was a no-op on an
- *   unregistered worktree (`false`).
+ * @returns `{ worktreePath, released, mutated }` where `released` (and the
+ *   equal `mutated`) reflect whether the library actually removed an entry
+ *   (`true`) or the call was a no-op on an unregistered worktree (`false`).
  */
 export async function dockerReleasePort(
   input: DockerReleasePortInput,
@@ -211,9 +226,12 @@ export async function dockerReleasePort(
   );
   const registry = new PortRegistry(input.worktreePath);
   const released = registry.release(input.worktreePath);
+  // `released` is the durable-state-changed signal; mirror it onto the uniform
+  // F2 `mutated` name so callers branch on one field across every R7 write tool.
   return {
     worktreePath: input.worktreePath,
     released,
+    mutated: released,
   };
 }
 

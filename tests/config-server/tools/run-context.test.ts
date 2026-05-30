@@ -236,18 +236,22 @@ describe('createRunWorkspace tool — cases 1b and 1c create the worktree', () =
     }
   });
 
-  it('returns { worktreePath, branch, createdByGan, resolutionCase }', () => {
+  it('returns { worktreePath, branch, createdByGan, resolutionCase, mutated }', () => {
     const repo = initRepo();
     const runId = '20260522T180000-shape';
     const cwd = process.cwd();
     try {
       process.chdir(repo);
       const ws = createRunWorkspaceTool({ subject: 'Shape Probe', runId });
-      // Pin the public shape: the tool must mirror the library's ResolvedWorkspace
-      // and not silently add or rename a field a downstream consumer would miss.
+      // Pin the public shape: the tool mirrors the library's ResolvedWorkspace
+      // and adds the F2 `mutated` indicator as a sibling — and must not silently
+      // add or rename any other field a downstream consumer would miss.
       expect(Object.keys(ws).sort()).toEqual(
-        ['branch', 'createdByGan', 'resolutionCase', 'worktreePath'].sort(),
+        ['branch', 'createdByGan', 'mutated', 'resolutionCase', 'worktreePath'].sort(),
       );
+      // `mutated` is the worktree-creation signal: it equals `createdByGan`
+      // (true for the 1b/1c create cases this fresh-repo probe exercises).
+      expect(ws.mutated).toBe(ws.createdByGan);
     } finally {
       process.chdir(cwd);
     }

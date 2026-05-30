@@ -56,12 +56,20 @@ import {
 import type { ErrorCode } from '../errors.js';
 
 /**
- * Result of {@link emitTraceEventTool}: the assigned sequence number on
- * success, or a structured warning the caller can surface. The shape is the
- * shared {@link EmitTraceEventResult} the library's `emitTraceEvent` returns —
- * re-exported here so a tool-test importer needs only this single module.
+ * Result of {@link emitTraceEventTool}: the shared {@link EmitTraceEventResult}
+ * the library's `emitTraceEvent` returns (assigned sequence number on success,
+ * or a structured warning on a dropped emit), augmented with the F2 mutation
+ * indicator as a sibling field. Re-exported alongside the tool result so a
+ * tool-test importer needs only this single module.
+ *
+ * @property mutated `true` when an event was appended (`ok === true`), `false`
+ *   on a dropped / best-effort-failed emit (`ok === false`). Surfaced under
+ *   the uniform F2 `mutated` name so the orchestrator can OR it in with the
+ *   other R7 write tools without having to know that this tool signals the
+ *   drop via `ok` instead.
  */
 export type { EmitTraceEventResult };
+export type EmitTraceEventToolResult = EmitTraceEventResult & { mutated: boolean };
 
 /**
  * Input to {@link emitTraceEventTool}.
@@ -89,10 +97,14 @@ export interface EmitTraceEventInput {
  * here.
  *
  * @param input see {@link EmitTraceEventInput}.
- * @returns see {@link EmitTraceEventResult}.
+ * @returns see {@link EmitTraceEventToolResult}.
  */
-export function emitTraceEventTool(input: EmitTraceEventInput): EmitTraceEventResult {
-  return libraryEmitTraceEvent(input.runDir, input.event);
+export function emitTraceEventTool(input: EmitTraceEventInput): EmitTraceEventToolResult {
+  const result = libraryEmitTraceEvent(input.runDir, input.event);
+  // `ok` already distinguishes an appended event from a dropped one; mirror it
+  // onto the uniform F2 `mutated` name so callers branch on the same field
+  // across every R7 write tool.
+  return { ...result, mutated: result.ok };
 }
 
 /**

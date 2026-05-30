@@ -65,6 +65,9 @@ describe('run-lock tools — acquire/release by key', () => {
     const runId = '20260522T180000-acq1';
     const result = acquireRunLockTool({ repoKey, runId });
     expect(existsSync(result.lockPath)).toBe(true);
+    // A returned handle always means the lock was created, so the F2 mutation
+    // indicator is unconditionally true on this surface.
+    expect(result.mutated).toBe(true);
 
     // Companion-check: the written lock is readable (a runId-less lock would
     // be treated as garbage by readRunLock and silently broken by the next
@@ -85,6 +88,8 @@ describe('run-lock tools — acquire/release by key', () => {
     // M1 stranding fix plus the C-1/I-006 holder-proof tightening.
     const released = releaseRunLockTool({ repoKey, runId });
     expect(released.lockPath).toBe(first.lockPath);
+    // A real unlink changed durable state: the F2 indicator is true.
+    expect(released.mutated).toBe(true);
     expect(existsSync(first.lockPath)).toBe(false);
 
     // Immediate re-acquire on the same repoKey must succeed cleanly.
@@ -120,19 +125,29 @@ describe('run-lock tools — acquire/release by key', () => {
   it('release is idempotent: a second release after the lock is already gone does not throw', () => {
     const runId = '20260522T180000-idem';
     acquireRunLockTool({ repoKey, runId });
-    releaseRunLockTool({ repoKey, runId });
+    const first = releaseRunLockTool({ repoKey, runId });
+    expect(first.mutated).toBe(true);
     // Already gone; the second release must be a no-op rather than a throw,
     // because the orchestrator's exit-path handlers may issue release on a
     // path the lock was already released on (graceful + abort overlap).
-    expect(() => releaseRunLockTool({ repoKey, runId })).not.toThrow();
+    let second: ReturnType<typeof releaseRunLockTool> | undefined;
+    expect(() => {
+      second = releaseRunLockTool({ repoKey, runId });
+    }).not.toThrow();
+    // The idempotent no-op removed nothing, so the F2 indicator is false —
+    // the signal an orchestrator OR's in without re-snapshotting on a no-op.
+    expect(second?.mutated).toBe(false);
   });
 
   it('release on a lock that was never acquired is also a no-op', () => {
     // Safety net: a buggy orchestrator could call release before any acquire
     // (e.g. an error path that races the acquire). The tool must not throw.
-    expect(() =>
-      releaseRunLockTool({ repoKey, runId: '20260522T180000-naq1' }),
-    ).not.toThrow();
+    let result: ReturnType<typeof releaseRunLockTool> | undefined;
+    expect(() => {
+      result = releaseRunLockTool({ repoKey, runId: '20260522T180000-naq1' });
+    }).not.toThrow();
+    // Nothing was removed; mutated is false for the never-acquired no-op.
+    expect(result?.mutated).toBe(false);
   });
 
   it('tool-vs-library parity: releaseRunLockTool funnels through the shared releaseRunLockAtPath', () => {
@@ -174,6 +189,9 @@ describe('run-lock tools — acquire/release by key', () => {
     // superseded run would carry. The lock must NOT be unlinked.
     const released = releaseRunLockTool({ repoKey, runId: '20260522T180000-stal' });
     expect(released.lockPath).toBe(acquired.lockPath);
+    // The identity-mismatch no-op unlinked nothing, so mutated is false even
+    // though a lock file is present on disk.
+    expect(released.mutated).toBe(false);
     expect(existsSync(acquired.lockPath)).toBe(true);
 
     // And the recorded holder is still the original one — the no-op did
@@ -193,6 +211,8 @@ describe('run-lock tools — acquire/release by key', () => {
 
     const released = releaseRunLockTool({ repoKey, runId });
     expect(released.lockPath).toBe(acquired.lockPath);
+    // Identity matched and the file was unlinked, so mutated is true.
+    expect(released.mutated).toBe(true);
     expect(existsSync(acquired.lockPath)).toBe(false);
   });
 

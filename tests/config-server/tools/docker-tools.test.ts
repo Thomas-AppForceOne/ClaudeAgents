@@ -143,11 +143,14 @@ describe('docker tools', () => {
       const registryViaLib = new PortRegistry(scratch);
       registryViaLib.register(wtB, 7200, 'app-lib');
 
-      await dockerReservePort({
+      const reserveResult = await dockerReservePort({
         worktreePath: wtA,
         port: 7201,
         containerName: 'app-tool',
       });
+      // register() persisted (or threw PortInUse); a normal return means the
+      // F2 mutation indicator is true.
+      expect(reserveResult.mutated).toBe(true);
 
       // The registry singleton (under scratch projectRoot) now carries
       // both entries; their shapes are identical.
@@ -171,12 +174,14 @@ describe('docker tools', () => {
       registry.register(wt, 7300, 'app-release');
       expect(registry.lookup(wt)).not.toBeNull();
       const result = await dockerReleasePort({ worktreePath: wt });
-      expect(result).toEqual({ worktreePath: wt, released: true });
+      // The F2 `mutated` indicator mirrors `released`: a removed entry changed
+      // durable state.
+      expect(result).toEqual({ worktreePath: wt, released: true, mutated: true });
       expect(new PortRegistry(scratch).lookup(wt)).toBeNull();
-      // Releasing again is a no-op; `released` reflects the library's real
-      // signal rather than a hardcoded `true`.
+      // Releasing again is a no-op; `released` (and the equal `mutated`)
+      // reflect the library's real signal rather than a hardcoded `true`.
       const noop = await dockerReleasePort({ worktreePath: wt });
-      expect(noop).toEqual({ worktreePath: wt, released: false });
+      expect(noop).toEqual({ worktreePath: wt, released: false, mutated: false });
     });
 
     it('dockerDiscoverPort: tool resolves the registry layer to the same port the library does', async () => {

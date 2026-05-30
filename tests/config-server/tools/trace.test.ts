@@ -130,8 +130,14 @@ describe('emitTraceEvent — dual-callable: tool and direct library import share
     const runDirLib = makeTmp();
     const viaTool = emitTraceEventTool({ runDir: runDirTool, event: attempt(0) });
     const viaLib = libraryEmitTraceEvent(runDirLib, attempt(0));
-    expect(viaTool).toEqual(viaLib);
+    // The tool augments the shared library result with the F2 `mutated`
+    // indicator (a sibling field) — strip it before comparing so the parity
+    // check still pins "no second policy copy" on the library-owned fields.
+    const { mutated, ...toolLibraryFields } = viaTool;
+    expect(toolLibraryFields).toEqual(viaLib);
     expect(viaTool.ok).toBe(true);
+    // `mutated` mirrors `ok`: an appended event changed durable state.
+    expect(mutated).toBe(viaTool.ok);
   });
 
   it('a direct library import gets the same one-retry + droppedEmits increment on agentAttempt failure', async () => {

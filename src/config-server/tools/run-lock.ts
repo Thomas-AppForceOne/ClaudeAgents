@@ -42,16 +42,22 @@ export interface AcquireRunLockInput {
 
 /**
  * Result of {@link acquireRunLockTool} — the resolved lock path and the
- * contents written into it.
+ * contents written into it, plus the F2 mutation indicator.
  *
  * The shipped library returns an in-memory `RunLockHandle` (`lockPath` +
- * `contents`); the tool returns the same fields verbatim. The orchestrator
- * keeps neither field around — it later releases by `repoKey`, not by the
- * returned `lockPath` — but the fields are still surfaced for diagnostic and
- * test purposes (a unit test can `readRunLock(result.lockPath)` to verify
- * the lock is readable).
+ * `contents`); the tool returns the same fields verbatim and adds `mutated`
+ * as a sibling. The orchestrator keeps neither lock field around — it later
+ * releases by `repoKey`, not by the returned `lockPath` — but the fields are
+ * still surfaced for diagnostic and test purposes (a unit test can
+ * `readRunLock(result.lockPath)` to verify the lock is readable).
+ *
+ * @property mutated always `true`: the library only returns on a successful
+ *   acquire (it created the lock file, including the stale-break re-acquire
+ *   path) and throws otherwise, so a returned handle always means durable
+ *   state changed. Lets the orchestrator OR this flag in uniformly with the
+ *   other R7 write tools per the F2 mutation-indicator contract.
  */
-export type AcquireRunLockResult = RunLockHandle;
+export type AcquireRunLockResult = RunLockHandle & { mutated: true };
 
 /**
  * Acquire the repository's run lock.
@@ -76,7 +82,10 @@ export type AcquireRunLockResult = RunLockHandle;
  */
 export function acquireRunLockTool(input: AcquireRunLockInput): AcquireRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
-  return libraryAcquireRunLock({ lockPath, runId: input.runId });
+  // A returned handle means the library created the lock (first-try or
+  // stale-break re-acquire); the throw path never reaches here. So the F2
+  // mutation indicator is unconditionally true on this surface.
+  return { ...libraryAcquireRunLock({ lockPath, runId: input.runId }), mutated: true };
 }
 
 /**
@@ -98,14 +107,21 @@ export interface ReleaseRunLockInput {
 
 /**
  * Result of {@link releaseRunLockTool} — the resolved lock path the release
- * targeted.
+ * targeted, plus the F2 mutation indicator.
  *
- * The result is informational: release is idempotent (a missing file is not
- * an error), so the value carries no success/failure distinction. The path
- * is returned mostly for test/diagnostic use, mirroring the acquire side.
+ * The `lockPath` is informational: release is idempotent (a missing file is
+ * not an error), so the path alone carries no success/failure distinction. The
+ * path is returned mostly for test/diagnostic use, mirroring the acquire side.
+ *
+ * @property mutated `true` when a lock file was actually removed; `false` for
+ *   the documented idempotent no-op — the lock was already gone, or the
+ *   on-disk holder's `runId` did not match the caller's (a superseded run's
+ *   late tear-down) so the unlink was deliberately skipped. This is the real
+ *   "did the release change durable state?" signal the F2 contract asks for.
  */
 export interface ReleaseRunLockResult {
   lockPath: string;
+  mutated: boolean;
 }
 
 /**
@@ -124,15 +140,21 @@ export interface ReleaseRunLockResult {
  * by another acquirer) is not an error.
  *
  * @param input see {@link ReleaseRunLockInput}.
- * @returns `{ lockPath }` — the path the release targeted (the resolution
- *   is reported regardless of whether the unlink fired, so a test or
- *   diagnostic call can compare it to {@link AcquireRunLockResult.lockPath}).
+ * @returns `{ lockPath, mutated }` — the path the release targeted (reported
+ *   regardless of whether the unlink fired, so a test or diagnostic call can
+ *   compare it to {@link AcquireRunLockResult.lockPath}) and whether a lock
+ *   file was actually removed.
  */
 export function releaseRunLockTool(input: ReleaseRunLockInput): ReleaseRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
   const holder = libraryReadRunLock(lockPath);
+  // Only the identity-matched branch can mutate; an unmatched / unreadable /
+  // missing lock is the documented idempotent no-op (mutated stays false).
+  // The shared path-form release reports whether it actually unlinked, so a
+  // lock that vanished between the read and the unlink also reads as no-op.
+  let mutated = false;
   if (holder !== undefined && holder.runId === input.runId) {
-    libraryReleaseRunLockAtPath(lockPath);
+    mutated = libraryReleaseRunLockAtPath(lockPath);
   }
-  return { lockPath };
+  return { lockPath, mutated };
 }

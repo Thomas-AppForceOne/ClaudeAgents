@@ -108,6 +108,19 @@ export interface CreateRunWorkspaceInput {
 }
 
 /**
+ * Result of {@link createRunWorkspaceTool} — the library `ResolvedWorkspace`
+ * shape plus the F2 mutation indicator.
+ *
+ * @property mutated `true` when the tool created a branch/worktree (resolution
+ *   cases 1b/1c, where `createdByGan` is also `true`), `false` when it reused
+ *   an existing worktree in place (case 1a, a read-only resolution). Mirrors
+ *   the library's `createdByGan` flag onto the uniform `mutated` name the F2
+ *   mutation-indicator contract uses, so the orchestrator can OR it in with
+ *   the other R7 write tools' results.
+ */
+export type CreateRunWorkspaceResult = ResolvedWorkspace & { mutated: boolean };
+
+/**
  * Resolve and create the run's worktree.
  *
  * Why `projectRoot` is derived internally rather than caller-supplied:
@@ -125,13 +138,13 @@ export interface CreateRunWorkspaceInput {
  * itself does not re-check.
  *
  * @param input see {@link CreateRunWorkspaceInput}.
- * @returns `{ worktreePath, branch, createdByGan, resolutionCase }` — the
- *   library `ResolvedWorkspace` shape, returned as-is.
+ * @returns `{ worktreePath, branch, createdByGan, resolutionCase, mutated }` —
+ *   the library `ResolvedWorkspace` shape plus the F2 `mutated` indicator.
  * @throws `MalformedInput` when case 1b is needed but the current checkout
  *   has uncommitted changes; git command failures propagate. (Errors come
  *   from the underlying library; this handler adds no error vocabulary.)
  */
-export function createRunWorkspaceTool(input: CreateRunWorkspaceInput): ResolvedWorkspace {
+export function createRunWorkspaceTool(input: CreateRunWorkspaceInput): CreateRunWorkspaceResult {
   // Derive projectRoot from the same library function resolveRunStore uses, so
   // the worktree always lands under the run's repo regardless of what the
   // markdown orchestrator might otherwise pass. resolveRunStoreTool gives us
@@ -148,5 +161,10 @@ export function createRunWorkspaceTool(input: CreateRunWorkspaceInput): Resolved
   };
   if (input.fromDir !== undefined) opts.fromDir = input.fromDir;
   if (input.newWorktree !== undefined) opts.newWorktree = input.newWorktree;
-  return resolveWorkspace(opts);
+  const resolved = resolveWorkspace(opts);
+  // `createdByGan` is true exactly for cases 1b/1c (a branch/worktree was
+  // created) and false for case 1a (an existing worktree reused in place), so
+  // it is the durable-state-changed signal — surfaced under the uniform F2
+  // `mutated` name alongside the library shape.
+  return { ...resolved, mutated: resolved.createdByGan };
 }
