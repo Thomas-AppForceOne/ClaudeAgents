@@ -81,7 +81,10 @@ export function formatWallclock(elapsedMs: number): string {
  * @property toolCalls number of `toolCall` events. Counted alongside `calls`
  *   and `agents` because the runtime now records tool invocations explicitly
  *   and the per-run summary surfaces the count for cost / observability
- *   reporting.
+ *   reporting. Always populated by the shipped aggregator; optional in the
+ *   type so external constructors stay source-compatible across additive
+ *   bumps (per PROJECT_CONTEXT § Conventions, "Schema discipline — TS
+ *   analog").
  * @property tokensInput / tokensOutput / tokensCached summed token counts
  *   across all LLM calls.
  * @property elapsedMs span between the first and last timestamped event; `0`
@@ -92,7 +95,7 @@ export interface SprintSummaryAggregate {
 
   agents: number;
 
-  toolCalls: number;
+  toolCalls?: number;
 
   tokensInput: number;
 
@@ -212,10 +215,13 @@ export function runSprintSummary(runDir: string): string {
  *   `0` here even when this process's tally is positive. The on-disk
  *   alternative was rejected because the failure domain it exists to flag
  *   (a disk-full or unwritable run dir) would also prevent the counter
- *   itself from being written.
+ *   itself from being written. Always populated by the shipped aggregator;
+ *   optional in the type so external constructors stay source-compatible
+ *   across additive bumps (per PROJECT_CONTEXT § Conventions, "Schema
+ *   discipline — TS analog").
  */
 export interface RunSummaryAggregate extends SprintSummaryAggregate {
-  droppedEmits: number;
+  droppedEmits?: number;
 }
 
 /**
