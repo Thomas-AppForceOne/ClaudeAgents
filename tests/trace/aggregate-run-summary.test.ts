@@ -22,7 +22,11 @@ import path from 'node:path';
 
 import { appendTraceEvent, type TraceEventInput } from '../../src/trace/append.js';
 import { aggregateRunSummary, aggregateSprintSummary } from '../../src/trace/progress.js';
-import { incrementDroppedEmits, resetDroppedEmitsForTests } from '../../src/trace/dropped-emits.js';
+import {
+  getDroppedEmits,
+  incrementDroppedEmits,
+  resetDroppedEmitsForTests,
+} from '../../src/trace/dropped-emits.js';
 import {
   aggregateRunSummaryTool,
   reconcileTraceIndexTool,
@@ -162,6 +166,23 @@ describe('aggregateRunSummary — droppedEmits source is the in-memory tally', (
     expect(summary.droppedEmits).toBe(2);
     // Sum-equality still holds for the on-disk-derived numeric fields.
     expect(summary.calls).toBe(1);
+  });
+});
+
+describe('droppedEmits — runDir key is canonicalised', () => {
+  it('trailing-slash and unnormalised variants of one runDir address a single counter', () => {
+    const runDir = makeTmp();
+    // Three textual forms of the same directory: bare, trailing separator, and
+    // a `.` segment. They must all collapse onto one counter rather than
+    // splitting into separate keys.
+    incrementDroppedEmits(runDir);
+    incrementDroppedEmits(runDir + path.sep);
+    incrementDroppedEmits(path.join(runDir, '.'));
+
+    expect(getDroppedEmits(runDir)).toBe(3);
+    expect(getDroppedEmits(runDir + path.sep)).toBe(3);
+    // aggregateRunSummary reads through the same canonicalised key.
+    expect(aggregateRunSummary(runDir + path.sep).droppedEmits).toBe(3);
   });
 });
 
