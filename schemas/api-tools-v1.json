@@ -1300,6 +1300,7 @@
       }
     },
     "runSprintSummary": {
+      "description": "Formats (computes) the human-readable sprint-summary STRING for a run by scanning its trace events — the rendered `[sprint-summary] …` roll-up. For the structured aggregate object instead, use `aggregateRunSummary`.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
