@@ -33,6 +33,11 @@ import { getLogger } from './logging/logger.js';
 import { packageRoot as resolvePackageRoot } from './package-root.js';
 import { apiToolsV1 } from './schemas-bundled.js';
 import {
+  REPO_KEY_PATTERN,
+  RUN_ID_PATTERN,
+  resolveStoreRoot,
+} from './storage/run-store.js';
+import {
   getActiveStacks as readGetActiveStacks,
   getBoundedDirectoryListing as readGetBoundedDirectoryListing,
   getMergedSplicePoints as readGetMergedSplicePoints,
@@ -773,10 +778,15 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
     },
   },
   releaseRunLock: {
-    required: ['repoKey'],
+    // `runId` is required so the path-form release can prove holder identity
+    // before unlinking — a delayed, stale release from a superseded run that
+    // only knows `repoKey` must not delete a live successor's lock. See
+    // `releaseRunLockTool` for the mismatch-as-silent-no-op contract.
+    required: ['repoKey', 'runId'],
     handler: (args) => {
       const repoKey = requireRepoKey(args, 'releaseRunLock');
-      return runReleaseRunLock({ repoKey });
+      const runId = requireRunId(args, 'releaseRunLock');
+      return runReleaseRunLock({ repoKey, runId });
     },
   },
   emitTraceEvent: {
@@ -1169,17 +1179,39 @@ function requireRunId(args: Record<string, unknown>, tool: string): string {
   return s;
 }
 
-// Extract a required non-empty `repoKey` string for the lock tool pair.
-// repoKey identifies the repository whose run lock is being addressed; the
-// path is derived server-side from it, so a missing or empty key would be a
-// silent misroute of the lock file rather than a noisy failure.
-function requireRepoKey(args: Record<string, unknown>, tool: string): string {
+/**
+ * Extract a required `repoKey` string shaped exactly like a value produced
+ * by `computeRepoKey` (`<basename>-<12 hex>`, matched against
+ * {@link REPO_KEY_PATTERN}). Pre-R7 the repoKey was server-derived and
+ * never crossed the wire, so its shape was a construction-time invariant;
+ * once R7 promoted it to a tool input the invariant became a trust
+ * assumption a caller can break. A free-form string would let
+ * `path.join(storeRoot, repoKey, …)` resolve outside `storeRoot` via `..`
+ * segments and cause `mkdirSync(..., { recursive: true })` + `linkSync`
+ * to land the lock file under an attacker-chosen path. The pattern match
+ * refutes that whole class up front.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * the dispatcher table itself is module-private, but the helpers it relies
+ * on are auditable as named exports.
+ */
+export function requireRepoKey(args: Record<string, unknown>, tool: string): string {
   const s = args['repoKey'];
   if (typeof s !== 'string' || s.length === 0) {
     throw createError('MalformedInput', {
       tool,
       field: 'repoKey',
       message: `Tool '${tool}' requires a non-empty 'repoKey' string in its input.`,
+    });
+  }
+  if (!REPO_KEY_PATTERN.test(s)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'repoKey',
+      message:
+        `Tool '${tool}' requires 'repoKey' to match the producer's shape ` +
+        `(\`<basename>-<12 hex>\` per computeRepoKey); reject path traversal, ` +
+        `path separators, NUL, and any other characters at the wire boundary.`,
     });
   }
   return s;
@@ -1192,11 +1224,24 @@ function readValue(args: Record<string, unknown>, key: string = 'value'): unknow
   return args[key];
 }
 
-// Extract a required non-empty `runDir` string for the trace tools. runDir
-// is the run's directory under the store; the handler joins 'trace' to it
-// internally, so the caller cannot misroute the trace by passing a
-// trace-root-shaped path.
-function requireRunDir(args: Record<string, unknown>, tool: string): string {
+/**
+ * Extract a required `runDir` string shaped exactly like the value
+ * `resolveRunStore` mints — i.e. an absolute, normalised path that decomposes
+ * as `<storeRoot>/<repoKey>/runs/<runId>` with `<repoKey>` and `<runId>`
+ * shape-matching their canonical regexes. Pre-R7 the value was server-side
+ * only; once it became a wire input every downstream syscall
+ * (`mkdirSync(..., { recursive: true })`, `openSync('wx')`, `path.join(.., 'trace')`,
+ * `path.basename(runDir)`) inherited a trust assumption the wire layer must
+ * re-impose. A free-form `runDir` would let the trace tools create arbitrary
+ * directories anywhere the server uid can write, scan unrelated directories
+ * via the summary readers, and inject `..` into `reconcileTraceIndex`'s
+ * `path.basename`-derived `runId`. Decomposing against `resolveStoreRoot()` +
+ * the two known patterns refutes that class wholesale.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ */
+export function requireRunDir(args: Record<string, unknown>, tool: string): string {
   const s = args['runDir'];
   if (typeof s !== 'string' || s.length === 0) {
     throw createError('MalformedInput', {
@@ -1205,7 +1250,53 @@ function requireRunDir(args: Record<string, unknown>, tool: string): string {
       message: `Tool '${tool}' requires a non-empty 'runDir' string in its input.`,
     });
   }
+  // Reject NUL bytes outright — `path.normalize` accepts them and POSIX
+  // syscalls would silently truncate.
+  if (s.includes('\0')) {
+    throw rejectRunDirShape(tool);
+  }
+  // Absolute + normalised: `..` segments and `\\` separators (on POSIX) are
+  // rejected by the equality with `path.normalize`; Windows treats `\\` as
+  // a separator but the runtime canonicalises POSIX-style separators by the
+  // time the value reaches here.
+  if (!path.isAbsolute(s) || path.normalize(s) !== s) {
+    throw rejectRunDirShape(tool);
+  }
+  // Decompose against `<storeRoot>/<repoKey>/runs/<runId>` and refute any
+  // value outside that layout. The store root is resolved per call (cheap;
+  // env/marker lookups don't read disk).
+  const storeRoot = resolveStoreRoot();
+  const sep = path.sep;
+  if (!(s === storeRoot || s.startsWith(storeRoot + sep))) {
+    throw rejectRunDirShape(tool);
+  }
+  const tail = s.slice(storeRoot.length + 1); // drop leading separator
+  const parts = tail.split(sep);
+  // Expect exactly three components: <repoKey>/runs/<runId>.
+  if (
+    parts.length !== 3 ||
+    parts[1] !== 'runs' ||
+    !REPO_KEY_PATTERN.test(parts[0]) ||
+    !RUN_ID_PATTERN.test(parts[2])
+  ) {
+    throw rejectRunDirShape(tool);
+  }
   return s;
+}
+
+// Shared `runDir`-rejection error. Branched out so every refutation reads the
+// same prose; the boundary surface stays one MalformedInput per check.
+function rejectRunDirShape(tool: string): ConfigServerError {
+  return createError('MalformedInput', {
+    tool,
+    field: 'runDir',
+    message:
+      `Tool '${tool}' requires 'runDir' to be an absolute, normalised path ` +
+      `under the resolved store root, shaped as ` +
+      `\`<storeRoot>/<repoKey>/runs/<runId>\` with the producer's repoKey and ` +
+      `runId regexes; reject path traversal, relative paths, NUL, and any ` +
+      `value outside the run-store layout at the wire boundary.`,
+  });
 }
 
 // Extract a required event payload (any plain object) — the library

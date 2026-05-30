@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,8 +18,11 @@ import {
   DISPATCH_TOOL_NAMES,
   F2_TOOL_NAMES,
   getApiVersion,
+  requireRepoKey,
+  requireRunDir,
 } from '../../src/config-server/index.js';
 import { apiToolsV1, stackV1, overlayV1 } from '../../src/config-server/schemas-bundled.js';
+import { resolveStoreRoot } from '../../src/config-server/storage/run-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -196,6 +199,192 @@ describe('buildToolList', () => {
       expect(tool.inputSchema.type).toBe('object');
       expect(Array.isArray(tool.required)).toBe(true);
     }
+  });
+});
+
+describe('boundary helper: requireRepoKey', () => {
+  // C-1/I-003 fix: a free-form string passed verbatim into
+  // `path.join(storeRoot, repoKey, 'run.lock')` would let `..` traversal
+  // escape the store root and write/delete a lock file at an attacker-chosen
+  // path. The helper now refutes any value that does not match
+  // `REPO_KEY_PATTERN` (`<basename>-<12 hex>`).
+  const TOOL = 'acquireRunLock';
+
+  it('accepts a canonical computeRepoKey-shaped value', () => {
+    const ok = requireRepoKey({ repoKey: 'my-repo-deadbeef0000' }, TOOL);
+    expect(ok).toBe('my-repo-deadbeef0000');
+  });
+
+  it('rejects `..` traversal', () => {
+    expect(() => requireRepoKey({ repoKey: '../../../tmp/foo' }, TOOL)).toThrow(
+      ConfigServerError,
+    );
+  });
+
+  it('rejects a forward-slash separator', () => {
+    expect(() => requireRepoKey({ repoKey: 'tmp/foo-deadbeef0000' }, TOOL)).toThrow(
+      ConfigServerError,
+    );
+  });
+
+  it('rejects a backslash separator', () => {
+    expect(() => requireRepoKey({ repoKey: 'tmp\\foo-deadbeef0000' }, TOOL)).toThrow(
+      ConfigServerError,
+    );
+  });
+
+  it('rejects an embedded NUL byte', () => {
+    expect(() => requireRepoKey({ repoKey: 'my-repo-deadbeef0000\0junk' }, TOOL)).toThrow(
+      ConfigServerError,
+    );
+  });
+
+  it('rejects a missing hex tail', () => {
+    expect(() => requireRepoKey({ repoKey: 'my-repo' }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects a non-hex tail', () => {
+    expect(() => requireRepoKey({ repoKey: 'my-repo-zzzzzzzzzzzz' }, TOOL)).toThrow(
+      ConfigServerError,
+    );
+  });
+
+  it('still rejects empty/missing values (legacy guard)', () => {
+    expect(() => requireRepoKey({ repoKey: '' }, TOOL)).toThrow(ConfigServerError);
+    expect(() => requireRepoKey({}, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('surfaces MalformedInput as the error code', () => {
+    try {
+      requireRepoKey({ repoKey: '../escape' }, TOOL);
+      expect.fail('expected throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigServerError);
+      expect((e as ConfigServerError).code).toBe('MalformedInput');
+    }
+  });
+});
+
+describe('boundary helper: requireRunDir', () => {
+  // C-1/I-004 fix: a free-form runDir would let trace tools create arbitrary
+  // directories anywhere the server uid can write, scan unrelated dirs via
+  // the summary readers, and inject `..` into `reconcileTraceIndex`'s
+  // `path.basename(runDir)` deriving runId. The helper now decomposes
+  // against `<storeRoot>/<repoKey>/runs/<runId>` with both regexes.
+  const TOOL = 'emitTraceEvent';
+  let storeRoot: string;
+
+  beforeEach(() => {
+    storeRoot = mkdtempSync(path.join(tmpdir(), 'cas-rundir-'));
+    vi.stubEnv('GAN_RUNS_DATA', storeRoot);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('accepts a canonical resolveRunStore-shaped runDir', () => {
+    const root = resolveStoreRoot();
+    const runDir = path.join(root, 'my-repo-deadbeef0000', 'runs', '20260522T180000-0a01');
+    expect(requireRunDir({ runDir }, TOOL)).toBe(runDir);
+  });
+
+  it('rejects a relative path', () => {
+    expect(() =>
+      requireRunDir({ runDir: 'my-repo-deadbeef0000/runs/20260522T180000-0a01' }, TOOL),
+    ).toThrow(ConfigServerError);
+  });
+
+  it('rejects a path containing a `..` segment', () => {
+    const root = resolveStoreRoot();
+    const bad = path.join(root, 'my-repo-deadbeef0000', 'runs', '..', '20260522T180000-0a01');
+    expect(() => requireRunDir({ runDir: bad }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects a path outside the resolved store root', () => {
+    const outside = path.join(tmpdir(), 'unrelated', 'my-repo-deadbeef0000', 'runs', '20260522T180000-0a01');
+    expect(() => requireRunDir({ runDir: outside }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects when the repoKey component does not match REPO_KEY_PATTERN', () => {
+    const root = resolveStoreRoot();
+    const bad = path.join(root, 'not-a-valid-key', 'runs', '20260522T180000-0a01');
+    expect(() => requireRunDir({ runDir: bad }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects when the runId component does not match RUN_ID_PATTERN', () => {
+    const root = resolveStoreRoot();
+    const bad = path.join(root, 'my-repo-deadbeef0000', 'runs', 'not-a-valid-runid');
+    expect(() => requireRunDir({ runDir: bad }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects when the middle segment is not literally `runs`', () => {
+    const root = resolveStoreRoot();
+    const bad = path.join(root, 'my-repo-deadbeef0000', 'sneak', '20260522T180000-0a01');
+    expect(() => requireRunDir({ runDir: bad }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('rejects an embedded NUL byte', () => {
+    const root = resolveStoreRoot();
+    const bad =
+      path.join(root, 'my-repo-deadbeef0000', 'runs', '20260522T180000-0a01') + '\0junk';
+    expect(() => requireRunDir({ runDir: bad }, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('still rejects empty/missing values (legacy guard)', () => {
+    expect(() => requireRunDir({ runDir: '' }, TOOL)).toThrow(ConfigServerError);
+    expect(() => requireRunDir({}, TOOL)).toThrow(ConfigServerError);
+  });
+
+  it('surfaces MalformedInput as the error code', () => {
+    try {
+      requireRunDir({ runDir: '/etc' }, TOOL);
+      expect.fail('expected throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigServerError);
+      expect((e as ConfigServerError).code).toBe('MalformedInput');
+    }
+  });
+});
+
+describe('api-tools-v1 schema: R7 wire-boundary patterns (defence in depth)', () => {
+  // The dispatcher helpers refuse traversal at runtime; the schema mirrors
+  // the same constraint so a malformed input is rejected before the
+  // handler runs, per F5 § Parameter-shape consistency and the C-1/I-006
+  // "two homes for one fact, both must agree" rule.
+  const props = (apiToolsV1.properties ?? {}) as Record<
+    string,
+    { inputSchema?: { properties?: Record<string, { pattern?: string }>; required?: string[] } }
+  >;
+
+  it('acquireRunLock pins a pattern on `repoKey` (REPO_KEY_PATTERN)', () => {
+    expect(props['acquireRunLock']?.inputSchema?.properties?.['repoKey']?.pattern).toBe(
+      '^[A-Za-z0-9._-]+-[0-9a-f]{12}$',
+    );
+  });
+
+  it('releaseRunLock pins a pattern on `repoKey` AND requires `runId`', () => {
+    expect(props['releaseRunLock']?.inputSchema?.properties?.['repoKey']?.pattern).toBe(
+      '^[A-Za-z0-9._-]+-[0-9a-f]{12}$',
+    );
+    expect(props['releaseRunLock']?.inputSchema?.required ?? []).toEqual(
+      expect.arrayContaining(['repoKey', 'runId']),
+    );
+    expect(props['releaseRunLock']?.inputSchema?.properties?.['runId']?.pattern).toBe(
+      '^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$',
+    );
+  });
+
+  it.each([
+    'emitTraceEvent',
+    'runSprintSummary',
+    'aggregateRunSummary',
+    'reconcileTraceIndex',
+    'reconstructRecoveryState',
+  ])('%s pins a `runDir` pattern matching <storeRoot>/<repoKey>/runs/<runId>', (name) => {
+    expect(props[name]?.inputSchema?.properties?.['runDir']?.pattern).toBe(
+      '^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$',
+    );
   });
 });
 

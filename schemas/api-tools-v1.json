@@ -10,10 +10,12 @@
         "properties": {
           "repoKey": {
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{12}$",
             "type": "string"
           },
           "runId": {
             "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
@@ -30,6 +32,7 @@
         "properties": {
           "runDir": {
             "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
@@ -509,6 +512,7 @@
           },
           "runDir": {
             "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
@@ -796,6 +800,7 @@
         "properties": {
           "runDir": {
             "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
@@ -811,6 +816,7 @@
         "properties": {
           "runDir": {
             "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
@@ -865,11 +871,18 @@
         "properties": {
           "repoKey": {
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },
         "required": [
-          "repoKey"
+          "repoKey",
+          "runId"
         ],
         "type": "object"
       }
@@ -985,6 +998,7 @@
         "properties": {
           "runDir": {
             "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
             "type": "string"
           }
         },

@@ -49,6 +49,18 @@ export const RUN_ID_PATTERN = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$/;
 export const REPO_KEY_HASH_TAIL = /-[0-9a-f]{12}$/;
 
 /**
+ * Whole-key shape of a value produced by {@link computeRepoKey}:
+ * `<basename>-<12 hex>` where the basename is a `path.basename`-shaped string
+ * (no `/`, `\`, NUL, or `..` segments) drawn from a canonicalised worktree
+ * root. Used by the R7 MCP boundary to refute a caller-supplied `repoKey`
+ * that does not match the producer's shape — so a free-form string can never
+ * misroute the lock or trace paths via `path.join` traversal. The character
+ * class matches the basename half of `computeRepoKey`'s output (Unicode
+ * letters/digits, `.`, `_`, `-`) and the `-<12 hex>` tail mirrors
+ * {@link REPO_KEY_HASH_TAIL}. */
+export const REPO_KEY_PATTERN = /^[A-Za-z0-9._-]+-[0-9a-f]{12}$/;
+
+/**
  * Resolve the run-store root by precedence: `GAN_RUNS_DATA` env var → marker
  * file → `~/.gan-runs-data`.
  *

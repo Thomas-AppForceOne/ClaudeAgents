@@ -8,7 +8,7 @@
  * scrubs any inherited shell value at every `beforeEach`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -74,16 +74,16 @@ describe('run-lock tools — acquire/release by key', () => {
     expect(contents?.runId).toBe(runId);
   });
 
-  it('round-trip-by-key: acquire → release({ repoKey }) → re-acquire succeeds', () => {
+  it('round-trip-by-key: acquire → release({ repoKey, runId }) → re-acquire succeeds', () => {
     const runId = '20260522T180000-rt01';
     const first = acquireRunLockTool({ repoKey, runId });
     expect(existsSync(first.lockPath)).toBe(true);
 
-    // Release by repoKey only — no JS handle threaded between the two calls.
-    // This is the M1 stranding fix: without it the markdown orchestrator
-    // could not release the lock at all (the shipped handle-taking release
-    // cannot survive an MCP boundary).
-    const released = releaseRunLockTool({ repoKey });
+    // Release by repoKey + runId — no JS handle threaded between the two
+    // calls; the runId proves holder identity so a delayed release from a
+    // superseded run cannot delete the live successor's lock. This is the
+    // M1 stranding fix plus the C-1/I-006 holder-proof tightening.
+    const released = releaseRunLockTool({ repoKey, runId });
     expect(released.lockPath).toBe(first.lockPath);
     expect(existsSync(first.lockPath)).toBe(false);
 
@@ -120,23 +120,29 @@ describe('run-lock tools — acquire/release by key', () => {
   it('release is idempotent: a second release after the lock is already gone does not throw', () => {
     const runId = '20260522T180000-idem';
     acquireRunLockTool({ repoKey, runId });
-    releaseRunLockTool({ repoKey });
+    releaseRunLockTool({ repoKey, runId });
     // Already gone; the second release must be a no-op rather than a throw,
     // because the orchestrator's exit-path handlers may issue release on a
     // path the lock was already released on (graceful + abort overlap).
-    expect(() => releaseRunLockTool({ repoKey })).not.toThrow();
+    expect(() => releaseRunLockTool({ repoKey, runId })).not.toThrow();
   });
 
   it('release on a lock that was never acquired is also a no-op', () => {
     // Safety net: a buggy orchestrator could call release before any acquire
     // (e.g. an error path that races the acquire). The tool must not throw.
-    expect(() => releaseRunLockTool({ repoKey })).not.toThrow();
+    expect(() =>
+      releaseRunLockTool({ repoKey, runId: '20260522T180000-naq1' }),
+    ).not.toThrow();
   });
 
   it('tool-vs-library parity: releaseRunLockTool funnels through the shared releaseRunLockAtPath', () => {
     // Acquire via the tool, release via a direct library import of the shared
     // path-form release: both paths must address the same lock file (the
-    // round trip works regardless of which side issued the delete).
+    // round trip works regardless of which side issued the delete). The
+    // library-form release does not gate on identity — the identity check
+    // is the *tool*'s responsibility (C-1/I-006), so the library call is
+    // used here as the equivalent of an unconditional unlink to prove the
+    // path computation matches.
     const runId = '20260522T180000-prty';
     const acquired = acquireRunLockTool({ repoKey, runId });
     expect(existsSync(acquired.lockPath)).toBe(true);
@@ -153,6 +159,68 @@ describe('run-lock tools — acquire/release by key', () => {
     const reacquired = acquireRunLockTool({ repoKey, runId: '20260522T180000-prt2' });
     expect(existsSync(reacquired.lockPath)).toBe(true);
   });
+
+  it('release with a mismatched runId is a silent no-op: the on-disk lock survives', () => {
+    // I-006 fix: a delayed release from a crashed-then-superseded run only
+    // knows `repoKey`; without the identity guard it would unlink the
+    // *successor*'s live lock and let a third concurrent run acquire,
+    // breaking the single-active-run invariant. The tool reads the on-disk
+    // contents and returns silently when the runIds differ.
+    const heldRunId = '20260522T180000-hold';
+    const acquired = acquireRunLockTool({ repoKey, runId: heldRunId });
+    expect(existsSync(acquired.lockPath)).toBe(true);
+
+    // The "stale" release names a different runId — the kind a delayed,
+    // superseded run would carry. The lock must NOT be unlinked.
+    const released = releaseRunLockTool({ repoKey, runId: '20260522T180000-stal' });
+    expect(released.lockPath).toBe(acquired.lockPath);
+    expect(existsSync(acquired.lockPath)).toBe(true);
+
+    // And the recorded holder is still the original one — the no-op did
+    // not corrupt the contents either.
+    const contents = readRunLock(acquired.lockPath);
+    expect(contents?.runId).toBe(heldRunId);
+  });
+
+  it('release with the matching runId succeeds and unlinks the lock file', () => {
+    // The positive side of the identity check: when the runIds agree, the
+    // tool forwards to `releaseRunLockAtPath` exactly as before. Pairs with
+    // the mismatch test above so a regression that always-unlinks or
+    // never-unlinks both flunk one test each.
+    const runId = '20260522T180000-mtch';
+    const acquired = acquireRunLockTool({ repoKey, runId });
+    expect(existsSync(acquired.lockPath)).toBe(true);
+
+    const released = releaseRunLockTool({ repoKey, runId });
+    expect(released.lockPath).toBe(acquired.lockPath);
+    expect(existsSync(acquired.lockPath)).toBe(false);
+  });
+
+  it('release against an unreadable / garbage lock file is also a silent no-op (no unlink)', () => {
+    // `readRunLock` returns `undefined` for an unreadable / shapeless lock.
+    // The identity gate must treat that the same way it treats a mismatch:
+    // do not unlink. (The acquire side breaks-then-retries an unreadable
+    // lock; release does not need to participate in that recovery.)
+    const runId = '20260522T180000-grbg';
+    const lockPath = resolveRunLockPath(resolveStoreRoot(), repoKey);
+    // Hand-craft a garbage lock — present on disk, but lacks the runId/pid
+    // fields readRunLock requires. The next acquire would break it; the
+    // tool's release must leave it alone.
+    const repoStoreDir = path.dirname(lockPath);
+    mkdirSync(repoStoreDir, { recursive: true });
+    writeFileSync(lockPath, '{}', { encoding: 'utf8' });
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readRunLock(lockPath)).toBeUndefined();
+
+    releaseRunLockTool({ repoKey, runId });
+    // The garbage file is still on disk — the tool refused to delete what it
+    // could not prove identity over. (This is a stricter contract than the
+    // pre-fix "always unlink" path, and is the bedrock of the I-006 fix.)
+    expect(existsSync(lockPath)).toBe(true);
+    // Cleanup so the test does not poison other tests' acquire paths.
+    libraryReleaseRunLockAtPath(lockPath);
+  });
+
 
   it('tool-vs-library parity: acquireRunLockTool dispatches through the shipped acquire (lock paths match)', () => {
     // The tool computes the lock path the same way the release tool does

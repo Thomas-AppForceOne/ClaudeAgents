@@ -19,6 +19,7 @@
 import { resolveRunLockPath, resolveStoreRoot } from '../storage/run-store.js';
 import {
   acquireRunLock as libraryAcquireRunLock,
+  readRunLock as libraryReadRunLock,
   releaseRunLockAtPath as libraryReleaseRunLockAtPath,
   type RunLockHandle,
 } from '../storage/run-lock.js';
@@ -82,13 +83,17 @@ export function acquireRunLockTool(input: AcquireRunLockInput): AcquireRunLockRe
  * Input to {@link releaseRunLockTool}.
  *
  * @property repoKey the per-repository key the lock path is derived from.
- *   No `runId` is needed here — release deletes the lock file regardless of
- *   who acquired it (the acquire-side `runId` was written into the lock
- *   contents only for diagnostic purposes; only the path identifies the
- *   lock).
+ * @property runId the acquiring run's id. **Required** for identity
+ *   verification — release reads the on-disk lock contents and only unlinks
+ *   when the recorded `runId` matches the caller's; a mismatch is a silent
+ *   no-op so a late, stale tear-down from a superseded run cannot delete the
+ *   live successor's lock. The acquire side already returns `runId` in the
+ *   handle and `GAN_RUN_ID` is exported into every spawned sub-agent's env,
+ *   so threading the value through release is free at every call site.
  */
 export interface ReleaseRunLockInput {
   repoKey: string;
+  runId: string;
 }
 
 /**
@@ -104,21 +109,30 @@ export interface ReleaseRunLockResult {
 }
 
 /**
- * Release the repository's run lock by `repoKey`.
+ * Release the repository's run lock by `repoKey`, gated on `runId` identity.
  *
  * Re-derives the lock path from `repoKey` exactly as
- * {@link acquireRunLockTool} did, then forwards to the shared
- * `releaseRunLockAtPath` helper — one delete implementation behind both the
- * handle-taking library call and this path-taking tool.
+ * {@link acquireRunLockTool} did, reads the on-disk lock's contents, and
+ * only forwards to the shared `releaseRunLockAtPath` helper when the
+ * recorded holder's `runId` equals the caller's `input.runId`. A mismatch
+ * (or an unreadable / missing lock) is a silent no-op — the SKILL.md
+ * idempotency contract (a graceful-then-error overlap may double-release,
+ * a successor lock must survive a late stale release from a superseded run)
+ * is preserved by making the no-op the safe default rather than an error.
  *
  * Idempotent: an already-missing lock (released, never acquired, or broken
  * by another acquirer) is not an error.
  *
  * @param input see {@link ReleaseRunLockInput}.
- * @returns `{ lockPath }` — the path the release targeted.
+ * @returns `{ lockPath }` — the path the release targeted (the resolution
+ *   is reported regardless of whether the unlink fired, so a test or
+ *   diagnostic call can compare it to {@link AcquireRunLockResult.lockPath}).
  */
 export function releaseRunLockTool(input: ReleaseRunLockInput): ReleaseRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
-  libraryReleaseRunLockAtPath(lockPath);
+  const holder = libraryReadRunLock(lockPath);
+  if (holder !== undefined && holder.runId === input.runId) {
+    libraryReleaseRunLockAtPath(lockPath);
+  }
   return { lockPath };
 }
