@@ -145,12 +145,62 @@
         "additionalProperties": false,
         "properties": {
           "snapshot": {
+            "additionalProperties": true,
+            "properties": {
+              "activeStacks": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "mergedSplicePoints": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "activeStacks",
+              "mergedSplicePoints"
+            ],
             "type": "object"
           },
           "sprintPlan": {
+            "additionalProperties": true,
+            "properties": {
+              "affectedFiles": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "criteria": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "affectedFiles",
+              "criteria"
+            ],
             "type": "object"
           },
           "worktreeState": {
+            "additionalProperties": true,
+            "properties": {
+              "fileContents": {
+                "type": "object"
+              },
+              "files": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "files"
+            ],
             "type": "object"
           }
         },
@@ -167,6 +217,31 @@
         "additionalProperties": false,
         "properties": {
           "halt": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
             "type": "object"
           }
         },
@@ -181,6 +256,34 @@
         "additionalProperties": false,
         "properties": {
           "resolution": {
+            "additionalProperties": true,
+            "properties": {
+              "contentHash": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "promptVariant": {
+                "enum": [
+                  "subsequentChange",
+                  "initialIntroduction"
+                ],
+                "type": "string"
+              },
+              "userChoice": {
+                "enum": [
+                  "view",
+                  "approve",
+                  "runWithoutProjectCommands",
+                  "cancel"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "promptVariant",
+              "userChoice",
+              "contentHash"
+            ],
             "type": "object"
           }
         },
@@ -195,6 +298,29 @@
         "additionalProperties": false,
         "properties": {
           "error": {
+            "additionalProperties": true,
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "number"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
             "type": "object"
           },
           "stage": {
@@ -218,6 +344,7 @@
             "type": "string"
           },
           "details": {
+            "description": "Optional free-form error-details bag forwarded verbatim to the error factory; no fixed keys, so it stays an open object rather than a pinned shape.",
             "type": "object"
           },
           "stage": {
@@ -237,13 +364,46 @@
         "additionalProperties": false,
         "properties": {
           "attemptState": {
+            "additionalProperties": true,
+            "properties": {
+              "attemptCount": {
+                "type": "number"
+              },
+              "highestAttemptNumber": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "attemptCount",
+              "highestAttemptNumber"
+            ],
             "type": "object"
           },
           "ceilings": {
+            "additionalProperties": {
+              "type": "number"
+            },
             "type": "object"
           },
           "evidence": {
             "items": {
+              "additionalProperties": true,
+              "properties": {
+                "attemptNumber": {
+                  "type": "number"
+                },
+                "outputArtifactPath": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attemptNumber",
+                "outputArtifactPath",
+                "summary"
+              ],
               "type": "object"
             },
             "type": "array"
@@ -267,6 +427,22 @@
         "additionalProperties": false,
         "properties": {
           "attemptStateByRole": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "properties": {
+                "attemptCount": {
+                  "type": "number"
+                },
+                "highestAttemptNumber": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "attemptCount",
+                "highestAttemptNumber"
+              ],
+              "type": "object"
+            },
             "type": "object"
           },
           "budget": {
@@ -284,6 +460,31 @@
         "additionalProperties": false,
         "properties": {
           "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
             "type": "object"
           },
           "traceDir": {
@@ -303,6 +504,31 @@
         "additionalProperties": false,
         "properties": {
           "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
             "type": "object"
           },
           "traceDir": {
@@ -349,6 +575,31 @@
         "additionalProperties": false,
         "properties": {
           "fields": {
+            "additionalProperties": true,
+            "properties": {
+              "attempts": {
+                "type": "number"
+              },
+              "ceiling": {
+                "type": "number"
+              },
+              "evidence": {},
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "role",
+              "attempts",
+              "ceiling",
+              "evidence"
+            ],
             "type": "object"
           },
           "traceDir": {
@@ -369,6 +620,19 @@
         "properties": {
           "history": {
             "items": {
+              "additionalProperties": true,
+              "properties": {
+                "fingerprint": {
+                  "type": "string"
+                },
+                "followedRejection": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "fingerprint",
+                "followedRejection"
+              ],
               "type": "object"
             },
             "type": "array"
@@ -506,6 +770,16 @@
         "additionalProperties": false,
         "properties": {
           "event": {
+            "additionalProperties": true,
+            "properties": {
+              "eventType": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "eventType"
+            ],
             "type": "object"
           },
           "runDir": {
@@ -541,6 +815,36 @@
         "additionalProperties": false,
         "properties": {
           "metrics": {
+            "additionalProperties": true,
+            "properties": {
+              "cacheHit": {
+                "type": "boolean"
+              },
+              "latencyMs": {
+                "type": "number"
+              },
+              "role": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tokensCached": {
+                "type": "number"
+              },
+              "tokensInput": {
+                "type": "number"
+              },
+              "tokensOutput": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "role",
+              "tokensInput",
+              "tokensOutput",
+              "tokensCached",
+              "latencyMs",
+              "cacheHit"
+            ],
             "type": "object"
           }
         },
