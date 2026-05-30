@@ -69,6 +69,14 @@ import type { ErrorCode } from '../errors.js';
  *   drop via `ok` instead.
  */
 export type { EmitTraceEventResult };
+
+/**
+ * The `emitTraceEvent` tool's return shape: the library
+ * {@link EmitTraceEventResult} plus the uniform F2 `mutated` indicator
+ * (`true` when an event was appended, `false` on a dropped or
+ * best-effort-failed emit). The property notes above describe how `mutated`
+ * is derived from the underlying `ok` signal.
+ */
 export type EmitTraceEventToolResult = EmitTraceEventResult & { mutated: boolean };
 
 /**

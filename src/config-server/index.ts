@@ -1562,8 +1562,20 @@ function requirePlanObjectArg(
 // shapes that would let a caller dodge that anchoring. Returns the value
 // unchanged for the library to canonicalise.
 //
-// Exported so the boundary check can be exercised directly in unit tests —
-// see {@link requireRepoKey} for the same rationale.
+/**
+ * Validate the `worktreePath` tool argument and return it unchanged for the
+ * library to canonicalise. The rationale comment above states why the shape
+ * is constrained at the boundary; the accepted shape is a non-empty,
+ * absolute, already-normalised path (no `..` segments, no NUL).
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `worktreePath` string.
+ * @throws `MalformedInput` when the value is missing or a disallowed shape.
+ */
 export function requireWorktreePathArg(args: Record<string, unknown>, tool: string): string {
   const v = args['worktreePath'];
   if (typeof v !== 'string' || v.length === 0) {
@@ -1635,8 +1647,21 @@ function requireContainerNameArg(args: Record<string, unknown>, tool: string): s
 // desync URL parsing. The boundary rejects all of these so only a genuine
 // path-absolute reference reaches the library.
 //
-// Exported so the boundary check can be exercised directly in unit tests —
-// see {@link requireRepoKey} for the same rationale.
+/**
+ * Validate the `path` tool argument for a health-check probe and return it
+ * unchanged. The rationale comment above states why the shape is constrained;
+ * the accepted shape is a non-empty, path-absolute reference (a single leading
+ * `/`) free of control bytes, whitespace, and the `?`/`#` delimiters, so the
+ * resolved request cannot leave the fixed localhost origin.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `path` string.
+ * @throws `MalformedInput` when the value is missing or a disallowed shape.
+ */
 export function requireHttpPathArg(args: Record<string, unknown>, tool: string): string {
   const v = args['path'];
   if (typeof v !== 'string' || v.length === 0) {
