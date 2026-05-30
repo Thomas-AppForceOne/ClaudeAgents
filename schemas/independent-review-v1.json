@@ -1,0 +1,212 @@
+{
+  "$id": "https://claudeagents.dev/schemas/independent-review-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "nonNegativeInteger": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "positiveInteger": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "severity": {
+      "description": "Severity tier per the measurement-vs-gating convention. blocker triggers a renegotiation round if a corresponding criterion is missing; warning is surfaced and may trigger; advisory is measurement-only.",
+      "enum": [
+        "blocker",
+        "warning",
+        "advisory"
+      ],
+      "type": "string"
+    },
+    "findingKind": {
+      "description": "Discriminator between a command-reproducible finding (carries reproductionCommand + reproduced) and an inspection finding (carries evidencePointer).",
+      "enum": [
+        "command",
+        "inspection"
+      ],
+      "type": "string"
+    },
+    "finding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "When kind is 'command' the finding MUST carry reproductionCommand (non-empty) and reproduced (boolean). reproductionCommand is what the orchestrator re-runs through the agent's Bash tool to decide whether to drop the finding.",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "command"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reproductionCommand": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reproduced": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "reproductionCommand",
+              "reproduced"
+            ]
+          }
+        },
+        {
+          "$comment": "When kind is 'inspection' the finding MUST carry evidencePointer (non-empty), the file:line + claim string a downstream auditor uses to confirm the defect actually exists in the cited code.",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "inspection"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidencePointer": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidencePointer"
+            ]
+          }
+        }
+      ],
+      "description": "One reviewer-authored defect claim. Discriminated on kind. The same id namespace is shared across both kinds; ids are slugs the proposer can also use as criterion keys downstream.",
+      "properties": {
+        "category": {
+          "description": "Short class name the reviewer used to group the finding (e.g. 'correctness', 'security', 'concurrency'). Free-form; the schema does not enumerate the set.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "description": {
+          "description": "What the defect is, in one or two sentences. Non-empty so a finding with an empty description cannot pass validation.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "evidencePointer": {
+          "description": "Inspection-kind only: a file:line plus the specific claim the downstream auditor checks. Required when kind is 'inspection'; forbidden as a sole signal when kind is 'command'.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "file": {
+          "description": "Repo-relative POSIX path of the file the finding concerns. No leading separator.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable slug identifying the finding within the bundle. ASCII letters, digits, hyphen, underscore. Used as a join key when the finding is promoted to a criterion.",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/findingKind"
+        },
+        "line": {
+          "$ref": "#/definitions/positiveInteger",
+          "description": "1-based line number in the cited file at the tip of the run branch."
+        },
+        "reproductionCommand": {
+          "description": "Command-kind only: a shell command the orchestrator runs from the worktree root to reproduce the defect. Required when kind is 'command'; ignored when kind is 'inspection'.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "reproduced": {
+          "description": "Command-kind only: true if the reviewer ran the reproductionCommand and saw the failure, false if asserted without local execution. Required when kind is 'command'.",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/definitions/severity"
+        },
+        "suggestedCriterion": {
+          "description": "A specific, testable restatement the proposer can adopt as a new contract criterion. Non-empty.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "kind",
+        "file",
+        "line",
+        "description",
+        "suggestedCriterion"
+      ],
+      "type": "object"
+    },
+    "summary": {
+      "additionalProperties": false,
+      "description": "Tallies the reviewer wrote when it emitted the bundle. blockers/warnings/advisories count findings of that severity; dropped is 0 in the reviewer's initial bundle and is incremented by the orchestrator's reproduction guard.",
+      "properties": {
+        "advisories": {
+          "$ref": "#/definitions/nonNegativeInteger"
+        },
+        "blockers": {
+          "$ref": "#/definitions/nonNegativeInteger"
+        },
+        "dropped": {
+          "$ref": "#/definitions/nonNegativeInteger"
+        },
+        "warnings": {
+          "$ref": "#/definitions/nonNegativeInteger"
+        }
+      },
+      "required": [
+        "blockers",
+        "warnings",
+        "advisories",
+        "dropped"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the artefact the independent-reviewer agent writes per sprint attempt. The bundle is the reviewer's findings list plus a per-severity tally; the orchestrator's reproduction guard later runs each command-kind finding's reproductionCommand and drops it if it does not reproduce, incrementing summary.dropped. additionalProperties is false at the top level and inside every nested object so a typo in a field name is caught at validation time rather than silently dropped.",
+  "properties": {
+    "attemptLetter": {
+      "description": "Uppercase ASCII letter naming the generator attempt within this sprint (A, B, C, ...).",
+      "pattern": "^[A-Z]$",
+      "type": "string"
+    },
+    "contractRevision": {
+      "$ref": "#/definitions/nonNegativeInteger",
+      "description": "Index of the locked criteria revision this review was authored against. 0 for the original lock; incremented each time a renegotiation round re-locks. The orchestrator supplies it as input and the reviewer copies it through verbatim."
+    },
+    "findings": {
+      "description": "Ordered list of findings the reviewer surfaced. May be empty (a clean review). Each finding is independently actionable.",
+      "items": {
+        "$ref": "#/definitions/finding"
+      },
+      "type": "array"
+    },
+    "sprintNumber": {
+      "$ref": "#/definitions/positiveInteger",
+      "description": "1-based sprint index within the run."
+    },
+    "summary": {
+      "$ref": "#/definitions/summary"
+    }
+  },
+  "required": [
+    "sprintNumber",
+    "attemptLetter",
+    "contractRevision",
+    "findings",
+    "summary"
+  ],
+  "title": "ClaudeAgents independent-review bundle, v1",
+  "type": "object"
+}
