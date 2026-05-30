@@ -84,10 +84,16 @@ export interface AcquireRunLockResult {
  * MCP boundary surfaces verbatim.
  *
  * Side effects: creates the lock's parent directory; writes the lock file;
- * may break a stale lock (dead-pid holder) and retry. Emits stderr warnings
- * on stale-break — the default warn sink.
+ * may break a stale lock (dead-pid holder) and retry. Stale-break notices go
+ * through `deps.warn`, which the dispatch wires to the structured logger so
+ * they join the same stream as the other R7 tools rather than escaping onto
+ * raw stderr (the library's bare default).
  *
  * @param input see {@link AcquireRunLockInput}.
+ * @param deps optional sinks. `warn` receives each stale-break notice line;
+ *   when omitted the library's `console.error` default applies. The dispatch
+ *   supplies a sink routing through `getLogger()` so the notices are
+ *   structured and respect the deployment's logger config.
  * @returns the {@link AcquireRunLockResult} (`lockPath`, `runId`, `startedAt`,
  *   `mutated`) — the holder `pid`/`hostname` the library handle carries are
  *   deliberately not surfaced to the client.
@@ -95,12 +101,23 @@ export interface AcquireRunLockResult {
  *   held by a live pid — propagated from the library through the F2 error
  *   factory.
  */
-export function acquireRunLockTool(input: AcquireRunLockInput): AcquireRunLockResult {
+export function acquireRunLockTool(
+  input: AcquireRunLockInput,
+  deps: { warn?: (line: string) => void } = {},
+): AcquireRunLockResult {
   const lockPath = resolveRunLockPath(resolveStoreRoot(), input.repoKey);
   // A returned handle means the library created the lock (first-try or
   // stale-break re-acquire); the throw path never reaches here. So the F2
   // mutation indicator is unconditionally true on this surface.
-  const handle = libraryAcquireRunLock({ lockPath, runId: input.runId });
+  const acquireOpts: Parameters<typeof libraryAcquireRunLock>[0] = {
+    lockPath,
+    runId: input.runId,
+  };
+  // Route stale-break warnings through the caller's sink when supplied, so a
+  // deployment with logger config (rate limits, JSON formatting) sees them in
+  // the structured stream instead of on raw stderr.
+  if (deps.warn !== undefined) acquireOpts.warn = deps.warn;
+  const handle = libraryAcquireRunLock(acquireOpts);
   // Project the library handle down to the run-scoped fields a client needs.
   // `contents.pid`/`contents.hostname` describe the long-lived config-server
   // process, not the caller, and the return shape is never run through

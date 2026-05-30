@@ -265,6 +265,28 @@ describe('run-lock tools — acquire/release by key', () => {
   });
 
 
+  it('routes a stale-break warning through the supplied warn sink, not raw stderr', () => {
+    // I-031: the tool forwards a `warn` sink to the library so stale-break
+    // notices join the structured stream the dispatch wires to getLogger().
+    // Plant a garbage (unreadable) lock so the library's break-then-retry
+    // path fires deterministically without needing pid-liveness control, then
+    // assert the supplied sink — not stderr — received the notice.
+    const lockPath = resolveRunLockPath(resolveStoreRoot(), repoKey);
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, '{}', { encoding: 'utf8' });
+
+    const warnings: string[] = [];
+    const result = acquireRunLockTool(
+      { repoKey, runId: '20260522T180000-warn' },
+      { warn: (line) => warnings.push(line) },
+    );
+    // The lock was re-acquired after breaking the garbage one.
+    expect(existsSync(result.lockPath)).toBe(true);
+    // Exactly the stale-break notice reached the sink.
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/unreadable run\.lock/);
+  });
+
   it('tool-vs-library parity: acquireRunLockTool dispatches through the shipped acquire (lock paths match)', () => {
     // The tool computes the lock path the same way the release tool does
     // (resolveStoreRoot + resolveRunLockPath); the library `acquireRunLock`

@@ -782,10 +782,16 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
   },
   acquireRunLock: {
     required: ['repoKey', 'runId'],
-    handler: (args) => {
+    handler: (args, ctx) => {
       const repoKey = requireRepoKey(args, 'acquireRunLock');
       const runId = requireRunId(args, 'acquireRunLock');
-      return runAcquireRunLock({ repoKey, runId });
+      // Route stale-break notices through the structured logger so they join
+      // the same stream as the other R7 tools instead of escaping onto raw
+      // stderr (the library's bare default).
+      return runAcquireRunLock(
+        { repoKey, runId },
+        { warn: (line) => ctx.logger.warn('run-lock: stale-break', { line }) },
+      );
     },
   },
   releaseRunLock: {
