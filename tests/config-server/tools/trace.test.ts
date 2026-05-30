@@ -381,8 +381,17 @@ describe('buildLoopDetectedBody — every trigger discriminator preserved', () =
 
 // ---------- emit-failure semantics ----------
 
+// The two filesystem-chmod cases below force an unwritable events dir with
+// `chmodSync(dir, 0o500)`. That only produces the EACCES they rely on where
+// POSIX permission bits actually deny the writer: as root the mode bits are
+// ignored (the write succeeds, the case would wrongly fail), and on Windows
+// the POSIX semantics do not apply. Skip there — the mock-injected EACCES
+// cases further down cover the same drop-on-failure policy portably.
+const CHMOD_CANNOT_ENFORCE_READONLY =
+  process.platform === 'win32' || process.getuid?.() === 0;
+
 describe('emit failure — non-agentAttempt does not abort the run; droppedEmits increments', () => {
-  it('an injected emit failure on a non-agentAttempt returns a structured outcome and increments droppedEmits', async () => {
+  it.skipIf(CHMOD_CANNOT_ENFORCE_READONLY)('an injected emit failure on a non-agentAttempt returns a structured outcome and increments droppedEmits', async () => {
     const runDir = makeTmp();
     // Make the events directory unwritable so the write throws EACCES.
     // The handler must catch + increment + return { ok: false, warning }.
@@ -422,7 +431,7 @@ describe('emit failure — non-agentAttempt does not abort the run; droppedEmits
 });
 
 describe('emit failure — droppedEmits increments even when the run dir is unwritable', () => {
-  it('the dropped-emit tally lives in memory and reflects the failed write', () => {
+  it.skipIf(CHMOD_CANNOT_ENFORCE_READONLY)('the dropped-emit tally lives in memory and reflects the failed write', () => {
     const runDir = makeTmp();
     // Make the run dir itself unwritable. The events directory cannot be
     // created — appendTraceEvent's mkdirSync throws EACCES; the handler
