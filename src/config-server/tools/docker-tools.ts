@@ -39,7 +39,64 @@
  * `PortRegistry.register` throwing `PortInUse`, not from a scan-and-register
  * routine the tool layer would implement. A free-port allocator would be
  * new domain logic outside this contract; future work, not this one.
+ *
+ * Why the dynamic imports are wrapped in {@link importDockerModule} — a
+ * Docker-less *host* is already handled (the prerequisite check fires when the
+ * registry persists or `docker ps` spawns). But a module *absent on disk*
+ * (a partial install, a pruned `dist/`) makes `import()` throw a bare
+ * `ERR_MODULE_NOT_FOUND` that the dispatch surface would otherwise report as a
+ * generic `NotImplemented`. The wrapper maps that one code to the spec-named
+ * `ModulePrerequisiteFailed` carrying an actionable hint, so a missing module
+ * surfaces the same class of error a missing prerequisite does; any other
+ * import failure bubbles unchanged.
  */
+
+import { createError } from '../errors.js';
+
+// Module-not-found hint: distinct from the manifest's "install Docker" hint
+// because the fault here is the docker module's own files missing on disk,
+// not the Docker engine being absent. The remediation is to reinstall/rebuild
+// the package, not to install Docker.
+const DOCKER_MODULE_MISSING_HINT =
+  'The docker module is not present on disk (a partial install or pruned ' +
+  "build). Reinstall the package or run the build so 'dist/modules/docker/*' " +
+  'exists.';
+
+/**
+ * Run a dynamic `import()` of a docker-module file, translating the
+ * module-absent-on-disk failure into the actionable
+ * `ModulePrerequisiteFailed` error.
+ *
+ * Only `ERR_MODULE_NOT_FOUND` (the module file is missing) is translated —
+ * that is the partial-install / pruned-`dist` case. Every other failure
+ * (syntax error in the module, a downstream prerequisite throw, etc.) bubbles
+ * unchanged so it is not masked by this translation.
+ *
+ * Exported so the error-translation behaviour can be exercised directly in
+ * unit tests (point the loader at a non-existent module path); the handlers
+ * call it with a fixed-path loader.
+ *
+ * @param loader the `() => import('../../modules/docker/<file>.js')` thunk.
+ * @returns the imported module namespace.
+ * @throws `ModulePrerequisiteFailed` when the module file is absent on disk.
+ */
+export async function importDockerModule<T>(loader: () => Promise<T>): Promise<T> {
+  try {
+    return await loader();
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code === 'ERR_MODULE_NOT_FOUND') {
+      throw createError('ModulePrerequisiteFailed', {
+        module: 'docker',
+        message:
+          `Module 'docker' could not be loaded: ${
+            e instanceof Error ? e.message : String(e)
+          }. ${DOCKER_MODULE_MISSING_HINT}`,
+        errorHint: DOCKER_MODULE_MISSING_HINT,
+      });
+    }
+    throw e;
+  }
+}
 
 /**
  * Input to {@link dockerReservePort}.
@@ -95,7 +152,9 @@ export async function dockerReservePort(
   // Docker-less host the prereq fails with ModulePrerequisiteFailed
   // carrying the manifest's errorHint — exactly the failure surface
   // the spec pins.
-  const { PortRegistry } = await import('../../modules/docker/PortRegistry.js');
+  const { PortRegistry } = await importDockerModule(
+    () => import('../../modules/docker/PortRegistry.js'),
+  );
   const registry = new PortRegistry(input.worktreePath);
   registry.register(input.worktreePath, input.port, input.containerName);
   return {
@@ -147,7 +206,9 @@ export async function dockerReleasePort(
   // module loader's allowlist gate, which runs the manifest prereq on
   // a Docker-less host (releasing an unregistered worktree is a no-op
   // and never persists, so its prereq check is similarly skipped).
-  const { PortRegistry } = await import('../../modules/docker/PortRegistry.js');
+  const { PortRegistry } = await importDockerModule(
+    () => import('../../modules/docker/PortRegistry.js'),
+  );
   const registry = new PortRegistry(input.worktreePath);
   const released = registry.release(input.worktreePath);
   return {
@@ -196,8 +257,12 @@ export async function dockerDiscoverPort(
   // gets a layer-3 error (stdout empty / spawn ENOENT) that the
   // library translates into a fall-through to layer 4 or a
   // PortNotDiscovered. The registry layer 2 is the deliberate path.
-  const { discoverPort } = await import('../../modules/docker/PortDiscovery.js');
-  const { PortRegistry } = await import('../../modules/docker/PortRegistry.js');
+  const { discoverPort } = await importDockerModule(
+    () => import('../../modules/docker/PortDiscovery.js'),
+  );
+  const { PortRegistry } = await importDockerModule(
+    () => import('../../modules/docker/PortRegistry.js'),
+  );
 
   // Build the options bag in the shape the library expects. Only supply
   // a registry when worktreePath is provided — layer 2 silently skips
@@ -268,7 +333,9 @@ export async function dockerCheckContainerHealth(
   // a connection error per poll until the timeout, surfaced as
   // TimeoutError from the library — no separate prereq is needed for
   // the health check tool.
-  const { waitForHealthy } = await import('../../modules/docker/ContainerHealth.js');
+  const { waitForHealthy } = await importDockerModule(
+    () => import('../../modules/docker/ContainerHealth.js'),
+  );
   await waitForHealthy(input.port, {
     path: input.path,
     expectStatus: input.expectStatus,
@@ -306,6 +373,8 @@ export async function dockerContainerName(
   // invariant as above. nameForWorktree is a pure function (no
   // subprocess); it is shipped behind the docker module so the dynamic
   // import keeps the load shape uniform across all five handlers.
-  const { nameForWorktree } = await import('../../modules/docker/ContainerNaming.js');
+  const { nameForWorktree } = await importDockerModule(
+    () => import('../../modules/docker/ContainerNaming.js'),
+  );
   return { containerName: nameForWorktree(input.worktreePath) };
 }

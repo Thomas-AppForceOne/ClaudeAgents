@@ -46,6 +46,7 @@ import {
   dockerDiscoverPort,
   dockerReleasePort,
   dockerReservePort,
+  importDockerModule,
 } from '../../../src/config-server/tools/docker-tools.js';
 import { PortRegistry } from '../../../src/modules/docker/PortRegistry.js';
 import { nameForWorktree } from '../../../src/modules/docker/ContainerNaming.js';
@@ -402,6 +403,38 @@ describe('docker tools', () => {
       expect(() => requireWorktreePathArg({ worktreePath: '/repo/wt\0junk' }, TOOL)).toThrow(
         ConfigServerError,
       );
+    });
+  });
+
+  // ---------- 1d. Missing-on-disk module translates to ModulePrerequisiteFailed ----------
+
+  describe('a module absent on disk surfaces ModulePrerequisiteFailed, not NotImplemented', () => {
+    it('translates ERR_MODULE_NOT_FOUND into an actionable ModulePrerequisiteFailed', async () => {
+      // Point the loader at a path that does not exist so import() throws
+      // ERR_MODULE_NOT_FOUND — the partial-install / pruned-dist case.
+      let thrown: unknown;
+      try {
+        await importDockerModule(() => import('../../modules/docker/DoesNotExist.js'));
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeDefined();
+      expect((thrown as { code?: string }).code).toBe('ModulePrerequisiteFailed');
+      // Carries an actionable hint distinct from a generic NotImplemented.
+      expect((thrown as { errorHint?: string }).errorHint).toMatch(/reinstall|build/i);
+    });
+
+    it('does not mask a non-ERR_MODULE_NOT_FOUND failure', async () => {
+      // A loader that throws an unrelated error must bubble unchanged so the
+      // translation cannot hide real faults (e.g. a module syntax error).
+      const sentinel = new Error('unrelated boom');
+      let thrown: unknown;
+      try {
+        await importDockerModule(() => Promise.reject(sentinel));
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBe(sentinel);
     });
   });
 
