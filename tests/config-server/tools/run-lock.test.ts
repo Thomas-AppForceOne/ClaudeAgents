@@ -77,6 +77,29 @@ describe('run-lock tools — acquire/release by key', () => {
     expect(contents?.runId).toBe(runId);
   });
 
+  it('the tool return surfaces no holder pid/hostname (only lockPath, runId, startedAt, mutated)', () => {
+    // I-039: the library handle carries the holder's pid + hostname (the
+    // long-lived config-server process), and a tool return is never run
+    // through input-only redaction — so those two server-process facts must
+    // not appear on the client-facing return shape. The on-disk lock still
+    // records them (a diagnostic test reads them via readRunLock); only the
+    // tool boundary projects them away.
+    const runId = '20260522T180000-redz';
+    const result = acquireRunLockTool({ repoKey, runId });
+    expect(Object.keys(result).sort()).toEqual(
+      ['lockPath', 'mutated', 'runId', 'startedAt'].sort(),
+    );
+    expect(result).not.toHaveProperty('pid');
+    expect(result).not.toHaveProperty('hostname');
+    expect(result).not.toHaveProperty('contents');
+    expect(result.runId).toBe(runId);
+    // The redacted fields are still durably recorded on disk — only the
+    // return shape hides them.
+    const onDisk = readRunLock(result.lockPath);
+    expect(typeof onDisk?.pid).toBe('number');
+    expect(typeof onDisk?.hostname).toBe('string');
+  });
+
   it('round-trip-by-key: acquire → release({ repoKey, runId }) → re-acquire succeeds', () => {
     const runId = '20260522T180000-rt01';
     const first = acquireRunLockTool({ repoKey, runId });

@@ -21,7 +21,6 @@ import {
   acquireRunLock as libraryAcquireRunLock,
   readRunLock as libraryReadRunLock,
   releaseRunLockAtPath as libraryReleaseRunLockAtPath,
-  type RunLockHandle,
 } from '../storage/run-lock.js';
 
 /**
@@ -41,23 +40,37 @@ export interface AcquireRunLockInput {
 }
 
 /**
- * Result of {@link acquireRunLockTool} — the resolved lock path and the
- * contents written into it, plus the F2 mutation indicator.
+ * Result of {@link acquireRunLockTool} — the resolved lock path, the run
+ * identity that now holds the lock, and the F2 mutation indicator.
  *
- * The shipped library returns an in-memory `RunLockHandle` (`lockPath` +
- * `contents`); the tool returns the same fields verbatim and adds `mutated`
- * as a sibling. The orchestrator keeps neither lock field around — it later
- * releases by `repoKey`, not by the returned `lockPath` — but the fields are
- * still surfaced for diagnostic and test purposes (a unit test can
- * `readRunLock(result.lockPath)` to verify the lock is readable).
+ * Deliberately *not* the library's `RunLockHandle`: the library handle's
+ * `contents` carries the holder's `pid` and `hostname`, which describe the
+ * long-lived config-server process rather than the caller. Those two fields
+ * are server-process facts of no use to a (possibly LLM) MCP client, and
+ * `anonymiseToolArgs` only redacts tool *input*, so anything on the return
+ * shape flows back to the client verbatim. The tool therefore projects the
+ * handle down to the run-scoped fields the client actually needs — `lockPath`,
+ * `runId`, `startedAt` — and leaves `pid`/`hostname` on the library handle for
+ * in-process callers that hold it directly. A diagnostic test that needs the
+ * full contents reads them from disk via `readRunLock(result.lockPath)`.
  *
+ * @property lockPath the resolved lock file path (informational; the
+ *   orchestrator releases by `repoKey`, not by this path).
+ * @property runId the run id now recorded as the lock holder — echoed back so
+ *   a caller that let an upstream tool mint the id can confirm it.
+ * @property startedAt ISO-8601 acquisition time (informational).
  * @property mutated always `true`: the library only returns on a successful
  *   acquire (it created the lock file, including the stale-break re-acquire
  *   path) and throws otherwise, so a returned handle always means durable
  *   state changed. Lets the orchestrator OR this flag in uniformly with the
  *   other R7 write tools per the F2 mutation-indicator contract.
  */
-export type AcquireRunLockResult = RunLockHandle & { mutated: true };
+export interface AcquireRunLockResult {
+  lockPath: string;
+  runId: string;
+  startedAt: string;
+  mutated: true;
+}
 
 /**
  * Acquire the repository's run lock.
@@ -75,7 +88,9 @@ export type AcquireRunLockResult = RunLockHandle & { mutated: true };
  * on stale-break — the default warn sink.
  *
  * @param input see {@link AcquireRunLockInput}.
- * @returns the {@link AcquireRunLockResult} (`lockPath` + `contents`).
+ * @returns the {@link AcquireRunLockResult} (`lockPath`, `runId`, `startedAt`,
+ *   `mutated`) — the holder `pid`/`hostname` the library handle carries are
+ *   deliberately not surfaced to the client.
  * @throws `InvariantViolation` (`ConcurrentRunInProgress`) when the lock is
  *   held by a live pid — propagated from the library through the F2 error
  *   factory.
@@ -85,7 +100,17 @@ export function acquireRunLockTool(input: AcquireRunLockInput): AcquireRunLockRe
   // A returned handle means the library created the lock (first-try or
   // stale-break re-acquire); the throw path never reaches here. So the F2
   // mutation indicator is unconditionally true on this surface.
-  return { ...libraryAcquireRunLock({ lockPath, runId: input.runId }), mutated: true };
+  const handle = libraryAcquireRunLock({ lockPath, runId: input.runId });
+  // Project the library handle down to the run-scoped fields a client needs.
+  // `contents.pid`/`contents.hostname` describe the long-lived config-server
+  // process, not the caller, and the return shape is never run through
+  // input-only redaction — so they are dropped here at the tool boundary.
+  return {
+    lockPath: handle.lockPath,
+    runId: handle.contents.runId,
+    startedAt: handle.contents.startedAt,
+    mutated: true,
+  };
 }
 
 /**
