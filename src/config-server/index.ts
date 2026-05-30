@@ -92,7 +92,7 @@ import {
   formatLlmCallSummaryTool as runFormatLlmCallSummary,
   reconcileTraceIndexTool as runReconcileTraceIndex,
   reconstructRecoveryStateTool as runReconstructRecoveryState,
-  runSprintSummaryTool as runRunSprintSummary,
+  runSprintSummaryTool as runSprintSummaryHandler,
 } from './tools/trace.js';
 import {
   checkRoleCeilingTool as runCheckRoleCeiling,
@@ -833,7 +833,7 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
     required: ['runDir'],
     handler: (args) => {
       const runDir = requireRunDir(args, 'runSprintSummary');
-      return runRunSprintSummary({ runDir });
+      return runSprintSummaryHandler({ runDir });
     },
   },
   formatHeartbeat: {
