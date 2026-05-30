@@ -24,10 +24,7 @@ import {
   resolveRunStore as libraryResolveRunStore,
   generateRunId,
 } from '../../../src/config-server/storage/run-store.js';
-import {
-  resolveWorkspace,
-  type ResolvedWorkspace,
-} from '../../../src/config-server/storage/worktree-resolver.js';
+import { resolveWorkspace } from '../../../src/config-server/storage/worktree-resolver.js';
 import {
   createRunWorkspaceTool,
   resolveRunStoreTool,
@@ -256,36 +253,14 @@ describe('createRunWorkspace tool — cases 1b and 1c create the worktree', () =
     }
   });
 
-  it('createRunWorkspace is NOT invoked on the --recover or --cleanup orchestration paths', () => {
-    // Guard the "writing tool runs only at run start" invariant by exercising
-    // the orchestrator's call-site selector: a markdown orchestrator decides
-    // between three paths and calls the writing tool only in the first.
-    let createWasCalled = false;
-    const mockCreate = (): ResolvedWorkspace => {
-      createWasCalled = true;
-      return {
-        worktreePath: '/never',
-        branch: 'never',
-        createdByGan: false,
-        resolutionCase: '1c',
-      };
-    };
-    // Replays the orchestrator's flag-dispatched selector (SKILL.md "Inspection
-    // and recovery short-circuits" + the regular invocation flow). The
-    // selector calls createRunWorkspace only on the regular path.
-    function dispatchOrchestrator(flag: 'regular' | '--recover' | '--cleanup'): void {
-      if (flag === 'regular') {
-        mockCreate();
-      }
-      // --recover and --cleanup intentionally do NOT touch the worktree
-      // creator — they re-attach the recorded workspace.worktreePath instead.
-    }
-    dispatchOrchestrator('--recover');
-    dispatchOrchestrator('--cleanup');
-    expect(createWasCalled).toBe(false);
-    dispatchOrchestrator('regular');
-    expect(createWasCalled).toBe(true);
-  });
+  // The orchestrator-flag-dispatch invariant ("createRunWorkspace is NOT
+  // invoked on --recover/--cleanup paths") was previously asserted here over a
+  // test-local `dispatchOrchestrator` helper — a tautology that mirrored what
+  // the SUT prose says rather than reading it. The actual SUT is
+  // skills/gan/SKILL.md; the section-walk in
+  // tests/agents/skill-createrunworkspace-mention.test.ts now pins that the
+  // term appears only inside the "Regular invocation flow" section and never
+  // in "Inspection and recovery short-circuits" or "Cleanup and recovery".
 
   it('tool-vs-library parity: createRunWorkspace returns the same shape as library resolveWorkspace for case 1a', () => {
     // Case 1a (reuse in place) is the read-only path; both the tool and the
