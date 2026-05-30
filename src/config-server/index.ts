@@ -901,30 +901,21 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
     },
   },
   checkRoleCeiling: {
-    // `role` is the only structurally-mandatory field on the library's
-    // CheckRoleCeilingInput — `attemptState`, `ceilings`, and `evidence` are
-    // optional or undefined-permitting on the library side. The boundary
-    // honours the library's contract verbatim so a tool call's required-keys
-    // surface matches what a direct library import would accept.
-    required: ['role'],
+    // Flat-shape boundary, matching sibling safety tools (`checkSprintBudget`,
+    // `detectEditOscillation`, `buildEvaluatorPlan`): `attemptState`, `ceilings`
+    // and `evidence` are read directly off `args`. The library's
+    // `CheckRoleCeilingInput` is constructed here from the flat wire shape so
+    // wire and library disagree only on shape, never on contract.
+    required: ['attemptState', 'ceilings', 'evidence', 'role'],
     handler: (args) => {
       const role = requireRoleArg(args, 'checkRoleCeiling');
-      const input = args['input'];
-      // Allow both a flat-shaped call (role + attemptState/ceilings/evidence
-      // at the top) and a nested `input` object call. Either shape unpacks
-      // into the library's CheckRoleCeilingInput verbatim — the tool does no
-      // field renaming, just a passthrough.
-      const source =
-        input !== undefined && typeof input === 'object' && input !== null && !Array.isArray(input)
-          ? (input as Record<string, unknown>)
-          : args;
       return runCheckRoleCeiling({
         role,
-        attemptState: source['attemptState'] as Parameters<
+        attemptState: args['attemptState'] as Parameters<
           typeof runCheckRoleCeiling
         >[0]['attemptState'],
-        ceilings: source['ceilings'] as Parameters<typeof runCheckRoleCeiling>[0]['ceilings'],
-        evidence: source['evidence'] as Parameters<typeof runCheckRoleCeiling>[0]['evidence'],
+        ceilings: args['ceilings'] as Parameters<typeof runCheckRoleCeiling>[0]['ceilings'],
+        evidence: args['evidence'] as Parameters<typeof runCheckRoleCeiling>[0]['evidence'],
       });
     },
   },

@@ -9,7 +9,10 @@
  *  - every name in the eleven-trace-tool list (sprint 2) is still present;
  *  - every name in the four run-context-tool list (sprint 1) is still present;
  *  - `$id` still names api-tools-v1 (no v2 introduced);
- *  - the six safety names also appear under top-level `required`.
+ *  - the six safety names also appear under top-level `required`;
+ *  - `checkRoleCeiling` carries the flat property set (no `input` key) —
+ *    the alternation that previously enabled the silent-shadow hazard is
+ *    structurally impossible to reintroduce while this assertion holds.
  *
  * Exits non-zero on any deviation. Run from the worktree root.
  */
@@ -89,6 +92,32 @@ if (!/api-tools-v1\.json$/.test(id)) {
   process.exit(1);
 }
 
+// Pin the flat property set on `checkRoleCeiling`. The previous wire shape
+// listed `attemptState`, `ceilings`, `evidence`, `input`, `role` as siblings
+// and only `role` as required — a JSON Schema that admits the nested `input`
+// alternation enabled the silent-shadow hazard. The contract is now flat-only
+// and matches the sibling safety tools.
+const expectedCheckRoleCeilingProps = ['attemptState', 'ceilings', 'evidence', 'role'];
+const checkRoleCeilingProps = Object.keys(
+  props['checkRoleCeiling']?.inputSchema?.properties ?? {},
+).sort();
+const expectedSorted = [...expectedCheckRoleCeilingProps].sort();
+if (checkRoleCeilingProps.join(',') !== expectedSorted.join(',')) {
+  console.error(
+    `api-tools-v1-six-safety-entries: checkRoleCeiling properties drift — expected [${expectedSorted.join(', ')}], saw [${checkRoleCeilingProps.join(', ')}]`,
+  );
+  process.exit(1);
+}
+const checkRoleCeilingRequired = [
+  ...(props['checkRoleCeiling']?.inputSchema?.required ?? []),
+].sort();
+if (checkRoleCeilingRequired.join(',') !== expectedSorted.join(',')) {
+  console.error(
+    `api-tools-v1-six-safety-entries: checkRoleCeiling required drift — expected [${expectedSorted.join(', ')}], saw [${checkRoleCeilingRequired.join(', ')}]`,
+  );
+  process.exit(1);
+}
+
 console.log(
-  'api-tools-v1-six-safety-entries: ok (6 new safety entries present, schema on v1, prior 11 trace + 4 run-context entries preserved)',
+  'api-tools-v1-six-safety-entries: ok (6 new safety entries present, schema on v1, prior 11 trace + 4 run-context entries preserved, checkRoleCeiling is flat-only)',
 );
