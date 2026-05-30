@@ -6,14 +6,53 @@
  * reconciliation implementation in the tool layer).
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { appendTraceEvent, type TraceEventInput } from '../../src/trace/append.js';
 import { reconcileIndex as libraryReconcileIndex } from '../../src/trace/reconcile.js';
 import { reconcileTraceIndexTool } from '../../src/config-server/tools/trace.js';
 import { incrementDroppedEmits, resetDroppedEmitsForTests } from '../../src/trace/dropped-emits.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..');
+const appendModuleUrl = pathToFileUrl(path.join(repoRoot, 'dist', 'trace', 'append.js'));
+
+// Convert an absolute filesystem path to a `file://` URL string suitable
+// for `import('...')` in a child node process.
+function pathToFileUrl(p: string): string {
+  return new URL(`file://${p}`).toString();
+}
+
+// Spawn a single child process that appends one event to `runDir`.
+// Multi-process is the only harness shape that produces real contention
+// against `openSync('wx')` — a microtask-batched Promise.all cannot.
+function spawnAppender(runDir: string, attemptIndex: number, event: TraceEventInput): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const childScript = `
+    import(${JSON.stringify(appendModuleUrl)}).then(({ appendTraceEvent }) => {
+      const r = appendTraceEvent(${JSON.stringify(runDir)}, ${JSON.stringify(event)});
+      process.stdout.write(JSON.stringify(r));
+    }).catch((e) => {
+      process.stderr.write(String(e && e.message ? e.message : e));
+      process.exit(2);
+    });
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    env: process.env,
+    encoding: 'utf8',
+  });
+  // Silence unused-parameter lint while keeping the index in the signature
+  // for symmetry with the concurrent-append harness.
+  void attemptIndex;
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
 
 const tmpDirs: string[] = [];
 
@@ -62,14 +101,18 @@ describe('reconcileTraceIndex — happy path', () => {
 });
 
 describe('reconcileTraceIndex — after-race', () => {
-  it('totalEvents equals on-disk count after a concurrent-append race', async () => {
+  it('totalEvents equals on-disk count after a multi-process concurrent-append race', () => {
     const runDir = makeTmp();
     const N = 6;
-    await Promise.all(
-      Array.from({ length: N }, (_, i) =>
-        Promise.resolve().then(() => appendTraceEvent(runDir, attempt(i))),
-      ),
+    // Multi-process race: each child appends once. The kernel's O_EXCL
+    // arbitration is what mediates real contention; a Promise.all
+    // microtask harness over a synchronous syscall cannot.
+    const children = Array.from({ length: N }, (_, i) =>
+      spawnAppender(runDir, i, attempt(i)),
     );
+    for (const c of children) {
+      expect(c.status, `child stderr: ${c.stderr}`).toBe(0);
+    }
     const index = reconcileTraceIndexTool({ runDir });
     expect(index.totalEvents).toBe(N);
   });
