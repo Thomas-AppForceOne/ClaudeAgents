@@ -294,6 +294,7 @@
       }
     },
     "buildValidationAbortBody": {
+      "description": "Builds a validation-abort body by wrapping an already-caught error OBJECT (with `code`/`message`). Use this when you have the thrown error in hand. To build from an explicit code plus a details bag instead, use `buildValidationAbortFromCode`.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -336,6 +337,7 @@
       }
     },
     "buildValidationAbortFromCode": {
+      "description": "Builds a validation-abort body from an explicit error CODE plus an optional details bag — no thrown error needed. Use this to raise an abort you are constructing yourself. To wrap an already-caught error object instead, use `buildValidationAbortBody`.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
