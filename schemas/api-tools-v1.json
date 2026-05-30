@@ -687,6 +687,7 @@
       }
     },
     "dockerContainerName": {
+      "description": "Derives (computes / gets) the deterministic container name for a worktree. Pure naming function — no Docker call, no I/O; the same `worktreePath` always yields the same name.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
