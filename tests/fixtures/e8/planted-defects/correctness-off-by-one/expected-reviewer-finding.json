@@ -4,6 +4,6 @@
   "severity": "blocker",
   "kind": "command",
   "summary": "sumAll loop bound is <= arr.length, reading one past the end.",
-  "reproductionCommand": "node -e \"const { sumAll } = await import('./defect.js'); if (!Number.isFinite(sumAll([1,2,3]))) process.exit(1);\"",
+  "reproductionCommand": "node -e \"const { sumAll } = await import('./defect.ts'); if (Number.isFinite(sumAll([1,2,3]))) process.exit(1);\"",
   "evidencePointer": "defect.ts:13"
 }

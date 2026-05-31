@@ -3,6 +3,6 @@
   "class": "concurrency",
   "severity": "major",
   "kind": "inspection",
-  "summary": "runOnce treats a boolean flag as a mutex; the check-await-set is not atomic.",
-  "evidencePointer": "defect.ts:23"
+  "summary": "runOnce holds a boolean flag across an await; the check-set-await is not atomic.",
+  "evidencePointer": "defect.ts:32"
 }
