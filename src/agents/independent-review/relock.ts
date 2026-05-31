@@ -71,6 +71,35 @@
  *   read-modify-write pattern (mirrored from `recordWorkspace` in
  *   `run-progress.ts`) preserves them and updates only `status` and
  *   `contractRevision`.
+ *
+ * Why an in-process mutex keyed on `progressFilePath`:
+ * - The Node event loop is single-threaded, but `async` functions
+ *   interleave at every `await` boundary. The critical section of this
+ *   helper spans `await runRound()`, so two `Promise.all([relockContract
+ *   (...), relockContract(...)])` calls against the same progress file
+ *   *will* interleave their read-archive-swap-write sequences unless the
+ *   helper holds a serialisation primitive across the await. The helper
+ *   therefore owns a module-scope `Map<progressFilePath, Promise<unknown>>`
+ *   onto which each call chains; concurrent invocations against the same
+ *   path serialise on the tail promise, while invocations against
+ *   *different* progress files never block each other. The map entry is
+ *   cleared in the `finally` only when the call is still the tail, so the
+ *   map naturally garbage-collects rather than growing unboundedly over
+ *   the lifetime of a long-running process.
+ *
+ * Preconditions:
+ * - **In-process serialisation is owned by this helper.** A caller does
+ *   NOT need to serialise concurrent calls itself; the path-keyed mutex
+ *   above does that. Two callers firing `Promise.all` against the same
+ *   `progressFilePath` will both see correct archival semantics
+ *   (.r{k}.json AND .r{k+1}.json, `contractRevision` incremented by 2).
+ * - **Cross-process serialisation is NOT this helper's job.** Two
+ *   separate Node processes writing to the same `progressFilePath` are
+ *   still coordinated only by the run-lock (a `flock`-style cross-process
+ *   file lock); this helper's mutex is purely in-process. The boundary is
+ *   intentional: re-implementing cross-process exclusion here would
+ *   duplicate the run-lock's job and force a second on-disk lock file
+ *   into the run directory.
  */
 
 import { existsSync, renameSync } from 'node:fs';
@@ -190,6 +219,23 @@ export function buildDraftPath(runDir: string, sprintNumber: number): string {
 }
 
 /**
+ * In-process serialisation primitive: one promise chain per
+ * `progressFilePath`. Two concurrent invocations against the same path
+ * chain onto the tail promise so their read-archive-swap-write sequences
+ * never interleave; two invocations against *different* paths run
+ * concurrently because they live in distinct map slots. The map slot is
+ * cleared in the `finally` of the wrapper only when the just-settled
+ * call is still the tail (i.e. no later caller chained onto it after we
+ * stored ourselves), so a long-running process accumulates at most one
+ * entry per actively-in-flight `progressFilePath`.
+ *
+ * See the "Why an in-process mutex keyed on `progressFilePath`" and
+ * "Preconditions" sections of this module's header for the rationale and
+ * the cross-process boundary.
+ */
+const inflightByProgressPath = new Map<string, Promise<unknown>>();
+
+/**
  * Run one renegotiation round end-to-end with the atomicity, archival, and
  * status-transition invariants this module is contracted to enforce.
  *
@@ -232,19 +278,41 @@ export function buildDraftPath(runDir: string, sprintNumber: number): string {
  *   `contractRevision` is NOT incremented, because no swap fired) and
  *   rethrows the original error. The canonical contract is byte-identical
  *   to what was on disk before the call.
+ * - If `runRound()` resolves WITHOUT writing the audited draft at
+ *   `newDraftPath`, the helper performs a pre-swap existence check on
+ *   `newDraftPath` BEFORE touching the canonical (i.e. before step 4),
+ *   throws an `Error` naming the missing draft path, restores `status:
+ *   "building"`, and rethrows. Because the throw fires while the
+ *   canonical is still in place, no archive rename has happened and the
+ *   prior revision is canonical, byte-identical to the pre-call state.
  * - If the archive rename (step 4) throws, the helper restores
  *   `status: "building"` and rethrows. The canonical contract is
  *   untouched (the throw fired before any rename completed); the draft
  *   file remains at its `.draft-tmp.<token>.json` path for a recovery
  *   flow to clean up.
- * - If the canonical swap (step 5) throws, the prior canonical is already
- *   archived at the returned `archivedPath`. The helper restores
- *   `status: "building"` and rethrows. The caller can recover the prior
- *   revision from the archive.
+ * - If the canonical swap (step 5) throws AFTER the archive rename
+ *   succeeded, the helper attempts an in-process rollback by renaming
+ *   the archived sibling back onto the canonical filename. If the
+ *   rollback succeeds, the helper re-throws the ORIGINAL swap error (so
+ *   the operator sees the diagnostic from the failure that actually
+ *   matters, not the rollback's success). If the rollback ITSELF throws,
+ *   the helper throws a new `Error` naming both `archived` and
+ *   `canonical` paths so the operator can recover by hand from the
+ *   archive sibling; the original swap error is preserved as the
+ *   ES2022 `cause` of the new error. In all rollback paths the helper
+ *   then restores `status: "building"`.
+ * - In-process concurrency is owned by this helper via the module-scope
+ *   path-keyed mutex (`inflightByProgressPath`): two concurrent
+ *   invocations against the same `progressFilePath` serialise, so the
+ *   second caller reads the first caller's incremented `contractRevision`
+ *   and archives to `.r{k+1}.json` rather than overwriting `.r{k}.json`.
+ *   Cross-process serialisation remains the run-lock's job; see the
+ *   "Preconditions" section in this module's header for the boundary.
  *
  * In every failure path the on-disk story is therefore: EITHER the prior
- * revision is canonical (no archive sibling created for this round), OR
- * the new revision is canonical AND the prior revision is archived.
+ * revision is canonical (no archive sibling created for this round, or
+ * the archive sibling was rolled back onto the canonical), OR the new
+ * revision is canonical AND the prior revision is archived.
  * Never a half-state, never lost history.
  *
  * Side effects:
@@ -262,8 +330,54 @@ export function buildDraftPath(runDir: string, sprintNumber: number): string {
  *   helper does NOT translate these — it surfaces them verbatim so the
  *   caller can diagnose I/O failures without losing the OS-level
  *   message.
+ * @throws an `Error` whose message starts with `relockContract: runRound
+ *   resolved without writing the draft at ` followed by the missing
+ *   `newDraftPath` when the `runRound` callback resolves successfully
+ *   but does not produce the audited draft on disk. The throw fires
+ *   BEFORE the archive rename, so the canonical contract is
+ *   byte-identical to its pre-call state when the catch runs.
+ * @throws an `Error` whose message starts with `relockContract:
+ *   canonical swap failed (` and names both `archived` and `canonical`
+ *   paths when the canonical swap fails AND the in-process rollback of
+ *   the archive sibling also fails. The thrown error's `cause` is the
+ *   original swap error. When the rollback succeeds, the helper
+ *   re-throws the original swap error verbatim (no message rewrite).
  */
 export async function relockContract(
+  opts: RelockContractOptions,
+): Promise<RelockContractResult> {
+  const { progressFilePath } = opts;
+
+  // Chain regardless of whether the prior call settled with success or
+  // failure: we only need ordering, not propagation of the prior call's
+  // outcome (a prior throw must NOT cascade into the next caller's
+  // observable result). The `.catch(() => undefined)` collapses both
+  // settlement shapes into a single resolved value the `.then` can
+  // sequence against.
+  const prev = inflightByProgressPath.get(progressFilePath) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(() => relockContractCore(opts));
+  inflightByProgressPath.set(progressFilePath, run);
+
+  try {
+    return (await run) as RelockContractResult;
+  } finally {
+    // Clear the slot only if we're still the tail; otherwise a later
+    // chained call has already replaced us in the map and must own the
+    // cleanup. This is what keeps the map naturally garbage-collecting.
+    if (inflightByProgressPath.get(progressFilePath) === run) {
+      inflightByProgressPath.delete(progressFilePath);
+    }
+  }
+}
+
+/**
+ * Internal: the actual re-lock protocol, executed once per call after
+ * the wrapper has serialised concurrent invocations on the same
+ * `progressFilePath`. The wrapper guarantees this function never
+ * interleaves with itself for a given path; the implementation can
+ * therefore assume single-writer semantics within the process.
+ */
+async function relockContractCore(
   opts: RelockContractOptions,
 ): Promise<RelockContractResult> {
   const { runDir, sprintNumber, newDraftPath, progressFilePath, runRound } = opts;
@@ -283,10 +397,27 @@ export async function relockContract(
   // even if the round is long-running.
   writeProgressFields(progressFilePath, { status: 'negotiating' });
 
+  // Tracks whether step 4 (the archive rename) succeeded. If the
+  // canonical swap (step 5) later throws, this flag tells us whether
+  // there is an archive sibling to roll back onto the canonical.
+  let archivedFromCanonical = false;
+
   try {
     // The renegotiation work itself — the caller's responsibility. By the
     // time this resolves, `newDraftPath` must hold the audited draft.
     await runRound();
+
+    // Fail-fast: if the callback resolved without producing the draft,
+    // throw BEFORE touching the canonical so the prior revision is
+    // still in place when the catch runs. The thrown error names the
+    // missing path so a recovery flow can act on it directly, and the
+    // archive rename has not yet fired so no on-disk rollback is
+    // needed beyond the status restoration the catch already does.
+    if (!existsSync(newDraftPath)) {
+      throw new Error(
+        `relockContract: runRound resolved without writing the draft at ${newDraftPath}`,
+      );
+    }
 
     // Archive-then-swap: rename the prior canonical to its `.r{k}.json`
     // sibling FIRST, so a crash between the two renames leaves the
@@ -297,13 +428,44 @@ export async function relockContract(
     // promotes the new draft to canonical.
     if (canonicalExists(canonical)) {
       renameSync(canonical, archived);
+      archivedFromCanonical = true;
     }
 
     // The atomic swap. After this returns, the new revision IS the
     // canonical contract; downstream readers (the evaluator's evidence-
     // bundle join in particular) see the new content in full on their
-    // next read of the canonical filename.
-    renameSync(newDraftPath, canonical);
+    // next read of the canonical filename. If this rename throws after
+    // the archive succeeded, we roll the archive back onto the
+    // canonical so the on-disk story is "prior revision is canonical"
+    // — the same shape every other pre-swap failure path produces.
+    try {
+      renameSync(newDraftPath, canonical);
+    } catch (swapErr) {
+      if (archivedFromCanonical) {
+        try {
+          renameSync(archived, canonical);
+          archivedFromCanonical = false;
+        } catch (rollbackErr) {
+          // Rollback itself failed: surface BOTH paths in the thrown
+          // error so the operator can recover manually from the
+          // archive sibling. The original swap error is preserved as
+          // the ES2022 `cause` so the diagnostic chain is not lost.
+          // We deliberately keep `rollbackErr` out of the message
+          // (the operator can read it from the surrounding logs); the
+          // load-bearing information is WHICH two paths are involved.
+          void rollbackErr;
+          throw new Error(
+            `relockContract: canonical swap failed (${(swapErr as Error).message}) and rollback of archived sibling ${archived} -> ${canonical} also failed; prior revision is at ${archived}`,
+            { cause: swapErr as Error },
+          );
+        }
+      }
+      // Rollback succeeded (or there was no archive to roll back).
+      // Re-throw the ORIGINAL swap error so the diagnostic message is
+      // preserved verbatim — callers pattern-matching on the OS-level
+      // error continue to work.
+      throw swapErr;
+    }
 
     // Commit the revision increment and return status to `building`.
     // This write is observable only AFTER the two renames have
