@@ -1,5 +1,12 @@
 /**
- * Regression guard for the E8 roadmap flip + Next-marker advance.
+ * Regression guard for the M4 roadmap flip + Next-marker advance to O2.
+ *
+ * Filename note: this file outlived the E8 flip it was originally
+ * authored for and now guards the M4 flip; the rename to
+ * `roadmap-m4-flipped.test.ts` is deferred to keep the M4 diff narrow.
+ * Each flip's guard is a one-shot for that flip — when O2 ships, this
+ * file's assertions invert again and must be updated (or replaced) in
+ * the O2 diff.
  *
  * The project convention (PROJECT_CONTEXT § "Shipping a spec flips its
  * roadmap entry") says a shipped spec's `Implementation order` entry must
@@ -40,7 +47,7 @@ function loadRoadmapLines(): string[] {
 
 /**
  * Locate the first line whose trimmed form starts with the given
- * implementation-order prefix (e.g. `19.`). Returns the raw line.
+ * implementation-order prefix (e.g. `20.`). Returns the raw line.
  *
  * @param lines roadmap file split into lines.
  * @param prefix entry-number prefix including the trailing period.
@@ -51,34 +58,37 @@ function findEntryLine(lines: string[], prefix: string): string {
   return match;
 }
 
-describe('roadmap E8 entry is flipped to shipped form and the Next marker advances to M4', () => {
-  it('entry 19 starts with the shipped-form marker and names the merged PR', () => {
+describe('roadmap M4 entry is flipped to shipped form and the Next marker advances to O2', () => {
+  it('entry 20 starts with the shipped-form marker and names the merged PR', () => {
     const lines = loadRoadmapLines();
-    const e8 = findEntryLine(lines, '19.');
-    // The shipped form is `✅ **[E8](…)** — …. Shipped PR #<n>.`.
-    // Substring matches on the two load-bearing tokens (the ✅-bold-E8
+    const m4 = findEntryLine(lines, '20.');
+    // The shipped form is `✅ **[M4](…)** — …. Shipped PR #<n>.`.
+    // Substring matches on the two load-bearing tokens (the ✅-bold-M4
     // prefix and the `Shipped PR #` marker) are sufficient — the rest of
     // the line is descriptive prose and may be reworded.
-    expect(e8).toMatch(/^\s*19\.\s+✅\s+\*\*\[E8\]/);
-    expect(e8).toContain('Shipped PR #');
+    expect(m4).toMatch(/^\s*20\.\s+✅\s+\*\*\[M4\]/);
+    expect(m4).toContain('Shipped PR #');
   });
 
-  it('entry 19 no longer carries the **Next** marker', () => {
+  it('entry 20 no longer carries the **Next** marker', () => {
     const lines = loadRoadmapLines();
-    const e8 = findEntryLine(lines, '19.');
+    const m4 = findEntryLine(lines, '20.');
     // The Next marker is the single point in the roadmap that signals
     // "ship this next"; a shipped entry that still carries it is a
     // definition-of-done failure.
-    expect(e8).not.toContain('**Next**');
+    expect(m4).not.toContain('**Next**');
   });
 
-  it('entry 20 (M4) now carries the **Next** marker', () => {
+  it('entry 21 (O2) now carries the **Next** marker', () => {
     const lines = loadRoadmapLines();
-    const m4 = findEntryLine(lines, '20.');
+    const o2 = findEntryLine(lines, '21.');
     // The marker must move forward atomically with the flip; otherwise
     // there is no single point of truth for "what ships next" and the
     // convention silently breaks.
-    expect(m4).toContain('**Next**');
-    expect(m4).toContain('[M4]');
+    expect(o2).toContain('**Next**');
+    expect(o2).toContain('[O2]');
+    // A spec carrying the Next marker has not yet shipped; it must not
+    // already display the ✅ shipped-form marker.
+    expect(o2).not.toContain('✅');
   });
 });
