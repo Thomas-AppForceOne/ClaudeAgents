@@ -53,6 +53,9 @@
         },
         {
           "$ref": "#/definitions/clarifierUserAction"
+        },
+        {
+          "$ref": "#/definitions/independentReview"
         }
       ]
     }
@@ -62,6 +65,11 @@
       "properties": {
         "attemptNumber": {
           "minimum": 1,
+          "type": "integer"
+        },
+        "contractRevision": {
+          "description": "Active contract revision when this attempt was emitted; absent means the original locked contract (revision 0). Optional and additive — a pre-existing trace that omits the field still validates, and a missing field is interpreted as revision 0 by downstream readers. Non-negative integer so revision-scoped accounting cannot be tricked by a negative or non-integer value.",
+          "minimum": 0,
           "type": "integer"
         },
         "disposition": {
@@ -175,9 +183,86 @@
       "type": "string"
     },
     "eventType": {
-      "description": "Event-class discriminator. The nine values below are the v1 known set; readers tolerate unknown values per the forward-compatibility contract (see the schema-level description). camelCase ASCII.",
+      "description": "Event-class discriminator. The ten values are the v1 known set; readers tolerate unknown values per the forward-compatibility contract (see the schema-level description). camelCase ASCII.",
       "pattern": "^[a-z][A-Za-z0-9]*$",
       "type": "string"
+    },
+    "independentReview": {
+      "description": "One independent-review event emitted by the contract-free reviewer role after a generator attempt. The payload is a lightweight summary (the full findings live in the sprint-{N}-independent-review-{attempt}.json artefact); this event marks 'a review happened' in the run trace so consumers can locate it without parsing the artefact file. Deliberately distinct from agentAttempt because the reviewer is off-budget — counting an agentAttempt here would mis-fire the sprint-budget guard.",
+      "properties": {
+        "eventType": {
+          "const": "independentReview"
+        },
+        "payload": {
+          "description": "Lightweight reviewer summary inlined on the event itself (small and integral, same precedent as safetyHalt.payload). The full reviewer findings live in the sprint-{N}-independent-review-{attempt}.json artefact; this object only carries the counts and the verdict so a reader can scan the trace for the review's outcome without opening a sibling file.",
+          "properties": {
+            "attemptLetter": {
+              "description": "Single uppercase ASCII letter identifying the generator attempt this review covered ('A' for the first attempt, 'B' for the second, and so on). Matches the {attempt-letter} placeholder in the sibling artefact filename so the two are joinable without ambiguity.",
+              "pattern": "^[A-Z]$",
+              "type": "string"
+            },
+            "contractRevision": {
+              "description": "Active contract revision when this review ran. Non-negative integer (0 is the original locked contract); mirrors agentAttempt.contractRevision so revision-scoped queries against the trace are consistent across event classes.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sprintNumber": {
+              "description": "Sprint this review belongs to. Positive integer; sprints are 1-indexed throughout the framework.",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "summary": {
+              "description": "Counts of findings by severity tier plus the count of findings the orchestrator dropped (e.g. a command finding whose reproductionCommand did not reproduce). All four counters are required and non-negative so a reader can do arithmetic on them without nullability checks.",
+              "properties": {
+                "advisories": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "blockers": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "dropped": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "warnings": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "blockers",
+                "warnings",
+                "advisories",
+                "dropped"
+              ],
+              "type": "object"
+            },
+            "verdict": {
+              "description": "Single-word outcome of the review. 'clean' means zero surviving findings of any severity; 'findings' means at least one finding survived the false-positive guard (a renegotiation round may follow, gated by the cap).",
+              "enum": [
+                "clean",
+                "findings"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "sprintNumber",
+            "attemptLetter",
+            "contractRevision",
+            "verdict",
+            "summary"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "eventType",
+        "payload"
+      ],
+      "type": "object"
     },
     "llmCall": {
       "properties": {

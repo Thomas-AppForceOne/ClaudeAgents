@@ -1,0 +1,8 @@
+{
+  "id": "concurrency-lock-across-await",
+  "class": "concurrency",
+  "severity": "major",
+  "kind": "inspection",
+  "summary": "runOnce holds a boolean flag across an await; the check-set-await is not atomic.",
+  "evidencePointer": "defect.ts:32"
+}

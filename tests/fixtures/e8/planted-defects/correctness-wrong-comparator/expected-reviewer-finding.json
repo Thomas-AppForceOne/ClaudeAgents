@@ -1,0 +1,8 @@
+{
+  "id": "correctness-wrong-comparator",
+  "class": "correctness",
+  "severity": "major",
+  "kind": "inspection",
+  "summary": "isAdmin uses loose `==`; '0' from a JSON payload coerces to admin.",
+  "evidencePointer": "defect.ts:22"
+}

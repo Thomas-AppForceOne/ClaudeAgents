@@ -1,0 +1,19 @@
+{
+  "id": "single-defect-email-validator-newline-injection",
+  "defect_class": "security",
+  "severity": "blocker",
+  "kind": "command",
+  "expected_finding_kind": "command",
+  "expected_gate_behaviour": "fail-as-rejection",
+  "description": "A TypeScript module exposes `validateEmail(input)` that satisfies its initial contract (\"return true for syntactically valid email strings\") but uses a JavaScript regex with `^...$` anchors against a string containing a newline. JavaScript's `^` and `$` match line boundaries by default — so an attacker-controlled string of the form `victim@host.tld\\n<injected SMTP commands>` is accepted as a valid email. This is the classic CRLF / newline injection vector that surfaces in mail-header construction. The implementation passes its sprint-N contract (which says nothing about newlines), so the planted defect is genuinely out-of-contract; only the independent reviewer's adversarial pass surfaces it.",
+  "reproductionCommand": "node -e \"const { validateEmail } = await import('./defect-source.js'); if (validateEmail('victim@host.tld\\\\nBCC: attacker@evil.example')) { process.exit(1); }\"",
+  "expectedGate": "fail-as-rejection",
+  "expectedFlow": [
+    "generator commits the diff satisfying the initial sprint contract",
+    "gan-reviewer-independent runs the reproductionCommand → exit 1 → finding is well-founded",
+    "gan-contract-proposer renegotiates: adds a finding-derived criterion 'validateEmail rejects strings containing CR/LF'",
+    "gan-contract-reviewer audits the new criterion: well-formed + well-founded → accepts",
+    "contract is atomically re-locked at revision r1; progress.json.contractRevision = 1",
+    "gan-evaluator scores the current diff against the revised contract → the newline-injection criterion scores below threshold → sprint terminates as failed-evaluation-rejected"
+  ]
+}

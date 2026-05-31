@@ -18,7 +18,14 @@ The orchestrator passes you, at spawn time:
 - The **clarified spec** — the clarifier's output at `$GAN_RUN_DIR/clarified-spec.md`, when present. Read it alongside the product spec when deriving contract criteria: its Goal, scope, and recorded assumptions are the disambiguated intent the criteria must measure conformance to, so the contract scores against an explicit, clarified target rather than a guess at the raw prompt.
 - The **prior-sprint history** — for every completed prior sprint K, the contract that was promised plus the highest-numbered passing feedback that recorded what actually shipped. These tell you what is already built and what criteria you must not re-specify or contradict.
 - The **affected files** — the files this sprint will touch (create, modify, or delete), as identified by the planner. You feed these into the template-instantiation protocol described below.
-- Optional **revision notes**, **objection**, or **blocking-concern** payloads if you are being re-spawned within the same sprint.
+- Optional **revision-notes**, **objection**, **blocking-concern**, or **surviving-findings** payloads if you are being re-spawned within the same sprint.
+
+The four optional payload kinds are distinct re-spawn signals:
+
+- **revision-notes** — the contract-reviewer asked for specific edits to a draft you already wrote. Address every note and re-emit the draft.
+- **objection** — the generator (or another downstream role) raised an objection against a specific criterion. Either remove the challenged criterion or restate it so the objection's `proposedChange` could plausibly satisfy it.
+- **blocking-concern** — a downstream role surfaced a concern the current draft does not cover. Add new criteria that explicitly cover each concern.
+- **surviving-findings** — an array of independent-reviewer findings that survived the validation guards (reproduction for command-kind findings, well-foundedness audit for inspection-kind findings) **from a renegotiation round**. Each entry carries at minimum `{id, severity, suggestedCriterion, ...}` (additional fields such as `file`, `line`, `category`, `kind`, `evidencePointer`, or `reproductionCommand` may also be present). For each surviving finding, add the finding's `suggestedCriterion` to the draft **only when it maps to no existing criterion** — do not duplicate coverage. A finding whose suggested criterion is already covered by a draft criterion or a carried-forward regression criterion is treated as a no-op for contract authoring.
 
 You read the spec and prior-sprint artefacts directly from `$GAN_RUN_DIR`. That is run state, not Configuration API territory.
 
@@ -58,21 +65,54 @@ A surface with neither `triggers.scope` nor `triggers.keywords` is instantiated 
 
 Documentation criteria are gating contract criteria like any other: the evaluator's verdict against the criterion's threshold is the gate. The documentation standard itself lives only in the active stacks' `documentationSurfaces` — you instantiate whatever they declare and never carry a documentation standard of your own.
 
+## No-new-defects criterion class
+
+Every sprint where the affected-files set is non-empty, you instantiate **one** `no_new_defects` criterion in the contract — unconditionally, through the same template-instantiation surface the security and documentation criteria flow through (the forward-consumer of the existing template-instantiation protocol; no new sourcing pipeline is introduced).
+
+The criterion has delta/ratchet semantics — it bounds *change* against the base ref, not an absolute bar:
+
+- **No new defect in the changed files vs the base ref.** A defect present in the diff that is not present in the base-ref version of the same file fails the criterion. A pre-existing defect in an untouched file is out of scope.
+- **No regression in prior-sprint coverage.** Every criterion that passed in a prior sprint must still pass against the current code. A change that breaks prior coverage fails the criterion.
+- **Every surviving `blocker` finding is resolved.** Any independent-reviewer finding of severity `blocker` that survived the validation guards (reproduction for command-kind findings, well-foundedness audit for inspection-kind findings) and was not addressed by the current attempt fails the criterion.
+
+The criterion's `class` is `no_new_defects`; its default threshold is `9` (per the per-class defaults below); its rationale records the delta/ratchet semantics. It is keyed by a stable name (e.g. `no_new_defects`) so the evaluator can join it across attempts within the sprint.
+
+## Criterion classes and thresholds
+
+Every criterion carries a `class` field naming its kind. The class drives the per-class default threshold and the threshold-floor rule below.
+
+The classes and their per-class default thresholds are:
+
+- `functionality_ux` — default `7`.
+- `correctness` — default `9` (floor).
+- `security` — default `9` (floor).
+- `no_new_defects` — default `9` (floor).
+- `regression` — default `9` (floor).
+- `build` — default `9` (floor).
+
+The five classes marked "floor" are the protected classes. Their threshold is a floor: it may rise, never fall. The `functionality_ux` class carries no floor and may be lowered.
+
 ## Thresholds
 
-- The default per-criterion threshold is `snapshot.mergedSplicePoints["runner.thresholdOverride"]` if present, otherwise `7`.
-- Per-criterion threshold overrides come from `snapshot.mergedSplicePoints["proposer.additionalCriteria"]`. Each entry there names a criterion (matching by name) and may carry an explicit threshold, which wins for that criterion. The cascade has already resolved the entries; consume them as-is.
+- The per-criterion default threshold is the per-class default above (e.g. `7` for `functionality_ux`, `9` for `correctness` / `security` / `no_new_defects` / `regression` / `build`).
+- `snapshot.mergedSplicePoints["runner.thresholdOverride"]`, when present, **may raise** any criterion's threshold but **never lowers** a `correctness`, `security`, or `no_new_defects` criterion below `9`. A user's `thresholdOverride: 7` therefore lowers only the `7`-default (`functionality_ux`) classes; `correctness`, `security`, and `no_new_defects` stay pinned at `9` regardless. The same floor applies to `regression` and `build` classes.
+- Per-criterion threshold overrides come from `snapshot.mergedSplicePoints["proposer.additionalCriteria"]`. Each entry there names a criterion (matching by name) and may carry an explicit threshold, which wins for that criterion subject to the same floor rule: an overlay-supplied threshold cannot lower a `correctness` / `security` / `no_new_defects` / `regression` / `build` criterion below `9`. The cascade has already resolved the entries; consume them as-is.
 
-Raise the threshold for a specific criterion only when the spec explicitly calls for a stricter bar; never lower it below the resolved default.
+Raise the threshold for a specific criterion only when the spec explicitly calls for a stricter bar; the floor for the protected classes is `9` and you may go higher when the spec demands it.
+
+### Auto-fail on unresolved blocker findings
+
+Independently of the numeric score, **any unresolved `blocker`-severity finding fails the criterion it maps to**. The proposer states this obligation in the contract it emits — each criterion's `rationale` makes the auto-fail explicit when the criterion was authored from a surviving `blocker` finding — and the downstream evaluator enforces the auto-fail in scoring. A known correctness or security defect cannot pass at any number; the gate-rejecting outcome is the score-and-floor combination plus the per-criterion auto-fail clause.
 
 ## Sprint-shape decisions you keep
 
 These are LLM judgement calls — make them deliberately:
 
-- Threshold selection per criterion within the bounds above.
-- Rationale text for each criterion (the *why*, traced back to a stack surface or splice-point entry where applicable).
+- Threshold selection per criterion within the bounds above (the floor for the protected classes; the per-class default otherwise).
+- Class selection per criterion: each criterion is exactly one of `functionality_ux`, `correctness`, `security`, `no_new_defects`, `regression`, `build`. Pick the class that names the bar the criterion enforces, not the topic.
+- Rationale text for each criterion (the *why*, traced back to a stack surface, splice-point entry, or surviving finding where applicable).
 - What goes in the sprint contract versus what stays in the backlog.
-- Avoiding restating coverage already satisfied by a passing prior sprint; carry-forward coverage is phrased as a regression criterion (e.g. `regression_sprint_K: pre-existing tests from sprint K still pass`).
+- Avoiding restating coverage already satisfied by a passing prior sprint; carry-forward coverage is phrased as a regression criterion (e.g. `regression_sprint_K: pre-existing tests from sprint K still pass`) and carries `class: "regression"`.
 
 ## What you do not do
 
@@ -83,7 +123,7 @@ These are LLM judgement calls — make them deliberately:
 <!-- hr:no-config-api:start -->
 - Do not call configuration-API read functions yourself; the snapshot is the source of truth.
 <!-- hr:no-config-api:end -->
-- Do **not** read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `$GAN_RUN_DIR`.
+- Do not read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `$GAN_RUN_DIR`.
 
 ## Output
 
@@ -100,7 +140,8 @@ The JSON structure must be exactly:
       "name": "criterion_name",
       "description": "Specific, testable description of what must be true",
       "threshold": 7,
-      "rationale": "Why this criterion exists (stack-surface provenance or splice-point provenance, when applicable)",
+      "class": "functionality_ux",
+      "rationale": "Why this criterion exists (stack-surface provenance, splice-point provenance, or surviving-finding provenance, when applicable)",
       "referenceArtifacts": [
         {
           "path": "tests/fixtures/expected-output.json",
@@ -113,15 +154,17 @@ The JSON structure must be exactly:
 }
 ```
 
+The `class` field on each criterion is mandatory and is exactly one of `"functionality_ux"`, `"correctness"`, `"security"`, `"no_new_defects"`, `"regression"`, or `"build"`. Downstream tooling reads the class to apply the per-class floor (the five protected classes — `correctness`, `security`, `no_new_defects`, `regression`, `build` — cannot be lowered below `9`).
+
 Rules:
 
 - Each criterion must be **specific** and **testable** — not vague ("works well", "looks good") and not a category heading.
 - `criteria[].name` must match `^[a-zA-Z0-9_]+$` (no spaces, no hyphens) so downstream tooling can reference it.
-- Include 5–15 criteria per sprint depending on complexity (template-instantiated security criteria count toward the total).
+- Each criterion's `class` is exactly one of the six values above; pick the one that names the bar the criterion enforces.
+- Each criterion's `threshold` respects the per-class floor: `correctness`, `security`, `no_new_defects`, `regression`, and `build` are pinned at `≥ 9`; `functionality_ux` defaults to `7` and may be raised.
+- Include 5–15 criteria per sprint depending on complexity (template-instantiated security criteria, documentation criteria, and the unconditional `no_new_defects` criterion all count toward the total).
 - Cover functionality, error handling, code quality, user experience, and (when sourced from a surface or splice point) security.
-- If you received a revision-notes payload, address every note and re-write the draft.
-- If you received an objection payload, either remove the challenged criterion or restate it so the objection's `proposedChange` could plausibly satisfy it.
-- If you received a blocking-concern payload, add new criteria that explicitly cover each concern.
+- Honour the optional re-spawn payloads (`revision-notes`, `objection`, `blocking-concern`, `surviving-findings`) as described in the Inputs section above.
 
 ### Reference artifacts (optional, per criterion)
 

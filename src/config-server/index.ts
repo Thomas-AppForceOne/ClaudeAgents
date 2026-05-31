@@ -92,6 +92,7 @@ import {
   formatLlmCallSummaryTool as runFormatLlmCallSummary,
   reconcileTraceIndexTool as runReconcileTraceIndex,
   reconstructRecoveryStateTool as runReconstructRecoveryState,
+  reconstructRevisionStateTool as runReconstructRevisionState,
   runSprintSummaryTool as runSprintSummaryHandler,
 } from './tools/trace.js';
 import {
@@ -103,6 +104,11 @@ import {
   detectEditOscillationTool as runDetectEditOscillation,
 } from './tools/safety.js';
 import { buildEvaluatorPlanTool as runBuildEvaluatorPlan } from './tools/evaluator-tools.js';
+import {
+  relockContractTool as runRelockContract,
+  validateFindingsTool as runValidateFindings,
+  writeFailedEvaluationRejectedTool as runWriteFailedEvaluationRejected,
+} from './tools/independent-review.js';
 // Docker tool handlers are intentionally imported from the local tools file
 // (which uses dynamic `import()` per-handler) rather than from
 // `../modules/docker/*` directly. A top-level static import of any path under
@@ -193,6 +199,7 @@ export const TRACE_TOOL_NAMES: readonly string[] = [
   'aggregateRunSummary',
   'reconcileTraceIndex',
   'reconstructRecoveryState',
+  'reconstructRevisionState',
   'buildTrustEventBody',
   'buildValidationAbortBody',
   'buildValidationAbortFromCode',
@@ -228,6 +235,27 @@ export const SAFETY_TOOL_NAMES: readonly string[] = [
 export const EVALUATOR_TOOL_NAMES: readonly string[] = ['buildEvaluatorPlan'] as const;
 
 /**
+ * Tool names introduced by the independent-review subsystem's wire surface —
+ * three thin handlers behind the shipped `src/agents/independent-review/`
+ * library functions. Kept in its own list so the additive surface stays
+ * auditable; unioned into {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ *
+ * The three handlers compose the dual-callable-surface convention
+ * (`reconstructRevisionState` is the sibling exemplar in the same PR):
+ * `relockContract` and `writeFailedEvaluationRejected` are write-class
+ * tools that mutate `progress.json` via the shared persister; `validateFindings`
+ * is a pure-data tool that supplies an MCP-side safe command runner.
+ * SKILL.md's renegotiation-loop section names these tool names verbatim;
+ * the `lint-no-bare-skill-ref` test refuses a SKILL.md helper reference
+ * that is not also registered here.
+ */
+export const INDEPENDENT_REVIEW_TOOL_NAMES: readonly string[] = [
+  'relockContract',
+  'writeFailedEvaluationRejected',
+  'validateFindings',
+] as const;
+
+/**
  * Tool names introduced by the runtime invocation bridge's docker-module
  * surface — five thin, lazy-loaded wrappers over the shipped docker module
  * library functions (`PortRegistry.register` / `.release`, `discoverPort`,
@@ -259,6 +287,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...SAFETY_TOOL_NAMES,
   ...EVALUATOR_TOOL_NAMES,
   ...DOCKER_TOOL_NAMES,
+  ...INDEPENDENT_REVIEW_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -875,6 +904,17 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runReconstructRecoveryState({ runDir });
     },
   },
+  reconstructRevisionState: {
+    required: ['runDir', 'contractRevision'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconstructRevisionState');
+      const contractRevision = requireContractRevisionArg(
+        args,
+        'reconstructRevisionState',
+      );
+      return runReconstructRevisionState({ runDir, contractRevision });
+    },
+  },
   buildTrustEventBody: {
     required: ['resolution'],
     handler: (args) => {
@@ -1114,6 +1154,73 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runDockerContainerName({ worktreePath });
     },
   },
+  relockContract: {
+    // Wraps the library's `relockContract`, minus the runRound callback the
+    // markdown orchestrator cannot supply across the MCP wire. The
+    // orchestrator writes the audited draft itself to `newDraftPath`; the
+    // tool performs only the archive + atomic-swap + RMW protocol.
+    required: ['runDir', 'sprintNumber', 'newDraftPath', 'progressFilePath'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'relockContract');
+      const sprintNumber = requireSprintNumberArg(args, 'relockContract');
+      const newDraftPath = requireNonEmptyStringArg(
+        args,
+        'relockContract',
+        'newDraftPath',
+      );
+      const progressFilePath = requireNonEmptyStringArg(
+        args,
+        'relockContract',
+        'progressFilePath',
+      );
+      return runRelockContract({ runDir, sprintNumber, newDraftPath, progressFilePath });
+    },
+  },
+  writeFailedEvaluationRejected: {
+    // Compose the pure builder with the shared progress.json persister at
+    // the wire boundary. A `capFired === false` or empty `unresolvedBlockers`
+    // input is a no-op (the builder decides; the handler honours).
+    required: ['progressFilePath', 'capFired', 'unresolvedBlockers'],
+    handler: (args) => {
+      const progressFilePath = requireNonEmptyStringArg(
+        args,
+        'writeFailedEvaluationRejected',
+        'progressFilePath',
+      );
+      const capFired = requireBooleanArg(
+        args,
+        'writeFailedEvaluationRejected',
+        'capFired',
+      );
+      const unresolvedBlockers = requireBlockerArrayArg(
+        args,
+        'writeFailedEvaluationRejected',
+      );
+      return runWriteFailedEvaluationRejected({
+        progressFilePath,
+        capFired,
+        unresolvedBlockers,
+      });
+    },
+  },
+  validateFindings: {
+    // The bundle is the only wire input — the safe command runner is
+    // installed by the handler (the wire boundary is exactly where the
+    // safe default is load-bearing; an injected runner would defeat the
+    // wrapper's purpose).
+    required: ['bundle'],
+    handler: (args) => {
+      const bundle = requireBundleArg(args, 'validateFindings');
+      // The library walks the bundle's discriminator and field shape; the
+      // boundary asserts only object-shape, so the cast carries the wire
+      // value into the structurally typed library entry point. A schema-
+      // invalid bundle surfaces as a TypeError on the discriminator read,
+      // which the dispatcher's catch maps to a NotImplemented response.
+      return runValidateFindings({
+        bundle: bundle as unknown as Parameters<typeof runValidateFindings>[0]['bundle'],
+      });
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`, regardless of kind
@@ -1335,6 +1442,30 @@ function requireEventPayload(args: Record<string, unknown>, tool: string): Recor
     });
   }
   return v as Record<string, unknown>;
+}
+
+// Extract a required non-negative integer `contractRevision`. Mirrors the
+// schema's `agentAttempt.contractRevision` constraint at the wire boundary:
+// the underlying revision-scoped tally treats a missing field as revision 0
+// (the original locked contract), so an explicit value here must satisfy the
+// same non-negative-integer constraint the schema enforces on the producer
+// side — preventing a negative or non-integer value from silently passing
+// the filter as "no events match".
+function requireContractRevisionArg(
+  args: Record<string, unknown>,
+  tool: string,
+): number {
+  const v = args['contractRevision'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'contractRevision',
+      message:
+        `Tool '${tool}' requires a non-negative integer 'contractRevision' ` +
+        `in its input (the schema constraint on agentAttempt.contractRevision).`,
+    });
+  }
+  return v;
 }
 
 // Extract a required non-empty `role` string for formatHeartbeat. The
@@ -1729,6 +1860,122 @@ function requireTimeoutSecondsArg(args: Record<string, unknown>, tool: string): 
     });
   }
   return v;
+}
+
+// Extract a required non-empty string by named field. A small generalisation
+// of `requireSubject` / `requireRunId` so the independent-review wrappers do
+// not need a bespoke validator per field; the rejection prose stays uniform
+// across the catalogue.
+function requireNonEmptyStringArg(
+  args: Record<string, unknown>,
+  tool: string,
+  fieldName: string,
+): string {
+  const v = args[fieldName];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: fieldName,
+      message: `Tool '${tool}' requires a non-empty '${fieldName}' string in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required boolean by named field. The boundary is presence + type
+// only; the library decides what the value means.
+function requireBooleanArg(
+  args: Record<string, unknown>,
+  tool: string,
+  fieldName: string,
+): boolean {
+  const v = args[fieldName];
+  if (typeof v !== 'boolean') {
+    throw createError('MalformedInput', {
+      tool,
+      field: fieldName,
+      message: `Tool '${tool}' requires a boolean '${fieldName}' in its input.`,
+    });
+  }
+  return v;
+}
+
+// Extract a required positive integer `sprintNumber`. The renegotiation
+// loop's filenames embed this value, so a fractional or non-positive value
+// would yield malformed paths; the boundary rejects it up front.
+function requireSprintNumberArg(
+  args: Record<string, unknown>,
+  tool: string,
+): number {
+  const v = args['sprintNumber'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'sprintNumber',
+      message: `Tool '${tool}' requires a positive integer 'sprintNumber' (>= 1).`,
+    });
+  }
+  return v;
+}
+
+// Extract the `unresolvedBlockers` array for writeFailedEvaluationRejected.
+// The library reads only `length` and each entry's loose `id`; the boundary
+// asserts it is an array of plain objects, then narrows to the
+// UnresolvedBlockerLike shape via cast (the library tolerates extra fields).
+function requireBlockerArrayArg(
+  args: Record<string, unknown>,
+  tool: string,
+): ReadonlyArray<{ id: string; [k: string]: unknown }> {
+  const v = args['unresolvedBlockers'];
+  if (!Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'unresolvedBlockers',
+      message: `Tool '${tool}' requires an 'unresolvedBlockers' array in its input.`,
+    });
+  }
+  for (let i = 0; i < v.length; i += 1) {
+    const entry = v[i];
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'unresolvedBlockers',
+        message:
+          `Tool '${tool}' requires each 'unresolvedBlockers' entry to be a plain object ` +
+          `with at least an 'id' string field (index ${i} is not an object).`,
+      });
+    }
+    const id = (entry as Record<string, unknown>)['id'];
+    if (typeof id !== 'string' || id.length === 0) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'unresolvedBlockers',
+        message:
+          `Tool '${tool}' requires each 'unresolvedBlockers' entry to carry a non-empty ` +
+          `string 'id' (index ${i} is missing or malformed).`,
+      });
+    }
+  }
+  return v as ReadonlyArray<{ id: string; [k: string]: unknown }>;
+}
+
+// Extract the `bundle` object for validateFindings. The library validates
+// the bundle's discriminator and field shape internally; the boundary
+// asserts it is a plain object so the library never sees a non-object where
+// it expects a structured bundle.
+function requireBundleArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['bundle'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'bundle',
+      message: `Tool '${tool}' requires a 'bundle' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
 }
 
 // Require that `fieldName` is present (own key) and not `undefined`, returning

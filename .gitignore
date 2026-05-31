@@ -15,9 +15,10 @@ specifications/REVIEW_RESPONSE*.md
 
 # Run artifacts from the user-level review skills (~/.claude/skills/review-*,
 # spec-review-*). Each invocation writes a timestamped subdir; they're local
-# scratch, not part of the repo.
-.claude/review-runs/
-.claude/spec-review-runs/
+# scratch, not part of the repo. Kept outside .claude/ because Claude Code
+# treats project-scope .claude/ as a protected path.
+.review-runs/
+.spec-review-runs/
 
 # R1 toolchain artifacts.
 dist/

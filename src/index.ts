@@ -151,6 +151,7 @@ export {
   indexPath,
 
   reconstructRecoveryState,
+  reconstructRevisionState,
   nextRecoverySequence,
   buildTrustEventBody,
   buildValidationAbortBody,
@@ -175,6 +176,7 @@ export type {
   PayloadClass,
 
   RecoveryState,
+  RevisionState,
   RoleAttemptState,
   TrustResolution,
   TrustEventBody,
@@ -190,6 +192,7 @@ export type {
   EvidenceBundleCheck,
   ContractCriterionLike,
   BundleCriterion,
+  IndependentReviewEvent,
 } from './trace/index.js';
 
 // The full safety surface. `src/safety/index.js` is the subsystem barrel and
@@ -223,6 +226,7 @@ export {
   renderEditOscillationMessage,
   createEditOscillationError,
   // effective-safety-config resolver
+  DEFAULT_RENEGOTIATION_CAP,
   MAX_ATTEMPTS_BUDGET_HEADROOM,
   resolveEffectiveSafetyConfig,
   readSafetyOverlayBlock,
@@ -265,6 +269,43 @@ export type {
   LoopHaltTerminalRecord,
   EffectiveStartingCountersInput,
 } from './safety/index.js';
+
+// Independent-review subsystem: the typed bundle model, the pure
+// reproduction-gate function, and the atomic re-lock helper that brackets
+// a renegotiation round (archive-then-swap on the canonical contract,
+// status-transition discipline on progress.json). Only the public surface
+// is re-exported here; internal helpers stay file-local in
+// src/agents/independent-review.
+export {
+  archivedContractPath,
+  buildDraftPath,
+  buildFailedEvaluationRejectedRecord,
+  canonicalContractPath,
+  FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
+  relockContract,
+  validateFindings,
+  writeProgressFields,
+} from './agents/independent-review/index.js';
+export type {
+  BuildFailedEvaluationRejectedOptions,
+  BuildFailedEvaluationRejectedResult,
+  CommandFinding,
+  CommandRunner,
+  CommandRunnerResult,
+  DropReason,
+  DroppedFindingRecord,
+  FailedEvaluationRejectedRecord,
+  Finding,
+  FindingKind,
+  IndependentReviewBundle,
+  InspectionFinding,
+  RelockContractOptions,
+  RelockContractResult,
+  ReviewSummary,
+  Severity,
+  UnresolvedBlockerLike,
+  ValidateFindingsResult,
+} from './agents/independent-review/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';
 export type { Warning, WarningCode, WarningDetails } from './config-server/warnings.js';

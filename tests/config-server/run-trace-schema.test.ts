@@ -134,6 +134,21 @@ const VALID_EVENTS: Record<string, Record<string, unknown>> = {
     round: 1,
     payload: { evolutionText: 'include password-reset' },
   },
+  // The contract-free reviewer's marker event for one generator attempt. The
+  // payload is the lightweight summary; the full per-finding bundle lives in
+  // the sibling sprint-{N}-independent-review-{attempt}.json artefact.
+  independentReview: {
+    ...ENVELOPE,
+    sequenceNumber: 9,
+    eventType: 'independentReview',
+    payload: {
+      sprintNumber: 2,
+      attemptLetter: 'A',
+      contractRevision: 0,
+      verdict: 'findings',
+      summary: { blockers: 1, warnings: 0, advisories: 2, dropped: 1 },
+    },
+  },
 };
 
 describe('run-trace-v1 schema: the known event classes', () => {
@@ -157,6 +172,7 @@ describe('run-trace-v1 schema: the known event classes', () => {
         'agentAttempt',
         'clarifierFinding',
         'clarifierUserAction',
+        'independentReview',
         'llmCall',
         'orchestratorMilestone',
         'safetyHalt',
@@ -294,6 +310,7 @@ const V1_KNOWN_EVENT_TYPES = new Set([
   'validationAbort',
   'clarifierFinding',
   'clarifierUserAction',
+  'independentReview',
 ]);
 
 interface ReaderResult {

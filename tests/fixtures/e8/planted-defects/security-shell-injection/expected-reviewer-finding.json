@@ -1,0 +1,8 @@
+{
+  "id": "security-shell-injection",
+  "class": "security",
+  "severity": "blocker",
+  "kind": "inspection",
+  "summary": "pingHost interpolates untrusted host into a shell exec call.",
+  "evidencePointer": "defect.ts:21"
+}

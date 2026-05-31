@@ -1,0 +1,9 @@
+{
+  "id": "correctness-off-by-one",
+  "class": "correctness",
+  "severity": "blocker",
+  "kind": "command",
+  "summary": "sumAll loop bound is <= arr.length, reading one past the end.",
+  "reproductionCommand": "grep -qE 'for[[:space:]]*\\([^)]*;[[:space:]]*[a-zA-Z_$][[:alnum:]_$]*[[:space:]]*<=[[:space:]]*[a-zA-Z_$][[:alnum:]_$]*\\.length' defect.ts",
+  "evidencePointer": "defect.ts:13"
+}

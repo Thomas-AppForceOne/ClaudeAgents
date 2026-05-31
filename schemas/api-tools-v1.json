@@ -1135,6 +1135,27 @@
         "type": "object"
       }
     },
+    "reconstructRevisionState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "contractRevision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractRevision",
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "registerModule": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1192,6 +1213,41 @@
         "required": [
           "repoKey",
           "runId"
+        ],
+        "type": "object"
+      }
+    },
+    "relockContract": {
+      "description": "Atomic re-lock of the sprint contract after a renegotiation round. The orchestrator writes the audited draft to `newDraftPath`; the tool archives the prior canonical `sprint-{N}-contract.json` to its `.r{k}.json` sibling, atomic-renames the draft onto the canonical filename, and read-modify-writes `progress.json` (status: `negotiating` → `building`, contractRevision incremented by one). The callback the library version accepts is omitted — the wire cannot supply a TS function, so the orchestrator must write the draft itself before invoking the tool.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "newDraftPath": {
+            "description": "Absolute path of the audited draft the orchestrator already wrote. Should follow the `sprint-{N}-contract.draft-tmp.<token>.json` convention so a crash leaves identifiable debris.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "progressFilePath": {
+            "description": "Absolute path to `progress.json`; the tool read-modify-writes it atomically.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          },
+          "sprintNumber": {
+            "description": "1-based sprint index `{N}`. The canonical and archived filenames embed this value.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runDir",
+          "sprintNumber",
+          "newDraftPath",
+          "progressFilePath"
         ],
         "type": "object"
       }
@@ -1455,6 +1511,22 @@
         "type": "object"
       }
     },
+    "validateFindings": {
+      "description": "Run the reproduction gate over an independent-review bundle. Walks `bundle.findings` in order: keeps `kind:\"inspection\"` findings unchanged, and for each `kind:\"command\"` finding executes the `reproductionCommand` under the wrapper's safe-by-default `/bin/sh -c` runner. Drops with `reproduction-unsafe` when the command carries a banned metacharacter that slipped past the schema (defence-in-depth); drops with `reproduction-failed` on a non-zero exit; drops with `reproduction-errored` when the runner throws (signal interruption, spawn failure). Returns the kept-findings bundle plus the ordered drop ledger; the per-severity summary is recomputed from the kept findings.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "bundle": {
+            "description": "The reviewer-authored bundle (schema-valid per `schemas/independent-review-v1.json`). The library walks the bundle's discriminator and field shape internally; the boundary asserts only that this is a non-array object.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "bundle"
+        ],
+        "type": "object"
+      }
+    },
     "validateOverlay": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1495,6 +1567,46 @@
         "required": [
           "projectRoot",
           "name"
+        ],
+        "type": "object"
+      }
+    },
+    "writeFailedEvaluationRejected": {
+      "description": "Write the `terminalReason: \"failed-evaluation-rejected\"` rejection record to `progress.json` when, and only when, the renegotiation cap fired with at least one unresolved blocker. Composes the pure builder `buildFailedEvaluationRejectedRecord` with the shared `writeProgressFields` persister at the wire boundary. A `capFired: false` or empty `unresolvedBlockers` is a true no-op (`mutated: false`); otherwise the record is merged into `progress.json` via the framework's atomic-write primitive.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "capFired": {
+            "description": "True when the orchestrator decided the renegotiation cap has fired this sprint. The tool treats `false` as a no-op so a caller that wires the guard at the wrong site cannot accidentally mark a non-terminal run as terminated.",
+            "type": "boolean"
+          },
+          "progressFilePath": {
+            "description": "Absolute path to `progress.json`. The tool read-modify-writes it atomically; pre-existing fields are preserved.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "unresolvedBlockers": {
+            "description": "Surviving `blocker`-severity findings at the moment the cap fired. The tool inspects only the length and each entry's `id`; an empty array is treated as `the round actually passed, do not terminate`.",
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "progressFilePath",
+          "capFired",
+          "unresolvedBlockers"
         ],
         "type": "object"
       }
@@ -1542,8 +1654,10 @@
     "listModules",
     "reconcileTraceIndex",
     "reconstructRecoveryState",
+    "reconstructRevisionState",
     "registerModule",
     "releaseRunLock",
+    "relockContract",
     "removeFromModuleState",
     "removeFromOverlayField",
     "removeFromStackField",
@@ -1555,8 +1669,10 @@
     "trustRevoke",
     "updateStackField",
     "validateAll",
+    "validateFindings",
     "validateOverlay",
-    "validateStack"
+    "validateStack",
+    "writeFailedEvaluationRejected"
   ],
   "title": "ClaudeAgents config-server MCP tool catalog, v1",
   "type": "object"

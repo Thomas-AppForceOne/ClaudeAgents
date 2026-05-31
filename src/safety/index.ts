@@ -71,6 +71,7 @@ export {
 } from './oscillation.js';
 
 export {
+  DEFAULT_RENEGOTIATION_CAP,
   MAX_ATTEMPTS_BUDGET_HEADROOM,
   resolveEffectiveSafetyConfig,
   readSafetyOverlayBlock,

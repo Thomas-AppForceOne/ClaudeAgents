@@ -1,0 +1,9 @@
+{
+  "id": "concurrency-race-condition",
+  "class": "concurrency",
+  "severity": "major",
+  "kind": "command",
+  "summary": "increment is a read-modify-write race; N concurrent calls do not produce N.",
+  "reproductionCommand": "node -e \"var s=require('fs').readFileSync('defect.ts','utf8');process.exit(/const\\\\s+\\\\w+\\\\s*=\\\\s*counter[\\\\s\\\\S]*?await[\\\\s\\\\S]*?counter\\\\s*=/.test(s)?0:1);\"",
+  "evidencePointer": "defect.ts:20"
+}

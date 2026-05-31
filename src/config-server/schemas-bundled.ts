@@ -17,6 +17,7 @@ import moduleManifestV1Json from '../../schemas/module-manifest-v1.json' with { 
 import runTraceV1Json from '../../schemas/run-trace-v1.json' with { type: 'json' };
 import runTraceIndexV1Json from '../../schemas/run-trace-index-v1.json' with { type: 'json' };
 import evaluatorEvidenceBundleV1Json from '../../schemas/evaluator-evidence-bundle-v1.json' with { type: 'json' };
+import independentReviewV1Json from '../../schemas/independent-review-v1.json' with { type: 'json' };
 
 /** Structural type of a bundled JSON Schema document (an opaque JSON object). */
 export type JsonSchema = Record<string, unknown>;
@@ -36,3 +37,11 @@ export const runTraceV1: JsonSchema = runTraceV1Json as JsonSchema;
 export const runTraceIndexV1: JsonSchema = runTraceIndexV1Json as JsonSchema;
 /** Schema for the evidence bundle the evaluator emits per run. */
 export const evaluatorEvidenceBundleV1: JsonSchema = evaluatorEvidenceBundleV1Json as JsonSchema;
+
+/**
+ * Schema for the artefact the independent-reviewer agent writes per sprint
+ * attempt — a list of findings plus a per-severity tally. The orchestrator's
+ * reproduction guard validates a reviewer's output against this schema before
+ * any finding is considered for promotion into the proposer's criteria.
+ */
+export const independentReviewV1: JsonSchema = independentReviewV1Json as JsonSchema;

@@ -90,6 +90,10 @@
     "oscillationDetectionBare": {
       "type": "boolean"
     },
+    "renegotiationCapBare": {
+      "minimum": 1,
+      "type": "integer"
+    },
     "sprintBudgetBare": {
       "minimum": 1,
       "type": "integer"
@@ -397,6 +401,30 @@
                 },
                 "value": {
                   "$ref": "#/definitions/oscillationDetectionBare"
+                }
+              },
+              "required": [
+                "discardInherited"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "renegotiationCap": {
+          "default": 2,
+          "description": "The safety.renegotiationCap splice point. Per-sprint maximum number of contract-renegotiation rounds (a positive integer). Distinct from the per-role and sprint-wide attempt ceilings — those bound how many times an agent may retry; this bounds how many times the locked contract may be re-locked at a new revision within one sprint. Scalar cascade; available in both tiers. Optional — absent means the default (2).",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/renegotiationCapBare"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "discardInherited": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "$ref": "#/definitions/renegotiationCapBare"
                 }
               },
               "required": [

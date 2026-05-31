@@ -142,6 +142,13 @@ function emitOneOfEach(emitter: TraceEmitter) {
       round: 1,
       payload: { evolutionText: 'include password-reset' },
     }),
+    emitter.emitIndependentReview({
+      sprintNumber: 2,
+      attemptLetter: 'A',
+      contractRevision: 0,
+      verdict: 'findings',
+      summary: { blockers: 1, warnings: 0, advisories: 2, dropped: 0 },
+    }),
   ];
   return events;
 }

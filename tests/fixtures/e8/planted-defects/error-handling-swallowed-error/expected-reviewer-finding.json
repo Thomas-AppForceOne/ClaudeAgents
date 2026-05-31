@@ -1,0 +1,8 @@
+{
+  "id": "error-handling-swallowed-error",
+  "class": "error-handling",
+  "severity": "major",
+  "kind": "inspection",
+  "summary": "tryParse swallows the parse error in an empty catch block.",
+  "evidencePointer": "defect.ts:20"
+}

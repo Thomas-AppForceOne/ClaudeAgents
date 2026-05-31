@@ -1,0 +1,74 @@
+[
+  {
+    "id": "correctness-off-by-one",
+    "class": "correctness",
+    "severity": "blocker",
+    "kind": "command",
+    "description": "A loop that walks `0 <= i < arr.length` is written as `0 <= i <= arr.length`, producing an out-of-bounds read on the final iteration. A small unit test demonstrates the off-by-one by reproducing a `RangeError`-equivalent symptom (the function returns `undefined` for the last element).",
+    "expected_catch_behaviour": "independent reviewer runs the failing unit test, surfaces a command-kind finding, contract-proposer renegotiates a 'sumAll covers every element' criterion."
+  },
+  {
+    "id": "correctness-wrong-comparator",
+    "class": "correctness",
+    "severity": "major",
+    "kind": "inspection",
+    "description": "An equality check uses loose `==` against a string-vs-number boundary, accepting `'0'` as equal to `0`. The cited file:line shows the loose comparator; the reviewer's evidencePointer is the comparator itself.",
+    "expected_catch_behaviour": "independent reviewer surfaces an inspection finding citing the `==` line; contract-proposer renegotiates a 'strict equality required' criterion."
+  },
+  {
+    "id": "security-shell-injection",
+    "class": "security",
+    "severity": "blocker",
+    "kind": "inspection",
+    "description": "`child_process.exec` is invoked with a string composed by interpolating an untrusted `userInput` argument. A reviewer recognises the classic shell-injection vector — `userInput = '; rm -rf $HOME'` would be executed by the spawned shell.",
+    "expected_catch_behaviour": "independent reviewer surfaces a blocker inspection finding; contract-proposer renegotiates a 'no shell-string interpolation; use spawn with array args or validated allow-list' criterion."
+  },
+  {
+    "id": "security-path-traversal",
+    "class": "security",
+    "severity": "blocker",
+    "kind": "inspection",
+    "description": "A file-read accepts a `relativePath` parameter and passes it directly to `fs.readFileSync(path.join(root, relativePath))` with no validation that the resolved path stays inside `root`. A reviewer recognises the path-traversal vector — `relativePath = '../../etc/passwd'` escapes the root.",
+    "expected_catch_behaviour": "independent reviewer surfaces a blocker inspection finding; contract-proposer renegotiates a 'resolved path must startWith root after path.resolve' criterion."
+  },
+  {
+    "id": "concurrency-lock-across-await",
+    "class": "concurrency",
+    "severity": "major",
+    "kind": "inspection",
+    "description": "An async function acquires a lock-like flag, awaits a long-running operation, and releases the flag in a `finally`. The intent is mutual exclusion, but JavaScript's single-threaded event loop means a second caller observes `inFlight === false` between the `await` and the synchronous flag-set, so two callers can both run the critical section. A reviewer recognises that a boolean flag is not a lock primitive across an await boundary.",
+    "expected_catch_behaviour": "independent reviewer surfaces an inspection finding; contract-proposer renegotiates a 'critical section uses a real mutex / queue, not a boolean flag' criterion."
+  },
+  {
+    "id": "concurrency-race-condition",
+    "class": "concurrency",
+    "severity": "major",
+    "kind": "command",
+    "description": "A counter is incremented via `count = count + 1` after an async read-modify-write sequence rather than via an atomic primitive. A small reproduction script kicks off N concurrent increment calls and asserts the final count equals N; the actual final count is less than N because increments race.",
+    "expected_catch_behaviour": "independent reviewer runs the failing reproduction, surfaces a command-kind finding; contract-proposer renegotiates an 'increment is atomic / serialised' criterion."
+  },
+  {
+    "id": "error-handling-swallowed-error",
+    "class": "error-handling",
+    "severity": "major",
+    "kind": "inspection",
+    "description": "A `try { … } catch {}` block contains an empty body. A failure inside the try is silently swallowed and the function returns a misleading success indicator. The reviewer's evidencePointer is the empty `catch` block.",
+    "expected_catch_behaviour": "independent reviewer surfaces an inspection finding; contract-proposer renegotiates a 'no empty catch — log + rethrow or convert to a structured error' criterion."
+  },
+  {
+    "id": "error-handling-unchecked-await",
+    "class": "error-handling",
+    "severity": "major",
+    "kind": "inspection",
+    "description": "A function awaits an I/O call that may reject, but the function is not declared to propagate the rejection — the caller assumes the function never throws, while a transient disk error would surface as an unhandled rejection. The reviewer's evidencePointer is the bare `await` inside a function whose JSDoc claims `@throws never`.",
+    "expected_catch_behaviour": "independent reviewer surfaces an inspection finding; contract-proposer renegotiates a 'doc-stated throw contract matches actual await surface' criterion."
+  },
+  {
+    "id": "regression-removed-validation",
+    "class": "regression",
+    "severity": "blocker",
+    "kind": "inspection",
+    "description": "A prior revision validated that `port >= 1024 && port <= 65535` before opening a socket. The current diff removes the bounds check, leaving the socket call exposed to a `port = -1` argument that crashes the runtime. The no-new-defects criterion-class catches this as a delta-regression: a check the prior revision had is gone.",
+    "expected_catch_behaviour": "independent reviewer (with the prior-revision diff in scope) surfaces a regression-class inspection finding; contract-proposer adds a no_new_defects criterion that retains the bounds check."
+  }
+]
