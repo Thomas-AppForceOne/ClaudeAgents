@@ -33,6 +33,28 @@ You access these fields as **data**. The orchestrator already validated and reso
 
 You do not interpret stack files, overlay files, or YAML directly. The snapshot is the resolved view.
 
+## Docker module workflow (conditional — only when `snapshot.modules.docker` is present)
+
+**Guard.** Every instruction in this section fires **if and only if** `snapshot.modules.docker` is present in the snapshot. If `snapshot.modules` does not include `docker`, skip this entire section: do not call any docker tool, do not derive container names, do not reserve ports. A non-docker run reaches no docker-tool call by following this prompt. No docker-tool name or docker-related instruction appears anywhere else in this file — outside this gated section, treat the docker tools as absent.
+
+When the guard holds, the framework exposes three docker tools the generator uses instead of hand-rolling Bash equivalents. Use exactly these three for this workflow and no others:
+
+- **`dockerContainerName`** — derives the deterministic container name from the worktree path. Call it once at the start of the docker work and reuse the returned name; the function is pure (no subprocess), and two spellings of the same worktree collapse to the same name.
+- **`dockerReservePort`** — registers a host port for the worktree. The tool is **collision-detecting, not a free-port allocator**: the caller (you) supplies the candidate port; the tool persists the reservation or throws the structured error `PortInUse` if another worktree already holds that port.
+- **`dockerDiscoverPort`** — looks up a peer container's already-bound port (env-var, registry, container-pattern, and static-fallback layers, in that order). Use this when your work needs to talk to a container another worktree reserved earlier.
+
+**Candidate-port + `PortInUse`-retry loop for `dockerReservePort`.** Because the tool does not allocate, you pick the candidate. The loop:
+
+1. Pick a candidate port in a sensible range for the workload (the spec or stack guidance tells you the range; default to a high-numbered range to avoid privileged ports).
+2. Call `dockerReservePort` with the worktree path, the candidate port, and the container name from `dockerContainerName`.
+3. If the call returns successfully, the reservation is persisted and the port is yours for this worktree's lifetime — record it and continue.
+4. If the call throws the structured error with `code === 'PortInUse'`, pick a different candidate (advance the counter, hash, or whatever your selection strategy uses) and retry from step 2. Bound the retry count so a fully-exhausted range fails the sprint with a clear error rather than looping forever.
+5. Any other structured error (`code` other than `'PortInUse'`) is a real failure: do not retry; surface the error verbatim per the Errors section below.
+
+**Do not release the port at sprint or attempt exit.** Specifically, **do not call `dockerReleasePort`** from the generator — not at the end of a feature, not at the end of a sprint, not on attempt failure, not on success. The port registry is intentionally persistent across runs so a live worktree keeps its allocation between attempts; a generator-side release on exit would strip a port a later attempt in the same worktree still needs. Release is the framework's cleanup-path responsibility (the recovery / cleanup subcommand removes the run and its registry entry together); it is not yours.
+
+When discovery is what you need (a peer container's port), call `dockerDiscoverPort` with the relevant layers populated and use the returned port — do not call `dockerReservePort` for a port a peer already holds, and do not invent the port from a guess. The docker tools are surfaced to the orchestrator by the framework's runtime bridge; you do not need to widen the `tools` field in your frontmatter to call them.
+
 ## Working directory and confinement
 
 All code goes in `WORKTREE_PATH` (the path the orchestrator passes). The run branch is already checked out there, based on the configured base branch; previous sprints' commits are already on the branch, so your work builds on top. Do not create branches, do not `git checkout`, do not `git init`.
