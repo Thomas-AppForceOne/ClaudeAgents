@@ -53,6 +53,10 @@ import {
   type RecoveryState,
   type TraceIndex,
 } from '../../trace/reconcile.js';
+import {
+  reconstructRevisionState as libraryReconstructRevisionState,
+  type RevisionState,
+} from '../../trace/reconstruct-revision-state.js';
 import type { ErrorCode } from '../errors.js';
 
 /**
@@ -179,6 +183,38 @@ export interface ReconstructRecoveryStateInput {
 export function reconstructRecoveryStateTool(input: ReconstructRecoveryStateInput): RecoveryState {
   const traceRoot = path.join(input.runDir, 'trace');
   return libraryReconstructRecoveryState(traceRoot);
+}
+
+/**
+ * Input to {@link reconstructRevisionStateTool}.
+ *
+ * @property runDir absolute path to the run directory. The handler derives
+ *   the trace root from `runDir` internally so the markdown orchestrator
+ *   never has to compose the `trace/` suffix.
+ * @property contractRevision the contract revision to filter to (non-negative
+ *   integer matching the schema constraint). The original locked contract is
+ *   revision 0; each successful re-lock increments by one.
+ */
+export interface ReconstructRevisionStateInput {
+  runDir: string;
+  contractRevision: number;
+}
+
+/**
+ * Disk-reading wrapper over the shipped pure
+ * {@link libraryReconstructRevisionState}. Computes
+ * `traceRoot = join(runDir, 'trace')` (the same convention every other
+ * disk-reading trace wrapper uses) and forwards the revision filter
+ * unchanged. The returned shape is the {@link RevisionState} alias of the
+ * shared {@link RecoveryState} type, so a caller can pipe the result into
+ * `checkSprintBudget` / `checkRoleCeiling` without any translation layer —
+ * the same dual-callable parity the other trace wrappers preserve.
+ */
+export function reconstructRevisionStateTool(
+  input: ReconstructRevisionStateInput,
+): RevisionState {
+  const traceRoot = path.join(input.runDir, 'trace');
+  return libraryReconstructRevisionState(traceRoot, input.contractRevision);
 }
 
 /**

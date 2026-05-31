@@ -92,6 +92,7 @@ import {
   formatLlmCallSummaryTool as runFormatLlmCallSummary,
   reconcileTraceIndexTool as runReconcileTraceIndex,
   reconstructRecoveryStateTool as runReconstructRecoveryState,
+  reconstructRevisionStateTool as runReconstructRevisionState,
   runSprintSummaryTool as runSprintSummaryHandler,
 } from './tools/trace.js';
 import {
@@ -193,6 +194,7 @@ export const TRACE_TOOL_NAMES: readonly string[] = [
   'aggregateRunSummary',
   'reconcileTraceIndex',
   'reconstructRecoveryState',
+  'reconstructRevisionState',
   'buildTrustEventBody',
   'buildValidationAbortBody',
   'buildValidationAbortFromCode',
@@ -875,6 +877,17 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       return runReconstructRecoveryState({ runDir });
     },
   },
+  reconstructRevisionState: {
+    required: ['runDir', 'contractRevision'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'reconstructRevisionState');
+      const contractRevision = requireContractRevisionArg(
+        args,
+        'reconstructRevisionState',
+      );
+      return runReconstructRevisionState({ runDir, contractRevision });
+    },
+  },
   buildTrustEventBody: {
     required: ['resolution'],
     handler: (args) => {
@@ -1335,6 +1348,30 @@ function requireEventPayload(args: Record<string, unknown>, tool: string): Recor
     });
   }
   return v as Record<string, unknown>;
+}
+
+// Extract a required non-negative integer `contractRevision`. Mirrors the
+// schema's `agentAttempt.contractRevision` constraint at the wire boundary:
+// the underlying revision-scoped tally treats a missing field as revision 0
+// (the original locked contract), so an explicit value here must satisfy the
+// same non-negative-integer constraint the schema enforces on the producer
+// side — preventing a negative or non-integer value from silently passing
+// the filter as "no events match".
+function requireContractRevisionArg(
+  args: Record<string, unknown>,
+  tool: string,
+): number {
+  const v = args['contractRevision'];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'contractRevision',
+      message:
+        `Tool '${tool}' requires a non-negative integer 'contractRevision' ` +
+        `in its input (the schema constraint on agentAttempt.contractRevision).`,
+    });
+  }
+  return v;
 }
 
 // Extract a required non-empty `role` string for formatHeartbeat. The

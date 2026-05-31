@@ -1135,6 +1135,27 @@
         "type": "object"
       }
     },
+    "reconstructRevisionState": {
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "contractRevision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractRevision",
+          "runDir"
+        ],
+        "type": "object"
+      }
+    },
     "registerModule": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1542,6 +1563,7 @@
     "listModules",
     "reconcileTraceIndex",
     "reconstructRecoveryState",
+    "reconstructRevisionState",
     "registerModule",
     "releaseRunLock",
     "removeFromModuleState",

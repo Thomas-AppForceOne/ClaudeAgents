@@ -151,6 +151,7 @@ export {
   indexPath,
 
   reconstructRecoveryState,
+  reconstructRevisionState,
   nextRecoverySequence,
   buildTrustEventBody,
   buildValidationAbortBody,
@@ -175,6 +176,7 @@ export type {
   PayloadClass,
 
   RecoveryState,
+  RevisionState,
   RoleAttemptState,
   TrustResolution,
   TrustEventBody,

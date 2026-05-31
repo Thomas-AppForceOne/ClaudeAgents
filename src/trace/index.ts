@@ -65,6 +65,11 @@ export {
 } from './reconcile.js';
 
 export {
+  reconstructRevisionState,
+  type RevisionState,
+} from './reconstruct-revision-state.js';
+
+export {
   buildTrustEventBody,
   buildValidationAbortBody,
   buildValidationAbortFromCode,
