@@ -334,3 +334,204 @@ describe('validateFindings — does not mutate its input', () => {
     expect(bundle.summary).toEqual(beforeSummary);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Negative-shape contract suites (cluster C-5 / I-010).
+//
+// Each describe block below pins one of the gate's documented negative-shape
+// promises so a future "defensive narrowing" or "silent recovery" edit
+// surfaces as a named test failure rather than a behaviour change shipped
+// invisibly. The positive-path suites above answer "what does the gate
+// produce on the happy path"; these suites answer "what does the gate
+// promise NOT to do".
+// ---------------------------------------------------------------------------
+
+describe('validateFindings — negative-shape contract — runner exceptions', () => {
+  it('does not crash the gate when the injected runner throws synchronously', () => {
+    // The load-bearing assertion: a sync-throwing runner is a documented
+    // failure mode (finding-validation.ts:81-86, "throws propagate from
+    // neither path"). The call must complete normally — no thrown error
+    // escapes — and the kept/dropped invariants must still hold so the
+    // walk's result remains observable by the orchestrator.
+    const onlyFinding = makeCommandFinding({
+      id: 'cmd-throws-solo',
+      reproductionCommand: 'echo throws',
+    });
+    const bundle = makeBundle([onlyFinding]);
+    const runner: CommandRunner = () => {
+      throw new Error('spawn EAGAIN');
+    };
+
+    // No-crash guard + result capture in a single invocation: try/catch
+    // records "did it throw?" without re-invoking the gate (which would
+    // double-record the throw / kept-dropped tallies).
+    let threw: unknown;
+    let result: ReturnType<typeof validateFindings> | undefined;
+    try {
+      result = validateFindings(bundle, runner);
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeUndefined();
+    expect(result).toBeDefined();
+
+    // Kept/dropped invariants: every finding lands in exactly one of
+    // (kept, dropped); the sum equals the input count. A truncated walk
+    // would leave a finding in neither bucket and break this invariant.
+    expect(result!.bundle.findings).toHaveLength(0);
+    expect(result!.droppedReasons).toHaveLength(1);
+    expect(
+      result!.bundle.findings.length + result!.droppedReasons.length,
+    ).toBe(bundle.findings.length);
+    expect(result!.bundle.summary.dropped).toBe(1);
+    expect(result!.bundle.summary.blockers).toBe(0);
+  });
+
+  it('maps a sync-throw to the reproduction-errored drop reason verbatim (contract pin post Step 3)', () => {
+    // Pins the contract Step 3 established: a synchronously-throwing
+    // runner is no longer a propagated throw — the gate catches per
+    // finding and records `reproduction-errored`. A test that asserted
+    // ".toThrow(oops)" here (the pre-Step-3 shape) is now incorrect; this
+    // test pins the post-Step-3 semantics so a regression that re-removes
+    // the try/catch fails with a named contract pin rather than a
+    // surprising verbatim throw.
+    const finding = makeCommandFinding({
+      id: 'cmd-errored',
+      reproductionCommand: 'echo whatever',
+    });
+    const bundle = makeBundle([finding]);
+    const oops = new Error('confinement violation');
+    const runner: CommandRunner = () => {
+      throw oops;
+    };
+
+    const result = validateFindings(bundle, runner);
+
+    expect(result.droppedReasons).toEqual([
+      { id: 'cmd-errored', reason: 'reproduction-errored' },
+    ]);
+    // The original error object is NOT exposed to the caller — by design
+    // (the docblock promises "throws propagate from neither path"). A
+    // future regression that put the message into the ledger would still
+    // pass this assertion; the assertion's role is to pin the no-throw
+    // contract, not to police the loss of the message itself.
+  });
+});
+
+describe('validateFindings — negative-shape contract — exit-code polarity', () => {
+  // Pins the load-bearing polarity at `finding-validation.ts:161`:
+  // `if (result.exitCode === 0) keep` — every other value drops with
+  // `reproduction-failed`. The positive-path suites above cover the happy
+  // values `0` and `1`; this suite covers the long tail (`-1`, `2`, `0.5`,
+  // `NaN`, `undefined`, `null` cast through `as unknown as ...`) so a
+  // regression that flipped to `!== 1` or `< 1` would fail here rather
+  // than ship.
+  it.each<[string, unknown]>([
+    ['negative exit code -1', -1],
+    ['large positive exit code 2', 2],
+    ['fractional exit code 0.5', 0.5],
+    ['NaN exit code', Number.NaN],
+    ['undefined exit code', undefined],
+    ['null exit code (cast through as unknown as)', null],
+  ])('drops the finding with reproduction-failed when the runner reports %s', (_, exitValue) => {
+    const finding = makeCommandFinding({
+      id: 'cmd-polarity',
+      reproductionCommand: 'echo polarity',
+    });
+    const bundle = makeBundle([finding]);
+    const runner: CommandRunner = () => {
+      // The runner returns whatever the orchestrator-side wire would
+      // hand the gate; the type cast pins the "we run schema-validation
+      // upstream but the wire is fundamentally unknown" boundary.
+      return { exitCode: exitValue as unknown as number, stdout: '', stderr: '' };
+    };
+
+    const result = validateFindings(bundle, runner);
+
+    expect(result.bundle.findings).toHaveLength(0);
+    expect(result.droppedReasons).toEqual([
+      { id: 'cmd-polarity', reason: 'reproduction-failed' },
+    ]);
+    expect(result.bundle.summary.dropped).toBe(1);
+  });
+
+  it('keeps the finding when the runner reports exitCode === 0 (the only kept polarity)', () => {
+    // Symmetric pin: the ONLY value that keeps is exactly `0`. A test
+    // matrix without the positive case would let a regression to
+    // `!== 0` (which keeps every non-zero, drops only zero) sneak by
+    // the polarity suite — this test prevents that.
+    const finding = makeCommandFinding({
+      id: 'cmd-polarity-keep',
+      reproductionCommand: 'echo zero',
+    });
+    const bundle = makeBundle([finding]);
+    const runner: CommandRunner = () => ({ exitCode: 0, stdout: '', stderr: '' });
+
+    const result = validateFindings(bundle, runner);
+
+    expect(result.bundle.findings).toHaveLength(1);
+    expect(result.droppedReasons).toEqual([]);
+  });
+});
+
+describe('validateFindings — negative-shape contract — schema trust', () => {
+  it('does not throw on a malformed bundle missing the kind discriminator (pins current trust-upstream behaviour)', () => {
+    // The post-Step-3 docblock truthfully enumerates the gate's verdicts:
+    // `{kept, reproduction-failed, reproduction-unsafe, reproduction-errored}`
+    // with "throws propagate from neither path". The gate still trusts
+    // the schema upstream for the discriminator field; a finding without
+    // `kind` does NOT match the inspection branch (`finding.kind ===
+    // 'inspection'` is false), so it falls through to the command branch
+    // and the runner is invoked on its (possibly undefined)
+    // `reproductionCommand`. The test pins THAT — deterministic handling
+    // of a malformed input — rather than a TypeError surface. A future
+    // regression that re-introduces a defensive `if (finding.kind !==
+    // 'command' && finding.kind !== 'inspection') throw …` would fail
+    // this assertion as a contract change, which is the right signal.
+    const malformed = {
+      id: 'malformed-no-kind',
+      severity: 'blocker' as const,
+      category: 'correctness' as const,
+      file: 'src/x.ts',
+      line: 10,
+      description: 'malformed: no kind discriminator',
+      suggestedCriterion: 'asserts something',
+      // No `kind`, no `reproductionCommand`, no `reproduced`. The cast
+      // smuggles the malformed shape past the type checker the same way
+      // an unvalidated wire bundle would.
+    } as unknown as CommandFinding;
+    const bundle = makeBundle([malformed]);
+    const { runner, calls } = spyRunner({});
+
+    // No-crash guard + result capture in a single invocation: calling
+    // `validateFindings` twice (once inside `expect(...).not.toThrow()`
+    // and once for the result) would double-count the runner spy. The
+    // try/catch pattern below records "did it throw?" without
+    // re-invoking the gate.
+    let threw: unknown;
+    let result: ReturnType<typeof validateFindings> | undefined;
+    try {
+      result = validateFindings(bundle, runner);
+    } catch (e) {
+      threw = e;
+    }
+
+    // Pins the gate's docblock promise (no throws from the four
+    // enumerated paths) covers a missing-discriminator input too.
+    expect(threw).toBeUndefined();
+    expect(result).toBeDefined();
+
+    // The runner is invoked once (the malformed finding falls into the
+    // command branch). The `reproductionCommand` is `undefined`; the
+    // gate's UNSAFE_COMMAND_CHARACTERS regex coerces it to the string
+    // "undefined" which contains none of the banned characters, so the
+    // runner is reached.
+    expect(calls).toHaveLength(1);
+    // The spyRunner default returns exitCode 0 for any command, so the
+    // malformed finding is kept under the current (post-Step-3)
+    // behaviour. The test is asserting the gate's actual deterministic
+    // verdict, not a hypothetical "we should reject this" contract.
+    expect(result?.bundle.findings).toHaveLength(1);
+    expect(result?.droppedReasons).toEqual([]);
+  });
+});

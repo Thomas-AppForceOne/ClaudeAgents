@@ -348,3 +348,169 @@ describe('relock_progress_status_negotiating', () => {
     expect(readProgress()['status']).toBe('building');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Step-4 invariant suites (cluster C-5 / I-011).
+//
+// The describe blocks below pin the invariants Step 4 introduced (in-process
+// mutex + pre-swap existence check + rollback on swap failure). Without
+// Step 4 these tests would either red-fail or encode the broken behaviour
+// as the contract; with Step 4 they pin the new shape so a regression that
+// removes the mutex / rollback surfaces as a named failure rather than an
+// observable change in production.
+// ---------------------------------------------------------------------------
+
+describe('relock_idempotent_replay_against_post_success_state', () => {
+  it('a second call against the same progressFilePath bumps revision from 1 to 2 and leaves both archive siblings on disk', async () => {
+    // Pins idempotent re-entry: after one successful re-lock the helper
+    // re-reads the now-incremented contractRevision and archives the
+    // second prior canonical under .r1.json. The first call's .r0.json
+    // is NEVER overwritten — operator-readable history accumulates
+    // rather than churning the same filename.
+    seedCanonical({ revision: 'r0' });
+    seedProgress({ contractRevision: 0, status: 'building' });
+
+    const draftA = buildDraftPath(runDir, SPRINT);
+    const result1 = await relockContract({
+      runDir,
+      sprintNumber: SPRINT,
+      newDraftPath: draftA,
+      progressFilePath: progressPath,
+      runRound: async () => {
+        writeFileSync(draftA, JSON.stringify({ revision: 'r1' }), 'utf8');
+      },
+    });
+
+    // First call: pre-call revision 0 -> post-call revision 1, archive
+    // sibling .r0.json holds the original.
+    expect(result1.newRevision).toBe(1);
+    expect(result1.archivedPath).toBe(archivedContractPath(runDir, SPRINT, 0));
+    expect(readProgress()['contractRevision']).toBe(1);
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 0))).toBe(true);
+
+    // Second call against the SAME progressFilePath, with a fresh
+    // newDraftPath. The helper reads the post-first-call revision (1)
+    // from disk and archives to .r1.json. Both archive siblings remain.
+    const draftB = buildDraftPath(runDir, SPRINT);
+    const result2 = await relockContract({
+      runDir,
+      sprintNumber: SPRINT,
+      newDraftPath: draftB,
+      progressFilePath: progressPath,
+      runRound: async () => {
+        writeFileSync(draftB, JSON.stringify({ revision: 'r2' }), 'utf8');
+      },
+    });
+
+    expect(result2.newRevision).toBe(2);
+    expect(result2.archivedPath).toBe(archivedContractPath(runDir, SPRINT, 1));
+    expect(readProgress()['contractRevision']).toBe(2);
+    // Both archive siblings exist after the second call — the .r0.json
+    // sibling from the first call was NOT overwritten. This is the
+    // load-bearing invariant: a future regression that re-derived the
+    // archive index from a stale in-memory value would clobber .r0.json
+    // and fail this assertion.
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 0))).toBe(true);
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 1))).toBe(true);
+    // Canonical holds the second call's content in full.
+    expect(JSON.parse(readFileSync(canonicalPath, 'utf8'))).toEqual({ revision: 'r2' });
+  });
+});
+
+describe('relock_concurrent_invocations_against_the_same_runDir', () => {
+  it('Promise.all serialises the two calls so both archive siblings exist and contractRevision lands at 2', async () => {
+    // Pins the C-4 in-process mutex invariant: two concurrent calls
+    // against the same progressFilePath chain on the path-keyed mutex
+    // rather than racing into the read-archive-swap-write sequence.
+    // The second caller reads the first's incremented revision and
+    // archives to .r1.json — never overwriting .r0.json.
+    seedCanonical({ revision: 'original' });
+    seedProgress({ contractRevision: 0, status: 'building' });
+
+    const draftA = buildDraftPath(runDir, SPRINT);
+    const draftB = buildDraftPath(runDir, SPRINT);
+    const contentA = JSON.stringify({ revision: 'A' });
+    const contentB = JSON.stringify({ revision: 'B' });
+
+    // Fire both calls without awaiting either: the mutex must serialise
+    // them at the path-keyed promise chain. A regression that removed
+    // the mutex would race the two callers into the same .r0.json
+    // archive filename, lose history, and crash the second renameSync.
+    const [resA, resB] = await Promise.all([
+      relockContract({
+        runDir,
+        sprintNumber: SPRINT,
+        newDraftPath: draftA,
+        progressFilePath: progressPath,
+        runRound: async () => {
+          writeFileSync(draftA, contentA, 'utf8');
+        },
+      }),
+      relockContract({
+        runDir,
+        sprintNumber: SPRINT,
+        newDraftPath: draftB,
+        progressFilePath: progressPath,
+        runRound: async () => {
+          writeFileSync(draftB, contentB, 'utf8');
+        },
+      }),
+    ]);
+
+    // First caller wins the mutex and bumps to revision 1, archiving
+    // the original to .r0.json. The second caller, having waited on
+    // the tail promise, reads revision 1 and bumps to 2, archiving
+    // the first caller's content to .r1.json.
+    expect(resA.newRevision).toBe(1);
+    expect(resA.archivedPath).toBe(archivedContractPath(runDir, SPRINT, 0));
+    expect(resB.newRevision).toBe(2);
+    expect(resB.archivedPath).toBe(archivedContractPath(runDir, SPRINT, 1));
+
+    // Both archive siblings exist and contractRevision ends at 2.
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 0))).toBe(true);
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 1))).toBe(true);
+    expect(readProgress()['contractRevision']).toBe(2);
+
+    // Canonical holds the SECOND caller's content (the last writer
+    // wins, deterministically, because the mutex serialised the swap
+    // order to match the caller-A-then-caller-B promise order).
+    expect(readFileSync(canonicalPath, 'utf8')).toBe(contentB);
+  });
+});
+
+describe('relock_external_writer_drift_on_contractRevision', () => {
+  it('reads the drifted contractRevision from progress.json and bumps from there (last on-disk value wins)', async () => {
+    // Pins the C-4-era behaviour: the helper does NOT defend against an
+    // out-of-band writer racing ahead on contractRevision. It reads the
+    // on-disk value at the start of the round and bumps from there.
+    // A drift to revision 5 followed by a successful re-lock therefore
+    // produces revision 6 and archives the prior canonical to .r5.json
+    // (matching the on-disk read, not the caller's assumed revision 0).
+    // The test pins THIS deterministic behaviour — the helper is not
+    // an authority on cross-process serialisation (see the module
+    // docblock's "Preconditions" section); the run-lock is.
+    seedCanonical({ revision: 'original' });
+    // Out-of-band external writer (or a prior session resumed mid-run)
+    // bumps contractRevision to 5 before the caller knows about it.
+    seedProgress({ contractRevision: 5, status: 'building' });
+
+    const draftPath = buildDraftPath(runDir, SPRINT);
+    const result = await relockContract({
+      runDir,
+      sprintNumber: SPRINT,
+      newDraftPath: draftPath,
+      progressFilePath: progressPath,
+      runRound: async () => {
+        writeFileSync(draftPath, JSON.stringify({ revision: 'r6' }), 'utf8');
+      },
+    });
+
+    // Helper bumped 5 -> 6 (the on-disk drifted value won).
+    expect(result.newRevision).toBe(6);
+    // Archive index matches the on-disk read, not a hypothetical
+    // caller-tracked revision: .r5.json holds the prior canonical.
+    expect(result.archivedPath).toBe(archivedContractPath(runDir, SPRINT, 5));
+    expect(existsSync(archivedContractPath(runDir, SPRINT, 5))).toBe(true);
+    expect(readProgress()['contractRevision']).toBe(6);
+  });
+});

@@ -30,6 +30,32 @@ import {
 } from '../../../src/agents/independent-review/terminal-reason.js';
 import { writeProgressFields } from '../../../src/agents/independent-review/progress.js';
 
+/**
+ * Test-local cap-fire predicate (cluster C-5 / I-014).
+ *
+ * Mirrors the SKILL.md renegotiation-section prose: "the renegotiation cap
+ * fires when the just-completed round number reaches the cap" — i.e. the
+ * polarity is `round >= cap`. Kept deliberately test-local (rather than
+ * promoted to a production module) per the phase-5 § C-5 "borrowed
+ * Approach-B element" decision: the predicate has no production caller
+ * today; the markdown orchestrator evaluates the comparison inline, and
+ * Step 5's MCP wrapper for `writeFailedEvaluationRejected` is the
+ * eventual production-side home for the `capFired` boolean. Promoting
+ * the predicate to a TS module before that wrapper has a caller for it
+ * would ship architectural debt this scaffold avoids — when the MCP
+ * wrapper grows a caller-side predicate site (or when SKILL.md's
+ * markdown orchestrator gains a TS shim), this function can be promoted
+ * to a real module in a one-line edit and this test file can re-bind
+ * against the new import.
+ *
+ * See: skills/gan/SKILL.md § "renegotiation cap" / "Cap hit with
+ * unresolved blockers"; src/config-server/tools/independent-review.ts'
+ * `writeFailedEvaluationRejectedTool` (Step 5's MCP wrapper).
+ */
+function shouldEmitCapFired(round: number, cap: number): boolean {
+  return round >= cap;
+}
+
 const tmpDirs: string[] = [];
 
 function makeTmp(): string {
@@ -128,5 +154,58 @@ describe('terminal-reason.ts — pure-builder module discipline', () => {
     expect(src).not.toMatch(/from\s+['"]node:fs['"]/);
     expect(src).not.toMatch(/writeFileSync\s*\(/);
     expect(src).not.toMatch(/atomicWriteFile/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cluster C-5 / I-014: cap-fire predicate boundary tests.
+//
+// The renegotiation cap's `round → capFired` decision lives only in
+// SKILL.md prose today (the markdown orchestrator evaluates the
+// comparison inline). Without an executable pin somewhere in source-
+// controlled code, a divergent off-by-one in a future TS shim could
+// ship invisibly. The test-local `shouldEmitCapFired` predicate at the
+// top of this file mirrors the SKILL.md prose polarity (`round >= cap`)
+// and is exercised at every boundary cliff below. When Step 5's MCP
+// wrapper gains a caller-side predicate site, the test-local function
+// can be promoted to a real module and these tests re-pointed.
+// ---------------------------------------------------------------------------
+
+describe('cap-fire predicate boundary (caller-side derivation)', () => {
+  it.each<[number, number, boolean]>([
+    // Minimum cap: a one-round budget fires on round 1.
+    [1, 1, true],
+    // Under-cap: round 1 of a two-round budget must NOT fire.
+    [1, 2, false],
+    // At-cap: round 2 of a two-round budget fires.
+    [2, 2, true],
+    // Below-floor: round 0 of any cap is a non-fire (no round completed).
+    [0, 2, false],
+    // Past-cap (defensive): round 3 of a two-round budget still fires;
+    // the predicate is `>=`, not `==`, so a sticky `capFired` survives a
+    // round that overruns by one.
+    [3, 2, true],
+  ])('round %i against cap %i -> %s', (round, cap, expected) => {
+    expect(shouldEmitCapFired(round, cap)).toBe(expected);
+  });
+
+  it('the predicate output is the load-bearing input the builder routes on', () => {
+    // Wire the predicate's boundary outputs through the builder so a
+    // regression that decoupled the two (e.g. the builder's `capFired`
+    // parameter going from `boolean` to a richer type) surfaces here.
+    // Round 1 of cap 2 -> predicate false -> builder no-ops.
+    const underCap = buildFailedEvaluationRejectedRecord({
+      capFired: shouldEmitCapFired(1, 2),
+      unresolvedBlockers: ONE_BLOCKER,
+    });
+    expect(underCap.write).toBe(false);
+
+    // Round 2 of cap 2 -> predicate true -> builder writes.
+    const atCap = buildFailedEvaluationRejectedRecord({
+      capFired: shouldEmitCapFired(2, 2),
+      unresolvedBlockers: ONE_BLOCKER,
+    });
+    expect(atCap.write).toBe(true);
+    expect(atCap.record?.terminalReason).toBe(FAILED_EVALUATION_REJECTED_TERMINAL_REASON);
   });
 });
