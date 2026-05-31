@@ -175,6 +175,11 @@ export interface OrchestratorMilestoneInput {
  *   inputs are detectable.
  * @property outputArtifactPath path to the artifact this attempt produced.
  * @property disposition `'completed'`, `'objected'`, or `'failed'`.
+ * @property contractRevision active contract revision when the attempt was
+ *   authored; absent means the original locked contract (revision 0). Additive
+ *   optional — callers that do not yet stamp it still produce schema-valid
+ *   events, and the field is conditionally copied so the persisted JSON never
+ *   carries an `undefined` key.
  */
 export interface AgentAttemptInput {
   role: string;
@@ -183,6 +188,7 @@ export interface AgentAttemptInput {
   inputs: unknown;
   outputArtifactPath: string;
   disposition: 'completed' | 'objected' | 'failed';
+  contractRevision?: number;
 }
 
 /**
@@ -429,6 +435,7 @@ export class TraceEmitter {
       outputArtifactPath: input.outputArtifactPath,
       disposition: input.disposition,
     };
+    if (input.contractRevision !== undefined) event.contractRevision = input.contractRevision;
     this.persist(event);
     return event;
   }
