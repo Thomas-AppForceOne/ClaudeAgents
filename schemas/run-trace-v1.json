@@ -64,6 +64,11 @@
           "minimum": 1,
           "type": "integer"
         },
+        "contractRevision": {
+          "description": "Active contract revision when this attempt was emitted; absent means the original locked contract (revision 0). Optional and additive — a pre-existing trace that omits the field still validates, and a missing field is interpreted as revision 0 by downstream readers. Non-negative integer so revision-scoped accounting cannot be tricked by a negative or non-integer value.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "disposition": {
           "enum": [
             "completed",

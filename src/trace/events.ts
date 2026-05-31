@@ -49,6 +49,15 @@ export interface OrchestratorMilestoneEvent extends TraceEnvelope {
  * One agent attempt. `inputDigest` is the hash of the attempt's inputs (the
  * raw inputs are not stored); `outputArtifactPath` points at what it produced;
  * `disposition` records whether it completed, was objected to, or failed.
+ *
+ * `contractRevision` is the active contract revision when the attempt was
+ * emitted. It is intentionally optional and additive: a trace written before
+ * the field existed (or by a producer that does not stamp it) still validates
+ * against the schema, and a missing value is interpreted by downstream readers
+ * as revision `0` — the original locked contract. The field exists so a
+ * revision-scoped budget accountant can filter attempts by which contract
+ * revision they were authored against, without having to rewrite the shipped
+ * whole-trace accounting.
  */
 export interface AgentAttemptEvent extends TraceEnvelope {
   eventType: 'agentAttempt';
@@ -57,6 +66,7 @@ export interface AgentAttemptEvent extends TraceEnvelope {
   inputDigest: string;
   outputArtifactPath: string;
   disposition: 'completed' | 'objected' | 'failed';
+  contractRevision?: number;
 }
 
 /**
