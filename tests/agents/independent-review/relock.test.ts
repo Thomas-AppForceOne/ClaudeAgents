@@ -58,12 +58,6 @@ function readProgress(): Record<string, unknown> {
   return JSON.parse(readFileSync(progressPath, 'utf8')) as Record<string, unknown>;
 }
 
-// Helper: read a JSON file at `p`; throws if missing (intentional — tests
-// that read the canonical file expect it to exist).
-function readJson(p: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
-}
-
 // Helper: seed the canonical contract with `body`. Returns the bytes
 // written, so a test can compare a later read against the original.
 function seedCanonical(body: Record<string, unknown>): string {
