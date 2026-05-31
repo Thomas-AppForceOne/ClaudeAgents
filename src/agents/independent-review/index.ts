@@ -23,3 +23,16 @@ export type {
 } from './types.js';
 
 export { validateFindings } from './finding-validation.js';
+
+// Atomic re-lock helper for the renegotiation loop: brackets a renegotiation
+// round between status transitions, archives the prior canonical contract to
+// its `.r{k}.json` sibling, and atomic-renames the audited draft onto the
+// canonical filename. The helper's atomicity, archive-then-swap discipline,
+// and progress.json read-modify-write are documented in relock.ts's header.
+export {
+  archivedContractPath,
+  buildDraftPath,
+  canonicalContractPath,
+  relockContract,
+} from './relock.js';
+export type { RelockContractOptions, RelockContractResult } from './relock.js';

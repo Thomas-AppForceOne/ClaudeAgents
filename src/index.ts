@@ -266,10 +266,19 @@ export type {
   EffectiveStartingCountersInput,
 } from './safety/index.js';
 
-// Independent-review subsystem: the typed bundle model and the pure
-// reproduction-gate function. Only the public surface is re-exported here;
-// internal helpers stay file-local in src/agents/independent-review.
-export { validateFindings } from './agents/independent-review/index.js';
+// Independent-review subsystem: the typed bundle model, the pure
+// reproduction-gate function, and the atomic re-lock helper that brackets
+// a renegotiation round (archive-then-swap on the canonical contract,
+// status-transition discipline on progress.json). Only the public surface
+// is re-exported here; internal helpers stay file-local in
+// src/agents/independent-review.
+export {
+  archivedContractPath,
+  buildDraftPath,
+  canonicalContractPath,
+  relockContract,
+  validateFindings,
+} from './agents/independent-review/index.js';
 export type {
   CommandFinding,
   CommandRunner,
@@ -280,6 +289,8 @@ export type {
   FindingKind,
   IndependentReviewBundle,
   InspectionFinding,
+  RelockContractOptions,
+  RelockContractResult,
   ReviewSummary,
   Severity,
   ValidateFindingsResult,
