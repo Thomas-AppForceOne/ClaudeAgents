@@ -275,10 +275,13 @@ describe('progress-v1 schema couples terminal to terminalReason and terminalAt (
   });
 
   it('rejects terminal:true with both terminalReason null and terminalAt null (half-terminal: missing both)', () => {
-    // Negative case 3 of 4: the warning the independent reviewer surfaced on
-    // attempt A — without the if/then coupling this shape validated clean even
-    // though no orchestrator code path produces it. The if/then is what closes
-    // that hole.
+    // Negative case 3 of 4: pins the invariant that `terminal:true` requires
+    // BOTH `terminalReason` and `terminalAt` to be non-null (and `terminal:false`
+    // requires both to be null). Without the schema's if/then coupling this
+    // half-terminal shape validates clean even though it contradicts the
+    // writer contract — and the reconciliation gate exists precisely to catch
+    // writer divergence, so a half-terminal record getting past the gate
+    // defeats the gate's purpose.
     const candidate = {
       ...inFlightBase(),
       terminal: true,

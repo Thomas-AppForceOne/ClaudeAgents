@@ -68,9 +68,12 @@ describe('skills/gan/SKILL.md — --cleanup v1.0 stub', () => {
   const stub = sliceCleanupSubsection(content);
 
   it('carries the [deferred-to-v1.1] marker on the --cleanup subsection heading or lead paragraph', () => {
-    // The D1 status-marker discipline ties the deferred marker to the
-    // dispatch heading; checking both the heading and the lead paragraph
-    // is defensive against a re-flow that moves the marker inline.
+    // The status-marker discipline requires every deferred surface to declare
+    // its `[deferred-to-v...]` marker at the dispatch site so a reader (and
+    // this test) can pin which surfaces are intentionally inert vs. which are
+    // accidentally missing. We accept the marker on either the heading or the
+    // lead paragraph — defensive against a re-flow that moves it inline
+    // without weakening the marker requirement itself.
     expect(stub).toMatch(/\[deferred-to-v1\.1\]/);
   });
 

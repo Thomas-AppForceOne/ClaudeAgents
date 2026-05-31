@@ -1,13 +1,13 @@
 /**
  * Regression guard for the install-affecting minor version bump.
  *
- * The clarified E8 spec's Version-bump section requires a minor bump
- * whenever an install-affecting change ships (new schema fields, new MCP
- * tool, additive run-trace-v1 / overlay-v1 surface). Without a guarded
- * version field, a subsequent sprint could silently revert the bump or
- * forget to roll it forward, and `install.sh`'s version-probe (which
- * triggers reinstall on mismatch) would diverge from the published
- * package contract.
+ * The version-bump discipline requires a minor bump whenever an
+ * install-affecting change ships (new schema fields, new MCP tool,
+ * additive run-trace-v1 / overlay-v1 surface). Without a guarded version
+ * field, a subsequent diff could silently revert the bump or forget to
+ * roll it forward, and `install.sh`'s version-probe (which triggers
+ * reinstall on mismatch) would diverge from the published package
+ * contract.
  *
  * The expected value is hard-coded here on purpose: this test is the
  * "ratchet" — when the next install-affecting change lands the test must
@@ -33,12 +33,12 @@ function loadPackageJson(): { version: unknown } {
   return JSON.parse(readFileSync(abs, 'utf8')) as { version: unknown };
 }
 
-describe('package.json version field carries the E8 install-affecting minor bump', () => {
-  it('top-level version is exactly the string 0.3.0', () => {
+describe('package.json version field carries the install-affecting minor bump', () => {
+  it('top-level version is exactly the string 0.4.0', () => {
     const pkg = loadPackageJson();
     // String-typed comparison is deliberate: the field is documented as a
     // semver string, and a numeric coercion would mask a future regression
-    // that wrote `0.3` (no patch component) instead of `0.3.0`.
-    expect(pkg.version).toBe('0.3.0');
+    // that wrote `0.4` (no patch component) instead of `0.4.0`.
+    expect(pkg.version).toBe('0.4.0');
   });
 });
