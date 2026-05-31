@@ -223,6 +223,7 @@ export {
   renderEditOscillationMessage,
   createEditOscillationError,
   // effective-safety-config resolver
+  DEFAULT_RENEGOTIATION_CAP,
   MAX_ATTEMPTS_BUDGET_HEADROOM,
   resolveEffectiveSafetyConfig,
   readSafetyOverlayBlock,

@@ -22,6 +22,7 @@ import { DEFAULT_SPRINT_BUDGET } from '../../src/safety/sprint-budget.js';
 import {
   resolveEffectiveSafetyConfig,
   readSafetyOverlayBlock,
+  DEFAULT_RENEGOTIATION_CAP,
   MAX_ATTEMPTS_BUDGET_HEADROOM,
 } from '../../src/safety/config.js';
 
@@ -136,16 +137,103 @@ describe('resolveEffectiveSafetyConfig — prototype-pollution resistance', () =
   });
 });
 
+describe('resolveEffectiveSafetyConfig — renegotiationCap (effective_safety_config_resolves_renegotiation_cap)', () => {
+  it('defaults renegotiationCap to 2 when the overlay is absent', () => {
+    // An empty input must yield the seed default — the spec's stated value
+    // for the per-sprint renegotiation cap.
+    const eff = resolveEffectiveSafetyConfig({});
+    expect(eff.renegotiationCap).toBe(2);
+    expect(eff.renegotiationCap).toBe(DEFAULT_RENEGOTIATION_CAP);
+  });
+
+  it('defaults renegotiationCap to 2 when the overlay omits the field', () => {
+    // An overlay setting other safety fields but omitting renegotiationCap
+    // must still yield the default — additive change semantics.
+    const eff = resolveEffectiveSafetyConfig({
+      overlay: { attemptCeilings: { 'gan-generator': 5 }, sprintBudget: 20 },
+    });
+    expect(eff.renegotiationCap).toBe(DEFAULT_RENEGOTIATION_CAP);
+  });
+
+  it('returns the overlay-supplied value when present (overlay beats default)', () => {
+    const eff = resolveEffectiveSafetyConfig({ overlay: { renegotiationCap: 5 } });
+    expect(eff.renegotiationCap).toBe(5);
+  });
+
+  it('a mis-typed overlay renegotiationCap degrades to the default', () => {
+    // Schema validation rejects mis-typed values at the validation seam,
+    // but the resolver is a pure function; defensive narrowing keeps a
+    // hypothetical validation-bypass from producing a bogus effective
+    // value (zero, negative, fractional).
+    expect(
+      resolveEffectiveSafetyConfig({ overlay: { renegotiationCap: 0 } }).renegotiationCap,
+    ).toBe(DEFAULT_RENEGOTIATION_CAP);
+    expect(
+      resolveEffectiveSafetyConfig({ overlay: { renegotiationCap: -3 } }).renegotiationCap,
+    ).toBe(DEFAULT_RENEGOTIATION_CAP);
+    expect(
+      resolveEffectiveSafetyConfig({ overlay: { renegotiationCap: 2.5 } }).renegotiationCap,
+    ).toBe(DEFAULT_RENEGOTIATION_CAP);
+  });
+
+  it('preserves the pre-existing precedence and field set when renegotiationCap is added', () => {
+    // The additive change must not perturb attemptCeilings, sprintBudget,
+    // or oscillationDetection. Pinning the full effective config in one
+    // assertion catches a regression that quietly drops or renames a
+    // pre-existing field.
+    const eff = resolveEffectiveSafetyConfig({
+      overlay: { attemptCeilings: { 'gan-generator': 4 }, sprintBudget: 9, oscillationDetection: false, renegotiationCap: 3 },
+    });
+    expect(eff).toEqual({
+      attemptCeilings: { 'gan-contract-proposer': 3, 'gan-generator': 4 },
+      sprintBudget: 9,
+      oscillationDetection: false,
+      renegotiationCap: 3,
+    });
+  });
+});
+
+describe('A1 constants are unedited (effective_safety_config_a1_constants_unedited)', () => {
+  it('DEFAULT_SPRINT_BUDGET is 12 (the A1 spec-named seed value)', () => {
+    // A1 seeded the sprint budget at 12 (per-role sum 6 + headroom 6 for
+    // the four non-multi-attempt roles, plus the per-role multi-attempt
+    // ceiling sum). The renegotiation-cap work is additive and must not
+    // re-tune A1's constants.
+    expect(DEFAULT_SPRINT_BUDGET).toBe(12);
+  });
+
+  it('MAX_ATTEMPTS_BUDGET_HEADROOM is 4 (the A1 +4 headroom)', () => {
+    // The `--max-attempts=n` derivation is `n × roleCount + 4`; the 4 is
+    // the A1-owned headroom for clarifier/planner/reviewer/evaluator.
+    expect(MAX_ATTEMPTS_BUDGET_HEADROOM).toBe(4);
+  });
+
+  it('DEFAULT_ATTEMPT_CEILINGS still seeds proposer=3 and generator=3', () => {
+    // A1's per-role seed ceilings: any change here would shift the
+    // sprint-budget derivation and silently re-tune the loop machinery.
+    expect(DEFAULT_ATTEMPT_CEILINGS).toEqual({
+      'gan-contract-proposer': 3,
+      'gan-generator': 3,
+    });
+  });
+});
+
 describe('readSafetyOverlayBlock — merged-overlay extraction', () => {
   it('extracts well-typed safety.* fields from a merged splice-point map', () => {
     const block = readSafetyOverlayBlock({
-      safety: { attemptCeilings: { 'gan-generator': 5 }, sprintBudget: 20, oscillationDetection: false },
+      safety: {
+        attemptCeilings: { 'gan-generator': 5 },
+        sprintBudget: 20,
+        oscillationDetection: false,
+        renegotiationCap: 4,
+      },
       runner: { thresholdOverride: 7 },
     });
     expect(block).toEqual({
       attemptCeilings: { 'gan-generator': 5 },
       sprintBudget: 20,
       oscillationDetection: false,
+      renegotiationCap: 4,
     });
   });
 

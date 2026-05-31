@@ -61,6 +61,26 @@ const FORBIDDEN_ROLE_KEYS: ReadonlySet<string> = new Set([
 export const MAX_ATTEMPTS_BUDGET_HEADROOM = 4;
 
 /**
+ * Seed default for `safety.renegotiationCap` — the per-sprint maximum number
+ * of contract-renegotiation rounds the renegotiation loop may run.
+ *
+ * This is a **seed value, not data-derived**, consistent with the {@link
+ * DEFAULT_ATTEMPT_CEILINGS} / {@link DEFAULT_SPRINT_BUDGET} / {@link
+ * MAX_ATTEMPTS_BUDGET_HEADROOM} seed-value annotations. The cap is
+ * deliberately distinct from the per-role and sprint-wide attempt
+ * ceilings: those bound how many times an agent retries; the
+ * renegotiation cap bounds how many times the locked contract may be
+ * re-locked at a new revision within one sprint. A retry that does not
+ * produce a new contract revision does not consume the cap; a successful
+ * re-lock does. The default of 2 is the value the spec's "Bounding
+ * thrash" point names, intentionally low so an underspecified prompt
+ * surfaces as a halt rather than as silent thrash. A post-release audit
+ * re-tunes it against trace data; until then it is an opinionated guess,
+ * and this comment is the rationale a reader gets.
+ */
+export const DEFAULT_RENEGOTIATION_CAP = 2;
+
+/**
  * The fully-resolved safety config the orchestrator feeds into the attempt-start
  * checks.
  *
@@ -78,11 +98,19 @@ export const MAX_ATTEMPTS_BUDGET_HEADROOM = 4;
  *   a generator that repeats fingerprints proceeds up to its per-role ceiling
  *   without an `editOscillation` halt. It gates the *call site*, not the
  *   detector — the safety layer never modifies agent behaviour.
+ * @property renegotiationCap the effective per-sprint maximum number of
+ *   contract-renegotiation rounds the renegotiation loop may run within one
+ *   sprint. Distinct from `attemptCeilings` / `sprintBudget`: those bound
+ *   agent attempts; this bounds *successful* re-locks of the canonical
+ *   contract. The orchestrator consults this value at the start of each
+ *   round; reaching the cap halts the sprint via the renegotiation-layer
+ *   halt path rather than mutating any A1 counter.
  */
 export interface EffectiveSafetyConfig {
   attemptCeilings: Record<string, number>;
   sprintBudget: number;
   oscillationDetection: boolean;
+  renegotiationCap: number;
 }
 
 /**
@@ -112,11 +140,19 @@ export interface SafetyRuntimeFlags {
  * @property sprintBudget the merged sprint budget, if the overlay set it.
  * @property oscillationDetection the merged oscillation gate, if the overlay set
  *   it.
+ * @property renegotiationCap the merged per-sprint renegotiation cap, if the
+ *   overlay set it. Optional and additive — an absent value defaults to
+ *   {@link DEFAULT_RENEGOTIATION_CAP} at the resolver. A non-integer or
+ *   non-positive value is treated as "absent" by the resolver (the
+ *   overlay schema already rejects mis-typed values at the validation
+ *   seam; this is defensive narrowing for a runtime that bypassed
+ *   validation).
  */
 export interface SafetyOverlayBlock {
   attemptCeilings?: Record<string, number>;
   sprintBudget?: number;
   oscillationDetection?: boolean;
+  renegotiationCap?: number;
 }
 
 /**
@@ -189,6 +225,12 @@ function isUsableMaxAttempts(n: number | undefined): n is number {
  * - **oscillationDetection.** The overlay's boolean if set, else the default
  *   (`true`). No runtime flag touches it. `false` is the gate the orchestrator
  *   reads to skip the oscillation detector entirely.
+ * - **renegotiationCap.** The overlay's positive-integer value if set, else
+ *   the seed default {@link DEFAULT_RENEGOTIATION_CAP}. No runtime flag
+ *   touches it (the v1.0 flag surface does not include a coarse "cap
+ *   everything renegotiation-side" knob — adding one belongs to a later
+ *   spec). The same precedence rule (overlay beats default) applies; a
+ *   missing or mis-typed overlay value degrades to the default.
  *
  * @param input see {@link ResolveEffectiveSafetyConfigInput}; an empty `{}`
  *   (no overlay, no flags) yields exactly the seed defaults.
@@ -246,7 +288,20 @@ export function resolveEffectiveSafetyConfig(
   const oscillationDetection =
     typeof overlay.oscillationDetection === 'boolean' ? overlay.oscillationDetection : true;
 
-  return { attemptCeilings, sprintBudget, oscillationDetection };
+  // renegotiationCap: overlay's positive-integer value wins; absent or
+  // mis-typed (non-integer, zero/negative) degrades to the seed default
+  // DEFAULT_RENEGOTIATION_CAP. No runtime flag participates — this is a
+  // deliberately overlay-only dimension in v1.0; introducing a flag here
+  // would be a new public surface, not an additive change, and belongs to
+  // a later spec.
+  const renegotiationCap =
+    typeof overlay.renegotiationCap === 'number' &&
+    Number.isInteger(overlay.renegotiationCap) &&
+    overlay.renegotiationCap >= 1
+      ? overlay.renegotiationCap
+      : DEFAULT_RENEGOTIATION_CAP;
+
+  return { attemptCeilings, sprintBudget, oscillationDetection, renegotiationCap };
 }
 
 /**
@@ -285,6 +340,16 @@ export function readSafetyOverlayBlock(merged: unknown): SafetyOverlayBlock {
 
   const osc = s['oscillationDetection'];
   if (typeof osc === 'boolean') block.oscillationDetection = osc;
+
+  // renegotiationCap: copy through only when the merged value is a
+  // well-typed positive integer; the resolver's own narrowing (above) is
+  // the second line of defence, but copying only integer values here keeps
+  // the block's type honest and matches the pattern used for
+  // sprintBudget just above.
+  const cap = s['renegotiationCap'];
+  if (typeof cap === 'number' && Number.isInteger(cap) && cap >= 1) {
+    block.renegotiationCap = cap;
+  }
 
   return block;
 }
