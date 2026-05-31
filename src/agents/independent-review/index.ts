@@ -36,3 +36,19 @@ export {
   relockContract,
 } from './relock.js';
 export type { RelockContractOptions, RelockContractResult } from './relock.js';
+
+// Terminal-reason writer for the renegotiation cap-with-blockers rejection:
+// writes `terminalReason: "failed-evaluation-rejected"` (literal kebab-case)
+// to progress.json via atomic-write when, and only when, the cap fires with
+// at least one unresolved blocker. A separate helper from relockContract
+// because the two writers carry different semantics — see terminal-reason.ts
+// for the contrast with the loop-detection halt class.
+export {
+  FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
+  writeFailedEvaluationRejected,
+} from './terminal-reason.js';
+export type {
+  UnresolvedBlockerLike,
+  WriteFailedEvaluationRejectedOptions,
+  WriteFailedEvaluationRejectedResult,
+} from './terminal-reason.js';

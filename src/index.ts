@@ -279,8 +279,10 @@ export {
   archivedContractPath,
   buildDraftPath,
   canonicalContractPath,
+  FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
   relockContract,
   validateFindings,
+  writeFailedEvaluationRejected,
 } from './agents/independent-review/index.js';
 export type {
   CommandFinding,
@@ -296,7 +298,10 @@ export type {
   RelockContractResult,
   ReviewSummary,
   Severity,
+  UnresolvedBlockerLike,
   ValidateFindingsResult,
+  WriteFailedEvaluationRejectedOptions,
+  WriteFailedEvaluationRejectedResult,
 } from './agents/independent-review/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';
