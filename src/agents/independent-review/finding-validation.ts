@@ -28,12 +28,30 @@
 
 import type {
   CommandRunner,
+  CommandRunnerResult,
   DroppedFindingRecord,
   Finding,
   IndependentReviewBundle,
   ReviewSummary,
   ValidateFindingsResult,
 } from './types.js';
+
+/**
+ * Defence-in-depth shape check on `reproductionCommand`. The schema in
+ * `schemas/independent-review-v1.json` is the primary vetting layer —
+ * the same character class is encoded as the field's `pattern` so a
+ * schema-valid bundle never carries any of these bytes. This colocated
+ * regex exists so a caller that skipped validation cannot funnel shell
+ * metacharacters into the runner; the two layers must stay in sync.
+ * Keep this expression and the schema `pattern` aligned.
+ *
+ * Bans: `;`, `&`, `|`, backtick, `$`, `<`, `>`, `\n`, `\r`, NUL, and
+ * `\`. Does NOT ban spaces, single/double quotes, hyphen, slash,
+ * colon, equals, dot — the legitimate shape of e.g.
+ * `pnpm vitest run path/to/file.test.ts` or
+ * `grep -nE 'foo' src/x.ts`.
+ */
+const UNSAFE_COMMAND_CHARACTERS = /[;&|`$<>\n\r\0\\]/;
 
 /**
  * Run the reproduction gate over a review bundle and return the kept
@@ -44,9 +62,15 @@ import type {
  * 2. For each `kind: "inspection"` finding, keep it unchanged. The runner
  *    is deliberately NOT invoked; an inspection finding's audit is a
  *    different role's job (see module note).
- * 3. For each `kind: "command"` finding, invoke `runner(reproductionCommand)`.
- *    If the result's `exitCode` is `0`, keep the finding; otherwise drop it
- *    and record the drop with reason `"reproduction-failed"`.
+ * 3. For each `kind: "command"` finding, first check the
+ *    `reproductionCommand` against {@link UNSAFE_COMMAND_CHARACTERS};
+ *    if it carries a banned byte, drop with reason
+ *    `"reproduction-unsafe"` WITHOUT invoking the runner. Otherwise
+ *    invoke `runner(reproductionCommand)` inside a try/catch. If the
+ *    runner throws, drop with reason `"reproduction-errored"` and
+ *    continue the walk. Otherwise, if the result's `exitCode` is `0`,
+ *    keep the finding; if non-zero, drop with reason
+ *    `"reproduction-failed"`.
  * 4. Rebuild `summary` from the kept findings:
  *    `blockers`/`warnings`/`advisories` are recomputed from severities;
  *    `dropped` is `originalSummary.dropped + droppedReasons.length`.
@@ -54,21 +78,33 @@ import type {
  * Determinism: pure function. Given the same `bundle` and a `runner` that
  * is itself deterministic, the result is byte-identical run-to-run.
  *
- * Failure modes: this function does not throw on a malformed runner result
- * or a missing field — it trusts the schema-validation step that ran
- * before it. A caller that hands it an unvalidated bundle will see
- * whatever the runtime would produce (typically a `TypeError`); that is
- * the caller's contract violation, not a defect to swallow here.
+ * Failure modes: the gate's verdict on any command finding is exactly
+ * one of {kept, `reproduction-failed`, `reproduction-unsafe`,
+ * `reproduction-errored`}; throws propagate from neither path. The walk
+ * always runs to completion — a synchronously-throwing runner is caught
+ * per finding and recorded as `reproduction-errored` rather than
+ * truncating the kept-list or the drop ledger. A
+ * `reproductionCommand` carrying shell metacharacters that slipped past
+ * the schema (or arrived via an unvalidated bundle) is refused at the
+ * gate with `reproduction-unsafe` BEFORE the runner is invoked. The
+ * function does not throw on a malformed runner result or a missing
+ * field; a caller that hands it an unvalidated bundle whose shape
+ * violates the discriminator contract will see whatever the runtime
+ * would produce (typically a `TypeError`).
  *
  * Invariants the caller must uphold:
  * - `bundle` MUST have been validated against
  *   `schemas/independent-review-v1.json` before being passed in. The gate
  *   relies on the discriminator (`kind`) being one of the two known values
- *   and on the kind-specific evidence fields being present.
- * - `runner` MUST be safe to call with the verbatim
- *   `reproductionCommand` strings; the gate does no escaping or
- *   sanitisation. Implementing safe command execution is the runner's
- *   contract.
+ *   and on the kind-specific evidence fields being present. The gate
+ *   ALSO performs a defence-in-depth shape check on
+ *   `reproductionCommand` (see {@link UNSAFE_COMMAND_CHARACTERS}) so a
+ *   caller that skipped validation still cannot funnel shell
+ *   metacharacters into the runner.
+ * - `runner` MAY throw synchronously; the gate catches per finding and
+ *   records `reproduction-errored`. Implementing safe command execution
+ *   remains the runner's contract, but the gate no longer relies on
+ *   that contract being honoured.
  *
  * Side effects: none. The function does not mutate `bundle` or any of its
  * findings — it builds a new bundle from cloned finding objects so a
@@ -100,12 +136,28 @@ export function validateFindings(
       continue;
     }
 
-    // The schema guarantees a command finding carries a non-empty
-    // reproductionCommand; if a caller passes an unvalidated bundle with
-    // an empty string we trust the runner to handle it and report the
-    // exit code as non-zero. The gate does not silently rescue malformed
-    // input — that would let a broken bundle masquerade as a clean one.
-    const result = runner(finding.reproductionCommand);
+    // Defence-in-depth shape check: the schema is the primary vetting
+    // layer (see schemas/independent-review-v1.json reproductionCommand
+    // pattern), but a caller that skipped validation should not be
+    // able to funnel shell metacharacters into the runner. Refuse at
+    // the gate BEFORE invoking the runner so the audit trail records
+    // 'reproduction-unsafe' distinctly from a benign exit-non-zero.
+    if (UNSAFE_COMMAND_CHARACTERS.test(finding.reproductionCommand)) {
+      droppedReasons.push({ id: finding.id, reason: 'reproduction-unsafe' });
+      continue;
+    }
+
+    // The runner is the single boundary into H1-confined Bash; a throw
+    // here means the gate could not adjudicate. Record the per-finding
+    // verdict so the walk continues and downstream renegotiation sees
+    // the full ledger rather than a silently-truncated prefix.
+    let result: CommandRunnerResult;
+    try {
+      result = runner(finding.reproductionCommand);
+    } catch {
+      droppedReasons.push({ id: finding.id, reason: 'reproduction-errored' });
+      continue;
+    }
     if (result.exitCode === 0) {
       kept.push(cloneFinding(finding));
       continue;

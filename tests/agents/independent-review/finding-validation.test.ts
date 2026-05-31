@@ -223,6 +223,98 @@ describe('validateFindings — empty bundles', () => {
   });
 });
 
+describe('validateFindings — runner-boundary failure modes', () => {
+  it('drops a command finding whose reproductionCommand carries shell metacharacters and records reproduction-unsafe without invoking the runner', () => {
+    const finding = makeCommandFinding({
+      id: 'cmd-unsafe',
+      reproductionCommand: 'echo ok; rm -rf /',
+    });
+    const bundle = makeBundle([finding]);
+    // A runner that throws if called: pins the load-bearing assertion
+    // that the gate refuses unsafe input at its own boundary rather
+    // than delegating the refusal to the runner contract.
+    const calls: string[] = [];
+    const runner: CommandRunner = (cmd) => {
+      calls.push(cmd);
+      throw new Error('runner must not be invoked for an unsafe command');
+    };
+
+    const result = validateFindings(bundle, runner);
+
+    expect(result.bundle.findings).toHaveLength(0);
+    expect(result.droppedReasons).toEqual([
+      { id: 'cmd-unsafe', reason: 'reproduction-unsafe' },
+    ]);
+    expect(result.bundle.summary.dropped).toBe(1);
+    // The load-bearing assertion: the runner is never called for an
+    // unsafe command. The gate refuses at the boundary rather than
+    // trust-relabelling the docblock's "schema validation ran" claim.
+    expect(calls).toEqual([]);
+  });
+
+  it('drops a command finding whose runner throws synchronously and continues the walk', () => {
+    const throwing = makeCommandFinding({
+      id: 'cmd-throws',
+      reproductionCommand: 'echo throws',
+    });
+    const surviving = makeCommandFinding({
+      id: 'cmd-survives',
+      reproductionCommand: 'echo ok',
+    });
+    const bundle = makeBundle([throwing, surviving]);
+    const calls: string[] = [];
+    const runner: CommandRunner = (cmd) => {
+      calls.push(cmd);
+      if (cmd === 'echo throws') throw new Error('confinement violation');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    const result = validateFindings(bundle, runner);
+
+    // Load-bearing: the throw does NOT abort the walk; the surviving
+    // finding is kept, the throwing one is recorded with
+    // reproduction-errored.
+    expect(result.bundle.findings.map((f) => f.id)).toEqual(['cmd-survives']);
+    expect(result.droppedReasons).toEqual([
+      { id: 'cmd-throws', reason: 'reproduction-errored' },
+    ]);
+    expect(result.bundle.summary.dropped).toBe(1);
+    expect(calls).toEqual(['echo throws', 'echo ok']);
+  });
+
+  it('preserves original order when the middle finding throws, ledgering each verdict correctly', () => {
+    // Pins the regression I-004 describes: a throw must not silently
+    // truncate the suffix of the walk. Three command findings; the
+    // middle one throws; the first and third are adjudicated normally.
+    const first = makeCommandFinding({
+      id: 'cmd-a',
+      reproductionCommand: 'echo a',
+    });
+    const middle = makeCommandFinding({
+      id: 'cmd-b',
+      reproductionCommand: 'echo b',
+    });
+    const last = makeCommandFinding({
+      id: 'cmd-c',
+      reproductionCommand: 'echo c',
+    });
+    const bundle = makeBundle([first, middle, last]);
+    const runner: CommandRunner = (cmd) => {
+      if (cmd === 'echo b') throw new Error('spawn EAGAIN');
+      return { exitCode: cmd === 'echo c' ? 1 : 0, stdout: '', stderr: '' };
+    };
+
+    const result = validateFindings(bundle, runner);
+
+    expect(result.bundle.findings.map((f) => f.id)).toEqual(['cmd-a']);
+    expect(result.droppedReasons).toEqual([
+      { id: 'cmd-b', reason: 'reproduction-errored' },
+      { id: 'cmd-c', reason: 'reproduction-failed' },
+    ]);
+    expect(result.bundle.summary.dropped).toBe(2);
+  });
+});
+
 describe('validateFindings — does not mutate its input', () => {
   it('the input bundle.findings array is unchanged after the call', () => {
     const passing = makeCommandFinding({ id: 'a', reproductionCommand: 'echo ok' });

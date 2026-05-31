@@ -195,11 +195,25 @@ export interface CommandRunnerResult {
 export type CommandRunner = (cmd: string) => CommandRunnerResult;
 
 /**
- * Why the reproduction gate dropped a finding. Single value today
- * (`"reproduction-failed"`) but a string union so future drop reasons
- * (e.g. malformed command) can be added without rewriting callers.
+ * Why the reproduction gate dropped a finding. The three values
+ * enumerate the gate's only drop verdicts; throws propagate from
+ * neither path.
+ *
+ * - `reproduction-failed` — the runner ran the command and reported a
+ *   non-zero exit code. The defect did not reproduce.
+ * - `reproduction-unsafe` — the gate refused to invoke the runner
+ *   because the `reproductionCommand` failed runtime shape vetting
+ *   (defence in depth against a schema-pass that nonetheless carries a
+ *   banned character; the schema is the primary guard, this is the
+ *   belt).
+ * - `reproduction-errored` — the runner threw synchronously
+ *   (confinement violation, spawn failure, signal interruption). The
+ *   gate could not adjudicate whether the defect reproduces.
  */
-export type DropReason = 'reproduction-failed';
+export type DropReason =
+  | 'reproduction-failed'
+  | 'reproduction-unsafe'
+  | 'reproduction-errored';
 
 /**
  * One entry in the gate's drop ledger: which finding was dropped and why.

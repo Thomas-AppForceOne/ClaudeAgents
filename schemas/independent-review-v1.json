@@ -119,8 +119,10 @@
           "description": "1-based line number in the cited file at the tip of the run branch."
         },
         "reproductionCommand": {
-          "description": "Command-kind only: a shell command the orchestrator runs from the worktree root to reproduce the defect. Required when kind is 'command'; ignored when kind is 'inspection'.",
+          "description": "Command-kind only: a shell command the orchestrator runs from the worktree root to reproduce the defect. Required when kind is 'command'; ignored when kind is 'inspection'. The string is run verbatim under the orchestrator's H1-confined Bash; the schema refuses chaining/substitution/redirection/newline/NUL bytes (banned characters: ; & | backtick $ < > backslash newline carriage-return NUL) and caps length at 512 so a prompt-injected diff cannot steer the reviewer into authoring a destructive payload.",
+          "maxLength": 512,
           "minLength": 1,
+          "pattern": "^[^;&|`$<>\\n\\r\\u0000\\\\]+$",
           "type": "string"
         },
         "reproduced": {
