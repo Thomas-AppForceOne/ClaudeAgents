@@ -211,6 +211,98 @@ describe('progress-v1 schema accepts an empty recoveryHistory array', () => {
   });
 });
 
+describe('progress-v1 schema couples terminal to terminalReason and terminalAt (cross-field invariant)', () => {
+  // The writer contract: terminal:true requires the FULL terminal triple
+  // (non-null terminalReason + non-null terminalAt); terminal:false requires
+  // both to be null. The schema's if/then clause is the reconciliation gate's
+  // teeth against a writer that wrote only part of a teardown — a half-terminal
+  // record (e.g. terminal:true with null reason/time) is exactly the writer-vs-
+  // schema drift class the gate exists to catch, so accepting one would
+  // undermine the gate's purpose. The four negative cases below pin each
+  // mismatched combination; the two positive cases pin the legal shapes.
+  const validate = compile();
+
+  it('accepts terminal:true with non-null terminalReason and non-null terminalAt (the full terminal triple)', () => {
+    // Positive case: the canonical teardown shape the orchestrator writes on
+    // graceful end (AC 1), max-attempts failure (AC 2), and user abort (AC 3).
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: 'complete',
+      terminalAt: '2026-05-12T10:18:47Z',
+    };
+    const ok = validate(candidate);
+    expect(ok, JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it('accepts terminal:false with null terminalReason and null terminalAt (the in-flight shape)', () => {
+    // Positive case: the in-flight tuple every run carries until teardown.
+    // inFlightBase() already encodes this shape; the explicit assertion here
+    // pins the if/false branch of the cross-field invariant.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: false,
+      terminalReason: null,
+      terminalAt: null,
+    };
+    expect(validate(candidate), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it('rejects terminal:true with null terminalReason and non-null terminalAt (half-terminal: missing reason)', () => {
+    // Negative case 1 of 4: writer set terminal and a timestamp but forgot the
+    // discriminator code. The gate must reject — the spec's enumerated codes
+    // are how downstream consumers branch on outcome.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: null,
+      terminalAt: '2026-05-12T10:18:47Z',
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects terminal:true with non-null terminalReason and null terminalAt (half-terminal: missing time)', () => {
+    // Negative case 2 of 4: writer set terminal and the reason code but forgot
+    // the timestamp. The gate must reject — every AC 1/2/3 writer path records
+    // the moment teardown happened, and recovery code keys off terminalAt.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: 'complete',
+      terminalAt: null,
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects terminal:true with both terminalReason null and terminalAt null (half-terminal: missing both)', () => {
+    // Negative case 3 of 4: the warning the independent reviewer surfaced on
+    // attempt A — without the if/then coupling this shape validated clean even
+    // though no orchestrator code path produces it. The if/then is what closes
+    // that hole.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: null,
+      terminalAt: null,
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects terminal:false with non-null terminalReason and non-null terminalAt (in-flight with terminal triple)', () => {
+    // Negative case 4 of 4: the inverse half-state — a run that claims to be
+    // in-flight while carrying a teardown reason and timestamp. A writer that
+    // cleared terminal but left the triple is just as broken as one that set
+    // terminal without the triple.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: false,
+      terminalReason: 'complete',
+      terminalAt: '2026-05-12T10:18:47Z',
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+});
+
 describe('progress-v1 schema rejects unenumerated and malformed shapes', () => {
   const validate = compile();
 

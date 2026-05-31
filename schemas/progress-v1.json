@@ -216,6 +216,66 @@
     "overlaysAtSnapshot",
     "recoveryHistory"
   ],
+  "allOf": [
+    {
+      "description": "Cross-field invariant: terminal:true requires the full terminal triple. The writer contract O2 ACs 1, 2, 3 each describe the orchestrator writing terminal:true alongside a non-null terminalReason and a non-null terminalAt. The schema is the reconciliation gate; without this coupling a half-terminal record (terminal:true with null reason/time) would silently pass, which is the F5/R6 writer-vs-schema drift class the gate exists to catch.",
+      "if": {
+        "properties": {
+          "terminal": {
+            "const": true
+          }
+        },
+        "required": [
+          "terminal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "terminalReason": {
+            "enum": [
+              "complete",
+              "failed-max-attempts",
+              "failed-budget",
+              "failed-loop-detected",
+              "failed-evaluation-rejected",
+              "failed-clarifier-error",
+              "aborted-by-user",
+              "aborted-planner-error",
+              "aborted-contract-failed",
+              "aborted-validation-failed"
+            ],
+            "type": "string"
+          },
+          "terminalAt": {
+            "$ref": "#/definitions/isoDateTime"
+          }
+        }
+      }
+    },
+    {
+      "description": "Cross-field invariant: terminal:false requires both terminalReason and terminalAt to be null. This is the in-flight shape — any non-null value on either field while terminal is still false means a writer half-wrote a teardown.",
+      "if": {
+        "properties": {
+          "terminal": {
+            "const": false
+          }
+        },
+        "required": [
+          "terminal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "terminalReason": {
+            "type": "null"
+          },
+          "terminalAt": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
   "title": "ClaudeAgents progress.json, v1",
   "type": "object"
 }
