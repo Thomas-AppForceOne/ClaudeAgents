@@ -1,0 +1,8 @@
+{
+  "id": "security-path-traversal",
+  "class": "security",
+  "severity": "blocker",
+  "kind": "inspection",
+  "summary": "readDocument joins user input to DOCS_ROOT without a containment check.",
+  "evidencePointer": "defect.ts:24"
+}

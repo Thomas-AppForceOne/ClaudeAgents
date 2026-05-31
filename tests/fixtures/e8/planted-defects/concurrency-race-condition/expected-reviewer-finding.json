@@ -1,0 +1,9 @@
+{
+  "id": "concurrency-race-condition",
+  "class": "concurrency",
+  "severity": "major",
+  "kind": "command",
+  "summary": "increment is a read-modify-write race; N concurrent calls do not produce N.",
+  "reproductionCommand": "node -e \"const m = await import('./defect.js'); await Promise.all(Array.from({length:50}, m.increment)); if (m.getCounter() === 50) process.exit(1);\"",
+  "evidencePointer": "defect.ts:20"
+}

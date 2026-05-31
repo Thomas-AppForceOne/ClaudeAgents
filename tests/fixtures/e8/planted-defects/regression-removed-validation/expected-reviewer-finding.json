@@ -1,0 +1,8 @@
+{
+  "id": "regression-removed-validation",
+  "class": "regression",
+  "severity": "blocker",
+  "kind": "inspection",
+  "summary": "openPort dropped the port-bounds check the prior revision enforced.",
+  "evidencePointer": "defect.ts:18"
+}

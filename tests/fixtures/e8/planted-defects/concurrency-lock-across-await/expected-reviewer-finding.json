@@ -1,0 +1,8 @@
+{
+  "id": "concurrency-lock-across-await",
+  "class": "concurrency",
+  "severity": "major",
+  "kind": "inspection",
+  "summary": "runOnce treats a boolean flag as a mutex; the check-await-set is not atomic.",
+  "evidencePointer": "defect.ts:23"
+}

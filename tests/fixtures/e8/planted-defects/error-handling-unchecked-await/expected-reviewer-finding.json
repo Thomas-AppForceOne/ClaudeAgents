@@ -1,0 +1,8 @@
+{
+  "id": "error-handling-unchecked-await",
+  "class": "error-handling",
+  "severity": "major",
+  "kind": "inspection",
+  "summary": "loadConfig documents @throws never but awaits an rejecting I/O call.",
+  "evidencePointer": "defect.ts:20"
+}
