@@ -33,14 +33,14 @@
     "id": "inspection-claims-shell-injection-actually-spawn-array",
     "kind": "inspection",
     "expectedDropOrReject": "reject-at-well-foundedness-audit",
-    "rationale": "The faked finding claims a shell-injection vector at `source.ts:15`, but the cited code uses `child_process.spawn` with an array-args invocation (the safe form) — not `exec` with a composed shell string. The contract-reviewer's well-foundedness audit (sprint 4) opens the cited file:line, sees the safe form, and rejects the finding-derived criterion as ill-formed.",
+    "rationale": "The faked finding claims a shell-injection vector at `source.ts:28`, but the cited code uses `child_process.spawn` with an array-args invocation (the safe form) — not `exec` with a composed shell string. The contract-reviewer's well-foundedness audit (sprint 4) opens the cited file:line, sees the safe form, and rejects the finding-derived criterion as ill-formed.",
     "fakedFindingPayload": {
       "id": "decoy-shell-injection-misread",
       "class": "security",
       "severity": "blocker",
       "kind": "inspection",
       "summary": "Defect: pingHost interpolates user input into a shell exec.",
-      "evidencePointer": "source.ts:15"
+      "evidencePointer": "source.ts:28"
     }
   },
   {
