@@ -1,6 +1,6 @@
 /**
- * Terminal-reason writer for a renegotiation round that failed at the cap
- * with unresolved blocking findings.
+ * Terminal-reason record builder for a renegotiation round that failed at
+ * the cap with unresolved blocking findings.
  *
  * When the renegotiation cap fires while at least one `blocker`-severity
  * finding remains unresolved, the run terminates as an evaluation failure:
@@ -14,40 +14,36 @@
  * fixing the flagged defect; thrash recovery is about adjusting the prompt
  * or raising a ceiling.
  *
- * The helper writes `terminalReason: "failed-evaluation-rejected"` (literal
- * kebab-case, matching the recoverable-terminal-reason convention) and
- * `terminal: true` onto `progress.json` via the framework's atomic-write
- * primitive — the temp-file + rename dance, so a crash mid-write can never
- * leave a half-written terminal record on disk. The literal string is
- * frozen at the source: a divergent spelling (camelCase, a different word,
- * a typo) would make the terminated run undiscoverable to any downstream
- * consumer keyed on the exact value.
+ * Shape: a pure builder symmetric with `buildLoopHaltTerminalRecord` in
+ * `src/safety/recovery.ts`. The builder decides whether to write (via the
+ * two cap-vs-blockers guards) and, on a write decision, returns the
+ * fields the caller must merge into `progress.json`. Persistence is the
+ * caller's responsibility — the MCP wrapper in
+ * `src/config-server/tools/independent-review.ts` composes builder +
+ * shared persister (`writeProgressFields` from `./progress.ts`) +
+ * atomic-write into one tool call, mirroring the wire shape every other
+ * progress-affecting MCP tool follows. A TS caller that needs the same
+ * behaviour invokes the builder then `writeProgressFields(...)` on the
+ * record fields directly.
  *
- * Why this is a separate helper from `buildLoopHaltTerminalRecord` (which
- * builds the `failed-loop-detected` record): the two reasons gate on
- * different conditions and carry different semantics. Co-locating them
- * would couple unrelated decisions; a sibling helper keeps each call site
- * narrow ("the renegotiation cap fired with blockers" vs "a loop halt
- * fired") and lets a reader see which terminal class the writer is
- * recording without untangling shared branching.
+ * Why a separate builder from `buildLoopHaltTerminalRecord` (which builds
+ * the `failed-loop-detected` record): the two reasons gate on different
+ * conditions and carry different semantics. Co-locating them would couple
+ * unrelated decisions; a sibling builder keeps each call site narrow ("the
+ * renegotiation cap fired with blockers" vs "a loop halt fired") and lets a
+ * reader see which terminal class is being recorded without untangling
+ * shared branching.
  *
- * Why the helper is a no-op when `capFired` is false OR `unresolvedBlockers`
- * is empty: writing `terminal: true` is irreversible from the caller's
- * perspective — once the field lands on disk, `--recover` keys on it and
- * the run is considered terminated. A spurious write in either of these
- * cases would mark a non-terminal run as terminated. The helper therefore
- * defends both conditions with an explicit guard: a finished round with
- * zero blockers is a passing renegotiation, not a rejection, and a round
- * that has not yet reached the cap should not be terminated by the
- * renegotiation accounting at all.
+ * Why the builder is a no-op when `capFired` is false OR
+ * `unresolvedBlockers` is empty: writing `terminal: true` is irreversible
+ * from the caller's perspective — once the field lands on disk, `--recover`
+ * keys on it and the run is considered terminated. A spurious write in
+ * either of these cases would mark a non-terminal run as terminated. The
+ * builder therefore defends both conditions with an explicit guard: a
+ * finished round with zero blockers is a passing renegotiation, not a
+ * rejection, and a round that has not yet reached the cap should not be
+ * terminated by the renegotiation accounting at all.
  */
-
-import { atomicWriteFile } from '../../config-server/storage/atomic-write.js';
-import { stableStringify } from '../../config-server/determinism/index.js';
-import {
-  readJsonObjectFile,
-  stripForbiddenKeys,
-} from '../../config-server/storage/json-read.js';
 
 /**
  * The kebab-case `terminalReason` literal a renegotiation-cap-with-blockers
@@ -63,9 +59,9 @@ import {
 export const FAILED_EVALUATION_REJECTED_TERMINAL_REASON = 'failed-evaluation-rejected';
 
 /**
- * Minimal shape of an unresolved blocking finding the helper inspects.
+ * Minimal shape of an unresolved blocking finding the builder inspects.
  *
- * The helper does not introspect any field beyond the array's length — it
+ * The builder does not introspect any field beyond the array's length — it
  * only needs to know whether at least one blocker survived the round. A
  * loose `id` is named here so callers can pass their existing finding
  * records without reshaping them; additional fields are tolerated and
@@ -79,90 +75,98 @@ export interface UnresolvedBlockerLike {
 }
 
 /**
- * Inputs to {@link writeFailedEvaluationRejected}.
+ * Inputs to {@link buildFailedEvaluationRejectedRecord}.
  *
- * @property progressFilePath absolute path to the run's `progress.json`. The
- *   helper read-modify-writes this file atomically; every field already on
- *   the document (workspace, telemetry markers, …) is preserved across the
- *   write — only `terminal` and `terminalReason` are added or replaced.
  * @property capFired `true` when the orchestrator decided the renegotiation
- *   cap has fired this sprint, `false` otherwise. The helper treats a
+ *   cap has fired this sprint, `false` otherwise. The builder treats a
  *   `false` value as a no-op so a caller that wires the guard at the wrong
  *   site cannot accidentally mark a non-terminal run as terminated.
  * @property unresolvedBlockers the surviving `blocker`-severity findings at
- *   the moment the cap fired. The helper inspects only the length; an
+ *   the moment the cap fired. The builder inspects only the length; an
  *   empty array (cap fired but every blocker was resolved) is treated as
  *   "the round actually passed, do not terminate" — a renegotiation that
  *   converges right at the cap is a pass, not a rejection.
  */
-export interface WriteFailedEvaluationRejectedOptions {
-  progressFilePath: string;
+export interface BuildFailedEvaluationRejectedOptions {
   capFired: boolean;
   unresolvedBlockers: ReadonlyArray<UnresolvedBlockerLike>;
 }
 
 /**
- * Result of {@link writeFailedEvaluationRejected}.
+ * The persisted fields the builder produces on a write decision.
  *
- * @property written `true` when the helper wrote the terminal record,
- *   `false` when it short-circuited (cap not fired, or no unresolved
- *   blockers). A no-op write is reported explicitly so the caller can log
- *   it for the trace without having to re-derive the guard conditions.
- * @property terminalReason present only when `written` is `true`: the
- *   literal {@link FAILED_EVALUATION_REJECTED_TERMINAL_REASON} string.
- *   Returning the literal (rather than just `true`) gives the caller a
- *   single source of truth it can echo into a structured warning or test
- *   assertion without re-importing the constant.
+ * @property terminal always `true`: a cap-with-blockers rejection ends the
+ *   run.
+ * @property terminalReason the kebab-case rejection reason; always
+ *   {@link FAILED_EVALUATION_REJECTED_TERMINAL_REASON}.
  */
-export interface WriteFailedEvaluationRejectedResult {
-  written: boolean;
-  terminalReason?: typeof FAILED_EVALUATION_REJECTED_TERMINAL_REASON;
+export interface FailedEvaluationRejectedRecord {
+  terminal: true;
+  terminalReason: typeof FAILED_EVALUATION_REJECTED_TERMINAL_REASON;
 }
 
 /**
- * Write the `failed-evaluation-rejected` terminal record to `progress.json`
- * when, and only when, the renegotiation cap has fired with at least one
- * unresolved blocking finding.
+ * Result of {@link buildFailedEvaluationRejectedRecord}.
+ *
+ * @property write `true` when the builder decided the terminal record must
+ *   be persisted (the cap fired AND at least one unresolved blocker
+ *   survived); `false` on a no-op decision (cap not fired, or no unresolved
+ *   blockers). A no-op is reported explicitly so the caller can log it for
+ *   the trace without having to re-derive the guard conditions.
+ * @property record present only when `write` is `true`: the
+ *   {@link FailedEvaluationRejectedRecord} the caller (or the MCP wrapper)
+ *   merges into `progress.json` via `writeProgressFields` from
+ *   `./progress.ts`. Returning the record (rather than just `true`) gives
+ *   the caller a single source of truth it can echo into a structured
+ *   warning or test assertion without re-importing the literal.
+ */
+export interface BuildFailedEvaluationRejectedResult {
+  write: boolean;
+  record?: FailedEvaluationRejectedRecord;
+}
+
+/**
+ * Build the `failed-evaluation-rejected` terminal-reason record when, and
+ * only when, the renegotiation cap has fired with at least one unresolved
+ * blocking finding. Pure — no I/O, no global state, no `Promise`.
  *
  * Behaviour:
  * - If `capFired === false` OR `unresolvedBlockers.length === 0`, the
- *   helper is a no-op: `progress.json` is not touched and the returned
- *   `written` is `false`. The two guards together protect against
- *   spuriously marking a non-terminal run terminated (see the module
- *   docblock for why a single guard is not enough).
- * - Otherwise the helper read-modify-writes `progress.json` atomically:
- *   reads the existing document (sanitised against prototype-pollution
- *   keys), spreads its current fields, layers `terminal: true` and
- *   `terminalReason: "failed-evaluation-rejected"` on top, serialises with
- *   the framework's deterministic stringifier, and writes via
- *   `atomicWriteFile` (temp-file + rename — never a half-written file).
+ *   builder is a no-op: returns `{ write: false }` and no record. The
+ *   two guards together protect against spuriously marking a non-terminal
+ *   run terminated (see the module docblock for why a single guard is not
+ *   enough).
+ * - Otherwise the builder returns
+ *   `{ write: true, record: { terminal: true, terminalReason: "failed-evaluation-rejected" } }`.
+ *   The caller (typically the MCP wrapper in
+ *   `src/config-server/tools/independent-review.ts`) merges the record
+ *   into `progress.json` via the shared persister.
  *
- * Why read-modify-write (not overwrite): `progress.json` is owned by the
- * orchestrator and accumulates fields across many subsystems (workspace,
- * telemetry, the renegotiation `contractRevision`, …). Overwriting would
- * clobber every unrelated field; the read-modify-write pattern mirrors
- * `relockContract` in this same subsystem so the two writers behave
- * consistently.
+ * Symmetric with `buildLoopHaltTerminalRecord` in
+ * `src/safety/recovery.ts`: both are pure builders returning the fields
+ * their respective terminal class records, and both leave persistence to a
+ * thin caller layer that consumes the shared `progress.json` read-modify-
+ * write primitive. Symmetric builders mean the wire-side MCP tool calls
+ * for the two terminal classes have the same shape (compose builder +
+ * persister), which is what lets the markdown orchestrator route both
+ * terminal writes through one tool-call pattern instead of two bespoke
+ * recipes.
  *
- * @param opts see {@link WriteFailedEvaluationRejectedOptions}.
- * @returns a {@link WriteFailedEvaluationRejectedResult} describing whether
- *   the write fired. The `Promise` shape matches the orchestrator's other
- *   atomic-write call sites even though the underlying primitive is
- *   synchronous — keeping the surface uniform lets the caller `await` this
- *   without a branch.
+ * @param opts see {@link BuildFailedEvaluationRejectedOptions}.
+ * @returns a {@link BuildFailedEvaluationRejectedResult}.
  */
-export async function writeFailedEvaluationRejected(
-  opts: WriteFailedEvaluationRejectedOptions,
-): Promise<WriteFailedEvaluationRejectedResult> {
-  const { progressFilePath, capFired, unresolvedBlockers } = opts;
+export function buildFailedEvaluationRejectedRecord(
+  opts: BuildFailedEvaluationRejectedOptions,
+): BuildFailedEvaluationRejectedResult {
+  const { capFired, unresolvedBlockers } = opts;
 
   // Guard 1: the cap has not fired. The renegotiation accounting only marks
   // a run terminal when the orchestrator has decided that further rounds
   // are not permitted; a not-yet-fired round must not be terminated by this
-  // writer, even if blockers are present (they may still be resolved in a
+  // builder, even if blockers are present (they may still be resolved in a
   // later round under the cap).
   if (!capFired) {
-    return { written: false };
+    return { write: false };
   }
 
   // Guard 2: cap fired but zero blockers survived. A renegotiation that
@@ -170,29 +174,14 @@ export async function writeFailedEvaluationRejected(
   // is a pass, not a rejection — the gate did not say no. Writing
   // `terminal: true` here would falsely terminate a passing run.
   if (unresolvedBlockers.length === 0) {
-    return { written: false };
+    return { write: false };
   }
 
-  // Read-modify-write: preserve every existing field on progress.json. The
-  // sanitiser strips the prototype-pollution-vector keys so a hostile field
-  // smuggled into the file cannot pollute Object.prototype via the spread.
-  const existing = readJsonObjectFile(progressFilePath);
-  const base = existing === undefined ? {} : stripForbiddenKeys(existing);
-  const next: Record<string, unknown> = {
-    ...base,
-    terminal: true,
-    terminalReason: FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
-  };
-
-  // atomicWriteFile is the single durable-write primitive every framework
-  // writer funnels through — temp-file + rename, so a crash mid-write can
-  // never leave a half-written terminal record on disk. Using it here
-  // (rather than raw fs.writeFileSync) keeps this writer's crash-safety
-  // story consistent with the rest of the codebase.
-  atomicWriteFile(progressFilePath, stableStringify(next));
-
   return {
-    written: true,
-    terminalReason: FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
+    write: true,
+    record: {
+      terminal: true,
+      terminalReason: FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
+    },
   };
 }

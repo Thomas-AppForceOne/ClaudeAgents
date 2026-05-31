@@ -1,10 +1,11 @@
 /**
  * Barrel for the independent-review subsystem.
  *
- * Re-exports the public surface — the typed bundle model and the pure
- * reproduction-gate function — so consumers can import everything they
- * need from one path (`src/agents/independent-review`) without reaching
- * into individual files. Internal helpers stay file-local.
+ * Re-exports the public surface — the typed bundle model, the pure
+ * reproduction-gate function, the atomic re-lock helper, and the terminal-
+ * reason record builder — so consumers can import everything they need from
+ * one path (`src/agents/independent-review`) without reaching into
+ * individual files. Internal helpers stay file-local.
  */
 
 export type {
@@ -37,18 +38,29 @@ export {
 } from './relock.js';
 export type { RelockContractOptions, RelockContractResult } from './relock.js';
 
-// Terminal-reason writer for the renegotiation cap-with-blockers rejection:
-// writes `terminalReason: "failed-evaluation-rejected"` (literal kebab-case)
-// to progress.json via atomic-write when, and only when, the cap fires with
-// at least one unresolved blocker. A separate helper from relockContract
-// because the two writers carry different semantics — see terminal-reason.ts
-// for the contrast with the loop-detection halt class.
+// Terminal-reason record builder for the renegotiation cap-with-blockers
+// rejection: returns the `terminal: true` + `terminalReason:
+// "failed-evaluation-rejected"` fields when, and only when, the cap fires
+// with at least one unresolved blocker. Symmetric with
+// `buildLoopHaltTerminalRecord` in `src/safety/recovery.ts`. Persistence is
+// the caller's responsibility — the MCP wrapper in
+// `src/config-server/tools/independent-review.ts` composes builder +
+// shared persister; a TS caller invokes `writeProgressFields` on the
+// returned record directly.
 export {
+  buildFailedEvaluationRejectedRecord,
   FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
-  writeFailedEvaluationRejected,
 } from './terminal-reason.js';
 export type {
+  BuildFailedEvaluationRejectedOptions,
+  BuildFailedEvaluationRejectedResult,
+  FailedEvaluationRejectedRecord,
   UnresolvedBlockerLike,
-  WriteFailedEvaluationRejectedOptions,
-  WriteFailedEvaluationRejectedResult,
 } from './terminal-reason.js';
+
+// Shared progress.json read-modify-write helper. Both `relock.ts` and the
+// caller-side persistence step for `buildFailedEvaluationRejectedRecord`
+// consume this primitive; exporting it from the barrel lets a TS caller
+// pair the builder with the persister without reaching into the file-
+// local module.
+export { writeProgressFields } from './progress.js';

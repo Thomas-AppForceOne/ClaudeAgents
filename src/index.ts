@@ -279,18 +279,22 @@ export type {
 export {
   archivedContractPath,
   buildDraftPath,
+  buildFailedEvaluationRejectedRecord,
   canonicalContractPath,
   FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
   relockContract,
   validateFindings,
-  writeFailedEvaluationRejected,
+  writeProgressFields,
 } from './agents/independent-review/index.js';
 export type {
+  BuildFailedEvaluationRejectedOptions,
+  BuildFailedEvaluationRejectedResult,
   CommandFinding,
   CommandRunner,
   CommandRunnerResult,
   DropReason,
   DroppedFindingRecord,
+  FailedEvaluationRejectedRecord,
   Finding,
   FindingKind,
   IndependentReviewBundle,
@@ -301,8 +305,6 @@ export type {
   Severity,
   UnresolvedBlockerLike,
   ValidateFindingsResult,
-  WriteFailedEvaluationRejectedOptions,
-  WriteFailedEvaluationRejectedResult,
 } from './agents/independent-review/index.js';
 
 export type { Issue } from './config-server/validation/schema-check.js';

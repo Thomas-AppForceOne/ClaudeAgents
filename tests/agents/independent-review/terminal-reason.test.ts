@@ -1,16 +1,21 @@
 /**
- * Tests for the `failed-evaluation-rejected` terminal-reason writer.
+ * Tests for the `failed-evaluation-rejected` terminal-reason record builder.
  *
  * Three properties pinned:
- *  - happy path: cap fired + at least one unresolved blocker writes the
- *    literal `terminalReason: "failed-evaluation-rejected"` and
- *    `terminal: true` to progress.json, preserving existing fields;
+ *  - happy path: cap fired + at least one unresolved blocker returns
+ *    `{ write: true, record: { terminal: true, terminalReason: "failed-evaluation-rejected" } }`;
  *  - no-op guards: (a) cap not fired and (b) cap fired with zero blockers
- *    both leave progress.json untouched;
- *  - atomicity: the helper uses the framework's `atomic-write.ts` primitive
- *    (temp-file + rename), not raw `fs.writeFileSync`. The check is a
- *    static-scan property — the helper's source must import atomicWriteFile
- *    and must not import writeFileSync.
+ *    both return `{ write: false }` with no record;
+ *  - module discipline: the helper source is a pure builder — it carries no
+ *    `node:fs` import, no `writeFileSync` call, and no `atomicWriteFile`
+ *    composition (persistence is the caller's job, performed by the shared
+ *    `writeProgressFields` primitive in `./progress.ts` and the MCP wrapper
+ *    in `src/config-server/tools/independent-review.ts`).
+ *
+ * A separate composition test exercises the builder + `writeProgressFields`
+ * pair end-to-end so the on-disk merge semantics (read-modify-write,
+ * existing fields preserved, atomic temp-file + rename) are still pinned —
+ * just at the persister site, not the builder site.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,9 +25,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildFailedEvaluationRejectedRecord,
   FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
-  writeFailedEvaluationRejected,
 } from '../../../src/agents/independent-review/terminal-reason.js';
+import { writeProgressFields } from '../../../src/agents/independent-review/progress.js';
 
 const tmpDirs: string[] = [];
 
@@ -40,41 +46,39 @@ afterEach(() => {
 
 const ONE_BLOCKER = [{ id: 'blocker-1' }];
 
-describe('writeFailedEvaluationRejected — happy path', () => {
-  it('writes terminalReason and terminal:true when cap fired with one blocker', async () => {
-    const dir = makeTmp();
-    const progressFilePath = path.join(dir, 'progress.json');
-
-    const res = await writeFailedEvaluationRejected({
-      progressFilePath,
+describe('buildFailedEvaluationRejectedRecord — happy path', () => {
+  it('returns a write decision with the literal terminal record when cap fired with one blocker', () => {
+    const res = buildFailedEvaluationRejectedRecord({
       capFired: true,
       unresolvedBlockers: ONE_BLOCKER,
     });
 
-    expect(res.written).toBe(true);
-    expect(res.terminalReason).toBe('failed-evaluation-rejected');
-    expect(res.terminalReason).toBe(FAILED_EVALUATION_REJECTED_TERMINAL_REASON);
-
-    const parsed = JSON.parse(readFileSync(progressFilePath, 'utf8')) as Record<string, unknown>;
-    expect(parsed.terminal).toBe(true);
-    expect(parsed.terminalReason).toBe('failed-evaluation-rejected');
+    expect(res.write).toBe(true);
+    expect(res.record).toEqual({
+      terminal: true,
+      terminalReason: 'failed-evaluation-rejected',
+    });
+    expect(res.record?.terminalReason).toBe(FAILED_EVALUATION_REJECTED_TERMINAL_REASON);
   });
 
-  it('preserves pre-existing fields on progress.json (read-modify-write)', async () => {
+  it('builder + writeProgressFields persists the record and preserves pre-existing fields', () => {
     const dir = makeTmp();
     const progressFilePath = path.join(dir, 'progress.json');
-    // Pre-existing content the writer must not clobber.
+    // Pre-existing content the persister must not clobber.
     writeFileSync(
       progressFilePath,
       JSON.stringify({ status: 'building', contractRevision: 1, sprintNumber: 3 }),
       'utf8',
     );
 
-    await writeFailedEvaluationRejected({
-      progressFilePath,
+    const res = buildFailedEvaluationRejectedRecord({
       capFired: true,
       unresolvedBlockers: ONE_BLOCKER,
     });
+    expect(res.write).toBe(true);
+    if (res.record !== undefined) {
+      writeProgressFields(progressFilePath, res.record);
+    }
 
     const parsed = JSON.parse(readFileSync(progressFilePath, 'utf8')) as Record<string, unknown>;
     expect(parsed.status).toBe('building');
@@ -85,45 +89,34 @@ describe('writeFailedEvaluationRejected — happy path', () => {
   });
 });
 
-describe('writeFailedEvaluationRejected — no-op guards', () => {
-  it('does NOT write when capFired is false (even if blockers are present)', async () => {
-    const dir = makeTmp();
-    const progressFilePath = path.join(dir, 'progress.json');
-
-    const res = await writeFailedEvaluationRejected({
-      progressFilePath,
+describe('buildFailedEvaluationRejectedRecord — no-op guards', () => {
+  it('returns { write: false } when capFired is false (even if blockers are present)', () => {
+    const res = buildFailedEvaluationRejectedRecord({
       capFired: false,
       unresolvedBlockers: ONE_BLOCKER,
     });
 
-    expect(res.written).toBe(false);
-    expect(res.terminalReason).toBeUndefined();
-    // No file should exist on disk — the writer must be a true no-op.
-    expect(() => readFileSync(progressFilePath, 'utf8')).toThrow();
+    expect(res.write).toBe(false);
+    expect(res.record).toBeUndefined();
   });
 
-  it('does NOT write when capFired is true but unresolvedBlockers is empty', async () => {
-    const dir = makeTmp();
-    const progressFilePath = path.join(dir, 'progress.json');
-
-    const res = await writeFailedEvaluationRejected({
-      progressFilePath,
+  it('returns { write: false } when capFired is true but unresolvedBlockers is empty', () => {
+    const res = buildFailedEvaluationRejectedRecord({
       capFired: true,
       unresolvedBlockers: [],
     });
 
-    expect(res.written).toBe(false);
-    expect(res.terminalReason).toBeUndefined();
-    expect(() => readFileSync(progressFilePath, 'utf8')).toThrow();
+    expect(res.write).toBe(false);
+    expect(res.record).toBeUndefined();
   });
 });
 
-describe('writeFailedEvaluationRejected — atomic-write discipline', () => {
-  it('imports atomicWriteFile (not raw fs.writeFileSync) in the helper source', () => {
-    // Static-scan property: the helper source must funnel its write through
-    // the framework's atomic-write primitive. Reading the source and
-    // checking imports is the lowest-coupling way to pin this without
-    // mocking the fs module.
+describe('terminal-reason.ts — pure-builder module discipline', () => {
+  it('the builder source has no fs imports and performs no I/O (persistence is left to the caller)', () => {
+    // Static-scan property: the builder must remain pure. A regression that
+    // re-introduced a writeFileSync call would couple the terminal-reason
+    // decision to the disk write, breaking the symmetry with
+    // `buildLoopHaltTerminalRecord` in src/safety/recovery.ts.
     const here = fileURLToPath(import.meta.url);
     const helperPath = path.resolve(
       path.dirname(here),
@@ -131,12 +124,9 @@ describe('writeFailedEvaluationRejected — atomic-write discipline', () => {
     );
     const src = readFileSync(helperPath, 'utf8');
 
-    expect(src).toContain(
-      "import { atomicWriteFile } from '../../config-server/storage/atomic-write.js';",
-    );
-    // Must NOT depend directly on node:fs writeFileSync — the atomic
-    // primitive is the only durable-write surface this helper uses.
-    expect(src).not.toMatch(/writeFileSync\s*\(/);
+    // Must NOT import node:fs or compose the atomic-write primitive directly.
     expect(src).not.toMatch(/from\s+['"]node:fs['"]/);
+    expect(src).not.toMatch(/writeFileSync\s*\(/);
+    expect(src).not.toMatch(/atomicWriteFile/);
   });
 });

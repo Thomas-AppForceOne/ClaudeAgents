@@ -105,12 +105,11 @@
 import { existsSync, renameSync } from 'node:fs';
 import path from 'node:path';
 
-import { atomicWriteFile } from '../../config-server/storage/atomic-write.js';
-import { stableStringify } from '../../config-server/determinism/index.js';
 import {
   readJsonObjectFile,
   stripForbiddenKeys,
 } from '../../config-server/storage/json-read.js';
+import { writeProgressFields } from './progress.js';
 
 /**
  * Inputs to {@link relockContract}.
@@ -509,29 +508,6 @@ function readContractRevision(progressFilePath: string): number {
   const v = sanitised['contractRevision'];
   if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return v;
   return 0;
-}
-
-/**
- * Read-modify-write the fields named in `updates` onto `progress.json`,
- * preserving every other field already in the document.
- *
- * The pattern mirrors {@link recordWorkspace} in `run-progress.ts`: read
- * the existing object (sanitised against prototype-pollution keys),
- * spread it first, then layer the updates on top, then atomic-write.
- * Spreading the base first guarantees that an update never clobbers a
- * field it does not explicitly name; serialising via {@link
- * stableStringify} guarantees byte-identical output for equal state, so
- * a recovery diff against the file can spot real changes versus
- * key-ordering noise.
- */
-function writeProgressFields(
-  progressFilePath: string,
-  updates: Record<string, unknown>,
-): void {
-  const existing = readJsonObjectFile(progressFilePath);
-  const base = existing === undefined ? {} : stripForbiddenKeys(existing);
-  const next: Record<string, unknown> = { ...base, ...updates };
-  atomicWriteFile(progressFilePath, stableStringify(next));
 }
 
 /**
