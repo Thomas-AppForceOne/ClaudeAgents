@@ -97,8 +97,7 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 16. ✅ **[W1](W1-overlay-misuse-warnings.md)** — overlay-misuse warnings. Shipped PR #31.
 17. ✅ **[D2](D2-prompt-hygiene.md)** — prompt hygiene. Shipped PR #33.
 18. ✅ **[R7](R7-runtime-invocation-bridge.md)** — runtime invocation bridge. Shipped PR #34.
-<!-- TODO at PR open: replace #<TBD> with the actual PR number -->
-19. ✅ **[E8](E8-independent-review-and-forced-verification.md)** — independent adversarial review & forced verification. Shipped PR #<TBD>.
+19. ✅ **[E8](E8-independent-review-and-forced-verification.md)** — independent adversarial review & forced verification. Shipped PR #35.
 20. **Next** [M4](M4-docker-module-wiring.md) — Docker module wiring.
 21. [O2](O2-recovery.md) — minimal recovery.
 22. [O1](O1-resolution-observability.md) + [O3](O3-telemetry-semantics.md) — resolution observability + telemetry semantics.
