@@ -104,7 +104,7 @@ export const DEFAULT_RENEGOTIATION_CAP = 2;
  *   agent attempts; this bounds *successful* re-locks of the canonical
  *   contract. The orchestrator consults this value at the start of each
  *   round; reaching the cap halts the sprint via the renegotiation-layer
- *   halt path rather than mutating any A1 counter.
+ *   halt path rather than mutating any existing attempt-counter ceiling.
  */
 export interface EffectiveSafetyConfig {
   attemptCeilings: Record<string, number>;

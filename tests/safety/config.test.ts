@@ -193,23 +193,24 @@ describe('resolveEffectiveSafetyConfig — renegotiationCap (effective_safety_co
   });
 });
 
-describe('A1 constants are unedited (effective_safety_config_a1_constants_unedited)', () => {
-  it('DEFAULT_SPRINT_BUDGET is 12 (the A1 spec-named seed value)', () => {
-    // A1 seeded the sprint budget at 12 (per-role sum 6 + headroom 6 for
-    // the four non-multi-attempt roles, plus the per-role multi-attempt
-    // ceiling sum). The renegotiation-cap work is additive and must not
-    // re-tune A1's constants.
+describe('safety constants are unedited (effective_safety_config_a1_constants_unedited)', () => {
+  it('DEFAULT_SPRINT_BUDGET is 12 (the seeded sprint-wide budget)', () => {
+    // The sprint budget was seeded at 12 (per-role multi-attempt ceiling
+    // sum 6 + headroom 6 for the four non-multi-attempt roles). The
+    // renegotiation-cap work is additive and must not re-tune this
+    // pre-existing constant.
     expect(DEFAULT_SPRINT_BUDGET).toBe(12);
   });
 
-  it('MAX_ATTEMPTS_BUDGET_HEADROOM is 4 (the A1 +4 headroom)', () => {
+  it('MAX_ATTEMPTS_BUDGET_HEADROOM is 4 (the +4 headroom in the --max-attempts derivation)', () => {
     // The `--max-attempts=n` derivation is `n × roleCount + 4`; the 4 is
-    // the A1-owned headroom for clarifier/planner/reviewer/evaluator.
+    // the headroom for clarifier/planner/reviewer/evaluator, baked into
+    // the pre-existing safety layer.
     expect(MAX_ATTEMPTS_BUDGET_HEADROOM).toBe(4);
   });
 
   it('DEFAULT_ATTEMPT_CEILINGS still seeds proposer=3 and generator=3', () => {
-    // A1's per-role seed ceilings: any change here would shift the
+    // The per-role seed ceilings: any change here would shift the
     // sprint-budget derivation and silently re-tune the loop machinery.
     expect(DEFAULT_ATTEMPT_CEILINGS).toEqual({
       'gan-contract-proposer': 3,
