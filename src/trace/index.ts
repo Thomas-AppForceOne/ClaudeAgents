@@ -20,6 +20,7 @@ export {
   type SafetyHaltInput,
   type TrustEventInput,
   type ValidationAbortInput,
+  type IndependentReviewInput,
   type LlmPayloads,
   type ToolPayloads,
 } from './emitter.js';
@@ -142,5 +143,6 @@ export type {
   SafetyHaltEvent,
   TrustEventEvent,
   ValidationAbortEvent,
+  IndependentReviewEvent,
 } from './events.js';
 export { KNOWN_EVENT_TYPES, AGENT_ATTEMPT_EVENT_TYPE } from './events.js';

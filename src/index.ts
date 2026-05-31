@@ -192,6 +192,7 @@ export type {
   EvidenceBundleCheck,
   ContractCriterionLike,
   BundleCriterion,
+  IndependentReviewEvent,
 } from './trace/index.js';
 
 // The full safety surface. `src/safety/index.js` is the subsystem barrel and

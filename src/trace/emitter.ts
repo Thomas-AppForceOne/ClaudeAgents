@@ -36,6 +36,7 @@ import type {
   AgentAttemptEvent,
   ClarifierFindingEvent,
   ClarifierUserActionEvent,
+  IndependentReviewEvent,
   LlmCallEvent,
   OrchestratorMilestoneEvent,
   SafetyHaltEvent,
@@ -257,6 +258,41 @@ export interface ClarifierUserActionInput {
   action: 'approved' | 'edited' | 'evolved' | 'cancelled' | 'autoApprovedOnTimeout';
   round: number;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Input to {@link TraceEmitter.emitIndependentReview}.
+ *
+ * The fields mirror the `independentReview` event's `payload` shape one-to-one
+ * because the inlined payload is small and integral — same precedent as
+ * {@link SafetyHaltInput}. Callers construct the summary object themselves so
+ * the emitter has no opinion about how findings are counted; the schema
+ * enforces the non-negative-integer floor.
+ *
+ * @property sprintNumber sprint this review belongs to; positive integer.
+ * @property attemptLetter single uppercase ASCII letter naming the generator
+ *   attempt this review covered ('A' for the first, 'B' for the second, ...);
+ *   joins the event to the sibling `sprint-{N}-independent-review-{A}.json`
+ *   artefact filename without ambiguity.
+ * @property contractRevision active contract revision when the review ran;
+ *   non-negative integer matching {@link AgentAttemptInput}'s convention so
+ *   revision-scoped queries treat the two classes consistently.
+ * @property verdict 'clean' when zero surviving findings; 'findings' when at
+ *   least one finding survived the false-positive guard.
+ * @property summary per-tier finding counts plus the dropped-by-the-guard
+ *   count; all four values are non-negative integers.
+ */
+export interface IndependentReviewInput {
+  sprintNumber: number;
+  attemptLetter: string;
+  contractRevision: number;
+  verdict: 'clean' | 'findings';
+  summary: {
+    blockers: number;
+    warnings: number;
+    advisories: number;
+    dropped: number;
+  };
 }
 
 /**
@@ -576,6 +612,49 @@ export class TraceEmitter {
       action: input.action,
       round: input.round,
       payload: input.payload,
+    };
+    this.persist(event);
+    return event;
+  }
+
+  /**
+   * Record an independent-review marker — one event per generator attempt the
+   * contract-free reviewer inspected. The inlined `payload` carries the
+   * lightweight summary the run trace surfaces (sprint, attempt-letter, active
+   * contract revision, single-word verdict, per-tier counts + dropped); the
+   * reviewer's full per-finding bundle lives in the sibling
+   * `sprint-{N}-independent-review-{attempt}.json` artefact, which a reader
+   * loads through the artefact path, not through this event.
+   *
+   * Side effect: appends an event file and rewrites the index. No payload
+   * bodies are written separately — the inline `payload` is part of the event
+   * itself, mirroring the {@link SafetyHaltEvent} precedent.
+   *
+   * Why this is its own class and not an `agentAttempt`: the reviewer is
+   * off-budget (the sprint-budget guard counts `agentAttempt` events, so
+   * routing a review through that channel would mis-fire the guard on a role
+   * that does not bear attempts). The reviewer's `llmCall` event is still
+   * emitted by the underlying model call, so `aggregateSprintSummary` sums
+   * its cost like any other role's — only the budget-bearing `agentAttempt`
+   * is withheld.
+   *
+   * Returns the persisted event.
+   */
+  emitIndependentReview(input: IndependentReviewInput): IndependentReviewEvent {
+    const event: IndependentReviewEvent = {
+      ...this.envelope('independentReview'),
+      payload: {
+        sprintNumber: input.sprintNumber,
+        attemptLetter: input.attemptLetter,
+        contractRevision: input.contractRevision,
+        verdict: input.verdict,
+        summary: {
+          blockers: input.summary.blockers,
+          warnings: input.summary.warnings,
+          advisories: input.summary.advisories,
+          dropped: input.summary.dropped,
+        },
+      },
     };
     this.persist(event);
     return event;

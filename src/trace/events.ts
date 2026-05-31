@@ -166,6 +166,42 @@ export interface ClarifierUserActionEvent extends TraceEnvelope {
 }
 
 /**
+ * Independent-review trace marker: one event per generator attempt the
+ * contract-free reviewer role inspected. The payload is a lightweight
+ * summary; the reviewer's full per-finding bundle lives in the sibling
+ * `sprint-{N}-independent-review-{attempt}.json` artefact. The marker exists
+ * so a trace reader can locate "a review happened" without opening the
+ * artefact file, and so the run trace surfaces the v1.0 headline role.
+ *
+ * Deliberately distinct from {@link AgentAttemptEvent}: the reviewer is
+ * off-budget — emitting an `agentAttempt` here would mis-fire the
+ * sprint-budget guard against a role that does not bear attempts.
+ *
+ * The reviewer's cost is still visible: the reviewer's `llmCall` event is
+ * emitted normally, so `aggregateSprintSummary` sums its tokens like any
+ * other role's. Only the budget-bearing `agentAttempt` is withheld.
+ */
+export interface IndependentReviewEvent extends TraceEnvelope {
+  eventType: 'independentReview';
+  payload: {
+
+    sprintNumber: number;
+
+    attemptLetter: string;
+
+    contractRevision: number;
+
+    verdict: 'clean' | 'findings';
+    summary: {
+      blockers: number;
+      warnings: number;
+      advisories: number;
+      dropped: number;
+    };
+  };
+}
+
+/**
  * The `eventType` discriminant for {@link AgentAttemptEvent}, named so the
  * special handling the emit path gives this class (the one-retry-on-failure
  * policy) keys off a single shared identifier rather than a bare string
@@ -186,13 +222,22 @@ export type TraceEvent =
   | TrustEventEvent
   | ValidationAbortEvent
   | ClarifierFindingEvent
-  | ClarifierUserActionEvent;
+  | ClarifierUserActionEvent
+  | IndependentReviewEvent;
 
 /**
  * Runtime set of the event-type discriminants in {@link TraceEvent}. The
  * scanner uses it to classify an event whose `eventType` it does not recognise
  * as a forward-compatible unknown (skipped with a warning) rather than as
  * corruption — so a trace written by a newer framework version still loads.
+ *
+ * Three-place wiring: every entry here must also (a) have a matching
+ * `definitions/<name>` event class in `schemas/run-trace-v1.json` and (b) be a
+ * discriminant value the {@link TraceEvent} union narrows on. A class added
+ * only to the schema or only to the union is silently dropped by the shipped
+ * scanner as a forward-compatible unknown; the test
+ * `tests/trace/independent-review-event-three-place-wiring.test.ts` enforces
+ * the three places agree.
  */
 export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'orchestratorMilestone',
@@ -204,4 +249,5 @@ export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'validationAbort',
   'clarifierFinding',
   'clarifierUserAction',
+  'independentReview',
 ]);
