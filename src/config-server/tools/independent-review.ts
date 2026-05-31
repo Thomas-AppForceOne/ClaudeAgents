@@ -36,8 +36,9 @@
  * `UNSAFE_COMMAND_CHARACTERS` regex (see
  * `src/agents/independent-review/finding-validation.ts`) together refute
  * the dangerous shell sequences before the runner is ever invoked; the
- * shell here is what executes the otherwise-safe `pnpm vitest …` /
- * `grep -nE …` shapes the schema admits.
+ * shell here is what executes the otherwise-safe multi-token shapes the
+ * schema admits (test runners with file-path arguments, `grep -nE …`,
+ * and similar).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -256,9 +257,9 @@ export interface ValidateFindingsToolInput {
 
 /**
  * The default safe-runner the MCP wrapper installs. Spawns the command
- * under `/bin/sh -c` so multi-token shapes the schema admits (e.g.
- * `pnpm vitest run path/to/file.test.ts`) execute as a single command;
- * the schema's metacharacter `pattern` plus the gate's
+ * under `/bin/sh -c` so multi-token shapes the schema admits (e.g. a
+ * test-runner invocation with file-path arguments) execute as a single
+ * command; the schema's metacharacter `pattern` plus the gate's
  * `UNSAFE_COMMAND_CHARACTERS` regex have already refuted the dangerous
  * shell sequences (`;`, `&`, `|`, backtick, `$`, `<`, `>`, newline, NUL,
  * backslash) before the runner is invoked.
