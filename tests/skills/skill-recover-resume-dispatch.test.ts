@@ -131,4 +131,49 @@ describe('skills/gan/SKILL.md — --recover resume dispatch', () => {
     expect(dispatch).toMatch(/emitTraceEvent/);
     expect(dispatch).toMatch(/TraceIndex\.totalEvents/);
   });
+
+  it('marks the terminal-status preflight reject branch [deferred-to-v1.1]', () => {
+    // I-003 v1.0 honesty: the preflight enumeration does not include a
+    // terminal-status reject, so the dispatch's fall-through behaviour on
+    // `complete` / `failed` runs is undefined. The v1.0 surface is the
+    // explicit `--run-id <terminal-id>` route (the default selector still
+    // pre-filters to non-terminal). The paragraph naming this gap must
+    // carry the `[deferred-to-v1.1]` marker so a reader can tell the claim
+    // is intentionally documentation-only — mirroring how the `--cleanup`
+    // stub above is marked. Pinning the marker on the paragraph that names
+    // the terminal-status preflight prevents a re-flow from silently
+    // upgrading the prose to "ships in v1.0" without the writer-side
+    // preflight subsystem actually landing.
+    const lines = dispatch.split('\n');
+    const terminalLine = lines.find(
+      (l) =>
+        /terminal-status/i.test(l) ||
+        /RunAlreadyTerminal/.test(l) ||
+        (/status/.test(l) && /complete/.test(l) && /failed/.test(l)),
+    );
+    expect(terminalLine).toBeDefined();
+    expect(terminalLine).toMatch(/\[deferred-to-v1\.1\]/);
+  });
+
+  it('marks the evaluating malformed-JSON partial-write heuristic [deferred-to-v1.1]', () => {
+    // I-004 v1.0 honesty: `sprint-N-feedback-A.json` is written by the
+    // gan-evaluator LLM agent through the generic `Write` tool with no
+    // atomicity contract, so the "detectable by malformed JSON" heuristic
+    // catches only the syntactically-invalid case and misses the
+    // cleanly-parsing-but-truncated case. The paragraph stating the
+    // heuristic must therefore carry `[deferred-to-v1.1]` so a reader
+    // (and CI) can pin which surfaces are intentionally inert in v1.0
+    // versus accidentally missing. The marker rides on the `evaluating`
+    // branch bullet specifically — the same bullet that contains the
+    // "malformed JSON" phrase — so a re-flow that moves the marker
+    // elsewhere weakens this assertion.
+    const buildingIdx = dispatch.search(/\*\*`evaluating`\*\*/);
+    expect(buildingIdx).toBeGreaterThan(-1);
+    // The branch bullet plus its deferral paragraph fits within a generous
+    // window; the malformed-JSON sentence must land inside the same window
+    // as the `[deferred-to-v1.1]` marker so the two are paired in prose.
+    const window = dispatch.slice(buildingIdx, buildingIdx + 2000);
+    expect(window).toMatch(/malformed JSON/);
+    expect(window).toMatch(/\[deferred-to-v1\.1\]/);
+  });
 });

@@ -90,6 +90,16 @@ export interface RunLockHandle {
  * @property isAlive liveness probe for an existing holder; defaults to
  *   {@link defaultIsAlive}.
  * @property warn sink for stale-lock-broken notices; defaults to `stderr`.
+ * @property recoverTargetRunId the run-id `--recover` is targeting, when the
+ *   acquire is part of a recover flow. When supplied and an existing holder is
+ *   a *live* pid whose recorded `runId` equals this value, acquisition throws
+ *   with `reason: 'StrandedSelfLock'` instead of the generic
+ *   `ConcurrentRunInProgress` — surfacing the recover-specific guidance and
+ *   `rm <lockPath>` escape rather than the misleading "kill the other run"
+ *   message that would point at the long-lived config server's pid. Omitted on
+ *   non-recover acquire paths (regular sprint flow), where the same-`runId`
+ *   live-pid case still throws `ConcurrentRunInProgress` because the regular
+ *   path has no recover-specific message to fall back to.
  */
 export interface AcquireRunLockOptions {
 
@@ -106,6 +116,8 @@ export interface AcquireRunLockOptions {
   isAlive?: IsAlive;
 
   warn?: (line: string) => void;
+
+  recoverTargetRunId?: string;
 }
 
 /**
@@ -148,6 +160,14 @@ export function readRunLock(lockPath: string): RunLockContents | undefined {
  *   'ConcurrentRunInProgress')` when the lock is held by a live run, or when it
  *   could not be acquired after breaking a stale one (lost a concurrent race).
  *   The message names the conflicting run/pid and how to resolve it.
+ * @throws `ConfigServerError('InvariantViolation', reason:
+ *   'StrandedSelfLock')` when `opts.recoverTargetRunId` is supplied and the
+ *   live holder's `runId` matches it. Distinct from `ConcurrentRunInProgress`:
+ *   the lock records the long-lived config-server's pid, so a same-`runId`
+ *   live-pid lock typically means the previous run aborted without releasing
+ *   while the server outlived it. The message names the lock path and the
+ *   `rm <lockPath>` manual-friction escape instead of the misleading
+ *   `kill <pid>` guidance the generic refusal carries.
  */
 export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
   const isAlive = opts.isAlive ?? defaultIsAlive;
@@ -178,6 +198,36 @@ export function acquireRunLock(opts: AcquireRunLockOptions): RunLockHandle {
     }
 
     if (isAlive(holder.pid)) {
+      // Recover-specific branch: a live-pid lock whose recorded runId matches
+      // the run the caller is trying to recover is "stranded-self-lock" — the
+      // pid is the long-lived config server, not a competing run, so the
+      // generic "kill that pid" guidance would point the user at the framework
+      // process every other run on the machine depends on. Surface the
+      // distinct reason + lock-path + `rm` escape instead.
+      if (
+        opts.recoverTargetRunId !== undefined &&
+        holder.runId === opts.recoverTargetRunId
+      ) {
+        throw createError('InvariantViolation', {
+          reason: 'StrandedSelfLock',
+          path: opts.lockPath,
+          field: 'run.lock',
+          runId: holder.runId,
+          pid: holder.pid,
+          startedAt: holder.startedAt,
+          message:
+            `The run lock at ${opts.lockPath} is held by a live pid (${holder.pid}, ` +
+            `started ${holder.startedAt}) whose recorded runId '${holder.runId}' matches ` +
+            `the run you are recovering. The pid is the long-lived config server, not a ` +
+            `competing run — either an active --recover session for this run, or an ` +
+            `interrupted run whose lock was never released. If no /gan session is ` +
+            `running this run, the lock is stale; clear it with 'rm ${opts.lockPath}' ` +
+            `and retry.`,
+          remediation:
+            `If no /gan session is running this run, the lock is stale; clear it with ` +
+            `'rm ${opts.lockPath}' and retry.`,
+        });
+      }
       throw createError('InvariantViolation', {
         reason: 'ConcurrentRunInProgress',
         path: opts.lockPath,
