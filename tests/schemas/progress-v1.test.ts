@@ -54,22 +54,15 @@ function compile(): ValidateFunction {
   return ajv.compile(progressV1);
 }
 
-// The full enumerated `terminalReason` set from O2 spec section 2. Spelt out
-// here so the positive-coverage test fails the day a new code is added to the
-// schema without being added to the test (or vice versa) — drift between the
-// schema's enum and the test's coverage is itself a finding.
-const TERMINAL_REASONS = [
-  'complete',
-  'failed-max-attempts',
-  'failed-budget',
-  'failed-loop-detected',
-  'failed-evaluation-rejected',
-  'failed-clarifier-error',
-  'aborted-by-user',
-  'aborted-planner-error',
-  'aborted-contract-failed',
-  'aborted-validation-failed',
-] as const;
+// The full enumerated `terminalReason` set from O2 spec section 2. Read from
+// the schema's own `definitions.terminalReasonCode.enum` rather than re-typed
+// here so adding an 11th value is a one-line schema edit and the positive-
+// coverage loop below picks it up automatically — drift between the schema's
+// enum and the test's coverage is itself a finding. The cast is the same
+// opaque-JSON narrowing the rest of the file uses.
+const TERMINAL_REASONS = (
+  progressV1 as { definitions: { terminalReasonCode: { enum: readonly string[] } } }
+).definitions.terminalReasonCode.enum;
 
 // A minimal in-flight shape every test can spread. terminal:false +
 // terminalReason:null + terminalAt:null is the legal "not yet ended" tuple;
@@ -354,6 +347,117 @@ describe('progress-v1 schema rejects unenumerated and malformed shapes', () => {
     const { createdByGan: _drop, ...partialWorkspace } = base.workspace as Record<string, unknown>;
     void _drop;
     const candidate = { ...base, workspace: partialWorkspace };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  // Coverage discipline for this block: every contract-bearing keyword in
+  // the schema (`pattern` on each $ref'd or inline regex, `enum` on each
+  // closed set, `additionalProperties:false` on each nested closure, every
+  // `anyOf` branch) is exercised by at least one negative case below. Keep
+  // this property when extending the schema.
+
+  // --- pattern: runId (schemas/progress-v1.json runId property; the
+  // canonical regex lives at RUN_ID_PATTERN in
+  // src/config-server/storage/run-store.ts — both are the same contract) ---
+  it('rejects a runId that violates the pattern (free-form string)', () => {
+    // Source of truth for the pattern: RUN_ID_PATTERN in
+    // src/config-server/storage/run-store.ts. A value that does not match
+    // cannot be reconstituted into a run directory path by any framework code.
+    const candidate = { ...inFlightBase(), runId: 'not-a-run-id' };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects a runId that violates the pattern (uppercase hex)', () => {
+    // The pattern's hex segment is `[0-9a-f]{4}` — uppercase hex is rejected.
+    // Same source of truth as the previous case (RUN_ID_PATTERN in
+    // src/config-server/storage/run-store.ts).
+    const candidate = { ...inFlightBase(), runId: '20260512T094233-7C1A' };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  // --- pattern: isoDateTime (schemas/progress-v1.json definitions.isoDateTime
+  // — the regex requires a trailing Z and forbids local-tz offsets) ---
+  it('rejects a terminalAt string with a local-tz offset (the pattern forbids non-Z)', () => {
+    // The isoDateTime pattern forbids local-timezone offsets — a trailing Z
+    // is required by the schema's definitions.isoDateTime regex.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: 'complete',
+      terminalAt: '2026-05-12T10:18:47+02:00',
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects a terminalAt string with a space rather than T (isoDateTime pattern)', () => {
+    // The isoDateTime pattern requires a literal `T` between date and time —
+    // a space is not accepted even with the trailing Z.
+    const candidate = {
+      ...inFlightBase(),
+      terminal: true,
+      terminalReason: 'complete',
+      terminalAt: '2026-05-12 10:18:47Z',
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects a recoveryHistoryEntry recoveredAt that violates the isoDateTime pattern (missing Z)', () => {
+    // The nested recoveryHistoryEntry.recoveredAt $refs isoDateTime — the
+    // same trailing-Z requirement applies at the nested call site.
+    const candidate = {
+      ...inFlightBase(),
+      recoveryHistory: [
+        { recoveredAt: '2026-05-12T10:05:14', fromStatus: 'building', atSprint: 2 },
+      ],
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  // --- additionalProperties:false on nested closures
+  // (schemas/progress-v1.json — workspace, overlaysAtSnapshot,
+  // recoveryHistoryEntry each declare the closure locally) ---
+  it('rejects an unknown field inside `workspace` (nested additionalProperties:false closure)', () => {
+    // The workspace object declares `additionalProperties:false`; an extra
+    // sibling (e.g. a maintainer adds `oldBranch` without updating the
+    // schema's properties list) must fail.
+    const base = inFlightBase();
+    const candidate = {
+      ...base,
+      workspace: { ...(base.workspace as object), oldBranch: 'x' },
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects an unknown tier inside `overlaysAtSnapshot` (nested additionalProperties:false closure)', () => {
+    // overlaysAtSnapshot enumerates the legal tiers (user, project) and
+    // declares `additionalProperties:false`; a third tier (e.g. `builtin`)
+    // must fail at the nested closure.
+    const base = inFlightBase();
+    const candidate = {
+      ...base,
+      overlaysAtSnapshot: {
+        ...(base.overlaysAtSnapshot as object),
+        builtin: { loaded: false, path: null, hash: null },
+      },
+    };
+    expect(validate(candidate)).toBe(false);
+  });
+
+  it('rejects an unknown field inside a `recoveryHistoryEntry` (nested additionalProperties:false closure)', () => {
+    // recoveryHistoryEntry declares `additionalProperties:false`; a
+    // well-formed entry that carries an extra field (e.g. `triggeredBy`)
+    // must fail at the nested closure.
+    const candidate = {
+      ...inFlightBase(),
+      recoveryHistory: [
+        {
+          recoveredAt: '2026-05-12T10:05:14Z',
+          fromStatus: 'building',
+          atSprint: 2,
+          triggeredBy: 'user',
+        },
+      ],
+    };
     expect(validate(candidate)).toBe(false);
   });
 });

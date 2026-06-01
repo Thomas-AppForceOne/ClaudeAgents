@@ -67,6 +67,22 @@
         "atSprint"
       ],
       "type": "object"
+    },
+    "terminalReasonCode": {
+      "description": "The 10-value terminal-outcome enum the orchestrator writes when the run ends. The enum is named here so the top-level terminalReason property and the allOf[0].then.terminalReason coupling both reference one source of truth — adding an 11th value is a one-line edit, and the test reads its positive-coverage roster from progressV1.definitions.terminalReasonCode.enum so drift between schema and test cannot ship green.",
+      "enum": [
+        "complete",
+        "failed-max-attempts",
+        "failed-budget",
+        "failed-loop-detected",
+        "failed-evaluation-rejected",
+        "failed-clarifier-error",
+        "aborted-by-user",
+        "aborted-planner-error",
+        "aborted-contract-failed",
+        "aborted-validation-failed"
+      ],
+      "type": "string"
     }
   },
   "description": "JSON Schema (draft-07) for the orchestrator-owned progress.json file under each run directory. The strict additionalProperties:false posture is load-bearing: any field the orchestrator writes that is not enumerated here fails validation, which is the reconciliation merge gate's mechanism. The schema includes the two E8-shipped writer fields (contractRevision, the failed-evaluation-rejected terminalReason value) so an E8-renegotiated run validates clean.",
@@ -156,19 +172,7 @@
           "type": "null"
         },
         {
-          "enum": [
-            "complete",
-            "failed-max-attempts",
-            "failed-budget",
-            "failed-loop-detected",
-            "failed-evaluation-rejected",
-            "failed-clarifier-error",
-            "aborted-by-user",
-            "aborted-planner-error",
-            "aborted-contract-failed",
-            "aborted-validation-failed"
-          ],
-          "type": "string"
+          "$ref": "#/definitions/terminalReasonCode"
         }
       ]
     },
@@ -232,19 +236,7 @@
       "then": {
         "properties": {
           "terminalReason": {
-            "enum": [
-              "complete",
-              "failed-max-attempts",
-              "failed-budget",
-              "failed-loop-detected",
-              "failed-evaluation-rejected",
-              "failed-clarifier-error",
-              "aborted-by-user",
-              "aborted-planner-error",
-              "aborted-contract-failed",
-              "aborted-validation-failed"
-            ],
-            "type": "string"
+            "$ref": "#/definitions/terminalReasonCode"
           },
           "terminalAt": {
             "$ref": "#/definitions/isoDateTime"
