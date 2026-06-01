@@ -145,6 +145,128 @@ describe('run-lock tools — acquire/release by key', () => {
     expect(err.message).toMatch(/kill \d+/);
   });
 
+  it('recover acquire — live holder whose runId matches recoverTargetRunId throws StrandedSelfLock with lockPath + rm escape', () => {
+    // I-005 / AC 30 branch 1 of 3. The recover flow passes the run-id it is
+    // trying to recover via `recoverTargetRunId`. When the live holder's
+    // recorded `runId` matches, the lock is "stranded self": the pid in the
+    // lock is the long-lived config server, not a competing run, so the
+    // generic "kill <pid>" guidance would point the user at the framework
+    // process every other run on the machine depends on. The tool must
+    // therefore surface the distinct `StrandedSelfLock` reason whose message
+    // names the actual lock path and the `rm <lockPath>` manual-friction
+    // escape — distinct from `ConcurrentRunInProgress`.
+    const targetRunId = '20260522T180000-srec';
+    // Seed the lock as if the recover-target run is already the recorded
+    // holder; the on-disk pid is `process.pid`, necessarily alive during the
+    // test, so the live-holder branch fires deterministically.
+    acquireRunLockTool({ repoKey, runId: targetRunId });
+
+    let caught: unknown;
+    try {
+      acquireRunLockTool({
+        repoKey,
+        runId: targetRunId,
+        recoverTargetRunId: targetRunId,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ConfigServerError);
+    const err = caught as ConfigServerError;
+    expect(err.code).toBe('InvariantViolation');
+    expect((err as unknown as { reason: string }).reason).toBe('StrandedSelfLock');
+    // The message must name the actual lock path so the user can find the
+    // file the `rm` escape targets. The tool re-derives the path the same
+    // way the acquire side did; we reach into the structured `path` field to
+    // assert it points at the same on-disk lock.
+    const lockPath = (err as unknown as { path: string }).path;
+    expect(lockPath).toBe(resolveRunLockPath(resolveStoreRoot(), repoKey));
+    expect(err.message).toContain(lockPath);
+    // The `rm <lockPath>` escape is the recover-specific manual-friction
+    // remediation; it must appear verbatim in the message so a reader is
+    // not left guessing how to clear the lock.
+    expect(err.message).toContain(`rm ${lockPath}`);
+  });
+
+  it('recover acquire — live holder whose runId differs from recoverTargetRunId still throws ConcurrentRunInProgress', () => {
+    // I-005 / AC 30 branch 2 of 3. The `recoverTargetRunId` knob is narrow:
+    // it only re-shapes the message when the holder's `runId` *matches* the
+    // recover target. A different-runId live-pid lock is a genuine
+    // concurrent run, regardless of whether the caller is in a recover
+    // flow, and must still surface the unchanged `ConcurrentRunInProgress`
+    // refusal — otherwise the recover path would silently swallow the
+    // cross-run conflict.
+    const heldRunId = '20260522T180000-held';
+    const recoverTarget = '20260522T180000-rec2';
+    acquireRunLockTool({ repoKey, runId: heldRunId });
+
+    let caught: unknown;
+    try {
+      acquireRunLockTool({
+        repoKey,
+        runId: recoverTarget,
+        recoverTargetRunId: recoverTarget,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ConfigServerError);
+    const err = caught as ConfigServerError;
+    expect(err.code).toBe('InvariantViolation');
+    expect((err as unknown as { reason: string }).reason).toBe('ConcurrentRunInProgress');
+    // The generic refusal still carries its shell remediation (kill <pid>)
+    // — proves the recover-knob did not weaken the unchanged branch.
+    expect(err.message).toMatch(/kill \d+/);
+  });
+
+  it('recover acquire — dead-pid lock silently stale-breaks and acquires (unchanged behaviour)', () => {
+    // I-005 / AC 30 branch 3 of 3. A dead-pid lock is always stale-broken
+    // by the regular lock-acquisition path; the `recoverTargetRunId` knob
+    // does not change that, because a dead pid cannot be either a stranded
+    // self-lock (no live config server) or a competing run (no live
+    // acquirer). We forge a lock file on disk with a never-live pid (the
+    // `DEAD_PID` constant the sibling recovery-serialization test uses for
+    // the same purpose) and confirm the acquire silently breaks it, emits
+    // a stale-break notice through the warn sink, and writes the
+    // recover-target run as the new holder.
+    const DEAD_PID = 2147483646;
+    const lockPath = resolveRunLockPath(resolveStoreRoot(), repoKey);
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    writeFileSync(
+      lockPath,
+      JSON.stringify({
+        runId: '20260522T170000-dead',
+        pid: DEAD_PID,
+        startedAt: '2026-05-22T17:00:00Z',
+        hostname: 'old',
+      }) + '\n',
+      'utf8',
+    );
+
+    const recoverTarget = '20260522T180000-srvd';
+    const warnings: string[] = [];
+    const result = acquireRunLockTool(
+      {
+        repoKey,
+        runId: recoverTarget,
+        recoverTargetRunId: recoverTarget,
+      },
+      { warn: (line) => warnings.push(line) },
+    );
+
+    // The lock now records the recover-target run, not the forged dead one.
+    expect(existsSync(result.lockPath)).toBe(true);
+    expect(result.runId).toBe(recoverTarget);
+    const contents = readRunLock(result.lockPath);
+    expect(contents?.runId).toBe(recoverTarget);
+    expect(contents?.pid).toBe(process.pid);
+    // The stale-break notice reached the warn sink (not stderr), with the
+    // dead-pid run-id named so a log scanner can correlate it.
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/stale/i);
+    expect(warnings[0]).toContain('20260522T170000-dead');
+  });
+
   it('release is idempotent: a second release after the lock is already gone does not throw', () => {
     const runId = '20260522T180000-idem';
     acquireRunLockTool({ repoKey, runId });

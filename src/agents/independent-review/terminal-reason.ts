@@ -90,6 +90,15 @@ export interface UnresolvedBlockerLike {
 export interface BuildFailedEvaluationRejectedOptions {
   capFired: boolean;
   unresolvedBlockers: ReadonlyArray<UnresolvedBlockerLike>;
+  /**
+   * Injection seam for the timestamp the builder stamps onto `terminalAt`.
+   * Defaults to `() => new Date()`. The seam exists so a deterministic test
+   * can pass a fixed clock; production calls leave it unset and pick up the
+   * default. Pure-builder discipline is preserved: with the default
+   * provided, the builder is a function of inputs alone (the wall clock is
+   * the input the seam exposes).
+   */
+  nowFn?: () => Date;
 }
 
 /**
@@ -99,10 +108,16 @@ export interface BuildFailedEvaluationRejectedOptions {
  *   run.
  * @property terminalReason the kebab-case rejection reason; always
  *   {@link FAILED_EVALUATION_REJECTED_TERMINAL_REASON}.
+ * @property terminalAt ISO-8601 UTC timestamp (matches the `isoDateTime`
+ *   pattern in `schemas/progress-v1.json`). Emitted alongside `terminal` and
+ *   `terminalReason` so the schema's cross-field invariant — `terminal: true`
+ *   requires both `terminalReason` AND `terminalAt` to be non-null — is
+ *   satisfied at the writer site rather than discovered at the validator.
  */
 export interface FailedEvaluationRejectedRecord {
   terminal: true;
   terminalReason: typeof FAILED_EVALUATION_REJECTED_TERMINAL_REASON;
+  terminalAt: string;
 }
 
 /**
@@ -158,7 +173,7 @@ export interface BuildFailedEvaluationRejectedResult {
 export function buildFailedEvaluationRejectedRecord(
   opts: BuildFailedEvaluationRejectedOptions,
 ): BuildFailedEvaluationRejectedResult {
-  const { capFired, unresolvedBlockers } = opts;
+  const { capFired, unresolvedBlockers, nowFn = () => new Date() } = opts;
 
   // Guard 1: the cap has not fired. The renegotiation accounting only marks
   // a run terminal when the orchestrator has decided that further rounds
@@ -182,6 +197,12 @@ export function buildFailedEvaluationRejectedRecord(
     record: {
       terminal: true,
       terminalReason: FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
+      // ISO-8601 UTC with trailing Z; matches the schema's isoDateTime
+      // pattern in `schemas/progress-v1.json` (definitions.isoDateTime).
+      // Stamped at build time — the schema's cross-field invariant requires
+      // a non-null terminalAt whenever terminal:true, and the writer is the
+      // only site that knows the moment of teardown.
+      terminalAt: nowFn().toISOString(),
     },
   };
 }

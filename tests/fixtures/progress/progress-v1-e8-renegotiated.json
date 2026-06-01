@@ -1,0 +1,40 @@
+{
+  "runId": "20260512T094233-7c1a",
+  "status": "failed",
+  "currentSprint": 2,
+  "currentAttempt": 3,
+  "contractRevision": 2,
+  "totalSprints": 5,
+  "completedSprints": 1,
+  "projectRoot": "/Users/example/projects/sample-app",
+  "runBranch": "gan/20260512T094233-7c1a",
+  "baseBranch": "develop",
+  "startingBranch": "develop",
+  "workspace": {
+    "worktreePath": "/Users/example/projects/sample-app/.gan-state/runs/20260512T094233-7c1a/worktree",
+    "branch": "gan/20260512T094233-7c1a",
+    "createdByGan": true
+  },
+  "terminal": true,
+  "terminalReason": "failed-evaluation-rejected",
+  "terminalAt": "2026-05-12T10:18:47.512Z",
+  "overlaysAtSnapshot": {
+    "user": {
+      "loaded": true,
+      "path": "/Users/example/.claude/gan/user.md",
+      "hash": "sha256:7f1c0b3e9a2b4d5e6f78901234567890abcdef0123456789abcdef0123456789"
+    },
+    "project": {
+      "loaded": true,
+      "path": ".claude/gan/project.md",
+      "hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  },
+  "recoveryHistory": [
+    {
+      "recoveredAt": "2026-05-12T10:05:14.000Z",
+      "fromStatus": "building",
+      "atSprint": 2
+    }
+  ]
+}

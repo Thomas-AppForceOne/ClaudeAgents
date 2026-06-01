@@ -1,0 +1,273 @@
+{
+  "$id": "https://claudeagents.dev/schemas/progress-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "isoDateTime": {
+      "description": "RFC 3339 / ISO-8601 UTC timestamp. The pattern enforces the encoding directly (the pinned ajv runs strict:true with no ajv-formats, so format:date-time is not used): a trailing Z is required and a local-timezone offset is forbidden. An optional fractional-second component is permitted because the orchestrator's terminalAt and recoveryHistory writers may or may not include millisecond precision.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
+      "type": "string"
+    },
+    "nonEmptyString": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "nonNegativeInteger": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "nullableString": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "overlayTierSnapshot": {
+      "additionalProperties": false,
+      "description": "Snapshot of one overlay tier at run start. The sha256 hash is compared against the live overlay file's hash during --recover to surface drift in the recovery report. Each field is nullable because an unloaded tier records loaded:false with no path or hash.",
+      "properties": {
+        "hash": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "loaded": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/definitions/nullableString"
+        }
+      },
+      "required": [
+        "loaded",
+        "path",
+        "hash"
+      ],
+      "type": "object"
+    },
+    "recoveryHistoryEntry": {
+      "additionalProperties": false,
+      "description": "One --recover invocation, appended atomically by recovery before the resume dispatch fires. fromStatus is recorded as a string rather than the status enum because the entry is informational rather than a re-entry discriminator and pre-revision runs may carry historic values.",
+      "properties": {
+        "atSprint": {
+          "$ref": "#/definitions/nonNegativeInteger"
+        },
+        "fromStatus": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "recoveredAt": {
+          "$ref": "#/definitions/isoDateTime"
+        }
+      },
+      "required": [
+        "recoveredAt",
+        "fromStatus",
+        "atSprint"
+      ],
+      "type": "object"
+    },
+    "terminalReasonCode": {
+      "description": "The 10-value terminal-outcome enum the orchestrator writes when the run ends. The enum is named here so the top-level terminalReason property and the allOf[0].then.terminalReason coupling both reference one source of truth — adding an 11th value is a one-line edit, and the test reads its positive-coverage roster from progressV1.definitions.terminalReasonCode.enum so drift between schema and test cannot ship green.",
+      "enum": [
+        "complete",
+        "failed-max-attempts",
+        "failed-budget",
+        "failed-loop-detected",
+        "failed-evaluation-rejected",
+        "failed-clarifier-error",
+        "aborted-by-user",
+        "aborted-planner-error",
+        "aborted-contract-failed",
+        "aborted-validation-failed"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the orchestrator-owned progress.json file under each run directory. The strict additionalProperties:false posture is load-bearing: any field the orchestrator writes that is not enumerated here fails validation, which is the reconciliation merge gate's mechanism. The schema includes the two E8-shipped writer fields (contractRevision, the failed-evaluation-rejected terminalReason value) so an E8-renegotiated run validates clean.",
+  "properties": {
+    "baseBranch": {
+      "$ref": "#/definitions/nonEmptyString"
+    },
+    "completedSprints": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    },
+    "contractRevision": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    },
+    "currentAttempt": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    },
+    "currentSprint": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    },
+    "overlaysAtSnapshot": {
+      "additionalProperties": false,
+      "description": "Per-tier overlay snapshot taken at run start. --recover compares the live overlay hashes against these to detect drift and surface it as a recovery-report warning.",
+      "properties": {
+        "project": {
+          "$ref": "#/definitions/overlayTierSnapshot"
+        },
+        "user": {
+          "$ref": "#/definitions/overlayTierSnapshot"
+        }
+      },
+      "required": [
+        "user",
+        "project"
+      ],
+      "type": "object"
+    },
+    "projectRoot": {
+      "$ref": "#/definitions/nonEmptyString"
+    },
+    "recoveryHistory": {
+      "description": "Append-only log of --recover invocations against this run. Empty array on a fresh run; one entry per successful recovery thereafter.",
+      "items": {
+        "$ref": "#/definitions/recoveryHistoryEntry"
+      },
+      "type": "array"
+    },
+    "runBranch": {
+      "$ref": "#/definitions/nonEmptyString"
+    },
+    "runId": {
+      "description": "Run identifier in the framework's <YYYYMMDDTHHMMSS>-<4 hex> form. The pattern is the contract: a value that does not match cannot be reconstituted into a run directory path by any framework code.",
+      "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+      "type": "string"
+    },
+    "startingBranch": {
+      "$ref": "#/definitions/nonEmptyString"
+    },
+    "status": {
+      "description": "In-flight phase the resume dispatch reads at --recover time. Distinct from terminalReason: status is the coarse stage, terminalReason is the terminal outcome. complete and failed are end-state status values that pair with terminal:true.",
+      "enum": [
+        "clarifying",
+        "planning",
+        "negotiating",
+        "building",
+        "evaluating",
+        "complete",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "terminal": {
+      "type": "boolean"
+    },
+    "terminalAt": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/isoDateTime"
+        }
+      ]
+    },
+    "terminalReason": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/terminalReasonCode"
+        }
+      ]
+    },
+    "totalSprints": {
+      "$ref": "#/definitions/nonNegativeInteger"
+    },
+    "workspace": {
+      "additionalProperties": false,
+      "description": "Recorded workspace coordinates. F7's shipped recordWorkspace writes this at run start; --recover re-attaches the run to worktreePath, and --cleanup classifies teardown by createdByGan (a gan-created workspace is torn down, a user-owned workspace is left intact).",
+      "properties": {
+        "branch": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "createdByGan": {
+          "type": "boolean"
+        },
+        "worktreePath": {
+          "$ref": "#/definitions/nonEmptyString"
+        }
+      },
+      "required": [
+        "worktreePath",
+        "branch",
+        "createdByGan"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "runId",
+    "status",
+    "currentSprint",
+    "currentAttempt",
+    "contractRevision",
+    "totalSprints",
+    "completedSprints",
+    "projectRoot",
+    "runBranch",
+    "baseBranch",
+    "startingBranch",
+    "workspace",
+    "terminal",
+    "terminalReason",
+    "terminalAt",
+    "overlaysAtSnapshot",
+    "recoveryHistory"
+  ],
+  "allOf": [
+    {
+      "description": "Cross-field invariant: terminal:true requires the full terminal triple. The writer contract O2 ACs 1, 2, 3 each describe the orchestrator writing terminal:true alongside a non-null terminalReason and a non-null terminalAt. The schema is the reconciliation gate; without this coupling a half-terminal record (terminal:true with null reason/time) would silently pass, which is the F5/R6 writer-vs-schema drift class the gate exists to catch.",
+      "if": {
+        "properties": {
+          "terminal": {
+            "const": true
+          }
+        },
+        "required": [
+          "terminal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "terminalReason": {
+            "$ref": "#/definitions/terminalReasonCode"
+          },
+          "terminalAt": {
+            "$ref": "#/definitions/isoDateTime"
+          }
+        }
+      }
+    },
+    {
+      "description": "Cross-field invariant: terminal:false requires both terminalReason and terminalAt to be null. This is the in-flight shape — any non-null value on either field while terminal is still false means a writer half-wrote a teardown.",
+      "if": {
+        "properties": {
+          "terminal": {
+            "const": false
+          }
+        },
+        "required": [
+          "terminal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "terminalReason": {
+            "type": "null"
+          },
+          "terminalAt": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "title": "ClaudeAgents progress.json, v1",
+  "type": "object"
+}

@@ -33,10 +33,20 @@ import {
  *   would be treated as garbage by `readRunLock` and broken by the next
  *   acquire, silently defeating the concurrent-run guard. The input schema
  *   enforces presence at the MCP boundary.
+ * @property recoverTargetRunId the run-id `--recover` is targeting, when this
+ *   acquire is part of a recover flow. Threaded through to the library so a
+ *   live-pid lock whose recorded `runId` matches surfaces as
+ *   `StrandedSelfLock` (with the `rm <lockPath>` escape) instead of the
+ *   generic `ConcurrentRunInProgress` "kill the other pid" message — the
+ *   recorded pid is the long-lived config server, so the generic guidance
+ *   would point the user at the wrong process. Omitted on regular sprint-flow
+ *   acquires; the same-`runId` live-pid case there still throws
+ *   `ConcurrentRunInProgress`.
  */
 export interface AcquireRunLockInput {
   repoKey: string;
   runId: string;
+  recoverTargetRunId?: string;
 }
 
 /**
@@ -98,8 +108,13 @@ export interface AcquireRunLockResult {
  *   `mutated`) — the holder `pid`/`hostname` the library handle carries are
  *   deliberately not surfaced to the client.
  * @throws `InvariantViolation` (`ConcurrentRunInProgress`) when the lock is
- *   held by a live pid — propagated from the library through the F2 error
- *   factory.
+ *   held by a live pid whose `runId` does not match `input.recoverTargetRunId`
+ *   (or when no `recoverTargetRunId` was supplied) — propagated from the
+ *   library through the F2 error factory.
+ * @throws `InvariantViolation` (`StrandedSelfLock`) when
+ *   `input.recoverTargetRunId` is supplied and the live holder's `runId`
+ *   matches it; the message names the lock path and the `rm <lockPath>`
+ *   manual-friction escape.
  */
 export function acquireRunLockTool(
   input: AcquireRunLockInput,
@@ -117,6 +132,14 @@ export function acquireRunLockTool(
   // deployment with logger config (rate limits, JSON formatting) sees them in
   // the structured stream instead of on raw stderr.
   if (deps.warn !== undefined) acquireOpts.warn = deps.warn;
+  // Thread the recover-target runId through to the library so the recover
+  // path's same-`runId` live-pid lock surfaces as `StrandedSelfLock` rather
+  // than the misleading generic `ConcurrentRunInProgress`. Omitted on
+  // non-recover acquires (regular sprint flow), where no recover-specific
+  // message exists to fall back to.
+  if (input.recoverTargetRunId !== undefined) {
+    acquireOpts.recoverTargetRunId = input.recoverTargetRunId;
+  }
   const handle = libraryAcquireRunLock(acquireOpts);
   // Project the library handle down to the run-scoped fields a client needs.
   // `contents.pid`/`contents.hostname` describe the long-lived config-server

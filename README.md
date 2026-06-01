@@ -213,7 +213,7 @@ Most projects need nothing — the framework auto-detects a stack and runs. A fe
 - **Tune the loop's safety ceilings**: in `.claude/gan/project.md`, set `safety.attemptCeilings.gan-generator: 5` to give the generator more revision rounds, `safety.sprintBudget: 16` to raise the sprint-wide cap, or `safety.oscillationDetection: false` to turn off edit-oscillation halts. For a one-off override, pass `/gan --max-attempts=5` (a uniform per-role ceiling for that run).
 - **Adjust the clarifier draft-preview timeout**: in `.claude/gan/project.md`, set `clarifier.draftTimeoutSeconds: 120` (integer in the range 10–600; default 60) to give yourself longer before a draft auto-approves. For a one-off override, pass `/gan --clarifier-timeout=120`. A value of `0` is rejected (`InvalidTimeoutValue`) — use `--skip-clarification` to bypass the phase instead.
 
-The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.json); the stack schema in [`schemas/stack-v1.json`](schemas/stack-v1.json).
+The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.json); the stack schema in [`schemas/stack-v1.json`](schemas/stack-v1.json); the strict `progress.json` schema (the per-run state file every writer must conform to) in [`schemas/progress-v1.json`](schemas/progress-v1.json).
 
 ---
 
@@ -224,17 +224,18 @@ The full overlay schema lives in [`schemas/overlay-v1.json`](schemas/overlay-v1.
 /gan --list-recoverable         # List runs eligible for recovery (repo-wide, from the central store).
 /gan --recover --run-id <id>    # Resume an interrupted run (only from the worktree it ran in).
 /gan --recover --reset-attempts # Resume, restarting the attempt counters from zero.
-/gan --cleanup                  # Delete the most recent non-terminal run.
-/gan --cleanup --run-id <id>    # Delete one specific run.
-/gan --cleanup --all            # Delete every non-terminal run.
-/gan --cleanup --all --include-terminal  # Delete every run (terminal included).
+/gan --cleanup [...]            # Reserved; deferred to v1.1 (prints a "requires v1.1" notice and exits non-zero).
 ```
 
-The inspection, recovery, and cleanup short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected or cleaned up.
+The inspection and recovery short-circuits run validation in non-aborting mode, so a project with a known-broken configuration can still be inspected or recovered.
 
 A run halted by loop & thrash detection (a `LoopDetected` exit, distinct from validation and contract failures) is recoverable like any other interrupted run. `--recover` rebuilds the per-role attempt counters from the run trace, so a sprint that was still looping halts again on the next attempt unless you change the prompt — or pass `--reset-attempts` (valid only alongside `--recover`) to resume with the counters reset to zero.
 
-`--list-recoverable` enumerates the repo's runs from the central store, so they are visible from any worktree; but a run is **resumable only from the worktree it ran in** (its working tree and branch live there), and `--recover` refuses from anywhere else, naming the right worktree. `--cleanup` prints a preview table (run id, status, sprint, start time, size) and prompts `[y/N]` before deleting; pass `--yes` to skip the prompt. It removes the run's central-store directory and — for a gan-created worktree — the run worktree and, merge-aware, its task branch (a merged branch is deleted; an unmerged one is kept unless you confirm). A user-owned worktree (case 1a) is never touched. Active runs (with a live `run.lock`) are refused. Cleanup never touches the central module-state store (`~/.gan-module-state/<repo-key>/`), `.claude/gan/`, or `.gan-cache/`.
+`--list-recoverable` enumerates the repo's runs from the central store, so they are visible from any worktree; but a run is **resumable only from the worktree it ran in** (its working tree and branch live there), and `--recover` refuses from anywhere else, naming the right worktree.
+
+**`--cleanup` is reserved in v1.0 and ships only as an inert stub:** invoking it (with any modifier) prints a structured `[deferred-to-v1.1]` notice and exits non-zero without touching disk. The full destructive surface — preview table, `[y/N]` prompt, `--yes`, merge-aware run-branch deletion, scope flags like `--all` / `--include-terminal` — ships in v1.1, when the already-tested cleanup-planner library is wired up as a deterministic tool the orchestrator can invoke. Until then, remove unwanted runs by hand: `rm -rf ~/.gan-runs-data/<repo-key>/runs/<run-id>` (or your `GAN_RUNS_DATA` override), then `git worktree remove .gan-state/runs/<run-id>/worktree --force` for a gan-created worktree, and `git branch -D <branch>` for the run branch if you no longer need it. Module state (`~/.gan-module-state/<repo-key>/`), `.claude/gan/`, and `.gan-cache/` are never run-state and never need cleanup.
+
+**The stranded-self-lock case.** A `--recover` against a run whose lock is held by a live pid carrying the *same* `runId` (which happens when the long-lived config-server pid outlives the run that took the lock) gets a distinct error — `StrandedSelfLock`, not the generic `ConcurrentRunInProgress` — that names the exact lock path and tells you to clear the stale lock with `rm <lockPath>` if no `/gan` session is actively running that run. A *different*-`runId` live lock still surfaces the generic refusal; a dead-pid lock is silently stale-broken. This means you don't have to guess whether the holder is your config-server or another live session.
 
 ---
 

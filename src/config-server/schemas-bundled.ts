@@ -18,6 +18,7 @@ import runTraceV1Json from '../../schemas/run-trace-v1.json' with { type: 'json'
 import runTraceIndexV1Json from '../../schemas/run-trace-index-v1.json' with { type: 'json' };
 import evaluatorEvidenceBundleV1Json from '../../schemas/evaluator-evidence-bundle-v1.json' with { type: 'json' };
 import independentReviewV1Json from '../../schemas/independent-review-v1.json' with { type: 'json' };
+import progressV1Json from '../../schemas/progress-v1.json' with { type: 'json' };
 
 /** Structural type of a bundled JSON Schema document (an opaque JSON object). */
 export type JsonSchema = Record<string, unknown>;
@@ -45,3 +46,14 @@ export const evaluatorEvidenceBundleV1: JsonSchema = evaluatorEvidenceBundleV1Js
  * any finding is considered for promotion into the proposer's criteria.
  */
 export const independentReviewV1: JsonSchema = independentReviewV1Json as JsonSchema;
+
+/**
+ * Strict schema for the orchestrator-owned `progress.json` file under each run
+ * directory — the reconciliation merge gate's load-bearing surface. Consumers
+ * (recovery, future cleanup, schema-publishing) should reach the bundled object
+ * via this export rather than re-parsing the JSON file from disk, so any drift
+ * between the on-disk source and the bundled copy is caught by the
+ * schemas-bundled parity tests. The `with { type: 'json' }` import attribute
+ * inlines the file at build time, matching the rest of the bundled set.
+ */
+export const progressV1: JsonSchema = progressV1Json as JsonSchema;
