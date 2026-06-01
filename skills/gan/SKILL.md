@@ -20,7 +20,7 @@ Parse arguments from the user's message before doing anything else. The five fla
 | Flag | Default | Meaning |
 |---|---|---|
 | `--help` (also `-h`, `help`) | n/a | Print help text and exit 0. Runs BEFORE validation; no worktree, no agents. |
-| `--print-config` | n/a | Inspection short-circuit. Calls validation in non-aborting mode, prints the resolved view (plus any structured errors), exits. No worktree, no agents. |
+| `--print-config` | n/a | Inspection short-circuit. Calls `validateAll()` in non-aborting mode then `getResolvedConfig()` and prints the flat resolved-config object — any error-severity validation results appear in the resolved object's own `issues` array (with `warnings` in the parallel `warnings` array); no `resolvedConfig`/`validationErrors` wrapper. Exit code reflects validation status. No worktree, no agents. |
 | `--recover` | n/a | Recovery short-circuit. Calls validation in non-aborting mode, dispatches to the recovery flow. No new worktree until recovery resumes. Without `--run-id`, targets the most recent non-terminal run; combine with `--run-id <id>` for a specific run. Recovery is bound to the run's recorded `workspace.worktreePath`: it refuses (non-zero) when invoked from any other worktree. See "Cleanup and recovery" below. |
 | `--list-recoverable` | n/a | Inventory short-circuit. Calls validation in non-aborting mode, enumerates the repo's runs under the central store (`<store-root>/<repo-key>/runs/`) so every run is visible from any worktree, prints recoverable runs, exits. |
 | `--cleanup` | n/a | `[deferred-to-v1.1]` v1.0 stub: invoking with any modifier prints the structured `this command requires v1.1` message, exits non-zero, and mutates nothing on disk. The full destructive surface (single-run / `--all` / `--include-terminal` / `--yes`, merge-aware run-branch deletion, on-disk reclaim) lands in v1.1. See "Cleanup and recovery" below. |
@@ -140,7 +140,7 @@ OUTPUT
 
 Specifics:
 
-- `--print-config` calls `getResolvedConfig()` and emits the resolved-config object on stdout. When validation captured errors, both the partial `resolvedConfig` and the `validationErrors` are emitted as top-level keys; exit code reflects validation status.
+- `--print-config` calls `getResolvedConfig()` and emits the resolved-config object on stdout — byte-identical with `gan config print --json` for the same project state. The output is the flat resolved shape; when validation captured errors they appear inside that object's `issues` array (with non-aborting overlay-misuse warnings in the parallel `warnings` array). There is no `resolvedConfig`/`validationErrors` wrapper. Exit code reflects validation status: `0` when no error-severity `issues`, non-zero otherwise (warnings stay exit-zero in v1.0).
 - `--recover` and `--list-recoverable` dispatch to the recovery flow, anchored to the central store. Enumeration reads the repo's runs under `<store-root>/<repo-key>/runs/` (repo-wide, so the same runs are listed from any worktree); `--recover` then binds to the run's recorded `workspace.worktreePath` and refuses from any other worktree. Recovery refuses to touch the module-state store, `.claude/gan/`, or `.gan-cache/` (zone ownership rules).
 - `--cleanup` dispatches to the cleanup flow described in the "Cleanup and recovery" section below. Like recovery, it never touches the module-state store, `.claude/gan/`, or `.gan-cache/`.
 
@@ -192,7 +192,18 @@ The orchestrator follows this order on every regular `/gan` invocation:
 5. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
 
    **Enrich the snapshot with active-stack bodies before spawn.** The `ResolvedConfig` carries only metadata for each active stack — `{tier, path, schemaVersion}` — not the body fields the agents reference (`buildCmd`, `testCmd`, `lintCmd`, `auditCmd`, `secretsGlob`, `securitySurfaces`, `cacheEnv`, `scope`). After `getResolvedConfig()` returns, for each name in `snapshot.stacks.active`, call the API's `getStack(name)` to load the parsed body and attach those fields onto the matching `snapshot.stacks.byName[name]` entry. The result is the "enriched snapshot" — what every agent prompt means by `snapshot.activeStacks[*].buildCmd` etc. Re-enrichment is performed only when the snapshot is re-captured after a `mutated: true` API call (per the freshness rule below); idempotent re-runs against an unchanged snapshot reuse the enriched object.
-6. **Print the startup log.** One structured line summarising the active stacks, overlay sources, additionalContext paths, and discarded fields. Missing sources are listed explicitly; nothing is silently omitted.
+6. **Print the startup log.** One structured record summarising the active stacks (with their resolution tier), overlay sources (with a `(loaded)` marker per file), additionalContext paths, and discarded fields read verbatim from the snapshot's `discarded` `string[]`. Missing sources are listed explicitly as `(none)`; nothing is silently omitted. The block follows this exact shape:
+
+   ```
+   /gan loaded:
+     stacks: web-node (project)
+     user overlay: ~/.claude/gan/user.md  (loaded)
+     project overlay: .claude/gan/project.md  (loaded)
+     additionalContext: docs/architecture.md, docs/conventions.md
+     discarded: proposer.additionalCriteria, generator.additionalRules
+   ```
+
+   The `discarded` line is the snapshot's `discarded` array verbatim — dotted `block.field` names where some tier set `discardInherited: true`. It does not carry per-tier origin or replacement detail (the data layer collapses that to a boolean); the replacement value, when present, is visible under the snapshot's `overlay.<field>`.
 
    **First-run nudge.** When the active stack set resolves to `stacks/generic.md` only (no real ecosystem stack matched), the startup log emits an additional non-suppressible line, verbatim: `No recognised ecosystem stack — running with generic defaults. For richer behaviour, run \`gan stacks new <name>\` to scaffold a stack file, or fork an existing one from \`stacks/\` as a starting point.` The note appears even when log verbosity is reduced.
 
