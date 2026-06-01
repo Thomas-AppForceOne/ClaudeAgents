@@ -207,14 +207,21 @@ describe('writeFailedEvaluationRejectedTool — wire-side builder + persister co
 
     expect(res.write).toBe(true);
     expect(res.mutated).toBe(true);
-    expect(res.record).toEqual({
+    // The builder also emits `terminalAt` (an ISO-8601 UTC string) so the
+    // strict progress-v1 schema's allOf coupling — terminal:true requires
+    // non-null terminalReason and terminalAt — is satisfied at write time.
+    // The exact timestamp depends on the wall clock; assert shape rather
+    // than equality so the test stays deterministic.
+    expect(res.record).toMatchObject({
       terminal: true,
       terminalReason: 'failed-evaluation-rejected',
     });
+    expect(res.record.terminalAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/);
 
     const parsed = JSON.parse(readFileSync(progressFilePath, 'utf8')) as Record<string, unknown>;
     expect(parsed.terminal).toBe(true);
     expect(parsed.terminalReason).toBe('failed-evaluation-rejected');
+    expect(parsed.terminalAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/);
     expect(parsed.contractRevision).toBe(2);
     expect(parsed.label).toBe('sprint 3');
     expect(parsed.status).toBe('building');

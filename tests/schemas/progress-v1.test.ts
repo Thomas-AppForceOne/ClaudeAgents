@@ -12,7 +12,7 @@
 // exercise the schema's strictness today; the dogfood is what makes the gate
 // reconcile against real writer output.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
