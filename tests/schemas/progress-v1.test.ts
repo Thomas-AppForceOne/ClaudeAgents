@@ -12,14 +12,25 @@
 // exercise the schema's strictness today; the dogfood is what makes the gate
 // reconcile against real writer output.
 
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import AjvImport, { type ValidateFunction } from 'ajv';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { progressV1 } from '../../src/config-server/schemas-bundled.js';
+import {
+  recordWorkspace,
+  seedProgress,
+  type RunContextForSeed,
+} from '../../src/config-server/storage/run-progress.js';
+import { writeProgressFields } from '../../src/agents/independent-review/progress.js';
+import { buildFailedEvaluationRejectedRecord } from '../../src/agents/independent-review/terminal-reason.js';
+import { buildLoopHaltTerminalRecord } from '../../src/safety/recovery.js';
+import { validateProgress } from '../../src/config-server/validation/schema-check.js';
+import type { ResolvedWorkspace } from '../../src/config-server/storage/worktree-resolver.js';
 
 // Read the fixture from disk rather than importing it, matching the existing
 // pattern in tests/config-server/schemas-bundled-independent-review.test.ts.
@@ -459,5 +470,138 @@ describe('progress-v1 schema rejects unenumerated and malformed shapes', () => {
       ],
     };
     expect(validate(candidate)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live-writer assertions: prove that the shipped writers produce output that
+// validates clean against the bundled `progressV1` Ajv validator. The
+// hand-rolled fixture above pins schema shape; these tests close the loop
+// by exercising the actual source writers — without this block the schema
+// is internally consistent but no production caller's output is checked
+// against it. The block resolves cluster C-2 (issue I-001).
+// ---------------------------------------------------------------------------
+
+const liveWriterTmpDirs: string[] = [];
+
+function makeLiveWriterTmp(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'progress-v1-live-'));
+  liveWriterTmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const d of liveWriterTmpDirs.splice(0)) {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+function liveRunContext(): RunContextForSeed {
+  return {
+    runId: '20260601T030830-1a2b',
+    projectRoot: '/Users/example/projects/sample-app',
+    runBranch: 'feature/sample',
+    baseBranch: 'develop',
+    startingBranch: 'develop',
+    workspace: {
+      worktreePath: '/Users/example/projects/sample-app/.gan-state/runs/20260601T030830-1a2b/worktree',
+      branch: 'feature/sample',
+      createdByGan: true,
+    },
+    overlaysAtSnapshot: {
+      user: { loaded: false, path: null, hash: null },
+      project: { loaded: false, path: null, hash: null },
+    },
+  };
+}
+
+describe('live writers produce conforming output (cluster C-2)', () => {
+  it('seedProgress produces a document that validates against progress-v1', () => {
+    const dir = makeLiveWriterTmp();
+    const progressPath = path.join(dir, 'progress.json');
+    seedProgress(progressPath, liveRunContext());
+    const onDisk = JSON.parse(readFileSync(progressPath, 'utf8'));
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
+  });
+
+  it('seedProgress + recordWorkspace round-trip validates against progress-v1', () => {
+    const dir = makeLiveWriterTmp();
+    const progressPath = path.join(dir, 'progress.json');
+    seedProgress(progressPath, liveRunContext());
+
+    const resolved: ResolvedWorkspace = {
+      worktreePath:
+        '/Users/example/projects/sample-app/.gan-state/runs/20260601T030830-1a2b/worktree',
+      branch: 'feature/sample',
+      createdByGan: true,
+      resolutionCase: '1c',
+    };
+    recordWorkspace(progressPath, resolved);
+    const onDisk = JSON.parse(readFileSync(progressPath, 'utf8'));
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
+  });
+
+  it('seedProgress + writeProgressFields(narrow update) round-trip validates against progress-v1', () => {
+    const dir = makeLiveWriterTmp();
+    const progressPath = path.join(dir, 'progress.json');
+    seedProgress(progressPath, liveRunContext());
+    // A typical narrow update from the renegotiation loop.
+    writeProgressFields(progressPath, { status: 'negotiating' });
+    const onDisk = JSON.parse(readFileSync(progressPath, 'utf8'));
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
+  });
+
+  it('seedProgress + buildFailedEvaluationRejectedRecord + writeProgressFields persists a schema-conforming terminal record', () => {
+    const dir = makeLiveWriterTmp();
+    const progressPath = path.join(dir, 'progress.json');
+    seedProgress(progressPath, liveRunContext());
+
+    const built = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: [{ id: 'b-1' }],
+    });
+    expect(built.write).toBe(true);
+    expect(built.record).toBeDefined();
+    if (built.record !== undefined) {
+      writeProgressFields(progressPath, { ...built.record });
+    }
+    const onDisk = JSON.parse(readFileSync(progressPath, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.terminal).toBe(true);
+    expect(onDisk.terminalReason).toBe('failed-evaluation-rejected');
+    expect(typeof onDisk.terminalAt).toBe('string');
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
+  });
+
+  it('seedProgress + buildLoopHaltTerminalRecord + writeProgressFields persists a schema-conforming terminal record', () => {
+    const dir = makeLiveWriterTmp();
+    const progressPath = path.join(dir, 'progress.json');
+    seedProgress(progressPath, liveRunContext());
+
+    const record = buildLoopHaltTerminalRecord();
+    writeProgressFields(progressPath, { ...record });
+    const onDisk = JSON.parse(readFileSync(progressPath, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.terminal).toBe(true);
+    expect(onDisk.terminalReason).toBe('failed-loop-detected');
+    expect(typeof onDisk.terminalAt).toBe('string');
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
+  });
+
+  it('the writer-supplied terminalAt matches the schema isoDateTime pattern', () => {
+    // Pin the wire shape that satisfies the schema's cross-field invariant:
+    // the writers stamp a trailing-Z UTC timestamp that the
+    // definitions.isoDateTime pattern accepts.
+    const failed = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: [{ id: 'b-1' }],
+    });
+    const loopHalt = buildLoopHaltTerminalRecord();
+    const isoZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/;
+    expect(failed.record?.terminalAt).toMatch(isoZ);
+    expect(loopHalt.terminalAt).toMatch(isoZ);
   });
 });

@@ -29,6 +29,11 @@ import {
   FAILED_EVALUATION_REJECTED_TERMINAL_REASON,
 } from '../../../src/agents/independent-review/terminal-reason.js';
 import { writeProgressFields } from '../../../src/agents/independent-review/progress.js';
+import {
+  seedProgress,
+  type RunContextForSeed,
+} from '../../../src/config-server/storage/run-progress.js';
+import { validateProgress } from '../../../src/config-server/validation/schema-check.js';
 
 /**
  * Test-local cap-fire predicate (cluster C-5 / I-014).
@@ -74,15 +79,19 @@ const ONE_BLOCKER = [{ id: 'blocker-1' }];
 
 describe('buildFailedEvaluationRejectedRecord — happy path', () => {
   it('returns a write decision with the literal terminal record when cap fired with one blocker', () => {
+    // Deterministic clock so the terminalAt assertion is reproducible.
+    const fixed = new Date('2026-06-01T03:08:30.000Z');
     const res = buildFailedEvaluationRejectedRecord({
       capFired: true,
       unresolvedBlockers: ONE_BLOCKER,
+      nowFn: () => fixed,
     });
 
     expect(res.write).toBe(true);
     expect(res.record).toEqual({
       terminal: true,
       terminalReason: 'failed-evaluation-rejected',
+      terminalAt: '2026-06-01T03:08:30.000Z',
     });
     expect(res.record?.terminalReason).toBe(FAILED_EVALUATION_REJECTED_TERMINAL_REASON);
   });
@@ -207,5 +216,91 @@ describe('cap-fire predicate boundary (caller-side derivation)', () => {
     });
     expect(atCap.write).toBe(true);
     expect(atCap.record?.terminalReason).toBe(FAILED_EVALUATION_REJECTED_TERMINAL_REASON);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// terminalAt + progress-v1 conformance (cluster C-2 / I-001).
+//
+// The schema's cross-field invariant requires terminal:true to carry both a
+// non-null terminalReason AND a non-null terminalAt. The builder now stamps
+// terminalAt at build time. These tests pin: (a) the seam injects a fixed
+// clock; (b) the default produces a string that matches the schema's
+// isoDateTime pattern; (c) a seedProgress → builder → writeProgressFields
+// composition produces a document that validates clean against progressV1.
+// ---------------------------------------------------------------------------
+
+function liveRunContext(): RunContextForSeed {
+  return {
+    runId: '20260601T030830-1a2b',
+    projectRoot: '/Users/example/projects/sample-app',
+    runBranch: 'feature/sample',
+    baseBranch: 'develop',
+    startingBranch: 'develop',
+    workspace: {
+      worktreePath: '/Users/example/projects/sample-app/.gan-state/runs/20260601T030830-1a2b/worktree',
+      branch: 'feature/sample',
+      createdByGan: true,
+    },
+    overlaysAtSnapshot: {
+      user: { loaded: false, path: null, hash: null },
+      project: { loaded: false, path: null, hash: null },
+    },
+  };
+}
+
+describe('buildFailedEvaluationRejectedRecord — terminalAt emission', () => {
+  it('stamps terminalAt with the injected clock when nowFn is provided', () => {
+    const fixed = new Date('2026-06-01T03:08:30.500Z');
+    const res = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: ONE_BLOCKER,
+      nowFn: () => fixed,
+    });
+    expect(res.record?.terminalAt).toBe('2026-06-01T03:08:30.500Z');
+  });
+
+  it('the default clock produces a terminalAt that matches the schema isoDateTime pattern', () => {
+    // No nowFn → wall clock. Assert only the shape (the value is
+    // non-deterministic).
+    const res = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: ONE_BLOCKER,
+    });
+    expect(res.record?.terminalAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/);
+  });
+
+  it('the no-op guards do not emit a terminalAt (no record at all)', () => {
+    const noCap = buildFailedEvaluationRejectedRecord({
+      capFired: false,
+      unresolvedBlockers: ONE_BLOCKER,
+    });
+    expect(noCap.record).toBeUndefined();
+    const noBlockers = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: [],
+    });
+    expect(noBlockers.record).toBeUndefined();
+  });
+});
+
+describe('buildFailedEvaluationRejectedRecord — progress-v1 conformance', () => {
+  it('seedProgress + builder + writeProgressFields persists a record that validates against progressV1', () => {
+    const dir = makeTmp();
+    const progressFilePath = path.join(dir, 'progress.json');
+    seedProgress(progressFilePath, liveRunContext());
+
+    const res = buildFailedEvaluationRejectedRecord({
+      capFired: true,
+      unresolvedBlockers: ONE_BLOCKER,
+    });
+    expect(res.write).toBe(true);
+    if (res.record !== undefined) {
+      writeProgressFields(progressFilePath, { ...res.record });
+    }
+
+    const onDisk = JSON.parse(readFileSync(progressFilePath, 'utf8'));
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
   });
 });

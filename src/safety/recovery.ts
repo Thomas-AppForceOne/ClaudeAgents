@@ -156,10 +156,27 @@ export function validateResetAttemptsUsage(flags: ResetAttemptsFlags): ResetAtte
  *   {@link FAILED_LOOP_DETECTED_TERMINAL_REASON}. This is what makes the halted
  *   run discoverable to `--recover` as a loop halt rather than a contract/
  *   validation failure.
+ * @property terminalAt ISO-8601 UTC timestamp (matches the `isoDateTime`
+ *   pattern in `schemas/progress-v1.json`). Emitted at build time so the
+ *   schema's cross-field invariant (terminal:true requires non-null
+ *   terminalReason AND non-null terminalAt) is satisfied at the writer site.
  */
 export interface LoopHaltTerminalRecord {
   terminal: true;
   terminalReason: typeof FAILED_LOOP_DETECTED_TERMINAL_REASON;
+  terminalAt: string;
+}
+
+/**
+ * Inputs to {@link buildLoopHaltTerminalRecord}: only the clock-injection seam.
+ *
+ * @property nowFn injection seam for the timestamp the builder stamps onto
+ *   `terminalAt`. Defaults to `() => new Date()`. Production calls leave it
+ *   unset; deterministic tests pass a fixed clock so the recorded timestamp
+ *   is reproducible.
+ */
+export interface BuildLoopHaltTerminalRecordOptions {
+  nowFn?: () => Date;
 }
 
 /**
@@ -167,18 +184,28 @@ export interface LoopHaltTerminalRecord {
  *
  * Produced when a `LoopDetected` halt fires (any of the three triggers), this
  * is the record whose `terminalReason` makes the run recoverable via
- * `--recover`. It is a pure builder over no inputs — the only fact it carries is
- * the fixed reason — so it can be unit-tested in isolation without the
- * archive/`--recover` execution flow.
+ * `--recover`. The builder is otherwise input-free; the only seam is the
+ * optional clock, which keeps determinism reachable from tests without
+ * coupling production callers to a clock argument.
  *
- * @returns a {@link LoopHaltTerminalRecord} with `terminal: true` and
- *   `terminalReason: "failed-loop-detected"`. A fresh object each call (never a
- *   shared mutable singleton). Pure; never throws.
+ * @param opts optional clock-injection seam (see
+ *   {@link BuildLoopHaltTerminalRecordOptions}); omit to use the wall clock.
+ * @returns a {@link LoopHaltTerminalRecord} with `terminal: true`,
+ *   `terminalReason: "failed-loop-detected"`, and a fresh `terminalAt`
+ *   timestamp. A new object each call (never a shared mutable singleton).
+ *   Never throws.
  */
-export function buildLoopHaltTerminalRecord(): LoopHaltTerminalRecord {
+export function buildLoopHaltTerminalRecord(
+  opts: BuildLoopHaltTerminalRecordOptions = {},
+): LoopHaltTerminalRecord {
+  const { nowFn = () => new Date() } = opts;
   return {
     terminal: true,
     terminalReason: FAILED_LOOP_DETECTED_TERMINAL_REASON,
+    // ISO-8601 UTC with trailing Z; matches the schema's isoDateTime pattern.
+    // Stamped at build time — the schema's cross-field invariant requires a
+    // non-null terminalAt whenever terminal:true.
+    terminalAt: nowFn().toISOString(),
   };
 }
 

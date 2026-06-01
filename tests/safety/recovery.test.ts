@@ -37,6 +37,13 @@ import {
   type RoleAttemptState,
 } from '../../src/trace/reconcile.js';
 import { TraceEmitter } from '../../src/trace/emitter.js';
+import {
+  seedProgress,
+  type RunContextForSeed,
+} from '../../src/config-server/storage/run-progress.js';
+import { writeProgressFields } from '../../src/agents/independent-review/progress.js';
+import { validateProgress } from '../../src/config-server/validation/schema-check.js';
+import { readFileSync } from 'node:fs';
 
 const tmpDirs: string[] = [];
 const RUN_ID = '20260523T171711-0388';
@@ -143,6 +150,63 @@ describe('loop_halt_writes_recoverable_terminal_reason', () => {
 
   it('the exported terminal-reason literal is the kebab-case recoverable-terminal convention', () => {
     expect(FAILED_LOOP_DETECTED_TERMINAL_REASON).toBe('failed-loop-detected');
+  });
+
+  it('emits terminalAt as an ISO-8601 UTC string matching the schema isoDateTime pattern', () => {
+    // Default clock: pin only the shape (the value is non-deterministic).
+    const record = buildLoopHaltTerminalRecord();
+    expect(typeof record.terminalAt).toBe('string');
+    expect(record.terminalAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/);
+  });
+
+  it('stamps terminalAt with the injected clock when nowFn is provided (determinism seam)', () => {
+    const fixed = new Date('2026-06-01T03:08:30.500Z');
+    const record = buildLoopHaltTerminalRecord({ nowFn: () => fixed });
+    expect(record.terminalAt).toBe('2026-06-01T03:08:30.500Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// progress-v1 conformance for the loop-halt terminal record (cluster C-2 /
+// I-001). seedProgress births the full required-set; the builder's record
+// merges in; the on-disk document validates clean. This is the live-writer
+// arm of the resolution: the schema's cross-field invariant (terminal:true
+// ⇒ non-null terminalReason AND non-null terminalAt) is satisfied at the
+// writer site, not patched at a downstream gate.
+// ---------------------------------------------------------------------------
+
+function liveRunContext(): RunContextForSeed {
+  return {
+    runId: '20260601T030830-1a2b',
+    projectRoot: '/Users/example/projects/sample-app',
+    runBranch: 'feature/sample',
+    baseBranch: 'develop',
+    startingBranch: 'develop',
+    workspace: {
+      worktreePath: '/Users/example/projects/sample-app/.gan-state/runs/20260601T030830-1a2b/worktree',
+      branch: 'feature/sample',
+      createdByGan: true,
+    },
+    overlaysAtSnapshot: {
+      user: { loaded: false, path: null, hash: null },
+      project: { loaded: false, path: null, hash: null },
+    },
+  };
+}
+
+describe('buildLoopHaltTerminalRecord — progress-v1 conformance', () => {
+  it('seedProgress + builder + writeProgressFields persists a record that validates against progressV1', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'recov-loop-halt-'));
+    tmpDirs.push(root);
+    const progressFilePath = path.join(root, 'progress.json');
+    seedProgress(progressFilePath, liveRunContext());
+
+    const record = buildLoopHaltTerminalRecord();
+    writeProgressFields(progressFilePath, { ...record });
+
+    const onDisk = JSON.parse(readFileSync(progressFilePath, 'utf8'));
+    const result = validateProgress(onDisk);
+    expect(result.valid, JSON.stringify(result.errors)).toBe(true);
   });
 });
 

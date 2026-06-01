@@ -28,6 +28,7 @@ import {
   readJsonObjectFile,
   stripForbiddenKeys,
 } from '../../config-server/storage/json-read.js';
+import { assertValidProgress } from '../../config-server/storage/run-progress.js';
 
 /**
  * Read-modify-write the fields named in `updates` onto `progress.json`,
@@ -59,5 +60,14 @@ export function writeProgressFields(
   const existing = readJsonObjectFile(progressFilePath);
   const base = existing === undefined ? {} : stripForbiddenKeys(existing);
   const next: Record<string, unknown> = { ...base, ...updates };
+  // Validate the merged document against `progress-v1` before the rename
+  // swap so an invalid shape is caught at write-time, not when a downstream
+  // reader compiles the validator. The gate is conditional inside
+  // assertValidProgress: a partial document (the legitimate pre-seed
+  // shape an existing test uses) is tolerated; only a document carrying
+  // every required top-level field is rejected on a validation failure,
+  // which is the writer-vs-schema drift class the reconciliation gate
+  // exists to catch.
+  assertValidProgress(progressFilePath, next);
   atomicWriteFile(progressFilePath, stableStringify(next));
 }

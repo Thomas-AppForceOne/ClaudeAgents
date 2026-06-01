@@ -80,9 +80,20 @@ export type {
   ResolveWorkspaceOptions,
 } from './config-server/storage/worktree-resolver.js';
 
-export { buildWorkspaceRecord, recordWorkspace } from './config-server/storage/run-progress.js';
+export {
+  buildWorkspaceRecord,
+  recordWorkspace,
+  seedProgress,
+  assertValidProgress,
+  progressDocumentIsComplete,
+} from './config-server/storage/run-progress.js';
 
-export type { WorkspaceRecord } from './config-server/storage/run-progress.js';
+export type {
+  WorkspaceRecord,
+  RunContextForSeed,
+  OverlayTierSnapshotRecord,
+  OverlaysAtSnapshotRecord,
+} from './config-server/storage/run-progress.js';
 
 export {
   acquireRunLock,

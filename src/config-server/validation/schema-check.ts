@@ -23,6 +23,7 @@ import {
   runTraceV1,
   runTraceIndexV1,
   evaluatorEvidenceBundleV1,
+  progressV1,
 } from '../schemas-bundled.js';
 
 // Ajv ships as a CJS module whose constructor may live on `.default` under an
@@ -117,6 +118,58 @@ export function getEvaluatorEvidenceBundleValidator(): ValidateFunction {
   const compiled = ajv.compile(evaluatorEvidenceBundleV1);
   evaluatorEvidenceBundleValidator = compiled;
   return compiled;
+}
+
+// Memoised validator for the strict `progress-v1` schema. The compile is
+// non-trivial (17 top-level required fields plus an allOf cross-field
+// invariant), so we cache it.
+let progressV1Validator: ValidateFunction | null = null;
+
+/**
+ * Compile-once Ajv validator for the `progress-v1` schema.
+ * @returns the memoised `ValidateFunction` (call it with the data to validate;
+ *   inspect its `.errors` on a `false` result).
+ */
+export function getProgressV1Validator(): ValidateFunction {
+  if (progressV1Validator !== null) return progressV1Validator;
+  const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
+  const compiled = ajv.compile(progressV1);
+  progressV1Validator = compiled;
+  return compiled;
+}
+
+/**
+ * Result of {@link validateProgress}: a pure pair of `{ valid, errors }`.
+ *
+ * @property valid `true` if the document conforms to `progress-v1`, `false`
+ *   otherwise.
+ * @property errors Ajv error objects when invalid; empty array when valid.
+ */
+export interface ValidateProgressResult {
+  valid: boolean;
+  errors: ErrorObject[];
+}
+
+/**
+ * Validate `value` against the strict `progress-v1` schema.
+ *
+ * Pure; never throws. Wraps the memoised Ajv validator
+ * ({@link getProgressV1Validator}) and normalises its `errors`/`null` output
+ * into a consistent `{ valid, errors }` shape. The writer-side wiring in
+ * `writeProgressFields` and `recordWorkspace` consumes this and chooses to
+ * throw on `valid: false` so an invalid shape is caught at write-time rather
+ * than discovered when a later read goes through the validator.
+ *
+ * @param value the parsed `progress.json` document to check.
+ * @returns a {@link ValidateProgressResult}.
+ */
+export function validateProgress(value: unknown): ValidateProgressResult {
+  const validator = getProgressV1Validator();
+  const ok = validator(value);
+  return {
+    valid: ok === true,
+    errors: ok === true ? [] : (validator.errors ?? []).slice(),
+  };
 }
 
 /**
