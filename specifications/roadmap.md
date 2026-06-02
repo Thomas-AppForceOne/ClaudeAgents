@@ -100,7 +100,7 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 19. ✅ **[E8](E8-independent-review-and-forced-verification.md)** — independent adversarial review & forced verification. Shipped PR #35.
 20. ✅ **[M4](M4-docker-module-wiring.md)** — Docker module wiring. Shipped PR #36.
 21. ✅ **[O2](O2-recovery.md)** — minimal recovery. Shipped PR #37.
-22. ✅ **[O1](O1-resolution-observability.md)** — resolution observability. Shipped PR #TBD.
+22. ✅ **[O1](O1-resolution-observability.md)** — resolution observability. Shipped PR #38.
 23. **Next** [O3](O3-telemetry-semantics.md) — telemetry semantics (O1's slot-mate, next PR).
 24. [D1](D1-diagnostic-clarity.md) — diagnostic clarity + SKILL.md status markers.
 25. **Pre-release chores + release gate.** See below.
