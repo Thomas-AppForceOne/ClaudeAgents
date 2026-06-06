@@ -19,6 +19,8 @@ import runTraceIndexV1Json from '../../schemas/run-trace-index-v1.json' with { t
 import evaluatorEvidenceBundleV1Json from '../../schemas/evaluator-evidence-bundle-v1.json' with { type: 'json' };
 import independentReviewV1Json from '../../schemas/independent-review-v1.json' with { type: 'json' };
 import progressV1Json from '../../schemas/progress-v1.json' with { type: 'json' };
+import telemetryConfigV1Json from '../../schemas/telemetry-config-v1.json' with { type: 'json' };
+import telemetryOutcomeV1Json from '../../schemas/telemetry-outcome-v1.json' with { type: 'json' };
 
 /** Structural type of a bundled JSON Schema document (an opaque JSON object). */
 export type JsonSchema = Record<string, unknown>;
@@ -57,3 +59,27 @@ export const independentReviewV1: JsonSchema = independentReviewV1Json as JsonSc
  * inlines the file at build time, matching the rest of the bundled set.
  */
 export const progressV1: JsonSchema = progressV1Json as JsonSchema;
+
+/**
+ * Strict schema for the `telemetry/config.json` artefact O3 writes once at run
+ * start. The schema pins the envelope (schemaVersion / capturedAt / runId) and
+ * the ten getResolvedConfig() top-level fields F2 owns, so a partial snapshot
+ * fails validation — the drift O3 exists to prevent. The bundled constant is
+ * what the writer and any reader (recovery, future T2 stats surface) compile
+ * against without touching disk; the on-disk file remains the canonical
+ * source, and the schemas-bundled parity test catches drift between the two.
+ */
+export const telemetryConfigV1: JsonSchema = telemetryConfigV1Json as JsonSchema;
+
+/**
+ * Strict schema for the `telemetry/outcome.json` artefact O3 writes once at
+ * run termination. The schema pins the disposition / terminalReason
+ * vocabularies, the per-sprint outcome shape, the nullable cost rollup with
+ * its complete:boolean discriminator (so a lossy trace cannot silently
+ * undercount), the safety-halt summary, and the reserved-empty humanReviews
+ * slot E6 v1.2 will land items into without forcing a v2 bump. Bundled the
+ * same way the rest of the project's schemas are bundled — the `with { type:
+ * 'json' }` import attribute inlines the file at build time so runtime
+ * validation works against the installed package.
+ */
+export const telemetryOutcomeV1: JsonSchema = telemetryOutcomeV1Json as JsonSchema;
