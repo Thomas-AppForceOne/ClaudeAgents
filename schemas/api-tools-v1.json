@@ -1571,6 +1571,46 @@
         "type": "object"
       }
     },
+    "writeFailedEvaluationRejected": {
+      "description": "Write the `terminalReason: \"failed-evaluation-rejected\"` rejection record to `progress.json` when, and only when, the renegotiation cap fired with at least one unresolved blocker. Composes the pure builder `buildFailedEvaluationRejectedRecord` with the shared `writeProgressFields` persister at the wire boundary. A `capFired: false` or empty `unresolvedBlockers` is a true no-op (`mutated: false`); otherwise the record is merged into `progress.json` via the framework's atomic-write primitive.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "capFired": {
+            "description": "True when the orchestrator decided the renegotiation cap has fired this sprint. The tool treats `false` as a no-op so a caller that wires the guard at the wrong site cannot accidentally mark a non-terminal run as terminated.",
+            "type": "boolean"
+          },
+          "progressFilePath": {
+            "description": "Absolute path to `progress.json`. The tool read-modify-writes it atomically; pre-existing fields are preserved.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "unresolvedBlockers": {
+            "description": "Surviving `blocker`-severity findings at the moment the cap fired. The tool inspects only the length and each entry's `id`; an empty array is treated as `the round actually passed, do not terminate`.",
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "progressFilePath",
+          "capFired",
+          "unresolvedBlockers"
+        ],
+        "type": "object"
+      }
+    },
     "writeTelemetryConfig": {
       "description": "Write the run's `telemetry/config.json` artefact atomically once at run start, between run-lock acquisition and the clarifier spawn. The artefact records the framework's view of the project (the captured F2 snapshot's ten required top-level fields) at the moment the snapshot was taken; reading the same artefact later reproduces what the orchestrator and every agent were fed. Skipped entirely when the orchestrator was invoked with `--no-telemetry`.",
       "inputSchema": {
@@ -1707,46 +1747,6 @@
           "sprints",
           "safetyHalts",
           "writtenAt"
-        ],
-        "type": "object"
-      }
-    },
-    "writeFailedEvaluationRejected": {
-      "description": "Write the `terminalReason: \"failed-evaluation-rejected\"` rejection record to `progress.json` when, and only when, the renegotiation cap fired with at least one unresolved blocker. Composes the pure builder `buildFailedEvaluationRejectedRecord` with the shared `writeProgressFields` persister at the wire boundary. A `capFired: false` or empty `unresolvedBlockers` is a true no-op (`mutated: false`); otherwise the record is merged into `progress.json` via the framework's atomic-write primitive.",
-      "inputSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "capFired": {
-            "description": "True when the orchestrator decided the renegotiation cap has fired this sprint. The tool treats `false` as a no-op so a caller that wires the guard at the wrong site cannot accidentally mark a non-terminal run as terminated.",
-            "type": "boolean"
-          },
-          "progressFilePath": {
-            "description": "Absolute path to `progress.json`. The tool read-modify-writes it atomically; pre-existing fields are preserved.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "unresolvedBlockers": {
-            "description": "Surviving `blocker`-severity findings at the moment the cap fired. The tool inspects only the length and each entry's `id`; an empty array is treated as `the round actually passed, do not terminate`.",
-            "items": {
-              "additionalProperties": true,
-              "properties": {
-                "id": {
-                  "minLength": 1,
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "progressFilePath",
-          "capFired",
-          "unresolvedBlockers"
         ],
         "type": "object"
       }
