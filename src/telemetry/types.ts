@@ -208,6 +208,17 @@ export interface WriteTelemetryConfigInput {
  * @property writtenAt the RFC3339-ms timestamp embedded in the envelope.
  *   The caller supplies it so the run-end moment is consistent across this
  *   artefact, the T1 trace's terminal milestone, and progress.json.
+ * @property droppedEmits optional explicit dropped-emit count, intended for
+ *   cross-process callers. When omitted (the in-process case), the writer
+ *   falls back to `getDroppedEmits(runDir)` — the in-memory tally R7
+ *   maintains in the long-lived config-server process. When provided, the
+ *   writer uses the explicit value verbatim and does **not** call
+ *   `getDroppedEmits`. The seam exists because the dropped-emit tally is
+ *   process-scoped by design (see `src/trace/dropped-emits.ts`): a writer
+ *   that runs in a different process from the trace emitter would otherwise
+ *   read 0 and misreport `cost.complete` as `true` after a real loss. The
+ *   `cost.complete` derivation remains `droppedEmits === 0` in both modes;
+ *   only the source of the count differs.
  */
 export interface WriteTelemetryOutcomeInput {
   runDir: string;
@@ -216,4 +227,5 @@ export interface WriteTelemetryOutcomeInput {
   sprints: SprintEntry[];
   safetyHalts: SafetyHaltEntry[];
   writtenAt: string;
+  droppedEmits?: number;
 }

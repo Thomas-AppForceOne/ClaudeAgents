@@ -34,6 +34,7 @@ import { terminalReasonToDisposition } from '../../src/telemetry/mapping.js';
 import { telemetryOutcomeV1 } from '../../src/config-server/schemas-bundled.js';
 import { appendTraceEvent, type TraceEventInput } from '../../src/trace/append.js';
 import {
+  getDroppedEmits,
   incrementDroppedEmits,
   resetDroppedEmitsForTests,
 } from '../../src/trace/dropped-emits.js';
@@ -263,5 +264,95 @@ describe('writeTelemetryOutcome — cost.complete derivation', () => {
     // typed as oneOf: null | costObject at the top level).
     const validate = compile();
     expect(validate(parsed)).toBe(true);
+  });
+});
+
+describe('writeTelemetryOutcome — explicit droppedEmits seam (cross-process)', () => {
+  // Verifies the cross-process API seam on WriteTelemetryOutcomeInput. When
+  // the caller supplies an explicit `droppedEmits` count, the writer uses it
+  // verbatim and does NOT consult the in-process tally. The behavioural
+  // assertions here are stronger than a spy: each case wires the in-process
+  // tally to the opposite value the explicit input asks for, so a writer
+  // that silently fell back to getDroppedEmits would produce a different
+  // result. That mismatch is what the test catches.
+
+  it('explicit droppedEmits: 0 wins over a non-zero in-process tally → cost.complete === true', async () => {
+    const runDir = makeRunDir();
+    appendTraceEvent(runDir, llmCall(0, 100, 50, 10));
+    // Bump the in-process tally to a non-zero value. If the writer used
+    // it, cost.complete would be false. The explicit `droppedEmits: 0`
+    // must override this signal.
+    incrementDroppedEmits(runDir);
+    incrementDroppedEmits(runDir);
+    expect(getDroppedEmits(runDir)).toBe(2);
+
+    const target = await writeTelemetryOutcome({
+      runDir,
+      runId: RUN_ID,
+      terminalReason: 'complete',
+      sprints: fabricatedSprints(),
+      safetyHalts: [],
+      writtenAt: '2026-06-06T19:10:00.000Z',
+      droppedEmits: 0,
+    });
+
+    const parsed = JSON.parse(readFileSync(target, 'utf8')) as {
+      cost: { complete: boolean } | null;
+    };
+    expect(parsed.cost).not.toBeNull();
+    expect(parsed.cost?.complete).toBe(true);
+  });
+
+  it('explicit droppedEmits: 5 wins over a zero in-process tally → cost.complete === false', async () => {
+    const runDir = makeRunDir();
+    appendTraceEvent(runDir, llmCall(0, 100, 50, 10));
+    // In-process tally is 0 (reset in beforeEach, no increment here). If
+    // the writer used it, cost.complete would be true. The explicit
+    // `droppedEmits: 5` must override and force complete: false.
+    expect(getDroppedEmits(runDir)).toBe(0);
+
+    const target = await writeTelemetryOutcome({
+      runDir,
+      runId: RUN_ID,
+      terminalReason: 'complete',
+      sprints: fabricatedSprints(),
+      safetyHalts: [],
+      writtenAt: '2026-06-06T19:10:00.000Z',
+      droppedEmits: 5,
+    });
+
+    const parsed = JSON.parse(readFileSync(target, 'utf8')) as {
+      cost: { complete: boolean } | null;
+    };
+    expect(parsed.cost).not.toBeNull();
+    expect(parsed.cost?.complete).toBe(false);
+  });
+
+  it('omitted droppedEmits falls back to getDroppedEmits(runDir) (regression guard)', async () => {
+    // The existing cost-derivation cases above already exercise the
+    // fallback path (no `droppedEmits` field in their input), so this
+    // is a focused belt-and-braces case: bump the in-process tally,
+    // omit the explicit field, and confirm the in-process count wins.
+    // If a future refactor accidentally dropped the fallback, this would
+    // flip to complete: true and fail.
+    const runDir = makeRunDir();
+    appendTraceEvent(runDir, llmCall(0, 100, 50, 10));
+    incrementDroppedEmits(runDir);
+
+    const target = await writeTelemetryOutcome({
+      runDir,
+      runId: RUN_ID,
+      terminalReason: 'complete',
+      sprints: fabricatedSprints(),
+      safetyHalts: [],
+      writtenAt: '2026-06-06T19:10:00.000Z',
+      // droppedEmits intentionally omitted — exercises the fallback path.
+    });
+
+    const parsed = JSON.parse(readFileSync(target, 'utf8')) as {
+      cost: { complete: boolean } | null;
+    };
+    expect(parsed.cost).not.toBeNull();
+    expect(parsed.cost?.complete).toBe(false);
   });
 });

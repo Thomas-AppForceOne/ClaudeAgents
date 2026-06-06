@@ -48,12 +48,16 @@ import type { Cost, TelemetryOutcomeV1, WriteTelemetryOutcomeInput } from './typ
  *   the summary degrades gracefully rather than failing the write.
  * - When the trace is present, `cost` is a non-null object whose six metric
  *   fields come from {@link aggregateRunSummary} and whose `complete`
- *   discriminator is `getDroppedEmits(runDir) === 0`. Reading the loss
- *   signal from droppedEmits — and not from the index-reconcile path — is
- *   the spec's explicit choice: a dropped emit leaves a gapless,
- *   index-reconcilable trace, so the reconcile cannot detect the loss. The
- *   only signal that survives the disk-full failure mode this surface
- *   exists to flag is R7's in-memory per-run emit-failure tally.
+ *   discriminator is `droppedEmits === 0`. The dropped-emit count comes
+ *   from the explicit `input.droppedEmits` when the caller supplied one
+ *   (the cross-process seam — see {@link WriteTelemetryOutcomeInput}) and
+ *   from {@link getDroppedEmits} otherwise (the in-process default).
+ *   Reading the loss signal from droppedEmits — and not from the
+ *   index-reconcile path — is the spec's explicit choice: a dropped emit
+ *   leaves a gapless, index-reconcilable trace, so the reconcile cannot
+ *   detect the loss. The only signal that survives the disk-full failure
+ *   mode this surface exists to flag is R7's in-memory per-run
+ *   emit-failure tally.
  *
  * Failure modes: any I/O failure on the write path bubbles up as a
  * ConfigServerError from atomicWriteFile. The cost-derivation path is
@@ -61,9 +65,9 @@ import type { Cost, TelemetryOutcomeV1, WriteTelemetryOutcomeInput } from './typ
  * `cost: null` rather than throwing.
  */
 export async function writeTelemetryOutcome(input: WriteTelemetryOutcomeInput): Promise<string> {
-  const { runDir, runId, terminalReason, sprints, safetyHalts, writtenAt } = input;
+  const { runDir, runId, terminalReason, sprints, safetyHalts, writtenAt, droppedEmits } = input;
   const disposition = terminalReasonToDisposition(terminalReason);
-  const cost = deriveCost(runDir);
+  const cost = deriveCost(runDir, droppedEmits);
 
   const envelope: TelemetryOutcomeV1 = {
     envelope: {
@@ -93,24 +97,32 @@ export async function writeTelemetryOutcome(input: WriteTelemetryOutcomeInput): 
  *
  * @param runDir absolute path to the run directory. The trace root is the
  *   `<runDir>/trace` subtree; cost is rolled up from `events/` within it.
+ * @param explicitDroppedEmits optional explicit dropped-emit count from the
+ *   caller. When `undefined`, the in-process {@link getDroppedEmits} tally
+ *   is read instead. The cross-process seam exists because
+ *   {@link getDroppedEmits} is process-scoped by design; passing the count
+ *   verbatim lets a caller in a different process supply the true value.
  *
  * @returns a non-null {@link Cost} when the trace's `events/` directory is
  *   present, or `null` when it is not. The non-null `complete` discriminator
  *   reflects droppedEmits, not the index-reconcile path — see the writer's
  *   doc comment for the rationale.
  */
-function deriveCost(runDir: string): Cost | null {
+function deriveCost(runDir: string, explicitDroppedEmits: number | undefined): Cost | null {
   const eventsDirPath = path.join(runDir, 'trace', 'events');
   if (!existsSync(eventsDirPath)) {
     return null;
   }
   const summary = aggregateRunSummary(runDir);
-  // droppedEmits === 0 is the verified-complete signal. Reading it through
-  // getDroppedEmits directly (rather than through summary.droppedEmits) keeps
-  // the dependency edge explicit: outcome.complete derives from R7's
-  // in-memory tally, not from anything on disk that a dropped emit could
-  // miss.
-  const droppedEmits = getDroppedEmits(runDir);
+  // droppedEmits === 0 is the verified-complete signal. When the caller
+  // supplied an explicit count we use it verbatim — the cross-process
+  // scenario where the in-memory tally in this process is not the
+  // authoritative one. Otherwise we read R7's in-memory tally directly
+  // (rather than through summary.droppedEmits) so the dependency edge is
+  // explicit: outcome.complete derives from R7's tally, not from anything
+  // on disk that a dropped emit could miss.
+  const droppedEmits =
+    explicitDroppedEmits !== undefined ? explicitDroppedEmits : getDroppedEmits(runDir);
   return {
     complete: droppedEmits === 0,
     tokensInput: summary.tokensInput,
