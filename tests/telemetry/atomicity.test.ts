@@ -107,10 +107,10 @@ describe('telemetry writers — atomic write contract', () => {
     // atomicWriteFile would mkdir-recursive it as a writable directory.
     const telemetryDir = path.join(runDir, 'telemetry');
     mkdirSync(telemetryDir);
-    // Read-only directory: temp write into telemetry/ throws, so the
-    // rename onto telemetry/config.json never happens. Either the file
-    // is absent (this case) or fully present (the success case above);
-    // never partial.
+    // Read-only directory makes the temp write throw, so the rename
+    // step never happens. Either the target file is absent (this case)
+    // or fully present (the success case above); the contract forbids a
+    // partial blend.
     chmodSync(telemetryDir, 0o555);
 
     let threw = false;

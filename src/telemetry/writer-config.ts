@@ -57,10 +57,10 @@ export async function writeTelemetryConfig(input: WriteTelemetryConfigInput): Pr
     },
     resolvedConfig,
   };
-  // Stable pretty-printed output: a human (operator, reviewer) opens this
-  // file far more often than a machine, and the consumer side is JSON
-  // parsing where indentation is free of cost. The two-space indent matches
-  // the rest of the project's JSON artefacts.
+  // Stable pretty-printed output: a human operator opens this file far
+  // more often than a machine, and the consumer side is JSON parsing
+  // where indentation is free of cost. The two-space indent matches the
+  // rest of the project's JSON artefacts.
   const serialised = JSON.stringify(envelope, null, 2) + '\n';
   const target = path.join(runDir, 'telemetry', 'config.json');
   atomicWriteFile(target, serialised);
