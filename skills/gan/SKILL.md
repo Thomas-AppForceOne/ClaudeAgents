@@ -185,6 +185,61 @@ In every branch the run trace continues writing **gaplessly** via `emitTraceEven
 
 The orchestrator never writes outside `GAN_RUN_DIR` and `GAN_WORKTREE` during recovery; the v1.0 `--cleanup` stub writes nothing at all.
 
+## ConfigApiUnreachable preflight [shipped-in-v1.0]
+
+Before the orchestrator calls `validateAll()` or any other framework API tool, it runs a three-step preflight against the active session to determine whether the framework's Configuration API is actually reachable. The preflight fires on every regular `/gan` invocation and on every short-circuit invocation that would otherwise touch the API (`--print-config`, `--list-recoverable`, `--recover`). It runs **before step 3** of the "Regular invocation flow" — before `validateAll()`, before the snapshot is captured, and before any run state is created. The three sub-checks are deterministic from the orchestrator's perspective and produce a single hand-authored diagnostic on failure.
+
+**Sub-check 1 — registration.** Is the framework's MCP server registered in `~/.claude.json` (or the platform equivalent)? The orchestrator reads `~/.claude.json` and looks for the `mcpServers.claudeagents-config` entry. Absent entry → branch to `notRegistered`.
+
+**Sub-check 2 — bin presence.** Does the registered command resolve to an existing executable on disk? When the registration is present, the orchestrator stat-checks the registered command's absolute path and confirms the file exists and is executable. Missing or non-executable path → branch to `binMissing`.
+
+**Sub-check 3 — session reachability.** Are the framework's MCP tools actually reachable in this session? The orchestrator attempts a single probe (for example, `getApiVersion()`) and observes whether a response arrives. No response → branch to `notLoadedInSession`. A successful response means the API is reachable and the preflight emits no diagnostic; the orchestrator proceeds to step 3.
+
+**Remediation branching.** The remediation prose is fixed per branch:
+
+| #1 registered? | #2 bin exists? | #3 reachable? | Remediation |
+|---|---|---|---|
+| No  | —   | —   | Install: `bash <repo>/install.sh`. Then restart Claude Code. |
+| Yes | No  | —   | Re-install: the registered bin path `<path>` does not exist. Run `bash <repo>/install.sh` to refresh the registration. |
+| Yes | Yes | No  | Restart Claude Code. The framework is installed but this session has not loaded the MCP registration yet — Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`. |
+| Yes | Yes | Yes | (No diagnostic; the API is reachable.) |
+
+The third branch is the load-bearing case: a user who already installed and just needs a session restart no longer cycles through "I already installed, why is it telling me to install?" The literal `Cmd+Q` keystroke is named so the user does not just close the foreground window (which leaves the process running on macOS) and assume the restart happened.
+
+**Diagnostic JSON shape.** When any of the three sub-checks fail, the orchestrator emits a standalone diagnostic object on stdout with three fields: `code` (always the literal string `"ConfigApiUnreachable"`), `subReason` (one of `"notRegistered"`, `"binMissing"`, `"notLoadedInSession"` — the discriminator that names which sub-check failed), and `message` (the per-branch remediation prose for that `subReason`). No other fields are emitted.
+
+A user who has already installed but has not restarted the session sees:
+
+```json
+{
+  "code": "ConfigApiUnreachable",
+  "subReason": "notLoadedInSession",
+  "message": "The framework is installed (`~/.claude.json` registers the background service at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded it yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
+}
+```
+
+A user who has not run the installer at all sees:
+
+```json
+{
+  "code": "ConfigApiUnreachable",
+  "subReason": "notRegistered",
+  "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/you/path/to/framework/install.sh`. Then restart Claude Code."
+}
+```
+
+The `binMissing` branch follows the same shape with its own remediation prose: the registered absolute path the orchestrator just stat-checked is interpolated into the message verbatim so the user can see exactly which file the framework expected to find.
+
+**Shape note: familiar surface, hand-authored origin.** The diagnostic carries a `code` and `message` so it reads to the user like the framework's other structured errors — the surface is intentionally familiar. It is, however, **hand-authored orchestrator markdown JSON**, not a framework error-enum entry and not a CLI exit-code-map entry. The preflight fires precisely when the framework's MCP server is unreachable in this session, so the orchestrator cannot call into the server to construct a server-side structured error — there is nothing to call. The diagnostic has no schema home; the `subReason` discriminator is the orchestrator's own contract for letting log readers and future telemetry tell the three cases apart.
+
+**Disjointness vs. `--print-config`'s reachable-API output.** The preflight and the `--print-config` reachable-API output are disjoint surfaces; they never co-emit.
+
+- When the API is unreachable, the orchestrator cannot call the resolved-config read at all — there is no resolved object to print. The preflight short-circuits before `--print-config`'s reachable-API flow runs, and the diagnostic JSON above is the only thing emitted.
+- When the API is reachable, the preflight emits nothing and `--print-config`'s reachable-API output is what prints: the flat resolved-config object with its own `issues` and `warnings` arrays carrying validation results.
+- The preflight diagnostic is **not** wrapped in a `validationErrors` / `resolvedConfig` envelope, and the reachable-API output stays flat — neither surface reintroduces a wrapper. The two surfaces are distinguished by the `code` field on the diagnostic, not by an envelope shape.
+
+A user driving `/gan --print-config` therefore sees exactly one of the two: a `ConfigApiUnreachable` diagnostic with a `subReason` and remediation prose, or the flat resolved-config object. The orchestrator never blends them.
+
 ## Regular invocation flow [shipped-in-v1.0]
 
 The orchestrator follows this order on every regular `/gan` invocation:
