@@ -2,6 +2,8 @@
 
 The Trace subsystem is the run-observation layer: `TraceEmitter` appends typed NDJSON events to an append-only per-run log, and the reconciler rebuilds a derivative index from those events for recovery and reporting.
 
+The telemetry subsystem (`telemetry/config.json` and `telemetry/outcome.json` under the run directory) is a sibling — not a trace event class. At termination the outcome writer reads `aggregateRunSummary(runDir)` for the cost roll-up and the emitter's `droppedEmits` tally for `cost.complete`; the trace is the source of truth that telemetry summarises.
+
 ---
 
 ## 1 — Event taxonomy
