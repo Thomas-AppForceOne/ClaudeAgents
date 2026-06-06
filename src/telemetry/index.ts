@@ -8,6 +8,7 @@
  */
 
 export { terminalReasonToDisposition } from './mapping.js';
+export { shouldEmitTelemetry, type TelemetryGateInput } from './gate.js';
 export { writeTelemetryConfig } from './writer-config.js';
 export { writeTelemetryOutcome } from './writer-outcome.js';
 export type {
