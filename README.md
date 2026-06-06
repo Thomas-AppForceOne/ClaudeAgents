@@ -43,7 +43,7 @@ run branch (reused or task-named) ready to review and merge
 
 Before planning, a **clarification pass** turns your raw prompt into an explicit spec: it names the ambiguities, fills the ones it safely can with defaults, and surfaces the rest as best-guess assumptions you can override. The clarified spec is shown as a single draft with an action menu — **`[a]`pprove / `[e]`dit / `evolve: <text>` / `[c]`ancel** — that auto-approves after a timeout (default 60s) so an unattended run never stalls. Pass `--skip-clarification` to bypass it (the orchestrator then plans straight from the raw prompt), and a perfectly-specified prompt skips the draft preview automatically. The raw prompt and the clarified spec are both preserved in the run's data for audit.
 
-Per-run *data* — the clarified spec, sprint contracts, evaluator feedback, progress state, the run trace — lives in a central, repo-keyed store outside any worktree (`~/.gan-runs-data/<repo-key>/runs/<run-id>/`), so it survives `git worktree remove`. The code is written in the run's worktree: the task worktree you launched from when it matches the task (case 1a), or a gan-created run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` otherwise (cases 1b/1c). When every sprint passes evaluation, the branch is ready to inspect and merge.
+Per-run *data* — the clarified spec, sprint contracts, evaluator feedback, progress state, the run trace, the telemetry artefacts — lives in a central, repo-keyed store outside any worktree (`~/.gan-runs-data/<repo-key>/runs/<run-id>/`), so it survives `git worktree remove`. The code is written in the run's worktree: the task worktree you launched from when it matches the task (case 1a), or a gan-created run-scoped worktree at `.gan-state/runs/<run-id>/worktree/` otherwise (cases 1b/1c). When every sprint passes evaluation, the branch is ready to inspect and merge.
 
 The build → evaluate retry loop is **bounded**: loop & thrash detection halts a sprint that stops converging — a role exhausting its attempt ceiling, the combined work exceeding the sprint-wide budget, or the generator oscillating between edits — with a structured `LoopDetected` error instead of retrying without limit. The ceilings are configurable per project, and a halted run is recoverable (see [Configuration recipes](#configuration-recipes) and [Inspecting, recovering, and cleaning up runs](#inspecting-recovering-and-cleaning-up-runs)).
 
@@ -152,6 +152,7 @@ Inside Claude Code, after install:
 /gan --target ~/projects/myapp "add Stripe payment integration"
 /gan --spec ./SPEC.md
 /gan --skip-clarification "regenerate the changelog"   # plan straight from the prompt, no draft preview
+/gan --no-telemetry "fix flaky test"                   # skip writing the run's telemetry/ subdirectory
 /gan --print-config
 /gan --help
 ```
@@ -210,6 +211,7 @@ Most projects need nothing — the framework auto-detects a stack and runs. A fe
 - **Override the lint command for a stack**: `gan stack update web-node lintCmd 'npm run lint:next'`.
 - **Force the active stack set**: in `.claude/gan/project.md`, set `stack.override: ['web-node']` (replaces auto-detection).
 - **Skip every project-sourced command for one run**: `/gan --no-project-commands "review someone's branch"`.
+- **Skip the run's local telemetry artefacts**: `/gan --no-telemetry "<prompt>"`. The `telemetry/` subdirectory is not created and neither `config.json` nor `outcome.json` is written; `trace/` and every per-sprint artefact are unaffected. Telemetry is a strictly-local audit record — no transmission path exists — so the flag is rarely needed in practice.
 - **Tune the loop's safety ceilings**: in `.claude/gan/project.md`, set `safety.attemptCeilings.gan-generator: 5` to give the generator more revision rounds, `safety.sprintBudget: 16` to raise the sprint-wide cap, or `safety.oscillationDetection: false` to turn off edit-oscillation halts. For a one-off override, pass `/gan --max-attempts=5` (a uniform per-role ceiling for that run).
 - **Adjust the clarifier draft-preview timeout**: in `.claude/gan/project.md`, set `clarifier.draftTimeoutSeconds: 120` (integer in the range 10–600; default 60) to give yourself longer before a draft auto-approves. For a one-off override, pass `/gan --clarifier-timeout=120`. A value of `0` is rejected (`InvalidTimeoutValue`) — use `--skip-clarification` to bypass the phase instead.
 

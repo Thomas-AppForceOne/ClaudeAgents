@@ -1,0 +1,135 @@
+{
+  "$id": "https://claudeagents.dev/schemas/telemetry-outcome-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClaudeAgents telemetry outcome.json, v1",
+  "description": "JSON Schema (draft-07) for the telemetry/outcome.json artefact written once at run termination. The artefact records the run's terminal disposition, the O2 terminalReason that drove it, the per-sprint outcomes, an aggregate cost rollup (nullable, with an explicit complete:boolean discriminator so a lossy trace cannot silently undercount), summary references to safety halts, and an empty-at-v1.0 humanReviews slot reserved for E6 v1.2's per-sprint human-review records. humanReviews item shape is intentionally unconstrained at v1 so E6 can land its items in place without forcing a v2 bump.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "isoDateTimeMs": {
+      "description": "RFC 3339 UTC timestamp with millisecond precision. The pattern enforces the encoding directly so the bundled ajv (strict:true, no ajv-formats) accepts it without relying on format:date-time.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$"
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "safetyHaltEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Summary reference to one safety halt; the halt's evidence lives in the T1 trace, this surface only carries the breadcrumbs an outcome reader needs to find it.",
+      "properties": {
+        "sprintNumber": { "$ref": "#/definitions/positiveInteger" },
+        "safetyClass": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "required": ["sprintNumber", "safetyClass", "reason"]
+    },
+    "costObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Aggregate cost rollup. complete is required and boolean: true when the trace is verified-complete (droppedEmits === 0 at termination), false when at least one R7 emit was dropped and a real number was therefore lost. The six metric fields are non-negative integers summed from the T1 trace via R7's aggregateRunSummary.",
+      "properties": {
+        "complete": { "type": "boolean" },
+        "tokensInput": { "$ref": "#/definitions/nonNegativeInteger" },
+        "tokensCached": { "$ref": "#/definitions/nonNegativeInteger" },
+        "tokensOutput": { "$ref": "#/definitions/nonNegativeInteger" },
+        "llmCallCount": { "$ref": "#/definitions/nonNegativeInteger" },
+        "toolCallCount": { "$ref": "#/definitions/nonNegativeInteger" },
+        "wallClockMs": { "$ref": "#/definitions/nonNegativeInteger" }
+      },
+      "required": [
+        "complete",
+        "tokensInput",
+        "tokensCached",
+        "tokensOutput",
+        "llmCallCount",
+        "toolCallCount",
+        "wallClockMs"
+      ]
+    }
+  },
+  "properties": {
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "type": "integer", "const": 1 },
+        "writtenAt": { "$ref": "#/definitions/isoDateTimeMs" },
+        "runId": { "$ref": "#/definitions/runId" }
+      },
+      "required": ["schemaVersion", "writtenAt", "runId"]
+    },
+    "disposition": {
+      "type": "string",
+      "enum": ["success", "rejected", "halted", "aborted", "errored"]
+    },
+    "terminalReason": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "failed-evaluation-rejected",
+        "aborted-contract-failed",
+        "failed-max-attempts",
+        "failed-budget",
+        "failed-loop-detected",
+        "aborted-by-user",
+        "failed-clarifier-error",
+        "aborted-planner-error",
+        "aborted-validation-failed"
+      ]
+    },
+    "sprints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One per-sprint outcome record. status reuses the run-level disposition vocabulary applied per-sprint, with complete substituted for success; that mismatch is deliberate so a per-sprint terminal-success reads as 'this sprint is done' rather than the run-scoped 'this run succeeded'. attemptCounts is a free-shape map of role-id -> attempt count.",
+        "properties": {
+          "sprintNumber": { "$ref": "#/definitions/positiveInteger" },
+          "status": {
+            "type": "string",
+            "enum": ["complete", "rejected", "halted", "aborted", "errored"]
+          },
+          "attemptCounts": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/nonNegativeInteger" }
+          }
+        },
+        "required": ["sprintNumber", "status", "attemptCounts"]
+      }
+    },
+    "cost": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/costObject" }
+      ]
+    },
+    "safetyHalts": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/safetyHaltEntry" }
+    },
+    "humanReviews": {
+      "type": "array",
+      "description": "Reserved-empty at v1.0; E6 v1.2 will land per-sprint human-review records here. The schema intentionally does not pin item shape so E6's items land as an additive in-place edit per F3's additive-stays-on-vN rule rather than forcing a v2 bump."
+    }
+  },
+  "required": [
+    "envelope",
+    "disposition",
+    "terminalReason",
+    "sprints",
+    "cost",
+    "safetyHalts",
+    "humanReviews"
+  ]
+}

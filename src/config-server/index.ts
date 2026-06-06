@@ -109,6 +109,10 @@ import {
   validateFindingsTool as runValidateFindings,
   writeFailedEvaluationRejectedTool as runWriteFailedEvaluationRejected,
 } from './tools/independent-review.js';
+import {
+  writeTelemetryConfigTool as runWriteTelemetryConfig,
+  writeTelemetryOutcomeTool as runWriteTelemetryOutcome,
+} from './tools/telemetry.js';
 // Docker tool handlers are intentionally imported from the local tools file
 // (which uses dynamic `import()` per-handler) rather than from
 // `../modules/docker/*` directly. A top-level static import of any path under
@@ -256,6 +260,19 @@ export const INDEPENDENT_REVIEW_TOOL_NAMES: readonly string[] = [
 ] as const;
 
 /**
+ * Tool names introduced by the telemetry-emission surface — two thin
+ * wrappers over the shipped `src/telemetry/` library writers
+ * (`writeTelemetryConfig`, `writeTelemetryOutcome`). Kept in its own list so
+ * the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch. SKILL.md names these tool
+ * names verbatim at the run-start and run-end call sites.
+ */
+export const TELEMETRY_TOOL_NAMES: readonly string[] = [
+  'writeTelemetryConfig',
+  'writeTelemetryOutcome',
+] as const;
+
+/**
  * Tool names introduced by the runtime invocation bridge's docker-module
  * surface — five thin, lazy-loaded wrappers over the shipped docker module
  * library functions (`PortRegistry.register` / `.release`, `discoverPort`,
@@ -288,6 +305,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...EVALUATOR_TOOL_NAMES,
   ...DOCKER_TOOL_NAMES,
   ...INDEPENDENT_REVIEW_TOOL_NAMES,
+  ...TELEMETRY_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -1221,6 +1239,61 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       });
     },
   },
+  writeTelemetryConfig: {
+    // The run-start emission step's wire entry: every input is required.
+    // resolvedConfig is the captured F2 snapshot the orchestrator passes to
+    // every agent — same object, no re-serialisation. capturedAt is the
+    // orchestrator-supplied RFC3339-ms timestamp so the artefact and the
+    // T1 trace's run-start milestone share one clock read.
+    required: ['runDir', 'runId', 'resolvedConfig', 'capturedAt'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'writeTelemetryConfig');
+      const runId = requireRunId(args, 'writeTelemetryConfig');
+      const resolvedConfig = requireResolvedConfigArg(args, 'writeTelemetryConfig');
+      const capturedAt = requireNonEmptyStringArg(args, 'writeTelemetryConfig', 'capturedAt');
+      return runWriteTelemetryConfig({
+        runDir,
+        runId,
+        resolvedConfig: resolvedConfig as unknown as Parameters<
+          typeof runWriteTelemetryConfig
+        >[0]['resolvedConfig'],
+        capturedAt,
+      });
+    },
+  },
+  writeTelemetryOutcome: {
+    // The run-end emission step's wire entry. droppedEmits is optional — see
+    // the tool module's prose comment for why the wrapper supplies the
+    // default from the in-memory tally on this side when the caller omits it.
+    required: ['runDir', 'runId', 'terminalReason', 'sprints', 'safetyHalts', 'writtenAt'],
+    handler: (args) => {
+      const runDir = requireRunDir(args, 'writeTelemetryOutcome');
+      const runId = requireRunId(args, 'writeTelemetryOutcome');
+      const terminalReason = requireTerminalReasonArg(args, 'writeTelemetryOutcome');
+      const sprints = requireSprintsArg(args, 'writeTelemetryOutcome');
+      const safetyHalts = requireSafetyHaltsArg(args, 'writeTelemetryOutcome');
+      const writtenAt = requireNonEmptyStringArg(args, 'writeTelemetryOutcome', 'writtenAt');
+      const droppedEmits = optionalDroppedEmits(args);
+      const input: Parameters<typeof runWriteTelemetryOutcome>[0] = {
+        runDir,
+        runId,
+        terminalReason: terminalReason as unknown as Parameters<
+          typeof runWriteTelemetryOutcome
+        >[0]['terminalReason'],
+        sprints: sprints as unknown as Parameters<
+          typeof runWriteTelemetryOutcome
+        >[0]['sprints'],
+        safetyHalts: safetyHalts as unknown as Parameters<
+          typeof runWriteTelemetryOutcome
+        >[0]['safetyHalts'],
+        writtenAt,
+      };
+      if (droppedEmits !== undefined) {
+        input.droppedEmits = droppedEmits;
+      }
+      return runWriteTelemetryOutcome(input);
+    },
+  },
 };
 
 // Look up and run the handler for `toolName`, regardless of kind
@@ -1957,6 +2030,260 @@ function requireBlockerArrayArg(
     }
   }
   return v as ReadonlyArray<{ id: string; [k: string]: unknown }>;
+}
+
+/**
+ * Validate the `resolvedConfig` argument for the `writeTelemetryConfig` tool.
+ *
+ * The boundary asserts only object-shape (non-null, non-array); the library
+ * embeds the snapshot verbatim into the envelope and the bundled
+ * telemetryConfigV1 schema pins the ten required top-level fields at parse
+ * time. A non-object reaching the library here would surface as an untyped
+ * JSON value in the envelope; the boundary refuses it up front so the
+ * failure is structured, not silent.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `resolvedConfig` object (passed through unchanged).
+ * @throws `MalformedInput` when the value is missing or not a plain object.
+ */
+export function requireResolvedConfigArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['resolvedConfig'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'resolvedConfig',
+      message: `Tool '${tool}' requires a 'resolvedConfig' object in its input.`,
+    });
+  }
+  return v as Record<string, unknown>;
+}
+
+// The closed ten-value terminalReason enum from progress-v1 and the
+// telemetry-outcome-v1 schema. Mirrored here so the wire boundary refuses an
+// out-of-vocabulary code (the writer would otherwise pass it to the mapping
+// module, where an unknown code throws — boundary catches it first with a
+// clearer message).
+const TERMINAL_REASON_VALUES: readonly string[] = [
+  'complete',
+  'failed-evaluation-rejected',
+  'aborted-contract-failed',
+  'failed-max-attempts',
+  'failed-budget',
+  'failed-loop-detected',
+  'aborted-by-user',
+  'failed-clarifier-error',
+  'aborted-planner-error',
+  'aborted-validation-failed',
+];
+
+/**
+ * Validate a `terminalReason` argument against the closed ten-value enum.
+ *
+ * The library mapping module is exhaustive over the same set; the boundary
+ * check gives a clear MalformedInput rather than an untyped throw on an
+ * unknown code.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `terminalReason` value (a member of the closed enum).
+ * @throws `MalformedInput` when the value is missing, an empty string, or
+ *   not a member of the closed enum.
+ */
+export function requireTerminalReasonArg(args: Record<string, unknown>, tool: string): string {
+  const v = args['terminalReason'];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'terminalReason',
+      message: `Tool '${tool}' requires a non-empty 'terminalReason' string in its input.`,
+    });
+  }
+  if (!TERMINAL_REASON_VALUES.includes(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'terminalReason',
+      message:
+        `Tool '${tool}' requires 'terminalReason' to be one of the ten kebab-case codes the framework's ` +
+        `terminal-reason enum pins (see schemas/telemetry-outcome-v1.json).`,
+    });
+  }
+  return v;
+}
+
+/**
+ * Validate a `sprints` array argument for `writeTelemetryOutcome`. Each entry
+ * is shape-checked for the three required fields the bundled outcome schema
+ * pins (`sprintNumber`, `status`, `attemptCounts`); the values pass through
+ * to the library writer unchanged.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `sprints` array (passed through unchanged).
+ * @throws `MalformedInput` when the value is missing, not an array, or any
+ *   entry is missing one of the three required shape fields.
+ */
+export function requireSprintsArg(args: Record<string, unknown>, tool: string): unknown[] {
+  const v = args['sprints'];
+  if (!Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'sprints',
+      message: `Tool '${tool}' requires a 'sprints' array in its input.`,
+    });
+  }
+  for (let i = 0; i < v.length; i += 1) {
+    const entry = v[i];
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'sprints',
+        message:
+          `Tool '${tool}' requires each 'sprints' entry to be a plain object ` +
+          `(index ${i} is not an object).`,
+      });
+    }
+    const obj = entry as Record<string, unknown>;
+    if (typeof obj['sprintNumber'] !== 'number' || !Number.isInteger(obj['sprintNumber'])) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'sprints',
+        message:
+          `Tool '${tool}' requires each 'sprints' entry to carry an integer 'sprintNumber' ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+    if (typeof obj['status'] !== 'string' || (obj['status'] as string).length === 0) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'sprints',
+        message:
+          `Tool '${tool}' requires each 'sprints' entry to carry a non-empty 'status' string ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+    const ac = obj['attemptCounts'];
+    if (typeof ac !== 'object' || ac === null || Array.isArray(ac)) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'sprints',
+        message:
+          `Tool '${tool}' requires each 'sprints' entry to carry an 'attemptCounts' object ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+  }
+  return v;
+}
+
+/**
+ * Validate a `safetyHalts` array argument for `writeTelemetryOutcome`. Each
+ * entry carries the three breadcrumb fields the bundled schema pins
+ * (`sprintNumber`, `safetyClass`, `reason`); the values pass through to the
+ * library writer unchanged.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @param tool the tool name, used in the error message.
+ * @returns the validated `safetyHalts` array (passed through unchanged).
+ * @throws `MalformedInput` when the value is missing, not an array, or any
+ *   entry is missing one of the three required breadcrumb fields.
+ */
+export function requireSafetyHaltsArg(args: Record<string, unknown>, tool: string): unknown[] {
+  const v = args['safetyHalts'];
+  if (!Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'safetyHalts',
+      message: `Tool '${tool}' requires a 'safetyHalts' array in its input.`,
+    });
+  }
+  for (let i = 0; i < v.length; i += 1) {
+    const entry = v[i];
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'safetyHalts',
+        message:
+          `Tool '${tool}' requires each 'safetyHalts' entry to be a plain object ` +
+          `(index ${i} is not an object).`,
+      });
+    }
+    const obj = entry as Record<string, unknown>;
+    if (typeof obj['sprintNumber'] !== 'number' || !Number.isInteger(obj['sprintNumber'])) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'safetyHalts',
+        message:
+          `Tool '${tool}' requires each 'safetyHalts' entry to carry an integer 'sprintNumber' ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+    if (typeof obj['safetyClass'] !== 'string' || (obj['safetyClass'] as string).length === 0) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'safetyHalts',
+        message:
+          `Tool '${tool}' requires each 'safetyHalts' entry to carry a non-empty 'safetyClass' string ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+    if (typeof obj['reason'] !== 'string' || (obj['reason'] as string).length === 0) {
+      throw createError('MalformedInput', {
+        tool,
+        field: 'safetyHalts',
+        message:
+          `Tool '${tool}' requires each 'safetyHalts' entry to carry a non-empty 'reason' string ` +
+          `(index ${i} is missing or malformed).`,
+      });
+    }
+  }
+  return v;
+}
+
+/**
+ * Read the optional `droppedEmits` argument. Returns `undefined` when absent
+ * (the wrapper then falls back to the in-process tally). When supplied it
+ * must be a non-negative integer; a malformed value throws so a caller that
+ * meant to pin the count does not silently fall through to the in-process
+ * default.
+ *
+ * Exported so the boundary check can be exercised directly in unit tests —
+ * see {@link requireRepoKey} for the same rationale.
+ *
+ * @param args the raw tool input object.
+ * @returns the non-negative integer value when supplied, or `undefined`
+ *   when the field is absent from the input.
+ * @throws `MalformedInput` when the field is supplied but is not a
+ *   non-negative integer.
+ */
+export function optionalDroppedEmits(args: Record<string, unknown>): number | undefined {
+  if (!Object.prototype.hasOwnProperty.call(args, 'droppedEmits')) return undefined;
+  const v = args['droppedEmits'];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    throw createError('MalformedInput', {
+      tool: 'writeTelemetryOutcome',
+      field: 'droppedEmits',
+      message:
+        "Tool 'writeTelemetryOutcome' requires 'droppedEmits' (when supplied) to be a non-negative integer.",
+    });
+  }
+  return v;
 }
 
 // Extract the `bundle` object for validateFindings. The library validates

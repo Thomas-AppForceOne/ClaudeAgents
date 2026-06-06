@@ -89,6 +89,7 @@ sequenceDiagram
     SK->>CS: getActiveStacks + getResolvedConfig
     CS-->>SK: resolved config + active stack list
     SK->>TR: emit runStart
+    SK->>CS: writeTelemetryConfig (skipped under --no-telemetry)
 
     SK->>CS: getBoundedDirectoryListing (scope-filtered, ignore-pruned)
     CS-->>SK: structure-only listing
@@ -122,6 +123,7 @@ sequenceDiagram
     CS-->>SK: passed / blocked
 
     SK->>TR: emit runComplete
+    SK->>CS: writeTelemetryOutcome (skipped under --no-telemetry)
     SK->>CS: releaseRunLock
     SK-->>U: run summary
 ```
@@ -175,6 +177,7 @@ flowchart LR
         RI["run index"]
         RA["recovery anchor"]
         RL["run lock"]
+        TM["telemetry artefacts<br/>config.json · outcome.json"]
     end
 
     subgraph Z2M["Zone 2b — module state"]
@@ -212,3 +215,4 @@ flowchart LR
 - **The trace emitter is the only writer to the zone-2 run log.** The reconciler is the only reader outside the normal flow.
 - **Trust gate runs before every resolution.** No resolved config is served from an unapproved file hash.
 - **The safety layer bounds every run.** At each attempt-start the orchestrator consults the loop/thrash checks — per-role ceiling, sprint-wide budget, edit oscillation — and any halt produces one `LoopDetected` error plus a `safetyHalt` trace event. Attempt counts are reconstructed from the trace, never a separate counter file. See [safety.md](safety.md).
+- **Telemetry is a local audit record, never a transmission.** Every run writes `telemetry/config.json` at run start (the captured resolved-config snapshot) and `telemetry/outcome.json` at every termination path (disposition, sprints, cost, safetyHalts), both via atomic temp-file + rename through the framework's `atomicWriteFile` primitive. `cost.complete` derives from the trace emitter's `droppedEmits` tally — read inside the config-server process to keep cross-process tallies honest. No network module is reachable from the writer's import graph (statically asserted). Pass `--no-telemetry` to disable the artefacts for one run; `trace/` and per-sprint artefacts are unaffected.

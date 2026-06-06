@@ -34,11 +34,11 @@ function loadPackageJson(): { version: unknown } {
 }
 
 describe('package.json version field carries the install-affecting minor bump', () => {
-  it('top-level version is exactly the string 0.5.0', () => {
+  it('top-level version is exactly the string 0.6.0', () => {
     const pkg = loadPackageJson();
     // String-typed comparison is deliberate: the field is documented as a
     // semver string, and a numeric coercion would mask a future regression
-    // that wrote `0.5` (no patch component) instead of `0.5.0`.
-    expect(pkg.version).toBe('0.5.0');
+    // that wrote `0.6` (no patch component) instead of `0.6.0`.
+    expect(pkg.version).toBe('0.6.0');
   });
 });

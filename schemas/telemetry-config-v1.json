@@ -1,0 +1,63 @@
+{
+  "$id": "https://claudeagents.dev/schemas/telemetry-config-v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClaudeAgents telemetry config.json, v1",
+  "description": "JSON Schema (draft-07) for the telemetry/config.json artefact written once at run start. The artefact records the framework's view of the project as of run start: the envelope (schema version + capture timestamp + run id) and the full ten-field getResolvedConfig() snapshot. The schema enumerates the ten resolvedConfig fields so a partial snapshot fails validation, which is the drift the spec exists to prevent. resolvedConfig.additionalProperties is true so a forward-compat field added under F3's additive-stays-on-vN rule still validates against v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "isoDateTimeMs": {
+      "description": "RFC 3339 UTC timestamp with millisecond precision. The pattern enforces the encoding directly so the bundled ajv (strict:true, no ajv-formats) accepts it without relying on format:date-time. The trailing Z and the .mmm fraction are required; local-timezone offsets are forbidden.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "runId": {
+      "description": "Run identifier in the framework's <YYYYMMDDTHHMMSS>-<4 hex> form, the same canonical shape progress-v1 pins.",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$"
+    }
+  },
+  "properties": {
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Capture metadata. schemaVersion is pinned to 1 so a future v2 reader can fail loudly when handed a v1 document rather than mis-parsing it.",
+      "properties": {
+        "schemaVersion": { "type": "integer", "const": 1 },
+        "capturedAt": { "$ref": "#/definitions/isoDateTimeMs" },
+        "runId": { "$ref": "#/definitions/runId" }
+      },
+      "required": ["capturedAt", "runId", "schemaVersion"]
+    },
+    "resolvedConfig": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The full getResolvedConfig() snapshot per F2: all ten top-level fields enumerated below. additionalProperties is intentionally true so a forward-compat field landed under F3's additive-stays-on-vN rule (e.g. a new top-level field added in a future minor) still validates against this v1 schema. Item shapes for the ten fields are intentionally unconstrained (kept as bare type:object/array/string) — the resolvedConfig structure is owned by F2's contract, and pinning its inner shape here would couple the telemetry schema to F2's evolution.",
+      "properties": {
+        "apiVersion": { "type": "string" },
+        "schemaVersions": { "type": "object" },
+        "runtimeMode": { "type": "object" },
+        "stacks": { "type": "object" },
+        "overlay": { "type": "object" },
+        "discarded": { "type": "array" },
+        "additionalContext": { "type": "object" },
+        "issues": { "type": "array" },
+        "warnings": { "type": "array" },
+        "modules": { "type": "object" }
+      },
+      "required": [
+        "apiVersion",
+        "schemaVersions",
+        "runtimeMode",
+        "stacks",
+        "overlay",
+        "discarded",
+        "additionalContext",
+        "issues",
+        "warnings",
+        "modules"
+      ]
+    }
+  },
+  "required": ["envelope", "resolvedConfig"]
+}

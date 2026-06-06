@@ -25,7 +25,7 @@ flowchart LR
         R13["getBoundedDirectoryListing"]
     end
 
-    subgraph WRITES["Writes (12)"]
+    subgraph WRITES["Writes (14)"]
         direction TB
         subgraph OVW["Overlay writes"]
             W1["setOverlayField"]
@@ -46,6 +46,10 @@ flowchart LR
             W10["appendToModuleState"]
             W11["removeFromModuleState"]
             W12["registerModule"]
+        end
+        subgraph TMW["Telemetry writes"]
+            W13["writeTelemetryConfig"]
+            W14["writeTelemetryOutcome"]
         end
     end
 
