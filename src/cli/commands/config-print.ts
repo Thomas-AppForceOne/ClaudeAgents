@@ -3,19 +3,54 @@
  * config for a project (api/schema versions, active stacks, discarded paths,
  * additional-context registrations, and the issue count).
  *
- * A read-only command: it never writes and delegates project-root resolution,
- * `--json` handling, and error mapping to {@link runRead}. The `--json` form
- * emits the entire resolved-config object — so its top-level `warnings` array
- * is already present, in stable sorted-key position, via the deterministic JSON
- * helper; the human form is the curated subset rendered by {@link renderHuman},
- * which additionally prints the warnings as prose below the table.
+ * A read-only command. It calls {@link getResolvedConfig} (which is itself
+ * fail-open at the data layer — error-severity issues are captured into the
+ * returned object's `issues` array rather than thrown), renders the resolved
+ * view, then maps the resolved `issues` to the process exit code via
+ * {@link exitCodeForIssues}. The `--json` form emits the entire resolved-config
+ * object verbatim — the same flat shape downstream surfaces (the orchestrator
+ * snapshot, `/gan --print-config --json`) consume — so any field added to the
+ * shape downstream appears here with no edit. The human form is the curated
+ * subset rendered by {@link renderHuman}, which prints `additionalContext`
+ * registrations with a `(missing)` affordance on rows whose file does not exist
+ * (the missing-file marker the human renderer is required to surface, not
+ * silently drop) and prints warnings as prose below the table.
+ *
+ * Why not {@link runRead}: this command needs a per-command exit-code policy —
+ * exit non-zero when the resolver captured error-severity `issues`, even
+ * though the resolver did not throw — that the shared helper deliberately does
+ * not encode. Keeping the special case here rather than threading an exit-code
+ * mapper through {@link runRead} preserves the aborting-on-error invariant
+ * every other read command relies on.
  */
 
 import { getResolvedConfig } from '../../index.js';
 import { renderWarningLines } from '../lib/warnings-render.js';
-import { runRead, type CommandResult } from '../lib/run-helpers.js';
-import type { ResolvedConfig } from '../../index.js';
+import { readSharedFlags, errorResult, type CommandResult } from '../lib/run-helpers.js';
+import { exitCodeForIssues } from '../lib/exit-codes.js';
+import { emitJson } from '../lib/json-output.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
+import type { ResolvedConfig, AdditionalContextRow } from '../../index.js';
 import type { ParsedArgs } from '../lib/args.js';
+
+/**
+ * Format one `additionalContext` role's rows for the human render.
+ *
+ * Rows whose backing file is missing on disk receive a trailing ` (missing)`
+ * suffix so the human reader sees the same `exists: false` signal the JSON
+ * form carries — the missing-file marker must not be silently dropped from
+ * the human surface. An empty role renders as the empty list `[]` literally,
+ * matching the prior format.
+ *
+ * @param rows the resolved context-file rows for one role (planner or
+ *   proposer); each row carries `{path, exists}` from the resolver.
+ * @returns a comma-separated list of `path` (or `path (missing)`) tokens,
+ *   wrapped in `[]` so the surrounding `role=[...]` shape stays stable.
+ */
+function formatAdditionalContextRows(rows: readonly AdditionalContextRow[]): string {
+  const tokens = rows.map((r) => (r.exists ? r.path : `${r.path} (missing)`));
+  return `[${tokens.join(', ')}]`;
+}
 
 /**
  * Render the curated, human-readable summary of a resolved config.
@@ -30,10 +65,11 @@ import type { ParsedArgs } from '../lib/args.js';
  *
  * @param resolved the fully resolved config to summarise.
  * @returns aligned `key: value` lines (trailing newline). `(none)` stands in
- *   for empty stack / discarded lists, and `additionalContext` is reduced to
- *   the registration `path`s for the planner and proposer roles. A `warnings:`
- *   section, blank-line-separated from the table, is appended only when
- *   warnings are present.
+ *   for empty stack / discarded lists, and `additionalContext` reduces to the
+ *   registration `path`s for the planner and proposer roles with a trailing
+ *   ` (missing)` marker on rows whose file does not exist on disk. A
+ *   `warnings:` section, blank-line-separated from the table, is appended only
+ *   when warnings are present.
  */
 function renderHuman(resolved: ResolvedConfig): string {
   const lines: string[] = [];
@@ -46,10 +82,10 @@ function renderHuman(resolved: ResolvedConfig): string {
   lines.push(
     `discarded paths:   ${resolved.discarded.length === 0 ? '(none)' : resolved.discarded.join(', ')}`,
   );
-  const plannerCtx = resolved.additionalContext.planner.map((r) => r.path);
-  const proposerCtx = resolved.additionalContext.proposer.map((r) => r.path);
   lines.push(
-    `additionalContext: planner=[${plannerCtx.join(', ')}] proposer=[${proposerCtx.join(', ')}]`,
+    `additionalContext: planner=${formatAdditionalContextRows(
+      resolved.additionalContext.planner,
+    )} proposer=${formatAdditionalContextRows(resolved.additionalContext.proposer)}`,
   );
   lines.push(`issues:            ${resolved.issues.length}`);
 
@@ -67,11 +103,53 @@ function renderHuman(resolved: ResolvedConfig): string {
 /**
  * CLI entrypoint for `gan config print`.
  *
+ * Behaviour contract:
+ * - Resolves the project root; a thrown `ConfigServerError` here renders via
+ *   {@link errorResult} and short-circuits the command (the resolver never
+ *   ran, so there is no resolved view to fail-open with).
+ * - Calls {@link getResolvedConfig}, which is itself fail-open — it captures
+ *   validation errors into `resolved.issues` rather than throwing, so the
+ *   command always has a (possibly partial) resolved view to print.
+ * - Renders the view (JSON or human) and maps `resolved.issues` to the exit
+ *   code via {@link exitCodeForIssues}: `EXIT_OK` (0) when no error-severity
+ *   issues, `EXIT_INVARIANT_VIOLATION` (4) when any error is an
+ *   `InvariantViolation`, else `EXIT_VALIDATION` (2). Warning-severity issues
+ *   and the separate `warnings[]` array never affect the exit code.
+ * - The fail-open path emits only what the resolver produced: the resolved
+ *   object's `issues` and `warnings` arrays. The command never stringifies
+ *   exception payloads, stack traces, or environment values into output.
+ *
  * @param parsed parsed argv; honours `--json` and `--project-root` via
- *   {@link runRead}.
- * @returns a {@link CommandResult}; exit OK on success or an error-mapped code
- *   if project-root resolution / config resolution throws.
+ *   {@link readSharedFlags}.
+ * @returns a {@link CommandResult}; the exit code reflects validation status
+ *   per the policy above. Never throws.
  */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
-  return runRead(parsed, (projectRoot) => getResolvedConfig({ projectRoot }), renderHuman);
+  const { wantJson, rootFlag } = readSharedFlags(parsed);
+
+  // Resolve the root before the body so an invalid --project-root fails fast
+  // with its own structured error — there is no resolved view to fail-open
+  // with at this stage.
+  let projectRoot: string;
+  try {
+    projectRoot = resolveProjectRoot(rootFlag).path;
+  } catch (e) {
+    return errorResult(e, wantJson);
+  }
+
+  // getResolvedConfig is fail-open at the data layer: error-severity issues
+  // are captured into `resolved.issues` rather than thrown. A throw here
+  // therefore means a genuinely-unexpected I/O fault (or a broken install) —
+  // funnel it through the same error-result envelope every other read
+  // command uses.
+  let resolved: ResolvedConfig;
+  try {
+    resolved = await getResolvedConfig({ projectRoot });
+  } catch (e) {
+    return errorResult(e, wantJson);
+  }
+
+  const stdout = wantJson ? emitJson(resolved) : renderHuman(resolved);
+  const code = exitCodeForIssues(resolved.issues);
+  return { stdout, stderr: '', code };
 }

@@ -57,30 +57,30 @@ function findEntryLine(lines: string[], prefix: string): string {
   return match;
 }
 
-describe('roadmap entry 21 is flipped to shipped form and the Next marker advances to entry 22', () => {
-  it('entry 21 starts with the shipped-form marker and names the merged PR', () => {
+describe('roadmap entry 22 is flipped to shipped form and the Next marker advances to entry 23', () => {
+  it('entry 22 starts with the shipped-form marker and names the merged PR', () => {
     const lines = loadRoadmapLines();
-    const shipped = findEntryLine(lines, '21.');
-    // The shipped form is `✅ **[O2](…)** — …. Shipped PR #<n>.`.
+    const shipped = findEntryLine(lines, '22.');
+    // The shipped form is `✅ **[O1](…)** — …. Shipped PR #<n>.`.
     // Substring matches on the two load-bearing tokens (the ✅-bold-spec
     // prefix and the `Shipped PR #` marker) are sufficient — the rest of
     // the line is descriptive prose and may be reworded.
-    expect(shipped).toMatch(/^\s*21\.\s+✅\s+\*\*\[O2\]/);
+    expect(shipped).toMatch(/^\s*22\.\s+✅\s+\*\*\[O1\]/);
     expect(shipped).toContain('Shipped PR #');
   });
 
-  it('entry 21 no longer carries the **Next** marker', () => {
+  it('entry 22 no longer carries the **Next** marker', () => {
     const lines = loadRoadmapLines();
-    const shipped = findEntryLine(lines, '21.');
+    const shipped = findEntryLine(lines, '22.');
     // The Next marker is the single point in the roadmap that signals
     // "ship this next"; a shipped entry that still carries it is a
     // definition-of-done failure.
     expect(shipped).not.toContain('**Next**');
   });
 
-  it('entry 22 now carries the **Next** marker', () => {
+  it('entry 23 now carries the **Next** marker', () => {
     const lines = loadRoadmapLines();
-    const next = findEntryLine(lines, '22.');
+    const next = findEntryLine(lines, '23.');
     // The marker must move forward atomically with the flip; otherwise
     // there is no single point of truth for "what ships next" and the
     // convention silently breaks.
