@@ -26,10 +26,10 @@
  *   omits the field (the cross-process case), so the value is always read
  *   inside the process where the failures were actually counted.
  *
- * Tool return shape: every wrapper returns the uniform F2 mutation indicator
- * (`mutated: true` on a successful write) alongside the path the atomic
- * writer landed; the orchestrator OR's `mutated` in with the other R7 write
- * tools without having to special-case telemetry.
+ * Tool return shape: every wrapper returns the framework's uniform mutation
+ * indicator (`mutated: true` on a successful write) alongside the path the
+ * atomic writer landed; the orchestrator OR's `mutated` in with the other
+ * write tools without having to special-case telemetry.
  */
 
 import {
@@ -49,9 +49,9 @@ import { getDroppedEmits } from '../../trace/dropped-emits.js';
  *   `<runDir>/telemetry/config.json` and creates the parent if missing.
  * @property runId the canonical `<YYYYMMDDTHHMMSS>-<4 hex>` identifier
  *   embedded verbatim in the envelope.
- * @property resolvedConfig the captured F2 snapshot recorded by the
- *   artefact; the schema pins the ten required top-level fields and tolerates
- *   forward-compat additions.
+ * @property resolvedConfig the captured configuration snapshot recorded by
+ *   the artefact; the schema pins the ten required top-level fields and
+ *   tolerates forward-compat additions.
  * @property capturedAt the RFC3339-ms timestamp the orchestrator captured for
  *   the snapshot moment; embedded verbatim so this artefact and the trace's
  *   run-start milestone share a single clock read.
@@ -60,7 +60,7 @@ export type WriteTelemetryConfigToolInput = WriteTelemetryConfigInput;
 
 /**
  * Return shape of {@link writeTelemetryConfigTool}: the absolute path the
- * atomic writer landed, plus the uniform F2 `mutated` indicator
+ * atomic writer landed, plus the framework's uniform `mutated` indicator
  * (always `true` on a successful return — the writer is unconditional when
  * it reaches this point).
  *
@@ -112,8 +112,9 @@ export async function writeTelemetryConfigTool(
  *   `<runDir>/telemetry/outcome.json` and reads the trace under
  *   `<runDir>/trace/` for the `cost` rollup.
  * @property runId embedded verbatim in the envelope.
- * @property terminalReason the O2 code that drove termination; the writer
- *   derives the run-level `disposition` from it via the mapping module.
+ * @property terminalReason the framework's kebab-case code that drove
+ *   termination; the writer derives the run-level `disposition` from it
+ *   via the mapping module.
  * @property sprints per-sprint outcome records the orchestrator reconstructed
  *   at termination.
  * @property safetyHalts summary references to the run's safety halts; empty
@@ -130,7 +131,7 @@ export type WriteTelemetryOutcomeToolInput = WriteTelemetryOutcomeInput;
 
 /**
  * Return shape of {@link writeTelemetryOutcomeTool}: the absolute path the
- * atomic writer landed, plus the uniform F2 `mutated` indicator.
+ * atomic writer landed, plus the framework's uniform `mutated` indicator.
  *
  * @property path absolute path of the written `telemetry/outcome.json`.
  * @property mutated `true` — the wrapper always reaches the writer when its
