@@ -1571,6 +1571,146 @@
         "type": "object"
       }
     },
+    "writeTelemetryConfig": {
+      "description": "Write the run's `telemetry/config.json` artefact atomically once at run start, between run-lock acquisition and the clarifier spawn. The artefact records the framework's view of the project (the captured F2 snapshot's ten required top-level fields) at the moment the snapshot was taken; reading the same artefact later reproduces what the orchestrator and every agent were fed. Skipped entirely when the orchestrator was invoked with `--no-telemetry`.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "capturedAt": {
+            "description": "RFC3339 UTC timestamp with millisecond precision the orchestrator captured for the snapshot moment. Embedded verbatim in the envelope so the artefact and the trace's run-start milestone share one clock read.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "resolvedConfig": {
+            "description": "The captured F2 snapshot — the same object the orchestrator passes to every spawned agent. The bundled telemetry-config-v1 schema pins the ten required top-level fields and tolerates additive forward-compat fields; the boundary asserts only object-shape.",
+            "type": "object"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir",
+          "runId",
+          "resolvedConfig",
+          "capturedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "writeTelemetryOutcome": {
+      "description": "Write the run's `telemetry/outcome.json` artefact atomically at every termination path (graceful completion, halted, aborted, errored) just before the run lock releases. Records the run's terminal disposition (derived from `terminalReason` via the framework's mapping table), per-sprint outcomes, the aggregate `cost` rollup with an explicit `complete: boolean` discriminator, summary references to safety halts, and an empty-at-v1.0 reserved `humanReviews[]`. Reads dropped-emit count from inside the config-server process when the caller omits `droppedEmits` (the cross-process seam). Skipped entirely when the orchestrator was invoked with `--no-telemetry`.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "droppedEmits": {
+            "description": "Optional explicit dropped-emit count. The dropped-emit tally is process-scoped by design (it flags the disk-full / unwritable-events-dir failure mode that would also prevent persisting a counter to disk); when the caller is in the same process as the trace emitter, the wrapper reads `getDroppedEmits(runDir)` on this side instead. Supply the explicit value when the caller is in a different process from the emitter.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runDir": {
+            "minLength": 1,
+            "pattern": "^.+/[A-Za-z0-9._-]+-[0-9a-f]{12}/runs/[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "pattern": "^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$",
+            "type": "string"
+          },
+          "safetyHalts": {
+            "description": "Summary references to the run's safety halts; empty array on a non-halted run. Each entry carries the three breadcrumbs an outcome reader needs to find the halt's full evidence in the trace.",
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "reason": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "safetyClass": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sprintNumber": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "sprintNumber",
+                "safetyClass",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "sprints": {
+            "description": "Per-sprint outcome records the orchestrator reconstructed at termination. Each entry carries `sprintNumber`, `status` (per-sprint status vocabulary), and a free-shape `attemptCounts` map of role-id to attempt count.",
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "attemptCounts": {
+                  "type": "object"
+                },
+                "sprintNumber": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "status": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sprintNumber",
+                "status",
+                "attemptCounts"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "terminalReason": {
+            "description": "The O2 kebab-case code that drove termination; the writer derives the run-level `disposition` from it via the mapping table. Closed enum of ten values.",
+            "enum": [
+              "complete",
+              "failed-evaluation-rejected",
+              "aborted-contract-failed",
+              "failed-max-attempts",
+              "failed-budget",
+              "failed-loop-detected",
+              "aborted-by-user",
+              "failed-clarifier-error",
+              "aborted-planner-error",
+              "aborted-validation-failed"
+            ],
+            "type": "string"
+          },
+          "writtenAt": {
+            "description": "RFC3339 UTC timestamp with millisecond precision the orchestrator captured for the termination moment. Embedded verbatim in the envelope.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir",
+          "runId",
+          "terminalReason",
+          "sprints",
+          "safetyHalts",
+          "writtenAt"
+        ],
+        "type": "object"
+      }
+    },
     "writeFailedEvaluationRejected": {
       "description": "Write the `terminalReason: \"failed-evaluation-rejected\"` rejection record to `progress.json` when, and only when, the renegotiation cap fired with at least one unresolved blocker. Composes the pure builder `buildFailedEvaluationRejectedRecord` with the shared `writeProgressFields` persister at the wire boundary. A `capFired: false` or empty `unresolvedBlockers` is a true no-op (`mutated: false`); otherwise the record is merged into `progress.json` via the framework's atomic-write primitive.",
       "inputSchema": {
@@ -1672,7 +1812,9 @@
     "validateFindings",
     "validateOverlay",
     "validateStack",
-    "writeFailedEvaluationRejected"
+    "writeFailedEvaluationRejected",
+    "writeTelemetryConfig",
+    "writeTelemetryOutcome"
   ],
   "title": "ClaudeAgents config-server MCP tool catalog, v1",
   "type": "object"
