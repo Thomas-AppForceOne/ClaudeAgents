@@ -49,8 +49,8 @@ import type { Cost, TelemetryOutcomeV1, WriteTelemetryOutcomeInput } from './typ
  * - When the trace is present, `cost` is a non-null object whose six metric
  *   fields come from {@link aggregateRunSummary} and whose `complete`
  *   discriminator is `getDroppedEmits(runDir) === 0`. Reading the loss
- *   signal from droppedEmits — and not from reconcileTraceIndex — is the
- *   spec's explicit choice: a dropped emit leaves a gapless, fully
+ *   signal from droppedEmits — and not from the index-reconcile path — is
+ *   the spec's explicit choice: a dropped emit leaves a gapless,
  *   index-reconcilable trace, so the reconcile cannot detect the loss. The
  *   only signal that survives the disk-full failure mode this surface
  *   exists to flag is R7's in-memory per-run emit-failure tally.
@@ -96,7 +96,7 @@ export async function writeTelemetryOutcome(input: WriteTelemetryOutcomeInput): 
  *
  * @returns a non-null {@link Cost} when the trace's `events/` directory is
  *   present, or `null` when it is not. The non-null `complete` discriminator
- *   reflects droppedEmits, not reconcileTraceIndex — see the writer's
+ *   reflects droppedEmits, not the index-reconcile path — see the writer's
  *   doc comment for the rationale.
  */
 function deriveCost(runDir: string): Cost | null {
