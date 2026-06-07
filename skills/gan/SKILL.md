@@ -2,7 +2,7 @@
 
 Run a generative-adversarial development pipeline against a sprint plan. The full run begins by clarifying the user's prompt into an explicit spec, then planning from it, before the per-sprint loop: prompt → clarifier → planner → contract-proposer → generator → evaluator (the proposer → generator → evaluator stage loops per sprint). The orchestrator is a thin shell — every framework configuration value comes from the Configuration API. The orchestrator never parses stack files, overlay files, or YAML directly.
 
-## Invocation
+## Invocation [shipped-in-v1.0]
 
 ```
 /gan "build a CLI todo app"
@@ -13,7 +13,7 @@ Run a generative-adversarial development pipeline against a sprint plan. The ful
 /gan --no-project-commands "review someone's branch"
 ```
 
-## Argument parsing
+## Argument parsing [shipped-in-v1.0]
 
 Parse arguments from the user's message before doing anything else. The five flags below are mandatory in the new flag table; user-supplied flags such as `--spec`, `--target`, `--max-attempts`, `--threshold`, `--branch-name`, `--base-branch`, and `--label` continue to be honoured for sprint-shape control and telemetry.
 
@@ -45,7 +45,7 @@ It halts with the structured error `NoPromptProvided`, carrying the exact user-f
 
 The `--help` hint is mandatory. The ordering is `validateAll()` → welcome banner → `NoPromptProvided`; see "Regular invocation flow" below for the precise step placement.
 
-## Welcome banner
+## Welcome banner [shipped-in-v1.0]
 
 The first time `/gan` is invoked **as a regular sprint invocation** (not as a `--help`, `--print-config`, `--list-recoverable`, `--recover`, or `--cleanup` short-circuit), the orchestrator prints a multi-paragraph welcome banner before doing any other work, then continues with the requested action.
 
@@ -61,11 +61,11 @@ The first time `/gan` is invoked **as a regular sprint invocation** (not as a `-
 
 **Non-TTY behavior.** When stdin/stdout are not a TTY (CI, automated scripts), the banner is skipped silently and the marker is created.
 
-## Help short-circuit
+## Help short-circuit [shipped-in-v1.0]
 
 `--help` runs **before** `validateAll()`. The orchestrator prints the help text to stdout and exits 0. There is no validation, no snapshot, no worktree, and no agent is spawned. This is the only flag that skips validation entirely.
 
-### Help text template
+### Help text template [shipped-in-v1.0]
 
 The orchestrator renders the help text in the following shape. The USAGE section gives each invocation's accepted shape with `[optional]` markers for modifiers; the FLAGS section gives each flag's description with its default value in parens at the end of the line.
 
@@ -142,9 +142,9 @@ OUTPUT
 
 Specifics:
 
-- `--print-config` calls `getResolvedConfig()` and emits the resolved-config object on stdout — byte-identical with `gan config print --json` for the same project state. The output is the flat resolved shape; when validation captured errors they appear inside that object's `issues` array (with non-aborting overlay-misuse warnings in the parallel `warnings` array). There is no `resolvedConfig`/`validationErrors` wrapper. Exit code reflects validation status: `0` when no error-severity `issues`, non-zero otherwise (warnings stay exit-zero in v1.0).
-- `--recover` and `--list-recoverable` dispatch to the recovery flow, anchored to the central store. Enumeration reads the repo's runs under `<store-root>/<repo-key>/runs/` (repo-wide, so the same runs are listed from any worktree); `--recover` then binds to the run's recorded `workspace.worktreePath` and refuses from any other worktree. Recovery refuses to touch the module-state store, `.claude/gan/`, or `.gan-cache/` (zone ownership rules).
-- `--cleanup` dispatches to the cleanup flow described in the "Cleanup and recovery" section below. Like recovery, it never touches the module-state store, `.claude/gan/`, or `.gan-cache/`.
+- `--print-config` `[shipped-in-v1.0]` calls `getResolvedConfig()` and emits the resolved-config object on stdout — byte-identical with `gan config print --json` for the same project state. The output is the flat resolved shape; when validation captured errors they appear inside that object's `issues` array (with non-aborting overlay-misuse warnings in the parallel `warnings` array). There is no `resolvedConfig`/`validationErrors` wrapper. Exit code reflects validation status: `0` when no error-severity `issues`, non-zero otherwise (warnings stay exit-zero in v1.0).
+- `--recover` `[partial-v1.0]` and `--list-recoverable` `[shipped-in-v1.0]` dispatch to the recovery flow, anchored to the central store. Enumeration reads the repo's runs under `<store-root>/<repo-key>/runs/` (repo-wide, so the same runs are listed from any worktree); `--recover` then binds to the run's recorded `workspace.worktreePath` and refuses from any other worktree. Recovery refuses to touch the module-state store, `.claude/gan/`, or `.gan-cache/` (zone ownership rules).
+- `--cleanup` `[deferred-to-v1.1]` dispatches to the cleanup flow described in the "Cleanup and recovery" section below. Like recovery, it never touches the module-state store, `.claude/gan/`, or `.gan-cache/`.
 
 No sprint work runs in any of these paths.
 
@@ -152,13 +152,15 @@ No sprint work runs in any of these paths.
 
 Run *data* lives in the central, repo-keyed store at `GAN_RUN_DIR` (resolved as `<store-root>/<repo-key>/runs/<run-id>/`), and the serialization lock is `<store-root>/<repo-key>/run.lock`. The `<repo-key>` is derived from the repo's main-worktree root, so all linked worktrees of one repo share the same store directory and lock — recovery enumeration and the lock are repo-wide.
 
-**Recovery worktree-anchor (`--recover`).** Enumeration is repo-wide, but *resuming* is bound to the worktree the run executed in. `--recover` reads `progress.json.workspace.worktreePath`; when the current invocation is not that worktree it refuses (non-zero) with `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists, recovery refuses with the same path plus guidance to recreate it. The run is still *listed* by `--list-recoverable` from any worktree.
+**Recovery worktree-anchor (`--recover` `[partial-v1.0]`).** Enumeration is repo-wide, but *resuming* is bound to the worktree the run executed in. `--recover` reads `progress.json.workspace.worktreePath`; when the current invocation is not that worktree it refuses (non-zero) with `Run <id> was executed in worktree <path> (branch <branch>); recover it from there.` If the recorded worktree no longer exists, recovery refuses with the same path plus guidance to recreate it. The run is still *listed* by `--list-recoverable` `[shipped-in-v1.0]` from any worktree.
+
+**Runtime alignment for marked flags.** The per-flag markers above are operative, not advisory: `--recover` `[partial-v1.0]` and `--list-recoverable` `[shipped-in-v1.0]` dispatch normally to the minimal recovery flow that ships in v1.0 — they are NOT deferred, and the orchestrator never short-circuits them with a "requires v1.1" message. By contrast, a section or flag genuinely marked `[deferred-to-v1.1]` — `--cleanup` is the live v1.0 example — short-circuits with the structured `this command requires v1.1` message, tells the user to install the latest framework, and the orchestrator exits non-zero (the dispatch handler is inert: it does not silently no-op, does not partially run, and never reaches the subsystem the deferred surface would otherwise drive). This is the same runtime contract every `[deferred-to-v1.1]`-marked section honours.
 
 ### --cleanup [deferred-to-v1.1]
 
 `[deferred-to-v1.1]` The full destructive cleanup surface — single-run teardown, `--all`, `--all --include-terminal`, the active-run guard, the preview + confirmation prompt, merge-aware run-branch deletion, and the on-disk reclaim — does not ship in v1.0. Invoking `--cleanup` (with any modifier: `--run-id <id>`, `--all`, `--all --include-terminal`, `--yes`, or no modifier at all) in v1.0 prints the structured `this command requires v1.1` message, exits non-zero, and mutates nothing on disk — no central-store run directory is removed, no worktree is touched, no run branch is deleted, no git write occurs. The dispatch handler is inert: it neither no-ops nor partially cleans, and it never reaches the active-run guard or the confirmation prompt. The v1.1 follow-up work wires the already-tested cleanup-planner library as a deterministic tool / CLI, turning the shipped-but-uncallable implementation into the operative path; v1.0 deliberately refuses to ship a behaviour-unverified destructive operation.
 
-### Recovery resume dispatch
+### Recovery resume dispatch [partial-v1.0]
 
 After `--recover` passes the preflight (validation, project-root match, worktree-anchor match, run-branch present, clean working tree) and re-attaches the worktree, the orchestrator reads `progress.json.status` and dispatches to one of five re-entry branches. The dispatch is the load-bearing mechanism `--recover` falls through to; there is no shared "resume from sprint N" branch, only these five.
 
@@ -183,7 +185,62 @@ In every branch the run trace continues writing **gaplessly** via `emitTraceEven
 
 The orchestrator never writes outside `GAN_RUN_DIR` and `GAN_WORKTREE` during recovery; the v1.0 `--cleanup` stub writes nothing at all.
 
-## Regular invocation flow
+## ConfigApiUnreachable preflight [shipped-in-v1.0]
+
+Before the orchestrator calls `validateAll()` or any other framework API tool, it runs a three-step preflight against the active session to determine whether the framework's Configuration API is actually reachable. The preflight fires on every regular `/gan` invocation and on every short-circuit invocation that would otherwise touch the API (`--print-config`, `--list-recoverable`, `--recover`). It runs **before step 3** of the "Regular invocation flow" — before `validateAll()`, before the snapshot is captured, and before any run state is created. The three sub-checks are deterministic from the orchestrator's perspective and produce a single hand-authored diagnostic on failure.
+
+**Sub-check 1 — registration.** Is the framework's MCP server registered in `~/.claude.json` (or the platform equivalent)? The orchestrator reads `~/.claude.json` and looks for the `mcpServers.claudeagents-config` entry. Absent entry → branch to `notRegistered`.
+
+**Sub-check 2 — bin presence.** Does the registered command resolve to an existing executable on disk? When the registration is present, the orchestrator stat-checks the registered command's absolute path and confirms the file exists and is executable. Missing or non-executable path → branch to `binMissing`.
+
+**Sub-check 3 — session reachability.** Are the framework's MCP tools actually reachable in this session? The orchestrator attempts a single probe (for example, `getApiVersion()`) and observes whether a response arrives. No response → branch to `notLoadedInSession`. A successful response means the API is reachable and the preflight emits no diagnostic; the orchestrator proceeds to step 3.
+
+**Remediation branching.** The remediation prose is fixed per branch:
+
+| #1 registered? | #2 bin exists? | #3 reachable? | Remediation |
+|---|---|---|---|
+| No  | —   | —   | Install: `bash <repo>/install.sh`. Then restart Claude Code. |
+| Yes | No  | —   | Re-install: the registered bin path `<path>` does not exist. Run `bash <repo>/install.sh` to refresh the registration. |
+| Yes | Yes | No  | Restart Claude Code. The framework is installed but this session has not loaded the MCP registration yet — Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`. |
+| Yes | Yes | Yes | (No diagnostic; the API is reachable.) |
+
+The third branch is the load-bearing case: a user who already installed and just needs a session restart no longer cycles through "I already installed, why is it telling me to install?" The literal `Cmd+Q` keystroke is named so the user does not just close the foreground window (which leaves the process running on macOS) and assume the restart happened.
+
+**Diagnostic JSON shape.** When any of the three sub-checks fail, the orchestrator emits a standalone diagnostic object on stdout with three fields: `code` (always the literal string `"ConfigApiUnreachable"`), `subReason` (one of `"notRegistered"`, `"binMissing"`, `"notLoadedInSession"` — the discriminator that names which sub-check failed), and `message` (the per-branch remediation prose for that `subReason`). No other fields are emitted.
+
+A user who has already installed but has not restarted the session sees:
+
+```json
+{
+  "code": "ConfigApiUnreachable",
+  "subReason": "notLoadedInSession",
+  "message": "The framework is installed (`~/.claude.json` registers the background service at `/opt/homebrew/bin/claudeagents-config-server`) but this Claude Code session has not loaded it yet. Claude Code reads `~/.claude.json` only at session startup. Quit Claude Code completely (Cmd+Q on macOS) and reopen, then re-run `/gan --print-config`."
+}
+```
+
+A user who has not run the installer at all sees:
+
+```json
+{
+  "code": "ConfigApiUnreachable",
+  "subReason": "notRegistered",
+  "message": "The framework's Configuration API is not registered in this Claude Code installation. Install: `bash /Users/you/path/to/framework/install.sh`. Then restart Claude Code."
+}
+```
+
+The `binMissing` branch follows the same shape with its own remediation prose: the registered absolute path the orchestrator just stat-checked is interpolated into the message verbatim so the user can see exactly which file the framework expected to find.
+
+**Shape note: familiar surface, hand-authored origin.** The diagnostic carries a `code` and `message` so it reads to the user like the framework's other structured errors — the surface is intentionally familiar. It is, however, **hand-authored orchestrator markdown JSON**, not a framework error-enum entry and not a CLI exit-code-map entry. The preflight fires precisely when the framework's MCP server is unreachable in this session, so the orchestrator cannot call into the server to construct a server-side structured error — there is nothing to call. The diagnostic has no schema home; the `subReason` discriminator is the orchestrator's own contract for letting log readers and future telemetry tell the three cases apart.
+
+**Disjointness vs. `--print-config`'s reachable-API output.** The preflight and the `--print-config` reachable-API output are disjoint surfaces; they never co-emit.
+
+- When the API is unreachable, the orchestrator cannot call the resolved-config read at all — there is no resolved object to print. The preflight short-circuits before `--print-config`'s reachable-API flow runs, and the diagnostic JSON above is the only thing emitted.
+- When the API is reachable, the preflight emits nothing and `--print-config`'s reachable-API output is what prints: the flat resolved-config object with its own `issues` and `warnings` arrays carrying validation results.
+- The preflight diagnostic is **not** wrapped in a `validationErrors` / `resolvedConfig` envelope, and the reachable-API output stays flat — neither surface reintroduces a wrapper. The two surfaces are distinguished by the `code` field on the diagnostic, not by an envelope shape.
+
+A user driving `/gan --print-config` therefore sees exactly one of the two: a `ConfigApiUnreachable` diagnostic with a `subReason` and remediation prose, or the flat resolved-config object. The orchestrator never blends them.
+
+## Regular invocation flow [shipped-in-v1.0]
 
 The orchestrator follows this order on every regular `/gan` invocation:
 
@@ -240,13 +297,13 @@ The orchestrator follows this order on every regular `/gan` invocation:
 
 11. **Tear down and release the lock.** On **every** run-exit path — graceful completion, abort (user cancel, `validateAll` failure after the lock is held, `ConcurrentRunInProgress` is the one exception: nothing was acquired), halted (loop-detection halt, recovery refusal), or errored (uncaught failure) — the orchestrator marks the run terminal in `progress.json` (under `GAN_RUN_DIR`). **Before** removing the worktree filesystem and releasing the lock — and unless `--no-telemetry` was passed — the orchestrator calls the `writeTelemetryOutcome` MCP tool exactly once. Inputs: `runDir` and `runId` from `resolveRunStore`; `terminalReason` is the same kebab-case code the orchestrator is about to write to `progress.json.terminalReason`; `sprints[]` is the per-sprint outcome ledger the orchestrator either kept in memory across the loop or reconstructed via `reconstructRecoveryState` on the recover path; `safetyHalts[]` is the orchestrator's running summary of any halts it surfaced during the run (empty on a non-halted run); `droppedEmits` is supplied explicitly so the in-memory tally is read inside the config-server process (the tally is process-scoped by design — `getDroppedEmits(runDir)` returns the authoritative count when invoked from the long-lived server process where the framework accumulates dropped-emit failures); `writtenAt` is the RFC3339 millisecond UTC timestamp of the termination moment. The tool writes `<runDir>/telemetry/outcome.json` atomically. The artefact is NOT exclusive-create: a `--recover`-ed run that reaches its resumed termination legitimately re-writes the file, and the second write overwrites the first. The writer derives `cost` from the trace via `aggregateRunSummary` and `cost.complete` from the supplied `droppedEmits`. With `--no-telemetry` the call is skipped entirely and `<runDir>/telemetry/` is not created. The orchestrator then removes the worktree filesystem (the run branch survives for inspection) and **then calls `releaseRunLock({ repoKey, runId })`**. The release is the last write the orchestrator performs for the run. Release-on-exit cannot be deferred: the acquiring process is the long-lived config server, so a lock left held by it would never be self-healed as stale, and the next `/gan` on the same repo would be refused indefinitely. Release is idempotent — a double-release on an overlapping graceful-then-error path is safe. The `runId` argument is the acquiring run's id (already in hand from `resolveRunStore` at step 7, and exported as `GAN_RUN_ID` to every sub-agent); the tool reads the on-disk lock's contents and unlinks only when the recorded holder's `runId` matches, so a late, stale tear-down from a superseded run is a silent no-op and never deletes a live successor's lock.
 
-## Snapshot freshness rule
+## Snapshot freshness rule [shipped-in-v1.0]
 
 The captured snapshot is **frozen across user-side edits** for the entire run, including across multiple sprints in a multi-sprint plan. Wall-clock time between sprints does not matter; user edits to overlay or stack files mid-run are not picked up until the next `/gan` invocation.
 
 When any agent's API call returns `{ mutated: true, ... }` (the framework's mutation indicator), the orchestrator records the per-sprint OR of every agent's `mutated` flag; if any agent in the prior sprint produced `mutated: true`, the orchestrator **always** re-snapshots via `getResolvedConfig()` before spawning the next agent. Re-snapshot-after-true-mutation is unconditional. A `mutated: false` result (e.g. duplicate-skip append) does **not** trigger a re-snapshot.
 
-## Safety halts — shared contract
+## Safety halts — shared contract [shipped-in-v1.0]
 
 The framework runs three independent triggers that can halt a sprint mid-loop: a per-role attempt ceiling, a sprint-wide attempt budget, and an edit-oscillation detector. They share one halt contract and differ only in the per-trigger distinctions below.
 
@@ -270,7 +327,7 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 - **With `--reset-attempts`, the recovered sprint resumes with attempt counters at zero,** behaving like a fresh sprint that does not immediately halt.
 - **`--reset-attempts` is valid only alongside `--recover`.** Passing it standalone is rejected with a structured usage error.
 
-### Trigger 1 — Per-role attempt ceiling
+### Trigger 1 — Per-role attempt ceiling [shipped-in-v1.0]
 
 - **Roles checked.** Multi-attempt roles only: `gan-contract-proposer` and `gan-generator` (seed default ceiling 3 each). The single-attempt clarifier and planner and the once-per-output reviewer and evaluator are never checked here.
 - **Counter substrate.** Per-role attempt counts reconstructed from `agentAttempt` events.
@@ -278,7 +335,7 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 - **Error builder.** `createLoopDetectedError` — `reason` and `role` identify the per-role halt (the role name and its attempt count/ceiling). The message names the role, its count and ceiling, points at the trace directory, and tells the user to adjust the prompt or raise the ceiling and re-run with `--recover`.
 - **Gating.** Always runs.
 
-### Trigger 2 — Sprint-wide attempt budget
+### Trigger 2 — Sprint-wide attempt budget [shipped-in-v1.0]
 
 - **Roles checked.** Every role — including the single-attempt clarifier and planner and the once-per-output reviewer and evaluator. Every role's attempts count toward the sprint-wide total even though no per-role ceiling applies to them.
 - **Counter substrate.** The summed per-role attempt counts reconstructed from `agentAttempt` events (the same accounting the per-role check uses).
@@ -286,7 +343,7 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 - **Error builder.** `createSprintBudgetError` — same `LoopDetected` error code, with `reason = "sprintBudgetExceeded"` and the synthetic `role = "sprint"`. The synthetic role denotes the aggregate budget; it is not itself a multi-attempt role and is never per-role-ceiling-checked. The message names the combined attempt count and the budget, points at the trace directory, and tells the user to adjust the prompt or raise the budget and re-run with `--recover`.
 - **Gating.** Always runs.
 
-### Trigger 3 — Edit-oscillation detection
+### Trigger 3 — Edit-oscillation detection [shipped-in-v1.0]
 
 - **Roles checked.** The generator role only.
 - **Counter substrate.** The generator's per-attempt edit-fingerprint history, paired with a post-rejection flag per attempt. Both come from the trace: the fingerprints from the edit sets recorded per attempt (normalized so that whitespace-only, comment-only, and reordering-only differences collapse to the same fingerprint), and the post-rejection flag reconstructed from the rejection the evaluator recorded before the attempt. The pure detector compares attempts by the fingerprint value the fingerprinting layer already produced; it does not re-derive its own fingerprint.
@@ -297,17 +354,17 @@ A halted sprint is recoverable via `--recover`. Unless the user changes the prom
 - **Error builder.** `createEditOscillationError` — same `LoopDetected` error code, with `reason = "editOscillation"` and `role = "gan-generator"`. The `safetyHalt` event's payload evidence is `{ fingerprintSequence, detectedPattern }`. The message names the attempt count and whether the generator repeated one edit or alternated between two, points at the trace directory, and tells the user to adjust the prompt and re-run with `--recover`.
 - **Gating.** Gated by the resolved effective-safety config's `oscillationDetection` boolean (overlay `safety.oscillationDetection`, else default `true`). When `true`, the orchestrator consults the detector. When `false`, the orchestrator skips the check entirely and a generator that repeats fingerprints proceeds up to its per-role ceiling without an `editOscillation` halt; only ceiling and budget apply. The gate is on the call site (whether the orchestrator consults the detector), not on the detector itself.
 
-## Per-run state versus configuration
+## Per-run state versus configuration [shipped-in-v1.0]
 
 Per-run state — `progress.json`, sprint contracts, evaluator feedback, generator artefacts — lives directly under `GAN_RUN_DIR` (the central-store run directory, zone 2). It is **not** Configuration API territory. The API is for framework configuration; per-run state is for sprint orchestration.
 
 The orchestrator is the sole writer of `progress.json`. Sub-agents may read it but never write it; they communicate state transitions via stdout status lines that the orchestrator parses.
 
-## Error surfacing
+## Error surfacing [shipped-in-v1.0]
 
 Every API error (during validation or during a sprint) is reported with the structured fields preserved verbatim: `code`, `file`, `field`, `line`, `message`. The orchestrator does not interpret, translate, or summarise these. User-facing messages obey the framework's error-text discipline: shell remediation (`rm <path>`), references to "the framework" rather than specific runtimes, no maintainer-only script names, readable to a developer who has only run `install.sh`.
 
-## Confinement
+## Confinement [shipped-in-v1.0]
 
 The framework-owned PreToolUse confinement hook remains in place. Spawned agents write only inside the resolved worktree and to their designated artefact paths under the run directory. MCP tool calls are not file-system reads; agents may call the API freely from inside a confined worktree.
 
@@ -319,7 +376,7 @@ Before spawning agents at sprint start, the orchestrator exports three absolute-
 
 The hook derives its zones from `GAN_WORKTREE` and `GAN_RUN_DIR`. It stays a pure deny-gate: it allows writes inside those two zones and denies everything else (`~/.claude/`, the home directory generally, the module-state directory, the ephemeral cache, and any path outside both zones). `gan hooks status` reports the resolved `GAN_WORKTREE` and `GAN_RUN_DIR` for the active run, or notes that the command is running outside a run.
 
-## Trust integration
+## Trust integration [shipped-in-v1.0]
 
 When the validation step returns the `UntrustedOverlay` structured error, the orchestrator surfaces the interactive trust prompt **before reaching any command-execution path**. The prompt is a protocol the orchestrator is contracted to obey, not a server-enforced gate: the orchestrator MUST show what the approval covers (the changed or newly-declared command-bearing fields, plus the disclosure that the trust hash does not cover the scripts those commands invoke), wait for explicit consent, and call `trustApprove` **only** when the user chooses `[a]`.
 
@@ -327,7 +384,7 @@ The rendered prompt text and the full `[v]` / `[a]` / `[r]` / `[c]` option set a
 
 `GAN_TRUST=strict` makes the prompt fail closed in CI; `GAN_TRUST=unsafe-trust-all` skips the trust check entirely (logged loudly).
 
-## Clarification phase
+## Clarification phase [shipped-in-v1.0]
 
 After the snapshot is captured and the startup log is printed, and before the worktree and sprint loop, the orchestrator runs the clarification phase. Unless `--skip-clarification` was passed, it spawns `gan-clarifier` with the user prompt, the snapshot, the union of every per-agent `additionalContext`, and a bounded directory listing obtained from the framework's `getBoundedDirectoryListing` read tool — which unions the active stacks' scope globs and returns a structure-only listing, scope-filtered and pruned of paths the project's own ignore file excludes. The clarifier writes `clarified-spec.md` under the run's state directory; the orchestrator preserves the verbatim original prompt alongside it as `raw-prompt.md`. The approved `clarified-spec.md` is the planner's primary input.
 
@@ -359,7 +416,7 @@ Proceed with this spec? [a]pprove / [e]dit / "evolve: <text>" / [c]ancel
 
 **Trace.** The clarifier emits `agentAttempt`, `llmCall`, `clarifierFinding`, and `clarifierUserAction` events per round, and a `safetyHalt` of class `clarifierCancelled` when the user cancels at the action menu.
 
-## Run-trace integration points
+## Run-trace integration points [shipped-in-v1.0]
 
 Every `/gan` run writes a structured, append-only event log to `<GAN_RUN_DIR>/trace/` via the framework's trace library: at each milestone, agent attempt, LLM call, and tool call (`orchestratorMilestone`, `agentAttempt`, `llmCall`, `toolCall`), the orchestrator emits a typed event by calling `emitTraceEvent({ runDir, event })` (the MCP tool, which delegates to the shared `appendTraceEvent(runDir, event)` library function). Each call is stateless and exclusive-create — one event per call, no held emitter object. The trace is the read-substrate for loop detection, recovery, and later cost/accuracy phases. The trace lives entirely on the local filesystem and is never transmitted off-machine.
 
@@ -407,7 +464,7 @@ Renegotiation re-locks the contract at a new revision rather than mutating the e
 
 **Crash mid-renegotiation.** If the round crashes before the atomic swap completes, the prior canonical contract stays authoritative — its file is byte-identical to what was on disk before the round began, because the archive step happens first and the swap is the single atomic rename that flips authority. Any partial draft on disk lives at a recognisable `sprint-{N}-contract.draft-tmp.<token>.json` path, distinguishable from both the canonical file and the archived siblings, so a recovery flow can identify and ignore unlocked partial drafts without consulting an external manifest.
 
-## Spawn discipline (summary)
+## Spawn discipline (summary) [shipped-in-v1.0]
 
 Sub-agents are spawned only as part of the regular invocation flow. They are never spawned during a help short-circuit, a print-config short-circuit, or a recovery short-circuit. Each spawn receives the captured run context (worktree path, sprint number, attempt number, contract path) and the resolved configuration object. The orchestrator also exports `GAN_RUN_ID`, `GAN_WORKTREE`, and `GAN_RUN_DIR` into the spawn environment (see "Confinement"), so the confinement hook can derive its allowed zones from the resolved worktree and run directory.
 

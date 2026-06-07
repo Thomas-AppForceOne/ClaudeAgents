@@ -42,6 +42,7 @@ const CATEGORY_WORKFLOWS = [
   'test-house-rules.yml',
   'test-error-text.yml',
   'test-doc-lint.yml',
+  'test-status-markers.yml',
 ] as const;
 const EXPECTED_FILES = [SHARED, ...CATEGORY_WORKFLOWS].sort();
 
@@ -273,6 +274,11 @@ describe('workflows: per-file command substrings', () => {
   it('test-api-tools-v1-r7-entries.yml runs `npm run api-tools-v1-r7-entries`', () => {
     const raw = readWorkflow('test-api-tools-v1-r7-entries.yml');
     expect(raw).toContain('npm run api-tools-v1-r7-entries');
+  });
+
+  it('test-status-markers.yml runs `npm run lint-status-markers`', () => {
+    const raw = readWorkflow('test-status-markers.yml');
+    expect(raw).toContain('npm run lint-status-markers');
   });
 });
 

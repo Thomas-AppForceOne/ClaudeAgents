@@ -60,33 +60,33 @@ function findEntryLine(lines: string[], prefix: string): string {
   return match;
 }
 
-describe('roadmap entry 23 is flipped to shipped form', () => {
-  it('entry 23 starts with the shipped-form marker and names the merged PR', () => {
+describe('roadmap entry 24 is flipped to shipped form', () => {
+  it('entry 24 starts with the shipped-form marker and names the merged PR', () => {
     const lines = loadRoadmapLines();
-    const shipped = findEntryLine(lines, '23.');
-    // The shipped form is `✅ **[O3](…)** — …. Shipped PR #<n>.`.
+    const shipped = findEntryLine(lines, '24.');
+    // The shipped form is `✅ **[<spec>](…)** — …. Shipped PR #<n>.`.
     // Substring matches on the two load-bearing tokens (the ✅-bold-spec
     // prefix and the `Shipped PR #` marker) are sufficient — the rest of
     // the line is descriptive prose and may be reworded.
-    expect(shipped).toMatch(/^\s*23\.\s+✅\s+\*\*\[O3\]/);
+    expect(shipped).toMatch(/^\s*24\.\s+✅\s+\*\*\[D1\]/);
     expect(shipped).toContain('Shipped PR #');
   });
 
-  it('entry 23 no longer carries the **Next** marker', () => {
+  it('entry 24 no longer carries the **Next** marker', () => {
     const lines = loadRoadmapLines();
-    const shipped = findEntryLine(lines, '23.');
+    const shipped = findEntryLine(lines, '24.');
     // The Next marker is the single point in the roadmap that signals
     // "ship this next"; a shipped entry that still carries it is a
     // definition-of-done failure.
     expect(shipped).not.toContain('**Next**');
   });
 
-  it('entry 24 (next-to-ship) has not been flipped (still bare link, no shipped marker)', () => {
+  it('entry 25 (next-to-ship) has not been flipped (still no shipped marker)', () => {
     const lines = loadRoadmapLines();
-    const next = findEntryLine(lines, '24.');
+    const next = findEntryLine(lines, '25.');
     // An entry that has not shipped must not display the ✅ shipped-form
     // marker. The **Next** marker advance is deliberately deferred to the
-    // PR that ships entry 24 itself, so the guard does not require it
+    // PR that ships entry 25 itself, so the guard does not require it
     // here.
     expect(next).not.toContain('✅');
   });
