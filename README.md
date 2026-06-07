@@ -297,6 +297,7 @@ The common workflow is wrapped in a `Makefile` — run `make` (or `make help`) t
 - `npm run lint-no-stack-leak` — guards against ecosystem-token leakage outside owning stack files.
 - `npm run lint-error-text` — checks user-facing error strings for the iOS-developer-on-macOS readability rule.
 - `npm run doc-lint` — documentation linter for the framework's TypeScript surface (the deterministic layer behind `web-node`'s `docLintCmd`); over the merge-base delta it gates an introduced export that lacks a doc comment, and reports the required-sections / commented-out-code heuristics as non-blocking advisories. Pass `--require-base` to fail instead of degrade when no baseline resolves (used by the `test-doc-lint` CI gate).
+- `npm run lint-status-markers` — asserts every runtime-behaviour section heading in `skills/gan/SKILL.md` carries a `[shipped-in-vN]` / `[partial-vN]` / `[deferred-to-vN]` token, and that every token references a release that exists in `specifications/roadmap.md`. Catches spec-vs-runtime drift before it ships; runs in the `test-status-markers` CI gate.
 - `npm run publish-schemas` — publish JSON Schemas under `schemas/`.
 - `npm run pair-names` — verifies module ↔ stack pairing.
 - `npm run evaluator-pipeline-check` — the deterministic core of the evaluator pipeline (no LLM in CI).
