@@ -135,6 +135,25 @@ export interface ValidationAbortEvent extends TraceEnvelope {
 }
 
 /**
+ * A pre-spawn preflight abort: the framework refused to spawn the first
+ * sub-agent because a session-level invariant did not hold. The discriminator
+ * `preflightStage` names which preflight rejected — currently only the
+ * confinement-hook probe, future preflights add values. Fields are
+ * deliberately kept to the four documented strings so operator state cannot
+ * leak into telemetry: the event captures the diagnostic code and message
+ * the operator already sees, plus the project-tier hook path (which the
+ * operator authored), but NOT the hook contents, probe stdin, or probe env.
+ */
+export interface PreflightAbortEvent extends TraceEnvelope {
+  eventType: 'preflightAbort';
+  preflightStage: 'confineHook';
+  errorCode: string;
+  errorSubReason: string;
+  errorMessage: string;
+  projectTierHookPath: string;
+}
+
+/**
  * A single gap the clarifier found while turning a raw prompt into a clarified
  * spec. `class` records how the gap was disposed of — silently resolved with a
  * framework default, defaulted-but-overridable, or surfaced as a blocker — so
@@ -223,7 +242,8 @@ export type TraceEvent =
   | ValidationAbortEvent
   | ClarifierFindingEvent
   | ClarifierUserActionEvent
-  | IndependentReviewEvent;
+  | IndependentReviewEvent
+  | PreflightAbortEvent;
 
 /**
  * Runtime set of the event-type discriminants in {@link TraceEvent}. The
@@ -250,4 +270,5 @@ export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'clarifierFinding',
   'clarifierUserAction',
   'independentReview',
+  'preflightAbort',
 ]);

@@ -1,0 +1,337 @@
+/**
+ * Behaviour probe for the confinement hook. Synthesises a hermetic two-dir
+ * temp tree, spawns the candidate hook with the framework's allow-listed
+ * `trace/<run-id>.jsonl` target inside the synthesised `$GAN_RUN_DIR`, and
+ * classifies the result into one of three verdicts:
+ *
+ * - `current`     — the hook exited 0 on the allow-listed write target
+ *                   (honouring the F7 `$GAN_RUN_DIR` contract).
+ * - `stale`       — the hook ran to completion and refused the write
+ *                   (no `$GAN_RUN_DIR` awareness; the genuine pre-F7 case).
+ * - `misconfigured` — the file is not a runnable bash script (no valid
+ *                     shebang, not executable, or the spawn errored before
+ *                     the hook could read stdin).
+ *
+ * The probe is the load-bearing detector. Both `gan hooks status` and the
+ * skill-side preflight call the same {@link runConfineHookProbe} so the
+ * acceptance-criteria-8 "byte-identical across surfaces" guarantee lives
+ * at this single call site.
+ *
+ * Hermeticity contract stated once here so the call sites do not have to
+ * restate it:
+ * - The temp tree lives under `os.tmpdir()` with a `gan-confine-probe-<pid>-`
+ *   prefix so parallel workers cannot collide on the prefix or race on
+ *   hygiene assertions.
+ * - The temp tree is removed in a `try/finally` `rm -rf` on every code path,
+ *   including spawn failure and asynchronous exit.
+ * - The spawn carries an **explicitly constructed** five-entry environment
+ *   (PATH, GAN_RUN_ID, GAN_WORKTREE, GAN_RUN_DIR, CLAUDE_PROJECT_DIR) —
+ *   never inherit-and-augment. `HOME`, `USER`, `SHELL`, and every other
+ *   ambient operator-env value are deliberately excluded so the probe's
+ *   classification cannot vary with operator machine state.
+ * - The spawn uses `spawn` from `node:child_process` with an argv array, not
+ *   `exec` with an interpolated shell command line, and the candidate
+ *   hook path is the **command** (not an argument), so the untrusted
+ *   filename never reaches a shell parser.
+ */
+
+import { spawn } from 'node:child_process';
+import { mkdtempSync, openSync, readSync, rmSync, statSync, closeSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+/**
+ * The verdict classes {@link runConfineHookProbe} surfaces.
+ *
+ * @see {@link ConfineProbeSubReason} for the per-verdict discriminator.
+ */
+export type ConfineProbeVerdict = 'current' | 'stale' | 'misconfigured';
+
+/**
+ * Per-verdict discriminator surfaced on the JSON result and the skill-side
+ * preflight envelope.
+ *
+ * @value `'noGanRunDirAwareness'` paired with `verdict: 'stale'`: the hook
+ *   ran to completion and refused the GAN_RUN_DIR-targeted write.
+ * @value `'projectHookMisconfigured'` paired with `verdict: 'misconfigured'`:
+ *   the file is not a runnable bash script.
+ * @value `null` paired with `verdict: 'current'`: the hook accepted the
+ *   probe and no remediation is required.
+ */
+export type ConfineProbeSubReason =
+  | 'noGanRunDirAwareness'
+  | 'projectHookMisconfigured'
+  | null;
+
+/**
+ * Input to {@link runConfineHookProbe}.
+ *
+ * @property hookPath the absolute path to the candidate hook file. The
+ *   probe spawns this path directly via `spawn` (no shell), so the path is
+ *   the **command** argument; an attacker-controlled filename therefore
+ *   cannot inject shell.
+ */
+export interface RunConfineHookProbeInput {
+  hookPath: string;
+}
+
+/**
+ * Result of {@link runConfineHookProbe}.
+ *
+ * @property verdict one of `'current'`, `'stale'`, or `'misconfigured'`.
+ * @property subReason the per-verdict discriminator surfaced on the
+ *   skill-side preflight envelope; `null` only when `verdict === 'current'`.
+ */
+export interface RunConfineHookProbeResult {
+  verdict: ConfineProbeVerdict;
+  subReason: ConfineProbeSubReason;
+}
+
+// Probe-target allow-list pin: the framework's current template
+// (`scripts/hooks/gan-confine.sh.template`, case `trace/*`) explicitly
+// allows any path under `<GAN_RUN_DIR>/trace/`. The probe targets a file
+// inside `<GAN_RUN_DIR>/trace/` so a future template edit that removed the
+// `trace/*` entry would surface as a unit-test failure at
+// `tests/installer/confineHookProbe.test.ts` rather than silently
+// misclassifying the framework's own template as `stale`.
+const PROBE_TARGET_RELATIVE_PATH = path.join('trace', 'probe-event.jsonl');
+
+// The synthetic run-id the probe injects. Matches the O2 run-id grammar
+// `^[0-9]{8}T[0-9]{6}-[0-9a-f]{4}$` so the hook's first-line grammar check
+// accepts it; the value is otherwise meaningless. Pinned to a fixed date
+// far in the future so a casual log reader can tell it apart from a real
+// run id.
+const PROBE_RUN_ID = '20991231T235959-0000';
+
+// Maximum number of bytes read for the shebang sniff. Two bytes is the
+// minimum useful (`#!`); reading a small prefix keeps the defensive check
+// cheap and predictable regardless of file size.
+const SHEBANG_SNIFF_BYTES = 4;
+
+/**
+ * Run the behaviour probe against the candidate confinement hook.
+ *
+ * The function is exported as the single shared probe runner — both the CLI
+ * `gan hooks status` command and the MCP `probeConfineHook` tool wrapper
+ * call it without redoing any of the logic. The promise resolves with a
+ * classification verdict in every code path: spawn failure, hook crash, and
+ * normal exit all collapse to one of the three verdicts. The function never
+ * throws.
+ *
+ * @param input see {@link RunConfineHookProbeInput}.
+ * @returns a {@link RunConfineHookProbeResult}. Failure modes: an
+ *   unreadable / non-bash hook is classified `misconfigured`; a non-zero
+ *   exit on the allow-listed write target is classified `stale`; a zero
+ *   exit is classified `current`. Side effect: creates a temp tree under
+ *   `os.tmpdir()` whose prefix carries the current process id, and removes
+ *   it in a `try/finally` `rm -rf` on every code path. The temp tree is
+ *   removed even when the spawn errors before the hook runs.
+ */
+export async function runConfineHookProbe(
+  input: RunConfineHookProbeInput,
+): Promise<RunConfineHookProbeResult> {
+  // Defensive shebang-check before spawn: a file that is not even readable
+  // as bash text — empty, near-empty, or with no `#!` prefix — is
+  // misconfigured by inspection. Avoiding a spawn for this case keeps the
+  // probe from leaving an ambiguous "spawn errored" trace for the obvious
+  // failure mode.
+  const shebangCheck = checkShebangSync(input.hookPath);
+  if (shebangCheck === 'unreadable' || shebangCheck === 'noShebang') {
+    return { verdict: 'misconfigured', subReason: 'projectHookMisconfigured' };
+  }
+
+  // Tag the temp prefix with the current process id so parallel workers
+  // never collide on a shared prefix, and a hygiene test that counts
+  // probe-prefixed temp dirs cannot race against a sibling worker's
+  // in-flight probe.
+  const tempRoot = mkdtempSync(
+    path.join(os.tmpdir(), `gan-confine-probe-${process.pid}-`),
+  );
+  try {
+    const worktreeDir = path.join(tempRoot, 'worktree');
+    const runDir = path.join(tempRoot, 'run');
+    // Create both sibling dirs eagerly: the probe payload references both,
+    // and a hook that consulted either path's existence (the framework's
+    // hook does not, but a custom override might) sees a coherent tree.
+    const fs = await import('node:fs');
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    fs.mkdirSync(path.join(runDir, 'trace'), { recursive: true });
+
+    const probeTarget = path.join(runDir, PROBE_TARGET_RELATIVE_PATH);
+
+    // PreToolUse stdin envelope.
+    //
+    // Last-verified contract: https://docs.claude.com/en/docs/claude-code/hooks
+    // checked against the docs on 2026-06-08. The envelope mirrors what
+    // Claude Code passes to a real PreToolUse hook; if Claude Code changes
+    // the shape, this envelope and the framework's own template need
+    // updating in lockstep.
+    const stdinPayload = JSON.stringify({
+      session_id: '<probe>',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: probeTarget },
+    });
+
+    // Explicitly construct the hermetic env with exactly five keys. PATH
+    // is anchored to the POSIX-minimal `/usr/bin:/bin` — sufficient for
+    // the standard shell utilities the confinement hook invokes (`grep`,
+    // `cat`, `dirname`) — and the directory containing the current Node
+    // executable is prepended so the framework's own template (which
+    // parses the PreToolUse JSON via `node -e`) is reachable even on
+    // operator machines where Node lives outside the POSIX-minimal paths
+    // (e.g. macOS Homebrew at `/opt/homebrew/bin`). That single
+    // extension is the minimum the framework's template requires; HOME,
+    // USER, SHELL, and every other ambient operator-env value are
+    // intentionally NOT forwarded: a hook whose behaviour depended on
+    // those would make classification non-deterministic across
+    // operators, and such a hook is by construction outside the
+    // framework's contract — the probe correctly classifies it as
+    // `stale`.
+    const childEnv: Record<string, string> = {
+      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      GAN_RUN_ID: PROBE_RUN_ID,
+      GAN_WORKTREE: worktreeDir,
+      GAN_RUN_DIR: runDir,
+      CLAUDE_PROJECT_DIR: worktreeDir,
+    };
+
+    const exitCode = await spawnAndCollect(input.hookPath, childEnv, stdinPayload);
+    if (exitCode === 'spawnError') {
+      return { verdict: 'misconfigured', subReason: 'projectHookMisconfigured' };
+    }
+    if (exitCode === 0) {
+      return { verdict: 'current', subReason: null };
+    }
+    return { verdict: 'stale', subReason: 'noGanRunDirAwareness' };
+  } finally {
+    // Hygiene contract: the temp tree is removed on every code path,
+    // including a `throw` inside the try block above. `force: true` makes
+    // the call idempotent so a partial cleanup (e.g. an interrupted spawn)
+    // does not surface as a secondary error.
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Synchronous shebang sniff. Reads up to {@link SHEBANG_SNIFF_BYTES} bytes
+ * from the start of `hookPath` and decides whether the file is plausibly a
+ * runnable bash script before the spawn is attempted.
+ *
+ * Three outcomes:
+ * - `'ok'`         — the file begins with `#!`.
+ * - `'noShebang'`  — the file is readable but does not begin with `#!`.
+ * - `'unreadable'` — the file could not be opened (does not exist, no
+ *                    permission, etc.).
+ *
+ * The check is synchronous to keep the call site simple — `mkdtempSync` and
+ * `rmSync` on the same path are already synchronous, so an async sniff
+ * would not improve responsiveness in any code path that matters.
+ */
+function checkShebangSync(hookPath: string): 'ok' | 'noShebang' | 'unreadable' {
+  try {
+    const st = statSync(hookPath);
+    if (!st.isFile() || st.size < 2) {
+      return 'noShebang';
+    }
+  } catch {
+    return 'unreadable';
+  }
+  let fd: number;
+  try {
+    fd = openSync(hookPath, 'r');
+  } catch {
+    return 'unreadable';
+  }
+  try {
+    const buf = Buffer.alloc(SHEBANG_SNIFF_BYTES);
+    const bytes = readSync(fd, buf, 0, SHEBANG_SNIFF_BYTES, 0);
+    if (bytes < 2) {
+      return 'noShebang';
+    }
+    if (buf[0] !== 0x23 || buf[1] !== 0x21) {
+      // 0x23 0x21 = '#!'. Any other lead byte sequence is not a script
+      // shebang, regardless of the rest of the file.
+      return 'noShebang';
+    }
+    return 'ok';
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // Best-effort close: a failure here is irrelevant — the file
+      // descriptor will be reaped when the process exits, and the
+      // probe's correctness does not depend on the close succeeding.
+    }
+  }
+}
+
+// Sentinel for spawn-time failures the caller turns into `misconfigured`.
+const SPAWN_ERROR = 'spawnError' as const;
+
+// Spawn the hook with the explicit env and feed the stdin payload. Resolves
+// with the numeric exit code on a normal exit, or with `SPAWN_ERROR` on
+// any spawn-time failure (ENOENT, EACCES, ENOEXEC). The function never
+// throws: the only outcomes are an integer exit code or the sentinel.
+async function spawnAndCollect(
+  hookPath: string,
+  env: Record<string, string>,
+  stdin: string,
+): Promise<number | typeof SPAWN_ERROR> {
+  return await new Promise<number | typeof SPAWN_ERROR>((resolve) => {
+    let child;
+    try {
+      // argv-form spawn: the candidate hook is the `command` argument, not
+      // a string interpolated into a shell command line. `shell: false`
+      // (the default) is reasserted by not passing the `shell` option at
+      // all, so the untrusted filename never reaches a shell parser.
+      child = spawn(hookPath, [], {
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      resolve(SPAWN_ERROR);
+      return;
+    }
+    let settled = false;
+    const settle = (value: number | typeof SPAWN_ERROR) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    child.on('error', () => settle(SPAWN_ERROR));
+    child.on('exit', (code, signal) => {
+      // A signal-only exit (no numeric code) is treated as a non-zero exit
+      // — the hook did not run to completion, so the contract was not
+      // satisfied. The status command surfaces this as `stale` rather than
+      // `misconfigured` because the spawn itself succeeded.
+      if (typeof code === 'number') {
+        settle(code);
+      } else if (signal !== null) {
+        settle(1);
+      } else {
+        settle(1);
+      }
+    });
+    // Drain stdout/stderr so the child never blocks on a full pipe.
+    if (child.stdout !== null) {
+      child.stdout.on('data', () => {
+        /* discard */
+      });
+    }
+    if (child.stderr !== null) {
+      child.stderr.on('data', () => {
+        /* discard */
+      });
+    }
+    if (child.stdin !== null) {
+      try {
+        child.stdin.end(stdin);
+      } catch {
+        // A write failure here is rare; the `error` event above resolves
+        // the promise as `SPAWN_ERROR`. Swallow the synchronous throw so
+        // the promise resolves through the event path rather than crashing.
+      }
+    }
+  });
+}

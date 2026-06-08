@@ -13,7 +13,12 @@
  */
 
 import { createError, type ConfigServerError, type ErrorCode } from '../config-server/errors.js';
-import type { TrustEventEvent, ValidationAbortEvent, SafetyHaltEvent } from './events.js';
+import type {
+  TrustEventEvent,
+  ValidationAbortEvent,
+  SafetyHaltEvent,
+  PreflightAbortEvent,
+} from './events.js';
 
 /** A {@link TrustEventEvent} without its envelope fields — the part this module builds. */
 export type TrustEventBody = Omit<
@@ -32,6 +37,37 @@ export type SafetyHaltBody = Omit<
   SafetyHaltEvent,
   'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
 >;
+
+/** A {@link PreflightAbortEvent} without its envelope fields — what {@link buildPreflightAbortBody} produces. */
+export type PreflightAbortBody = Omit<
+  PreflightAbortEvent,
+  'sequenceNumber' | 'eventType' | 'timestamp' | 'runId'
+>;
+
+/** The preflight-stage discriminant, re-derived from the event type. */
+export type PreflightStage = PreflightAbortEvent['preflightStage'];
+
+/**
+ * The structured error shape {@link buildPreflightAbortBody} consumes.
+ *
+ * @property code the diagnostic envelope's `code` field — for the H3
+ *   confine-hook preflight this is always the literal
+ *   `'StaleProjectConfinementHook'`. Surfaced verbatim on the event body
+ *   under `errorCode`.
+ * @property subReason the per-branch discriminator the orchestrator emits
+ *   (`'noGanRunDirAwareness'` or `'projectHookMisconfigured'`). Surfaced
+ *   verbatim under `errorSubReason`.
+ * @property message the human-readable remediation prose. Surfaced verbatim
+ *   under `errorMessage`. The same string the operator sees in the
+ *   diagnostic envelope; the trace event re-records it so a log reader does
+ *   not have to cross-reference the stderr surface to recover the
+ *   remediation text.
+ */
+export interface PreflightAbortError {
+  code: string;
+  subReason: string;
+  message: string;
+}
 
 /**
  * The outcome of a trust prompt, as produced upstream.
@@ -195,5 +231,38 @@ export function buildLoopDetectedBody(halt: LoopDetectionHalt): SafetyHaltBody {
       ceiling: halt.ceiling,
       evidence: halt.evidence,
     },
+  };
+}
+
+/**
+ * Project a preflight-abort error into a `preflightAbort` event body ready
+ * for {@link emitTraceEvent}.
+ *
+ * Mirrors {@link buildValidationAbortBody}: a pure mapping, no I/O, never
+ * throws. The body fields are limited to the four documented strings — the
+ * stage discriminator, the structured-error code / subReason / message, and
+ * the project-tier hook path — so operator state cannot leak into the
+ * telemetry surface. Specifically, the function does NOT capture probe env,
+ * stdin envelope, or hook contents; those are deliberately out of scope.
+ *
+ * @param stage the preflight discriminator (currently only
+ *   `'confineHook'`). Surfaced verbatim under `preflightStage`.
+ * @param error the structured diagnostic envelope the orchestrator already
+ *   emitted to stderr. See {@link PreflightAbortError}.
+ * @param hookPath the absolute path to the project-tier hook file that
+ *   triggered the halt. Surfaced verbatim under `projectTierHookPath`.
+ * @returns the body, ready to pass to the emitter. Never throws.
+ */
+export function buildPreflightAbortBody(
+  stage: PreflightStage,
+  error: PreflightAbortError,
+  hookPath: string,
+): PreflightAbortBody {
+  return {
+    preflightStage: stage,
+    errorCode: error.code,
+    errorSubReason: error.subReason,
+    errorMessage: error.message,
+    projectTierHookPath: hookPath,
   };
 }

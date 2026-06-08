@@ -76,6 +76,7 @@ const TS_UNION_DISCRIMINANTS = new Set<TraceEventDiscriminant>([
   'clarifierFinding',
   'clarifierUserAction',
   'independentReview',
+  'preflightAbort',
 ]);
 
 function schemaEventClassNames(): Set<string> {
@@ -154,11 +155,11 @@ describe('three-place wiring — independentReview is explicitly verified', () =
     expect((TS_UNION_DISCRIMINANTS as Set<string>).has('independentReview')).toBe(true);
   });
 
-  it('KNOWN_EVENT_TYPES.size === 10 after sprint 5 (was 9 before)', () => {
-    // Numerical guard against the same drop direction: if 'independentReview'
-    // is silently removed from KNOWN_EVENT_TYPES, the size returns to 9 and
-    // this test fails. The number is intentionally a literal so the
-    // expectation is auditable from the test source alone.
-    expect(KNOWN_EVENT_TYPES.size).toBe(10);
+  it('KNOWN_EVENT_TYPES.size === 11 after the preflightAbort event class lands', () => {
+    // Numerical guard: the H3 preflight abort event lifts the union size
+    // from 10 to 11. A silent drop in any direction returns the count to
+    // 10 and fails this test. The number is intentionally a literal so
+    // the expectation is auditable from the test source alone.
+    expect(KNOWN_EVENT_TYPES.size).toBe(11);
   });
 });

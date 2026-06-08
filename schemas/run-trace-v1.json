@@ -56,6 +56,9 @@
         },
         {
           "$ref": "#/definitions/independentReview"
+        },
+        {
+          "$ref": "#/definitions/preflightAbort"
         }
       ]
     }
@@ -514,6 +517,44 @@
         "errorPayload",
         "eventType",
         "validationStage"
+      ],
+      "type": "object"
+    },
+    "preflightAbort": {
+      "description": "A pre-spawn preflight halt: the framework refused to spawn the first sub-agent because a session-level invariant did not hold. The four documented strings are the only fields — operator state (hook contents, probe env, stdin envelope) is deliberately excluded so telemetry cannot leak it.",
+      "properties": {
+        "eventType": {
+          "const": "preflightAbort"
+        },
+        "preflightStage": {
+          "enum": [
+            "confineHook"
+          ],
+          "type": "string"
+        },
+        "errorCode": {
+          "$ref": "#/definitions/errorCode"
+        },
+        "errorSubReason": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "errorMessage": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "projectTierHookPath": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventType",
+        "preflightStage",
+        "errorCode",
+        "errorSubReason",
+        "errorMessage",
+        "projectTierHookPath"
       ],
       "type": "object"
     }

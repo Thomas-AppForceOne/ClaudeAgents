@@ -37,7 +37,8 @@ import * as stacksWhereCmd from './commands/stacks-where.js';
 import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
-import * as hooksStatusCmd from './commands/hooks-status.js';
+import * as hooksStatusCmd from './commands/hooks/status.js';
+import * as hooksMigrateCmd from './commands/hooks/migrate.js';
 import * as validateCmd from './commands/validate.js';
 import * as trustInfoCmd from './commands/trust-info.js';
 import * as trustApproveCmd from './commands/trust-approve.js';
@@ -211,9 +212,11 @@ async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
 }
 
 /**
- * Route `gan hooks <status>` to its inner command. Same frame-shift and
- * missing/unknown-subcommand contract as {@link configDispatch}; currently only
- * `status` is defined.
+ * Route `gan hooks <status|migrate>` to its inner command. Same frame-shift
+ * and missing/unknown-subcommand contract as {@link configDispatch}. The
+ * `status` subcommand is the diagnostic surface; `migrate` is the
+ * remediation surface (with its own `--delete` / `--replace` / `--review`
+ * sub-actions).
  */
 async function hooksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   const inner = parsed._[0];
@@ -225,10 +228,13 @@ async function hooksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   switch (inner) {
     case 'status':
       return hooksStatusCmd.run(tail);
+    case 'migrate':
+      return hooksMigrateCmd.run(tail);
     case undefined:
       return {
         stdout: '',
-        stderr: 'Error: gan hooks requires a subcommand (`status`). Run `gan hooks --help`.\n',
+        stderr:
+          'Error: gan hooks requires a subcommand (`status` or `migrate`). Run `gan hooks --help`.\n',
         code: EXIT_BAD_ARGS,
       };
     default:
@@ -308,6 +314,18 @@ const TOP_LEVEL_SPEC: CommandSpec = {
     { long: '--note', type: 'string' },
 
     { long: '--force', type: 'boolean' },
+
+    // `gan hooks migrate` action flags (exactly one required). Declared
+    // at the top level because the whole argv is parsed once before
+    // dispatch; the migrate command then reads the resolved flag values.
+    { long: '--delete', type: 'boolean' },
+
+    { long: '--replace', type: 'boolean' },
+
+    { long: '--review', type: 'boolean' },
+
+    // Confirmation bypass for `gan hooks migrate --delete` / `--replace`.
+    { long: '--yes', type: 'boolean' },
   ],
   allowUnknownFlags: false,
 };
