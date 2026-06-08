@@ -35,12 +35,26 @@ export type ContractRevision = 'F1' | 'F7' | 'unknown';
 
 /**
  * The per-tier banner verdict that lands on the JSON surface's `bannerVerdict`
- * field. `matches` / `lags` / `ahead` fire only when a banner parsed and the
- * parsed version was compared against the framework's installed version;
- * `absent` fires when no banner line was found in the file; `unparseable`
- * fires when a banner line matched the regex but its semver did not parse.
+ * field.
+ *
+ * @value `matches` / `lags` / `ahead` — a banner was parsed and the parsed
+ *   version compared to the framework's installed version.
+ * @value `absent` — no banner line was found in the hook file.
+ * @value `unparseable` — a banner line matched the regex but its semver did
+ *   not parse (the hook carries a malformed version). This is a hook-side
+ *   failure mode the operator can correct by editing the banner line.
+ * @value `installedUnknown` — the framework's own `package.json` could not
+ *   be read, so the parsed banner version cannot be compared. Distinct from
+ *   `unparseable` so a CI gate can tell `please fix your hook banner` apart
+ *   from `please reinstall the framework`.
  */
-export type BannerVerdict = 'matches' | 'lags' | 'ahead' | 'absent' | 'unparseable';
+export type BannerVerdict =
+  | 'matches'
+  | 'lags'
+  | 'ahead'
+  | 'absent'
+  | 'unparseable'
+  | 'installedUnknown';
 
 /**
  * One row in the contract-revision pivot table.
@@ -155,18 +169,28 @@ export function parseConfineHookBanner(content: string): ParsedBanner {
  * and project the comparison into the per-tier verdict the JSON surface
  * emits on `bannerVerdict`.
  *
+ * The verdict distinguishes hook-side failure modes from framework-side
+ * ones: `unparseable` means the hook carries a malformed banner the
+ * operator can fix; `installedUnknown` means the framework cannot read its
+ * own `package.json` and the comparison cannot proceed regardless of the
+ * hook. A CI gate that fires on `unparseable` would otherwise be unable to
+ * tell `please fix your hook banner` apart from `please reinstall the
+ * framework`.
+ *
  * @param parsedVersion the raw version string the banner declared
  *   (`null` when no banner parsed). A `null` parsed version means the banner
  *   did not match at all — surfaced as `absent`. A non-null but unparseable
  *   semver — when the regex fired but the core extraction failed — is
  *   surfaced as `unparseable`.
  * @param installedVersion the framework's installed version (read from the
- *   package's `package.json`). When this is `null` the verdict collapses to
- *   `absent` for an absent banner or `unparseable` for an un-comparable one:
- *   without an installed anchor the matches / lags / ahead branches cannot
- *   fire.
- * @returns one of `'matches'`, `'lags'`, `'ahead'`, `'absent'`, or
- *   `'unparseable'`. Pure; no I/O; never throws.
+ *   package's `package.json`). When this is `null` and a banner did parse,
+ *   the verdict is `installedUnknown` — the comparison anchor is missing.
+ *   The `absent` branch fires before this check (no banner means the
+ *   `installedVersion` value is irrelevant); the `unparseable` branch fires
+ *   when the banner regex matched but the semver did not parse (a
+ *   hook-side defect independent of the installed version).
+ * @returns one of `'matches'`, `'lags'`, `'ahead'`, `'absent'`,
+ *   `'unparseable'`, or `'installedUnknown'`. Pure; no I/O; never throws.
  */
 export function compareBanner(
   parsedVersion: string | null,
@@ -180,13 +204,19 @@ export function compareBanner(
     return 'unparseable';
   }
   if (installedVersion === null) {
-    // No installed anchor: report `unparseable` so the operator sees the
-    // missing comparison without the surface lying about a match.
-    return 'unparseable';
+    // No installed anchor: the banner DID parse (the `parsedCore` branch
+    // above did not fire), so the comparison cannot proceed only because
+    // the framework cannot read its own `package.json`. Return
+    // `installedUnknown` rather than `unparseable` so the operator sees
+    // the correct remediation (`please reinstall the framework`, not
+    // `please fix your hook banner`).
+    return 'installedUnknown';
   }
   const installedCore = SEMVER_CORE_REGEX.exec(installedVersion);
   if (installedCore === null) {
-    return 'unparseable';
+    // The framework's `package.json` carries a non-parseable version
+    // string — also a framework-side failure mode, not a hook-side one.
+    return 'installedUnknown';
   }
   const cmp = compareCores(
     [

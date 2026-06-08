@@ -164,17 +164,19 @@ function defaultStdinAdapter(): StdinAdapter {
   };
 }
 
-// Format the UTC ISO timestamp the backup-sibling filename embeds.
-// Uses the seconds-precision form (e.g. `2026-06-08T19:42:11Z`) so the
-// human-readable timestamp is short and sorts lexicographically.
+// Format the UTC ISO timestamp the backup-sibling filename embeds. Uses
+// the millisecond-precision form (e.g. `2026-06-08T19:42:11.123Z`) so two
+// invocations within the same UTC second produce distinct filenames and
+// renameSync never silently overwrites a prior backup. The full
+// `Date.toISOString()` shape is preserved verbatim — the `.SSS` segment
+// is not trimmed.
 function formatBackupTimestamp(now: Date): string {
-  const iso = now.toISOString();
-  // Drop the milliseconds (`.123`) and keep the trailing `Z`. The seconds-
-  // precision form keeps the filename short while still being unique
-  // across normal operator pacing — two `migrate` invocations within the
-  // same second on the same path is the documented re-run case the
-  // `--delete` shape handles via the "re-run is idempotent" property.
-  return iso.replace(/\.\d{3}Z$/, 'Z');
+  // The standard library's toISOString() emits the millisecond-precision
+  // RFC 3339 form (`YYYY-MM-DDTHH:MM:SS.sssZ`); returning it unchanged is
+  // the simplest implementation of option (a) in the
+  // h3-backup-timestamp-collision-safe criterion and avoids inventing a
+  // bespoke format.
+  return now.toISOString();
 }
 
 // Atomic write via temp + rename. Writes to `<dest>.tmp.<pid>` first, then
@@ -220,12 +222,14 @@ function isFileAt(p: string): boolean {
   }
 }
 
-// Compute the unified-diff line set for `--review`. The implementation is
-// deliberately minimal: a header naming the two sides and a per-line
-// projection of the longest-common-prefix difference. A real `diff -u`
-// implementation lives in the system `diff(1)`; v1.0 of H3 keeps the
-// inline diff small enough that the operator can read it as-is without
-// the system tool.
+// Compute the unified-diff line set for `--review`. The implementation
+// is a Longest Common Subsequence (LCS) diff built on a standard
+// dynamic-programming table, then walked back to emit `-` / `+` /
+// context lines in source order. A real LCS is required (not a
+// line-index projection) so a single-line insertion early in the file
+// produces a single `+` pair plus context lines for the unchanged
+// remainder; a naive projection would emit every subsequent line as a
+// mismatched -/+ pair, masking the actual drift.
 function unifiedDiff(left: string, right: string, leftLabel: string, rightLabel: string): string {
   const a = left.split('\n');
   const b = right.split('\n');
@@ -234,23 +238,63 @@ function unifiedDiff(left: string, right: string, leftLabel: string, rightLabel:
   lines.push(`+++ ${rightLabel}`);
   // Emit a single hunk header. The simple form serves the
   // operator-facing review use case; a future enhancement could compute
-  // proper @@ hunk ranges, but the inline call site does not require it.
+  // proper @@ hunk ranges, but the inline call site does not require
+  // it.
   lines.push(`@@ -1,${a.length} +1,${b.length} @@`);
-  // Naive line-by-line projection: when a line differs from the
-  // corresponding line on the other side, emit a `-`/`+` pair; when the
-  // lines match, emit a context line. For dropped / added lines beyond
-  // the shorter file, emit `-`/`+` unilaterally. This keeps the diff
-  // readable on the small templates H3 actually compares.
-  const maxLen = Math.max(a.length, b.length);
-  for (let i = 0; i < maxLen; i += 1) {
-    const la = a[i];
-    const lb = b[i];
-    if (la === lb) {
-      if (la !== undefined) lines.push(` ${la}`);
-      continue;
+  // Build the LCS length table. `dp[i][j]` is the length of the LCS of
+  // `a[0..i)` and `b[0..j)`. The table is O((|a|+1)*(|b|+1)) but the
+  // confinement hook templates compared here are short (~200 lines), so
+  // a few tens of thousands of integer cells is well within budget.
+  const n = a.length;
+  const m = b.length;
+  const dp: number[][] = [];
+  for (let i = 0; i <= n; i += 1) {
+    const row = new Array<number>(m + 1).fill(0);
+    dp.push(row);
+  }
+  for (let i = 1; i <= n; i += 1) {
+    for (let j = 1; j <= m; j += 1) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i]![j] = dp[i - 1]![j - 1]! + 1;
+      } else {
+        const up = dp[i - 1]![j]!;
+        const left = dp[i]![j - 1]!;
+        dp[i]![j] = up >= left ? up : left;
+      }
     }
-    if (la !== undefined) lines.push(`-${la}`);
-    if (lb !== undefined) lines.push(`+${lb}`);
+  }
+  // Walk back through the table to produce the edit script in reverse,
+  // then reverse the collected segments to emit them in source order.
+  type Op = { kind: 'ctx' | 'del' | 'add'; text: string };
+  const ops: Op[] = [];
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      ops.push({ kind: 'ctx', text: a[i - 1]! });
+      i -= 1;
+      j -= 1;
+    } else if (dp[i - 1]![j]! >= dp[i]![j - 1]!) {
+      ops.push({ kind: 'del', text: a[i - 1]! });
+      i -= 1;
+    } else {
+      ops.push({ kind: 'add', text: b[j - 1]! });
+      j -= 1;
+    }
+  }
+  while (i > 0) {
+    ops.push({ kind: 'del', text: a[i - 1]! });
+    i -= 1;
+  }
+  while (j > 0) {
+    ops.push({ kind: 'add', text: b[j - 1]! });
+    j -= 1;
+  }
+  ops.reverse();
+  for (const op of ops) {
+    if (op.kind === 'ctx') lines.push(` ${op.text}`);
+    else if (op.kind === 'del') lines.push(`-${op.text}`);
+    else lines.push(`+${op.text}`);
   }
   return lines.join('\n') + '\n';
 }
@@ -389,13 +433,19 @@ function runDelete(hookPath: string, now: Date): CommandResult {
     };
   }
   const original = readFileSync(hookPath);
+  // Capture the source hook's mode bits BEFORE the unlink so the backup
+  // sibling carries the same permissions and the documented `mv backup
+  // hook` rollback restores a runnable hook. The mask `& 0o7777` keeps
+  // the setuid/setgid/sticky bits along with the standard rwx triples
+  // and discards the file-type bits Node's stat reports above 0o7777.
+  const sourceMode = statSync(hookPath).mode & 0o7777;
   const backupPath = composeBackupPath(hookPath, now);
   try {
     // Atomic backup-then-unlink: write the backup via temp+rename FIRST so
     // a failure between write and rename leaves the original intact and
     // the operator can re-run. Only after the backup rename succeeds does
     // the unlink fire.
-    atomicWriteBuffer(backupPath, original);
+    atomicWriteBuffer(backupPath, original, sourceMode);
     unlinkSync(hookPath);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -461,9 +511,13 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
   // before the original hook is overwritten, and the replacement is
   // renamed onto the original path in one atomic step.
   const original = readFileSync(hookPath);
+  // Capture the source hook's mode bits BEFORE the overwrite so the
+  // backup sibling carries the same permissions; see the matching
+  // comment in runDelete above for the rationale.
+  const sourceMode = statSync(hookPath).mode & 0o7777;
   const backupPath = composeBackupPath(hookPath, now);
   try {
-    atomicWriteBuffer(backupPath, original);
+    atomicWriteBuffer(backupPath, original, sourceMode);
     atomicWriteFile(hookPath, template, 0o755);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -491,14 +545,17 @@ function composeBackupPath(hookPath: string, now: Date): string {
 }
 
 // Atomic-write a Buffer (rather than a string). The text helper above
-// re-uses `writeFileSync` with `mode`; the binary helper drops the mode
-// argument because the backup sibling inherits the original's content
-// faithfully, and the operator can re-`chmod` if they restore it. The
-// helper is otherwise identical to `atomicWriteFile`.
-function atomicWriteBuffer(dest: string, contents: Buffer): void {
+// takes a mode argument; the binary helper does too because the backup
+// sibling MUST preserve the source hook's executable bit so the
+// documented `mv <backup> <hook>` rollback restores a runnable hook. A
+// missing mode argument would default Node's `writeFileSync` to `0o666 &
+// umask` (typically `0o644` on a standard operator umask) and the
+// rollback would produce a non-executable hook that Claude Code skips
+// silently or rejects with EACCES.
+function atomicWriteBuffer(dest: string, contents: Buffer, mode: number): void {
   const dir = path.dirname(dest);
   const tmp = path.join(dir, `${path.basename(dest)}.tmp.${process.pid}`);
-  writeFileSync(tmp, contents);
+  writeFileSync(tmp, contents, { mode });
   try {
     renameSync(tmp, dest);
   } catch (e) {

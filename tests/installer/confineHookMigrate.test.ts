@@ -30,6 +30,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,8 +99,13 @@ function seedHook(root: string, content: string, mode = 0o755): string {
 }
 
 // A deterministic fake clock for backup-sibling filename assertions.
+// The timestamp the migrate command embeds preserves millisecond
+// precision so two same-second invocations produce distinct filenames
+// (the collision-safe property exercised by the
+// `produces distinct backup paths` test below); the fixture mirrors that
+// shape verbatim.
 const FIXED_DATE = new Date('2026-06-08T19:42:11.000Z');
-const FIXED_TIMESTAMP = '2026-06-08T19:42:11Z';
+const FIXED_TIMESTAMP = '2026-06-08T19:42:11.000Z';
 
 const STALE_HOOK = '#!/bin/bash\nexit 1\n';
 
@@ -378,6 +384,150 @@ describe('gan hooks migrate action selection', () => {
     );
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('got more than one');
+  });
+});
+
+describe('gan hooks migrate backup-sibling preserves source mode', () => {
+  // The documented rollback is `mv <backup> <hook>`, which preserves the
+  // BACKUP's mode bits on the restored file. If the backup were written
+  // at 0o644 (Node's `writeFileSync` default under a standard 0o022
+  // umask), the restored hook would lose its executable bit and Claude
+  // Code would either skip it silently or refuse to spawn it with
+  // EACCES. The atomicWriteBuffer helper therefore propagates the source
+  // hook's `mode & 0o7777` to the backup file.
+  it('--delete: 0o755 source → backup with executable bit set', async () => {
+    const cwd = makeTmpDir('gan-migrate-');
+    seedHook(cwd, STALE_HOOK, 0o755);
+    const result = await runMigrate(
+      makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    expect(result.code, `stderr: ${result.stderr}`).toBe(0);
+    const backupPath = path.join(
+      canonical(cwd),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${FIXED_TIMESTAMP}`,
+    );
+    expect(existsSync(backupPath)).toBe(true);
+    // The 0o111 mask isolates the user/group/other execute bits; any
+    // one of them being set means `mv backup hook` restores a runnable
+    // file.
+    expect(statSync(backupPath).mode & 0o111).not.toBe(0);
+  });
+
+  it('--replace: 0o755 source → backup with executable bit set', async () => {
+    const cwd = makeTmpDir('gan-migrate-');
+    seedHook(cwd, STALE_HOOK, 0o755);
+    const result = await runMigrate(
+      makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    expect(result.code, `stderr: ${result.stderr}`).toBe(0);
+    const backupPath = path.join(
+      canonical(cwd),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${FIXED_TIMESTAMP}`,
+    );
+    expect(existsSync(backupPath)).toBe(true);
+    expect(statSync(backupPath).mode & 0o111).not.toBe(0);
+  });
+});
+
+describe('gan hooks migrate backup-sibling timestamp is collision-safe', () => {
+  // Two invocations within the same UTC second MUST NOT silently
+  // overwrite the prior backup. The millisecond-precision timestamp
+  // (the toISOString shape `YYYY-MM-DDTHH:MM:SS.sssZ`) ensures distinct
+  // filenames when the two calls land at different sub-second instants.
+  it('--delete: two invocations at distinct milliseconds produce distinct backup paths', async () => {
+    const cwd = makeTmpDir('gan-migrate-');
+    seedHook(cwd, STALE_HOOK, 0o755);
+    const firstDate = new Date('2026-06-08T19:42:11.100Z');
+    const firstResult = await runMigrate(
+      makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
+      { now: () => firstDate },
+    );
+    expect(firstResult.code, `stderr: ${firstResult.stderr}`).toBe(0);
+    // Re-seed the hook so a second --delete has something to back up
+    // and the same UTC second is exercised on a fresh file.
+    seedHook(cwd, '#!/bin/bash\nexit 7\n', 0o755);
+    const secondDate = new Date('2026-06-08T19:42:11.250Z');
+    const secondResult = await runMigrate(
+      makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
+      { now: () => secondDate },
+    );
+    expect(secondResult.code, `stderr: ${secondResult.stderr}`).toBe(0);
+    const firstBackup = path.join(
+      canonical(cwd),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${firstDate.toISOString()}`,
+    );
+    const secondBackup = path.join(
+      canonical(cwd),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${secondDate.toISOString()}`,
+    );
+    expect(firstBackup).not.toBe(secondBackup);
+    expect(existsSync(firstBackup)).toBe(true);
+    expect(existsSync(secondBackup)).toBe(true);
+    // Each backup carries the bytes it captured, not the other's.
+    expect(readFileSync(firstBackup, 'utf8')).toBe(STALE_HOOK);
+    expect(readFileSync(secondBackup, 'utf8')).toBe('#!/bin/bash\nexit 7\n');
+  });
+});
+
+describe('gan hooks migrate --review produces a real unified diff', () => {
+  // The criterion: a single-line drift (one inserted line near the top
+  // of the project hook) produces a small localised hunk, not a
+  // full-file -/+ projection from the drift point onward. The LCS-based
+  // diff finds the alignment so all unchanged lines below the
+  // insertion are emitted as context lines.
+  it('--review: one inserted line near the top → small hunk with one +/- pair', async () => {
+    const cwd = makeTmpDir('gan-migrate-');
+    // Stage a project hook that is byte-identical to the framework
+    // template EXCEPT for one inserted line near the top.
+    const template = renderedTemplate();
+    const lines = template.split('\n');
+    // Insert a comment line at index 2 (after the shebang and the
+    // first comment) so the drift is early in the file and the naive
+    // projection would print every subsequent line as a mismatch.
+    const drifted = [
+      lines[0],
+      lines[1],
+      '# Operator-added comment line',
+      ...lines.slice(2),
+    ].join('\n');
+    seedHook(cwd, drifted, 0o755);
+    const result = await runMigrate(
+      makeArgs({ action: 'review', projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    expect(result.code, `stderr: ${result.stderr}`).toBe(0);
+    // Count the +/- body lines (the first two lines starting with `---`
+    // and `+++` are the file headers, not body lines).
+    const bodyLines = result.stdout.split('\n');
+    const minus = bodyLines.filter(
+      (l) => l.startsWith('-') && !l.startsWith('---'),
+    );
+    const plus = bodyLines.filter(
+      (l) => l.startsWith('+') && !l.startsWith('+++'),
+    );
+    // A real LCS produces exactly one `-` (the inserted line, which is
+    // present in the project hook on the LEFT but absent from the
+    // framework template on the RIGHT) and zero `+` lines for this
+    // case; a naive line-index projection produces dozens of
+    // mismatched pairs.
+    expect(minus.length).toBe(1);
+    expect(plus.length).toBe(0);
+    expect(minus[0]).toBe('-# Operator-added comment line');
+    // Context lines (lines starting with a space) MUST exist after the
+    // drift — proof the alignment recovered and the rest of the file
+    // is reported as unchanged.
+    const context = bodyLines.filter((l) => l.startsWith(' '));
+    expect(context.length).toBeGreaterThan(5);
   });
 });
 

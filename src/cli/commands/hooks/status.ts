@@ -82,8 +82,14 @@ export interface UserTierJsonShape {
  * @property frameworkVersion same as user tier.
  * @property contractRevision same as user tier.
  * @property bannerVerdict the per-tier comparison against the installed
- *   framework version (`'matches'` / `'lags'` / `'ahead'` / `'absent'` /
- *   `'unparseable'`).
+ *   framework version. `'matches'` / `'lags'` / `'ahead'` fire when both
+ *   sides parsed; `'absent'` when the hook carries no banner;
+ *   `'unparseable'` when a banner line matched but its semver did not
+ *   parse (a hook-side defect the operator can fix); `'installedUnknown'`
+ *   when the framework's own `package.json` could not be read (a
+ *   framework-side defect distinct from `'unparseable'` so a CI gate can
+ *   tell `please fix your hook banner` from `please reinstall the
+ *   framework`).
  * @property probeVerdict the behaviour-probe verdict (`'current'` /
  *   `'stale'` / `'misconfigured'`).
  * @property verdict the probe-wins resolution of `bannerVerdict` vs

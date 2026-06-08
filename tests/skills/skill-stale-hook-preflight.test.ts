@@ -14,10 +14,20 @@
  * of these invariants would surface a failure here, not at runtime.
  */
 
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { probeConfineHook } from '../../src/config-server/tools/confine-hook-probe.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -25,6 +35,44 @@ const skillPath = path.join(repoRoot, 'skills', 'gan', 'SKILL.md');
 
 function readSkill(): string {
   return readFileSync(skillPath, 'utf8');
+}
+
+// Per-test temp roots the behavioural tests below materialise and tear
+// down. Each test reserves its own `<root>/.claude/hooks/` subtree so
+// concurrent runs cannot collide on the synthesised project tree.
+const cleanups: string[] = [];
+
+afterEach(() => {
+  for (const d of cleanups.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+});
+
+function makeProjectRoot(): string {
+  const d = mkdtempSync(path.join(tmpdir(), 'gan-skill-preflight-'));
+  cleanups.push(d);
+  return d;
+}
+
+// Materialise `<root>/.claude/hooks/gan-confine.sh` with the supplied
+// content and exec mode. Mirrors what an end-user's project tree carries
+// when a stale or misconfigured project-tier hook is the cause of the
+// preflight halt.
+function seedProjectHook(
+  root: string,
+  content: string | Buffer,
+  mode = 0o755,
+): string {
+  const dir = path.join(root, '.claude', 'hooks');
+  mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, 'gan-confine.sh');
+  writeFileSync(p, content);
+  chmodSync(p, mode);
+  return p;
 }
 
 // Slice the prose block that documents the preflight: starts at the
@@ -109,5 +157,60 @@ describe('skill-side preflight (H3) — SKILL.md content invariants', () => {
     // duplication without locking the prose to a single literal.
     expect(allMentions.length).toBeGreaterThanOrEqual(1);
     expect(allMentions.length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('skill-side preflight (H3) — probeConfineHook behavioural matrix', () => {
+  // The criterion: a synthesised project tree carrying a stale (pre-F7)
+  // hook makes the probe surface the stale verdict paired with the
+  // noGanRunDirAwareness sub-reason. The SKILL.md prose names this
+  // branch as one of the two halt cases; the test pins it to the actual
+  // probe runtime so a future refactor that left the prose intact but
+  // broke the wiring surfaces here.
+  it('stale hook tree → verdict=stale, subReason=noGanRunDirAwareness', async () => {
+    const projectRoot = makeProjectRoot();
+    // A pre-F7 hook refuses every write outright. The probe's allow-
+    // listed GAN_RUN_DIR target is denied, so the hook returns non-zero
+    // and the probe classifies as stale.
+    seedProjectHook(projectRoot, '#!/bin/bash\nexit 1\n');
+    const result = await probeConfineHook({ projectRoot });
+    expect(result.verdict).toBe('stale');
+    expect(result.subReason).toBe('noGanRunDirAwareness');
+    // The path the wrapper composed matches what the prose advertises
+    // — confirms the probe ran against the synthesised tree, not a
+    // cached or unrelated path.
+    expect(result.projectTierHookPath).toBe(
+      path.join(projectRoot, '.claude', 'hooks', 'gan-confine.sh'),
+    );
+  });
+
+  // The criterion's second case: a non-bash file at the hook path
+  // makes the probe surface the misconfigured verdict paired with the
+  // projectHookMisconfigured sub-reason. The chmod 0o644 mirrors a
+  // common operator mistake (forgot to `chmod +x`) and stacks with the
+  // binary-content guard so the shebang sniff fires on both fronts.
+  it('non-bash tree → verdict=misconfigured, subReason=projectHookMisconfigured', async () => {
+    const projectRoot = makeProjectRoot();
+    const binaryContent = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
+    seedProjectHook(projectRoot, binaryContent, 0o644);
+    const result = await probeConfineHook({ projectRoot });
+    expect(result.verdict).toBe('misconfigured');
+    expect(result.subReason).toBe('projectHookMisconfigured');
+    expect(result.projectTierHookPath).toBe(
+      path.join(projectRoot, '.claude', 'hooks', 'gan-confine.sh'),
+    );
+  });
+
+  // Belt-and-braces: an absent project-tier hook short-circuits and
+  // surfaces a null verdict. The SKILL.md prose names this as the
+  // no-halt branch; the test pins the wrapper's short-circuit so it
+  // cannot be confused with the misconfigured case.
+  it('absent project-tier hook → verdict=null (no halt)', async () => {
+    const projectRoot = makeProjectRoot();
+    // No `.claude/hooks/gan-confine.sh` materialised.
+    const result = await probeConfineHook({ projectRoot });
+    expect(result.verdict).toBeNull();
+    expect(result.subReason).toBeNull();
+    expect(result.projectTierHookPath).toBeNull();
   });
 });

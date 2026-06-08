@@ -225,3 +225,46 @@ describe('renderedTemplate — version substitution sanity', () => {
   });
 });
 
+// The criterion: the probe's child env PATH MUST be an enumerated set
+// of literal directories that does not vary across operator machines.
+// The earlier `${path.dirname(process.execPath)}` prepend re-exposed
+// operator-installed binaries co-located with the node executable and
+// made classification machine-dependent.
+describe('runConfineHookProbe — child env PATH is hermetic and machine-independent', () => {
+  it("the probe spawns a hook that observes a literal enumerated PATH", async () => {
+    // A custom hook prints the PATH it sees on stdout, then accepts
+    // the probe target so the probe's three-state classification
+    // collapses to a definitive answer. The test reads the printed
+    // PATH off the file the hook writes — the only env-snapshotting
+    // surface available without modifying the probe to expose its
+    // env construction directly.
+    const dir = makeTmpDir('gan-confine-probe-path-');
+    const sentinel = path.join(dir, 'observed-path');
+    const hookPath = path.join(dir, 'gan-confine.sh');
+    // The hook writes "$PATH" verbatim to the sentinel and exits 0.
+    // The probe targets a path under `<runDir>/trace/`, which this
+    // hook ignores; the probe's verdict is `current` because the
+    // hook exited 0 on the target.
+    const hookSource =
+      '#!/bin/bash\n' +
+      `printf '%s' "$PATH" > '${sentinel}'\n` +
+      'exit 0\n';
+    writeFileSync(hookPath, hookSource);
+    chmodSync(hookPath, 0o755);
+    const result = await runConfineHookProbe({ hookPath });
+    expect(result.verdict).toBe('current');
+    const observed = readFileSync(sentinel, 'utf8');
+    // The literal enumerated list the probe pins: POSIX-minimal +
+    // NodeSource + Homebrew. Asserting on the exact string proves the
+    // probe is NOT prepending `process.execPath`'s parent (which
+    // would vary across NVM, Homebrew, fnm, system Node).
+    expect(observed).toBe('/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin');
+    // Belt-and-braces: the PATH does NOT contain the parent directory
+    // of the current node executable. Were the prepend still in
+    // place, this directory would appear at the front of PATH and
+    // make the probe machine-dependent.
+    const nodeParent = path.dirname(process.execPath);
+    expect(observed).not.toContain(nodeParent);
+  });
+});
+

@@ -103,6 +103,33 @@ const PROBE_TARGET_RELATIVE_PATH = path.join('trace', 'probe-event.jsonl');
 // run id.
 const PROBE_RUN_ID = '20991231T235959-0000';
 
+// Hermetic PATH the probe pins on the spawned hook's env. The list is an
+// enumerated set of fixed directories chosen to make the probe's
+// classification independent of the operator's machine:
+//
+//   /usr/bin            — POSIX-minimal: the framework's hook template
+//                          relies on `grep`, `cat`, `dirname`, `awk`-class
+//                          utilities that vendor installs ship here.
+//   /bin                — POSIX-minimal companion: `sh`, `cat`-class
+//                          binaries on Debian/Ubuntu derivatives (often a
+//                          symlink to /usr/bin but historically distinct).
+//   /usr/local/bin      — NodeSource convention on Linux: the `node` binary
+//                          installed via `apt-get install nodejs` (NodeSource
+//                          deb) lands here; the framework's hook template
+//                          invokes `node -e` to parse the PreToolUse JSON.
+//   /opt/homebrew/bin   — Homebrew convention on Apple Silicon macOS: the
+//                          `node` binary installed via `brew install node`
+//                          lands here on M1/M2 machines.
+//
+// Each entry is required so the framework's own hook template can locate
+// `node` across the supported operator platforms. The list excludes every
+// path that would re-introduce operator state (no `$HOME/.nvm/...`,
+// no `path.dirname(process.execPath)`, no inherited PATH from the parent
+// process). A hook that depends on a directory outside this list is by
+// construction outside the framework's contract, and the probe correctly
+// classifies it as `stale`.
+const HERMETIC_PROBE_PATH = '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin';
+
 // Maximum number of bytes read for the shebang sniff. Two bytes is the
 // minimum useful (`#!`); reading a small prefix keeps the defensive check
 // cheap and predictable regardless of file size.
@@ -174,22 +201,24 @@ export async function runConfineHookProbe(
     });
 
     // Explicitly construct the hermetic env with exactly five keys. PATH
-    // is anchored to the POSIX-minimal `/usr/bin:/bin` — sufficient for
-    // the standard shell utilities the confinement hook invokes (`grep`,
-    // `cat`, `dirname`) — and the directory containing the current Node
-    // executable is prepended so the framework's own template (which
-    // parses the PreToolUse JSON via `node -e`) is reachable even on
-    // operator machines where Node lives outside the POSIX-minimal paths
-    // (e.g. macOS Homebrew at `/opt/homebrew/bin`). That single
-    // extension is the minimum the framework's template requires; HOME,
-    // USER, SHELL, and every other ambient operator-env value are
-    // intentionally NOT forwarded: a hook whose behaviour depended on
-    // those would make classification non-deterministic across
-    // operators, and such a hook is by construction outside the
-    // framework's contract — the probe correctly classifies it as
-    // `stale`.
+    // is an enumerated list of fixed directories the framework's own
+    // hook template needs to discover its dependencies. The list is
+    // operator-machine-agnostic: every directory is a literal string the
+    // probe pins, so two operators on different machines see the same
+    // PATH layout when the probe spawns the hook. Prepending
+    // `path.dirname(process.execPath)` is explicitly avoided because it
+    // would (a) make PATH operator-machine-dependent (NVM, fnm, Homebrew,
+    // and system Node install at distinct directories), and (b) re-expose
+    // every operator-installed binary co-located with the node executable
+    // (e.g. an NVM `~/.nvm/versions/node/<v>/bin/` directory carrying
+    // user-installed CLIs alongside `node`). HOME, USER, SHELL, and every
+    // other ambient operator-env value are intentionally NOT forwarded: a
+    // hook whose behaviour depended on those would make classification
+    // non-deterministic across operators, and such a hook is by
+    // construction outside the framework's contract — the probe
+    // correctly classifies it as `stale`.
     const childEnv: Record<string, string> = {
-      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: HERMETIC_PROBE_PATH,
       GAN_RUN_ID: PROBE_RUN_ID,
       GAN_WORKTREE: worktreeDir,
       GAN_RUN_DIR: runDir,
