@@ -39,6 +39,8 @@ import type {
   IndependentReviewEvent,
   LlmCallEvent,
   OrchestratorMilestoneEvent,
+  PreflightAbortEvent,
+  PreflightAbortSubReason,
   SafetyHaltEvent,
   ToolCallEvent,
   TraceEvent,
@@ -229,6 +231,34 @@ export interface ValidationAbortInput {
   validationStage: 'config' | 'overlay' | 'stack' | 'module';
   errorCode: string;
   errorPayload: Record<string, unknown>;
+}
+
+/**
+ * Input to {@link TraceEmitter.emitPreflightAbort}.
+ *
+ * The body is intentionally limited to the four documented strings plus
+ * the project-tier hook path: probe env, stdin envelope, and hook
+ * contents are deliberately excluded so operator state cannot leak into
+ * telemetry.
+ *
+ * @property preflightStage discriminator naming which preflight rejected;
+ *   currently only `'confineHook'` is defined.
+ * @property errorCode the diagnostic envelope's `code` field (for the H3
+ *   confine-hook preflight always the literal
+ *   `'StaleProjectConfinementHook'`).
+ * @property errorSubReason the per-branch discriminator
+ *   (`'noGanRunDirAwareness'` or `'projectHookMisconfigured'`).
+ * @property errorMessage the human-readable remediation prose; the same
+ *   text the orchestrator already wrote to stderr.
+ * @property projectTierHookPath absolute path to the project-tier hook
+ *   that triggered the halt.
+ */
+export interface PreflightAbortInput {
+  preflightStage: 'confineHook';
+  errorCode: string;
+  errorSubReason: PreflightAbortSubReason;
+  errorMessage: string;
+  projectTierHookPath: string;
 }
 
 /**
@@ -582,6 +612,27 @@ export class TraceEmitter {
       validationStage: input.validationStage,
       errorCode: input.errorCode,
       errorPayload: input.errorPayload,
+    };
+    this.persist(event);
+    return event;
+  }
+
+  /**
+   * Record a preflight-abort event: the framework refused to spawn the
+   * first sub-agent because a session-level invariant did not hold. The
+   * fields are limited to the four documented strings plus the
+   * project-tier hook path; probe env, stdin envelope, and hook contents
+   * are intentionally NOT captured so operator state cannot leak into
+   * telemetry. Side effect: appends an event file and rewrites the index.
+   */
+  emitPreflightAbort(input: PreflightAbortInput): PreflightAbortEvent {
+    const event: PreflightAbortEvent = {
+      ...this.envelope('preflightAbort'),
+      preflightStage: input.preflightStage,
+      errorCode: input.errorCode,
+      errorSubReason: input.errorSubReason,
+      errorMessage: input.errorMessage,
+      projectTierHookPath: input.projectTierHookPath,
     };
     this.persist(event);
     return event;

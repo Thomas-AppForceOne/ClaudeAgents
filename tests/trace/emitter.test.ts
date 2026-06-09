@@ -149,6 +149,13 @@ function emitOneOfEach(emitter: TraceEmitter) {
       verdict: 'findings',
       summary: { blockers: 1, warnings: 0, advisories: 2, dropped: 0 },
     }),
+    emitter.emitPreflightAbort({
+      preflightStage: 'confineHook',
+      errorCode: 'StaleProjectConfinementHook',
+      errorSubReason: 'noGanRunDirAwareness',
+      errorMessage: 'The project-tier confinement hook does not honour $GAN_RUN_DIR.',
+      projectTierHookPath: '/tmp/probe-fixture/.claude/hooks/gan-confine.sh',
+    }),
   ];
   return events;
 }

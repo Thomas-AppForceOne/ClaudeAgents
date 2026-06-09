@@ -135,6 +135,47 @@ export interface ValidationAbortEvent extends TraceEnvelope {
 }
 
 /**
+ * Closed set of `subReason` discriminators a {@link PreflightAbortEvent}
+ * may carry. Constraining the field to a closed union (rather than an
+ * open string) prevents future preflights from minting overlapping
+ * values across surfaces — a CI gate reading the trace can branch on
+ * the literal set without having to know which preflight stage
+ * emitted it. New preflights (a `preflightStage` other than
+ * `'confineHook'`) extend this union; the framework's schema then
+ * validates the pairing.
+ *
+ * Current values, all from the `confineHook` preflight:
+ * - `'noGanRunDirAwareness'`     — probe ran the project-tier hook
+ *   to completion and the hook refused the `$GAN_RUN_DIR` write
+ *   (the genuine pre-F7 stale-contract case).
+ * - `'projectHookMisconfigured'` — the project-tier hook is not a
+ *   runnable bash script (no valid shebang, not executable, or
+ *   the spawn errored before the hook could read stdin).
+ */
+export type PreflightAbortSubReason =
+  | 'noGanRunDirAwareness'
+  | 'projectHookMisconfigured';
+
+/**
+ * A pre-spawn preflight abort: the framework refused to spawn the first
+ * sub-agent because a session-level invariant did not hold. The discriminator
+ * `preflightStage` names which preflight rejected — currently only the
+ * confinement-hook probe, future preflights add values. Fields are
+ * deliberately kept to the four documented strings so operator state cannot
+ * leak into telemetry: the event captures the diagnostic code and message
+ * the operator already sees, plus the project-tier hook path (which the
+ * operator authored), but NOT the hook contents, probe stdin, or probe env.
+ */
+export interface PreflightAbortEvent extends TraceEnvelope {
+  eventType: 'preflightAbort';
+  preflightStage: 'confineHook';
+  errorCode: string;
+  errorSubReason: PreflightAbortSubReason;
+  errorMessage: string;
+  projectTierHookPath: string;
+}
+
+/**
  * A single gap the clarifier found while turning a raw prompt into a clarified
  * spec. `class` records how the gap was disposed of — silently resolved with a
  * framework default, defaulted-but-overridable, or surfaced as a blocker — so
@@ -223,7 +264,8 @@ export type TraceEvent =
   | ValidationAbortEvent
   | ClarifierFindingEvent
   | ClarifierUserActionEvent
-  | IndependentReviewEvent;
+  | IndependentReviewEvent
+  | PreflightAbortEvent;
 
 /**
  * Runtime set of the event-type discriminants in {@link TraceEvent}. The
@@ -250,4 +292,5 @@ export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'clarifierFinding',
   'clarifierUserAction',
   'independentReview',
+  'preflightAbort',
 ]);

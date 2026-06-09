@@ -247,6 +247,32 @@ The orchestrator follows this order on every regular `/gan` invocation:
 1. **Parse args.** Build the flag table from the user's message.
 2. **Welcome banner.** Check for `~/.claude/gan/welcomed`. If absent, the user did not pass `--skip-welcome`, and stdin/stdout are TTY, render the welcome banner described in the "Welcome banner" section above. After the banner finishes printing, create the marker (`mkdir -p ~/.claude/gan && touch ~/.claude/gan/welcomed`). On non-TTY invocations the marker is created without rendering the banner. With `--skip-welcome`, the marker is created without rendering the banner regardless of TTY status. If the marker already exists, this step is a no-op.
 3. **`validateAll()` (aborting).** Failure aborts the run with the framework's structured error report — no worktree is created, no agent is spawned, and no zone-2 or zone-3 writes occur. The structured error fields (`code`, `file`, `field`, `line`, `message`) are surfaced verbatim. The user-facing remediation hint (when present) is forwarded as-is; the orchestrator does not paraphrase or interpret API errors.
+
+   **`probeConfineHook` preflight (after `validateAll()`, before the clarifier spawn).** Call `probeConfineHook({ projectRoot })` to detect a stale or misconfigured project-tier confinement hook before any sub-agent fires. The tool wraps the shared `runConfineHookProbe()` runner — the same probe `gan hooks status` invokes — and returns `{ projectTierHookPath, verdict, subReason, backupSiblings }`. When `projectTierHookPath === null` (no project-tier hook present) the user-tier framework hook applies and the orchestrator proceeds. When `verdict === 'current'` the project-tier hook honours `$GAN_RUN_DIR` and the orchestrator proceeds. When `verdict === 'stale'` or `verdict === 'misconfigured'` the orchestrator **halts the run before lock acquisition**: no `progress.json`, no `telemetry/`, no worktree, no sub-agent spawn. The halt fires here, after `validateAll()` and before step 7's run-lock acquisition (the specific call the preflight precedes is named below in the just-in-time runDir block).
+
+   The halt emits a single structured diagnostic envelope on stdout — the same `code` + `subReason` + `message` shape `ConfigApiUnreachable` uses — so log readers and telemetry can tell this halt apart from the loop-detection halts:
+
+   ```json
+   {
+     "code": "StaleProjectConfinementHook",
+     "subReason": "noGanRunDirAwareness",
+     "message": "The project-tier confinement hook at `<path>` does not honour `$GAN_RUN_DIR`. A `/gan` sprint would fail mid-attempt when an agent writes to the central-store run directory. Run `gan hooks status` for details and `gan hooks migrate` to resolve."
+   }
+   ```
+
+   ```json
+   {
+     "code": "StaleProjectConfinementHook",
+     "subReason": "projectHookMisconfigured",
+     "message": "The project-tier confinement hook at `<path>` is not a runnable bash script (no valid shebang, not executable, or otherwise unstartable). A `/gan` sprint cannot proceed until the file is fixed or removed. Run `gan hooks status` for details."
+   }
+   ```
+
+   The `subReason` discriminator takes one of two values: `noGanRunDirAwareness` when the probe ran the hook to completion and the hook returned non-zero on the `$GAN_RUN_DIR` write (the genuine stale-contract case), or `projectHookMisconfigured` when the candidate hook is not a runnable bash script (no valid shebang, not executable, or `spawn` failed before the hook could read stdin). Both branches halt the run; the discriminator is what lets log readers and operators tell the two cases apart.
+
+   **Just-in-time `<runDir>` derivation.** Before emitting the halt's trace event, derive the would-be `<runDir>` path via `resolveRunStore` (no arguments), **without acquiring the run lock and without creating the worktree** — the path-resolution helper is pure, so calling it at preflight time is safe even though the preflight precedes step 7's `acquireRunLock` call (step 9 is not entered on this path either). The trace library's `appendTraceEvent` creates the `<runDir>/trace/` subtree on first write, so passing the derived `runDir` to `emitTraceEvent` lands a single `preflightAbort` event without materialising the rest of the run directory. The event body is built with the `buildPreflightAbortBody` MCP tool from `{ stage: 'confineHook', error, hookPath }`; no `progress.json`, no `telemetry/`, and no worktree are created. The run is **not recoverable** via `--recover` because the lock was never acquired; the trace event is a record-only telemetry surface for the operator's log readers.
+
+   **No bypass flag in v1.0.** A hypothetical `--ignore-stale-hook` is explicitly deferred to a v1.1 follow-up. The probe is cheap (~10 ms; spawn one hook, deny one synthetic path) and the failure mode it catches is destructive enough that masking it with a flag would betray the framework-owned confinement contract.
 4. **`NoPromptProvided` check.** If the invocation carries no prompt and no agent-spawn-short-circuiting flag (not `--help`, `--print-config`, `--list-recoverable`, or `--recover`), halt here with the structured error `NoPromptProvided` and the exact user-facing message reproduced in the "Bare invocation" section above. This check runs **after** `validateAll()` (step 3) and **after** the welcome banner (step 2), but **before** the clarifier and **before any run-lockfile is acquired or any run state is created** — a bare invocation never creates run state. (See "Bare invocation" above.)
 5. **`getResolvedConfig()` — capture the snapshot once.** The returned snapshot is the **single source of truth** for this run. It is data, not configuration. The orchestrator passes it to every spawned agent.
 

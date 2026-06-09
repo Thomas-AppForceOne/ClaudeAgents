@@ -175,6 +175,7 @@ describe('run-trace-v1 schema: the known event classes', () => {
         'independentReview',
         'llmCall',
         'orchestratorMilestone',
+        'preflightAbort',
         'safetyHalt',
         'toolCall',
         'trustEvent',

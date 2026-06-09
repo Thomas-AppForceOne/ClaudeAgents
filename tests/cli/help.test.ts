@@ -109,4 +109,34 @@ describe('gan help surface', () => {
     expect(r.stderr).toContain('--definitely-not-a-real-flag');
     expect(r.stderr).toContain('--help');
   });
+
+  // The action flags `--delete`, `--replace`, and `--review` are
+  // declared at the top-level parser (the parser is single-pass with
+  // `allowUnknownFlags: false`, so every flag any subcommand accepts
+  // must appear on the top-level spec). The dispatcher rejects them
+  // when supplied to any subcommand other than `gan hooks migrate`,
+  // because they would otherwise parse to a success exit with the
+  // flag silently ignored — a surface that advertises capabilities
+  // a command does not honour.
+  it('F-AC9: --delete on a non-migrate subcommand exits 64 with guidance', async () => {
+    const r = await runGan(['stacks', 'list', '--delete']);
+    expect(r.exitCode).toBe(64);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('--delete');
+    expect(r.stderr).toContain('hooks migrate');
+  });
+
+  it('F-AC9: --replace on a non-migrate subcommand exits 64 with guidance', async () => {
+    const r = await runGan(['validate', '--replace']);
+    expect(r.exitCode).toBe(64);
+    expect(r.stderr).toContain('--replace');
+    expect(r.stderr).toContain('hooks migrate');
+  });
+
+  it('F-AC9: --review on a non-migrate subcommand exits 64 with guidance', async () => {
+    const r = await runGan(['config', 'print', '--review']);
+    expect(r.exitCode).toBe(64);
+    expect(r.stderr).toContain('--review');
+    expect(r.stderr).toContain('hooks migrate');
+  });
 });

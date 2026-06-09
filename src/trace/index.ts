@@ -21,6 +21,7 @@ export {
   type TrustEventInput,
   type ValidationAbortInput,
   type IndependentReviewInput,
+  type PreflightAbortInput,
   type LlmPayloads,
   type ToolPayloads,
 } from './emitter.js';
@@ -75,10 +76,14 @@ export {
   buildValidationAbortBody,
   buildValidationAbortFromCode,
   buildLoopDetectedBody,
+  buildPreflightAbortBody,
   type TrustResolution,
   type TrustEventBody,
   type ValidationAbortBody,
   type SafetyHaltBody,
+  type PreflightAbortBody,
+  type PreflightAbortError,
+  type PreflightStage,
   type LoopDetectionHalt,
   type ValidationStage,
   type F2ErrorLike,
@@ -144,5 +149,7 @@ export type {
   TrustEventEvent,
   ValidationAbortEvent,
   IndependentReviewEvent,
+  PreflightAbortEvent,
+  PreflightAbortSubReason,
 } from './events.js';
 export { KNOWN_EVENT_TYPES, AGENT_ATTEMPT_EVENT_TYPE } from './events.js';

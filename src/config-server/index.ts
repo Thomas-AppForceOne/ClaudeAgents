@@ -84,6 +84,7 @@ import {
 import {
   aggregateRunSummaryTool as runAggregateRunSummary,
   buildLoopDetectedBodyTool as runBuildLoopDetectedBody,
+  buildPreflightAbortBodyTool as runBuildPreflightAbortBody,
   buildTrustEventBodyTool as runBuildTrustEventBody,
   buildValidationAbortBodyTool as runBuildValidationAbortBody,
   buildValidationAbortFromCodeTool as runBuildValidationAbortFromCode,
@@ -95,6 +96,7 @@ import {
   reconstructRevisionStateTool as runReconstructRevisionState,
   runSprintSummaryTool as runSprintSummaryHandler,
 } from './tools/trace.js';
+import { probeConfineHook as runProbeConfineHook } from './tools/confine-hook-probe.js';
 import {
   checkRoleCeilingTool as runCheckRoleCeiling,
   checkSprintBudgetTool as runCheckSprintBudget,
@@ -208,7 +210,17 @@ export const TRACE_TOOL_NAMES: readonly string[] = [
   'buildValidationAbortBody',
   'buildValidationAbortFromCode',
   'buildLoopDetectedBody',
+  'buildPreflightAbortBody',
 ] as const;
+
+/**
+ * Tool names introduced by the confinement-hook diagnostic surface — the
+ * single wrapper around the shared `runConfineHookProbe` runner the
+ * skill-side preflight calls between `validateAll()` and the clarifier
+ * spawn. Kept in its own list so the additive surface stays auditable;
+ * unioned into {@link DISPATCH_TOOL_NAMES} for actual dispatch.
+ */
+export const HOOK_PROBE_TOOL_NAMES: readonly string[] = ['probeConfineHook'] as const;
 
 /**
  * Tool names introduced by the runtime invocation bridge's safety surface —
@@ -306,6 +318,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...DOCKER_TOOL_NAMES,
   ...INDEPENDENT_REVIEW_TOOL_NAMES,
   ...TELEMETRY_TOOL_NAMES,
+  ...HOOK_PROBE_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -983,6 +996,36 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
       });
     },
   },
+  buildPreflightAbortBody: {
+    // The body builder is a pure mapping with three structured inputs:
+    // the preflight stage discriminant (currently only `confineHook`),
+    // the diagnostic envelope the orchestrator already showed the
+    // operator (`code` / `subReason` / `message`), and the project-tier
+    // hook path. The boundary asserts presence + shape; the library
+    // preserves the strings verbatim.
+    required: ['stage', 'error', 'hookPath'],
+    handler: (args) => {
+      const stage = requireNonEmptyStringArg(args, 'buildPreflightAbortBody', 'stage');
+      const error = requirePreflightErrorArg(args, 'buildPreflightAbortBody');
+      const hookPath = requireNonEmptyStringArg(args, 'buildPreflightAbortBody', 'hookPath');
+      return runBuildPreflightAbortBody({
+        stage: stage as unknown as Parameters<typeof runBuildPreflightAbortBody>[0]['stage'],
+        error: error as unknown as Parameters<typeof runBuildPreflightAbortBody>[0]['error'],
+        hookPath,
+      });
+    },
+  },
+  probeConfineHook: {
+    // Pure marshalling wrapper around the shared probe runner. The
+    // boundary asserts the project root is a non-empty string; the
+    // wrapper composes the canonical hook path and lists backup siblings
+    // without re-running any of the probe logic.
+    required: ['projectRoot'],
+    handler: (args) => {
+      const projectRoot = requireProjectRoot(args, 'probeConfineHook');
+      return runProbeConfineHook({ projectRoot });
+    },
+  },
   checkRoleCeiling: {
     // Flat-shape boundary, matching sibling safety tools (`checkSprintBudget`,
     // `detectEditOscillation`, `buildEvaluatorPlan`): `attemptState`, `ceilings`
@@ -1654,6 +1697,38 @@ function requireLoopHaltArg(args: Record<string, unknown>, tool: string): Record
     });
   }
   return v as Record<string, unknown>;
+}
+
+// Extract the structured preflight-error object for buildPreflightAbortBody.
+// The library preserves the three documented strings (`code` / `subReason` /
+// `message`) verbatim; the boundary asserts only that the object carries
+// each as a non-empty string.
+function requirePreflightErrorArg(
+  args: Record<string, unknown>,
+  tool: string,
+): Record<string, unknown> {
+  const v = args['error'];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw createError('MalformedInput', {
+      tool,
+      field: 'error',
+      message: `Tool '${tool}' requires an 'error' object in its input.`,
+    });
+  }
+  const obj = v as Record<string, unknown>;
+  for (const f of ['code', 'subReason', 'message'] as const) {
+    const fv = obj[f];
+    if (typeof fv !== 'string' || fv.length === 0) {
+      throw createError('MalformedInput', {
+        tool,
+        field: `error.${f}`,
+        message:
+          `Tool '${tool}' requires the 'error' object to carry a non-empty ` +
+          `'${f}' string (the diagnostic envelope the orchestrator already showed the operator).`,
+      });
+    }
+  }
+  return obj;
 }
 
 // Extract the `attemptStateByRole` map for checkSprintBudget. The library

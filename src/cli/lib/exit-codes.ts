@@ -63,6 +63,30 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   // "the framework halted an unproductive loop" from a contract/validation
   // failure, which it would otherwise be conflated with.
   LoopDetected: EXIT_LOOP_DETECTED,
+
+  // `gan hooks migrate` structured-error code registry. Every failure
+  // path in the migrate command routes through `migrateError(...)` and
+  // emits one of these `code` tokens on stderr; registering them here
+  // makes `exitCodeFor` resolve the same exit value uniformly when a
+  // ConfigServerError or other propagated error carries one of the
+  // codes. The grouping matches the migrate command's exit-code split:
+  // bad-args / validation / generic.
+  GanHooksMigrateActionRequired: EXIT_BAD_ARGS,
+  GanHooksMigrateActionConflict: EXIT_BAD_ARGS,
+  GanHooksMigrateInvalidProjectRoot: EXIT_BAD_ARGS,
+  GanHooksMigrateConfirmationRequired: EXIT_VALIDATION,
+  GanHooksMigrateCancelled: EXIT_VALIDATION,
+  GanHooksMigrateProjectHookIsSymlink: EXIT_VALIDATION,
+  GanHooksMigrateSourceReadFailed: EXIT_GENERIC,
+  GanHooksMigrateTemplateError: EXIT_GENERIC,
+  GanHooksMigrateFilesystemError: EXIT_GENERIC,
+
+  // `gan hooks status` structured-error codes. Currently just the
+  // one argument-error path. Same `Gan<Command><Specific>` shape as
+  // the `GanHooksMigrate*` family above; the prefix scopes the
+  // token to the emitting command so future structured-error
+  // commands extend the registry without collision.
+  GanHooksStatusInvalidProjectRoot: EXIT_BAD_ARGS,
 });
 
 /**

@@ -13,3 +13,7 @@ ClaudeAgents is a generator-discriminator framework for AI-driven software devel
 A spec's implementation PR also flips that spec's entry in `specifications/roadmap.md` § "Implementation order" to the shipped form (`✅ **<spec>** — <desc>. Shipped PR #<n>`) in the **same diff** — a merged spec whose roadmap entry still shows a link, a `**Next.**` marker, or no `✅` is a defect. Shipped specs are otherwise immutable: new behaviour goes in a new spec, never an edit to a shipped one.
 
 Full rules and rationale live in PROJECT_CONTEXT § Conventions — "Shipping a spec flips its roadmap entry", "Implemented specs are immutable", "One fact, one home". (Status itself is never tracked here or in PROJECT_CONTEXT; the roadmap is its only home.)
+
+## Confinement
+
+If a `/gan` sprint aborts mid-attempt with a confinement-denial message, run `gan hooks status` to diagnose whether a stale project-tier hook is the cause and `gan hooks migrate` to resolve it.

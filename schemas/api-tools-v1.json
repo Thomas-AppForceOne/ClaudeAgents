@@ -251,6 +251,51 @@
         "type": "object"
       }
     },
+    "buildPreflightAbortBody": {
+      "description": "Builds a preflightAbort event body from the orchestrator-resolved preflight stage, structured diagnostic envelope (code/subReason/message), and project-tier hook path. The wrapper preserves the four documented strings verbatim; it does NOT capture probe env, stdin envelope, or hook contents so operator state cannot leak into telemetry.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": true,
+            "properties": {
+              "code": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "message": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "subReason": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "subReason",
+              "message"
+            ],
+            "type": "object"
+          },
+          "hookPath": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "stage": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "error",
+          "hookPath"
+        ],
+        "type": "object"
+      }
+    },
     "buildTrustEventBody": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1103,6 +1148,22 @@
         "type": "object"
       }
     },
+    "probeConfineHook": {
+      "description": "Probe the project-tier confinement hook at <project>/.claude/hooks/gan-confine.sh and classify it as current, stale, or misconfigured. Pure marshalling wrapper around the shared runConfineHookProbe runner — both `gan hooks status` and the skill-side preflight call the same runner so the byte-identical-with-status guarantee holds.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "projectRoot": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "type": "object"
+      }
+    },
     "reconcileTraceIndex": {
       "inputSchema": {
         "additionalProperties": false,
@@ -1760,6 +1821,7 @@
     "appendToStackField",
     "buildEvaluatorPlan",
     "buildLoopDetectedBody",
+    "buildPreflightAbortBody",
     "buildTrustEventBody",
     "buildValidationAbortBody",
     "buildValidationAbortFromCode",
@@ -1792,6 +1854,7 @@
     "getTrustDiff",
     "getTrustState",
     "listModules",
+    "probeConfineHook",
     "reconcileTraceIndex",
     "reconstructRecoveryState",
     "reconstructRevisionState",

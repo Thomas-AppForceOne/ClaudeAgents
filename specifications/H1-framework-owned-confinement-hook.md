@@ -90,6 +90,8 @@ The framework cannot reliably distinguish "project-tier hook is a copy of the ol
 
 A `gan hooks status` CLI command (added to R3's command surface by H1's implementation PR) prints the user-tier hook path, any project-tier hook in the current directory, the framework version that authored the user-tier hook, and a hint about deletion when the project-tier hook predates F1's zone rework.
 
+**Forward reference (added by H3).** The detection and migration tooling H1 anticipated is shipped in H3: run `gan hooks status` to diagnose a stale or misconfigured project-tier hook, and `gan hooks migrate --delete | --replace | --review` to resolve it. See `specifications/H3-stale-project-hook-detection-and-migration.md`.
+
 ### Why user-tier, not symlinked-into-project
 
 Three options were considered for hook ownership:

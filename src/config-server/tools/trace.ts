@@ -28,10 +28,14 @@ import {
 } from '../../trace/emit.js';
 import {
   buildLoopDetectedBody as libraryBuildLoopDetectedBody,
+  buildPreflightAbortBody as libraryBuildPreflightAbortBody,
   buildTrustEventBody as libraryBuildTrustEventBody,
   buildValidationAbortBody as libraryBuildValidationAbortBody,
   buildValidationAbortFromCode as libraryBuildValidationAbortFromCode,
   type LoopDetectionHalt,
+  type PreflightAbortBody,
+  type PreflightAbortError,
+  type PreflightStage,
   type SafetyHaltBody,
   type TrustEventBody,
   type TrustResolution,
@@ -343,6 +347,45 @@ export interface BuildLoopDetectedBodyInput {
  */
 export function buildLoopDetectedBodyTool(input: BuildLoopDetectedBodyInput): SafetyHaltBody {
   return libraryBuildLoopDetectedBody(input.halt);
+}
+
+/**
+ * Input to {@link buildPreflightAbortBodyTool}.
+ *
+ * @property stage the {@link PreflightStage} discriminant — preserved
+ *   byte-for-byte on the returned body. Currently only `'confineHook'` is
+ *   defined; the schema forward-compats on additional values.
+ * @property error the diagnostic envelope the orchestrator already showed
+ *   the operator (`code` / `subReason` / `message`). Surfaced verbatim under
+ *   the body's `errorCode` / `errorSubReason` / `errorMessage` fields.
+ * @property hookPath the absolute path to the project-tier hook file that
+ *   triggered the halt. Surfaced verbatim under `projectTierHookPath`.
+ */
+export interface BuildPreflightAbortBodyInput {
+  stage: PreflightStage;
+  error: PreflightAbortError;
+  hookPath: string;
+}
+
+/**
+ * Body-builder wrapper that preserves the `PreflightStage` discriminant and
+ * the structured-error fields the orchestrator already emitted to stderr.
+ * Routes straight through {@link libraryBuildPreflightAbortBody} so this
+ * wrapper carries no domain logic of its own (the dual-callable-surface
+ * rule). Surface invariant: the returned body never includes probe env,
+ * stdin envelope, or hook contents — only the four documented fields plus
+ * the project-tier hook path — so operator state cannot leak into
+ * telemetry.
+ *
+ * @param input see {@link BuildPreflightAbortBodyInput}; the stage
+ *   discriminator, the diagnostic envelope, and the project-tier hook path.
+ * @returns the {@link PreflightAbortBody} ready to pass to the emitter.
+ *   Pure mapping — never throws.
+ */
+export function buildPreflightAbortBodyTool(
+  input: BuildPreflightAbortBodyInput,
+): PreflightAbortBody {
+  return libraryBuildPreflightAbortBody(input.stage, input.error, input.hookPath);
 }
 
 // Re-export the result alias from the library so a tool-test importer needs

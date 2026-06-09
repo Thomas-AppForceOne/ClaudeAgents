@@ -239,24 +239,79 @@ const SUBCOMMAND_HELP: Readonly<Record<string, SubcommandHelp>> = Object.freeze(
     exitCodes: ['  0   Success', '  5   Framework library unreachable'],
   },
   hooks: {
-    usage: 'gan hooks status [--json]',
+    usage: 'gan hooks <status|migrate> [...]',
     description:
-      'Report the framework confinement-hook state.\n' +
-      '  gan hooks status   Show the user-tier and project-tier hooks.',
-    examples: ['  gan hooks status', '  gan hooks status --json'],
-    exitCodes: ['  0   Success', '  64  Bad CLI arguments'],
+      'Diagnose or remediate the framework confinement-hook state.\n' +
+      '  gan hooks status                              Show the user-tier and project-tier hooks.\n' +
+      '  gan hooks migrate --delete | --replace | --review\n' +
+      '                                                Remediate a stale or misconfigured override.',
+    examples: [
+      '  gan hooks status',
+      '  gan hooks status --json',
+      '  gan hooks migrate --review',
+      '  gan hooks migrate --delete --yes',
+      '  gan hooks migrate --replace --yes',
+    ],
+    exitCodes: [
+      '  0   Success',
+      '  1   Filesystem failure during a destructive action',
+      '  2   Stale or misconfigured project-tier hook; confirmation required; symlink refusal',
+      '  64  Bad CLI arguments',
+    ],
   },
   'hooks status': {
-    usage: 'gan hooks status [--json]',
+    usage: 'gan hooks status [--json] [--project-root <path>]',
     description:
       'Report the framework-owned confinement hook at the user tier\n' +
       '(`~/.claude/hooks/gan-confine.sh`) and any project-tier override at\n' +
-      '`<cwd>/.claude/hooks/gan-confine.sh`. Shows the framework version that\n' +
-      'authored the user-tier hook, notes that a project-tier hook takes\n' +
-      'precedence, and hints at deletion when an override matches a known\n' +
-      'legacy zone layout. Reads the filesystem; needs no project config.',
+      '`<project>/.claude/hooks/gan-confine.sh`. Shows the framework\n' +
+      'version banner, derived contract revision, and Claude Code\n' +
+      'registration for each tier; runs the behaviour probe against the\n' +
+      'project-tier hook and resolves the verdict probe-wins. Exits 2 on\n' +
+      'a stale or misconfigured project-tier hook so CI can gate on it.',
     examples: ['  gan hooks status', '  gan hooks status --json'],
-    exitCodes: ['  0   Success'],
+    exitCodes: [
+      '  0   Success (no project-tier hook, or it passes the probe)',
+      '  2   Stale or misconfigured project-tier hook',
+      '  64  Bad CLI arguments (e.g. missing or invalid --project-root)',
+    ],
+  },
+  'hooks migrate': {
+    usage:
+      'gan hooks migrate (--delete | --replace | --review) [--yes] [--project-root <path>]',
+    description:
+      'Remediate a stale or misconfigured project-tier confinement hook.\n' +
+      '  --delete   Atomically backup-then-unlink the project-tier hook.\n' +
+      '             The framework user-tier hook then applies.\n' +
+      '  --replace  Atomically backup-then-overwrite with the framework\n' +
+      '             current rendered template (substituted banner).\n' +
+      '  --review   Print the unified diff between the project-tier hook\n' +
+      '             and the framework current template; pure read.\n' +
+      '\n' +
+      '--delete and --replace require either an interactive y confirmation\n' +
+      '(TTY stdin, bare-Enter defaults to N) or an explicit --yes flag.\n' +
+      'Non-TTY stdin without --yes fails closed.\n' +
+      '\n' +
+      'Structured failures (confirmation required, symlink refusal) emit a\n' +
+      'JSON envelope on stderr with `code`, `subReason`, and `message`\n' +
+      'fields so a CI gate can branch on the cause without parsing prose.',
+    flags: [
+      '      --delete    Backup-then-unlink the project-tier hook.',
+      '      --replace   Backup-then-overwrite with the framework current template.',
+      '      --review    Print the unified diff (pure read).',
+      '      --yes       Skip the interactive confirmation prompt.',
+    ],
+    examples: [
+      '  gan hooks migrate --review',
+      '  gan hooks migrate --delete --yes',
+      '  gan hooks migrate --replace --yes',
+    ],
+    exitCodes: [
+      '  0   Success (or absent-hook no-op for --delete / --review)',
+      '  1   Filesystem failure (atomic-write, mkdir, unlink, or read error)',
+      '  2   Validation failure (confirmation required, project-hook-is-symlink)',
+      '  64  Bad CLI arguments (no/multiple action flags, invalid --project-root)',
+    ],
   },
   trust: {
     usage: 'gan trust <info|approve|revoke|list> [args] [--json]',

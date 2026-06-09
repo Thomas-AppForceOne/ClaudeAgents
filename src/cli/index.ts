@@ -38,6 +38,7 @@ import * as stackShowCmd from './commands/stack-show.js';
 import * as stackUpdateCmd from './commands/stack-update.js';
 import * as modulesListCmd from './commands/modules-list.js';
 import * as hooksStatusCmd from './commands/hooks-status.js';
+import * as hooksMigrateCmd from './commands/hooks-migrate.js';
 import * as validateCmd from './commands/validate.js';
 import * as trustInfoCmd from './commands/trust-info.js';
 import * as trustApproveCmd from './commands/trust-approve.js';
@@ -211,9 +212,11 @@ async function modulesDispatch(parsed: ParsedArgs): Promise<CommandResult> {
 }
 
 /**
- * Route `gan hooks <status>` to its inner command. Same frame-shift and
- * missing/unknown-subcommand contract as {@link configDispatch}; currently only
- * `status` is defined.
+ * Route `gan hooks <status|migrate>` to its inner command. Same frame-shift
+ * and missing/unknown-subcommand contract as {@link configDispatch}. The
+ * `status` subcommand is the diagnostic surface; `migrate` is the
+ * remediation surface (with its own `--delete` / `--replace` / `--review`
+ * sub-actions).
  */
 async function hooksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   const inner = parsed._[0];
@@ -225,10 +228,13 @@ async function hooksDispatch(parsed: ParsedArgs): Promise<CommandResult> {
   switch (inner) {
     case 'status':
       return hooksStatusCmd.run(tail);
+    case 'migrate':
+      return hooksMigrateCmd.run(tail);
     case undefined:
       return {
         stdout: '',
-        stderr: 'Error: gan hooks requires a subcommand (`status`). Run `gan hooks --help`.\n',
+        stderr:
+          'Error: gan hooks requires a subcommand (`status` or `migrate`). Run `gan hooks --help`.\n',
         code: EXIT_BAD_ARGS,
       };
     default:
@@ -308,6 +314,18 @@ const TOP_LEVEL_SPEC: CommandSpec = {
     { long: '--note', type: 'string' },
 
     { long: '--force', type: 'boolean' },
+
+    // `gan hooks migrate` action flags (exactly one required). Declared
+    // at the top level because the whole argv is parsed once before
+    // dispatch; the migrate command then reads the resolved flag values.
+    { long: '--delete', type: 'boolean' },
+
+    { long: '--replace', type: 'boolean' },
+
+    { long: '--review', type: 'boolean' },
+
+    // Confirmation bypass for `gan hooks migrate --delete` / `--replace`.
+    { long: '--yes', type: 'boolean' },
   ],
   allowUnknownFlags: false,
 };
@@ -385,6 +403,31 @@ export async function dispatch(rawArgv: readonly string[]): Promise<number> {
     writeErr(`Error: unknown subcommand '${subName}'.\n`);
     writeErr('Run `gan --help` for the subcommand list.\n');
     return EXIT_BAD_ARGS;
+  }
+
+  // Out-of-context action-flag guard. `--delete`, `--replace`, and
+  // `--review` are declared on the top-level parser (the parser is
+  // single-pass with `allowUnknownFlags: false`, so every flag any
+  // subcommand accepts must be on the top-level spec). But they only
+  // make sense on `gan hooks migrate` — supplying them to e.g.
+  // `gan stacks list --delete` would otherwise parse to a success exit
+  // with the flag silently ignored. Reject here so the surface
+  // advertises only the capabilities a command honours, and a future
+  // `gan stacks delete` does not inherit pre-existing semantics by
+  // accident.
+  const actionFlagInUse =
+    parsed.flags['delete'] === true
+    || parsed.flags['replace'] === true
+    || parsed.flags['review'] === true;
+  if (actionFlagInUse) {
+    const isHooksMigrate = subName === 'hooks' && parsed._[1] === 'migrate';
+    if (!isHooksMigrate) {
+      writeErr(
+        'Error: --delete / --replace / --review are valid only on `gan hooks migrate`.\n',
+      );
+      writeErr('Run `gan hooks migrate --help` for usage.\n');
+      return EXIT_BAD_ARGS;
+    }
   }
 
   // `gan <sub> --help`: render that subcommand's help page rather than running

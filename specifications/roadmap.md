@@ -148,6 +148,7 @@ Builds on real trace data (now flowing, post-R7) and v1.0 user reports. The them
 
 - **T2** — cost & efficiency read surface (`gan run report`, `gan stats`). The read CLI deferred from v1.0 now that the trace is real; the highest-frequency post-run need.
 - **[H2](H2-operator-controls.md)** — operator controls: run halt + mid-run steering (`gan halt` / `resume` / `steer`). Extends H1's framework-owned confinement hook with a halt precedence check and adds a one-shot zone-2 steering channel. Depends on H1, A1, O2, T1; composes with A2 in the same hook (halt → scope → zone precedence). Steering is advisory only — it never alters contract criteria, preserving the evaluator's sole-gate property.
+- ✅ **[H3](H3-stale-project-hook-detection-and-migration.md)** — Stale project-tier confinement hook detection and migration. Shipped PR #<n>. Addresses the migration gap H1 flagged abstractly and F7 made concrete.
 - **[A2](A2-generator-scope-enforcement.md)** — generator scope enforcement (PreToolUse hook, per-role scope splits).
 - **U1 / U2 / U3 — overlay-UX polish** (moved from v1.0). The project-overlay, user-overlay, and additional-context surfaces. Real ergonomics, but not trust-critical — they make a trustworthy loop pleasant to configure, so they follow the core-loop work rather than gate the first release.
 - **[O2](O2-recovery.md) — full recovery UX** (completes the minimal resume shipped in v1.0).

@@ -1,32 +1,51 @@
 /**
- * `gan hooks status` — diagnose the install state of the `gan-confine.sh`
- * write-confinement hook and the active-run confinement zones.
+ * `gan hooks status` — diagnose the install state of the framework's
+ * `gan-confine.sh` PreToolUse confinement hook.
  *
- * The hook can exist at two tiers: a user-tier copy authored by the framework
- * (and stamped with the version that wrote it) and an optional project-tier
- * override that, when present, takes precedence. The command reports both,
- * flags a stale user-tier hook (authored version != current framework
- * version), and flags a legacy project override that still references the
- * retired `.gan/` zone layout. It also reports the per-run env vars
- * (`GAN_RUN_ID` / `GAN_WORKTREE` / `GAN_RUN_DIR`) the framework exports while a
- * run is active.
+ * The command reports two tiers — the user-tier copy authored by the
+ * framework's `install.sh` at `~/.claude/hooks/gan-confine.sh`, and an
+ * optional project-tier override at `<project>/.claude/hooks/gan-confine.sh`
+ * — and for each surfaces the framework-version banner, the derived
+ * contract revision (`F1` / `F7` / `unknown`), and the Claude Code
+ * registration in `~/.claude/settings.json`. For the project-tier hook
+ * only, the command also runs the shared behaviour probe (the load-bearing
+ * detector) and resolves the per-tier verdict with probe-wins precedence —
+ * the banner is metadata, the probe tests the observable contract.
  *
- * This is a pure diagnostic: it only reads. {@link collectStatus} is the
- * testable core; {@link run} wraps it so any unexpected failure degrades to a
- * conservative "nothing installed" report rather than an error exit.
+ * The JSON surface (`--json`) is the v1.0-stable CLI contract documented
+ * in the H3 spec; the human surface is the multi-section text form. The
+ * exit code is `0` when no project-tier hook is detected or it passes the
+ * probe, and `2` when the project-tier hook is `stale` or `misconfigured`
+ * so CI can gate on hook hygiene.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import {
+  compareBanner,
+  listBackupSiblings,
+  parseConfineHookBanner,
+  readInstalledFrameworkVersion,
+  runConfineHookProbe,
+  type BannerVerdict,
+  type ConfineProbeVerdict,
+  type ContractRevision,
+} from '../../hook-probe/index.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 import { emitJson } from '../lib/json-output.js';
-import { EXIT_OK } from '../lib/exit-codes.js';
+import { cliError, presentErrorAsProse } from '../lib/cli-error.js';
+import { EXIT_BAD_ARGS, EXIT_OK, EXIT_VALIDATION } from '../lib/exit-codes.js';
+import { canonicalizePath } from '../../config-server/determinism/index.js';
 import type { ParsedArgs } from '../lib/args.js';
 
 /**
  * Result contract shared by every CLI command handler.
+ *
+ * @property stdout text for stdout (rendered output or JSON).
+ * @property stderr text for stderr (errors, usage hints).
+ * @property code the process exit code.
  */
 interface CommandResult {
   stdout: string;
@@ -35,393 +54,452 @@ interface CommandResult {
 }
 
 /**
- * Status of the user-tier (framework-authored) confinement hook.
+ * Per-tier hook record on the JSON surface for the user tier.
  *
- * @property path absolute path where the user-tier hook lives.
- * @property present whether that file exists and was readable.
- * @property authoredVersion the framework version parsed from the hook's
- *   header, or `null` when absent or unparseable.
- * @property current `true` only when both the authored and current framework
- *   versions are known and equal (i.e. the hook is up to date).
+ * @property path the absolute path of the user-tier hook file.
+ * @property frameworkVersion the raw semver string the banner declared, or
+ *   `null` when the banner is absent or unparseable. The JSON surface emits
+ *   `null` only — never the string `"unknown"`.
+ * @property contractRevision the derived revision (`'F1'` / `'F7'` /
+ *   `'unknown'`); `'unknown'` mirrors the no-banner human label as a
+ *   literal JSON string.
+ * @property registered whether `~/.claude/settings.json` lists this hook
+ *   path under `hooks.PreToolUse[].hooks[].command` via canonical-path
+ *   equality. A framework-installed hook is registered by construction;
+ *   `false` indicates a manual settings edit removed the entry.
  */
-export interface UserTierStatus {
+export interface UserTierJsonShape {
   path: string;
-
-  present: boolean;
-
-  authoredVersion: string | null;
-
-  current: boolean;
+  frameworkVersion: string | null;
+  contractRevision: ContractRevision;
+  registered: boolean;
 }
 
 /**
- * Status of an optional project-tier hook override.
+ * Per-tier hook record on the JSON surface for the project tier.
  *
- * @property path absolute path where a project-tier override would live.
- * @property present whether such an override exists.
- * @property legacy whether a present override still references the retired
- *   `.gan/` zone layout (and not the current `.gan-state/`), suggesting it
- *   should be deleted.
+ * @property path the absolute path of the project-tier hook file.
+ * @property frameworkVersion same as user tier.
+ * @property contractRevision same as user tier.
+ * @property bannerVerdict the per-tier comparison against the installed
+ *   framework version. `'matches'` / `'lags'` / `'ahead'` fire when both
+ *   sides parsed; `'absent'` when the hook carries no banner;
+ *   `'unparseable'` when a banner line matched but its semver did not
+ *   parse (a hook-side defect the operator can fix); `'installedUnknown'`
+ *   when the framework's own `package.json` could not be read (a
+ *   framework-side defect distinct from `'unparseable'` so a CI gate can
+ *   tell `please fix your hook banner` from `please reinstall the
+ *   framework`).
+ * @property probeVerdict the behaviour-probe verdict (`'current'` /
+ *   `'stale'` / `'misconfigured'`).
+ * @property verdict the probe-wins resolution of `bannerVerdict` vs
+ *   `probeVerdict`. The probe always wins on disagreement — the banner is
+ *   metadata; the probe tests the observable contract.
+ * @property backupSiblings absolute paths of every
+ *   `gan-confine.sh.gan-bak.<timestamp>` file in the same directory.
  */
-export interface ProjectTierStatus {
+export interface ProjectTierJsonShape {
   path: string;
-
-  present: boolean;
-
-  legacy: boolean;
+  frameworkVersion: string | null;
+  contractRevision: ContractRevision;
+  bannerVerdict: BannerVerdict;
+  probeVerdict: ConfineProbeVerdict;
+  verdict: ConfineProbeVerdict;
+  backupSiblings: string[];
 }
 
 /**
- * The active-run confinement zone env vars.
- *
- * @property runId `GAN_RUN_ID`, or `null` when not inside a run.
- * @property worktree `GAN_WORKTREE`, or `null` when unset.
- * @property runDir `GAN_RUN_DIR`, or `null` when unset.
- *
- * Invariant: when `runId` is `null` the other two are forced to `null` as well
- * (no run means no zones), regardless of stray env values.
+ * Discriminator value the JSON shape carries so a downstream consumer
+ * can branch on the shape version. Incremented on a breaking change
+ * (a removed or renamed field, or a tightening of an enum). Additive
+ * evolution (a new optional field, a new enum value on a non-gate
+ * field) MUST NOT bump it — consumers handle additive evolution by
+ * defaulting-allow on unknown enum values for non-gate fields.
  */
-export interface RunZonesStatus {
-  runId: string | null;
-
-  worktree: string | null;
-
-  runDir: string | null;
-}
+/**
+ * Why this shape carries a `schemaVersion` while the MCP tool's
+ * `ProbeConfineHookResult` and the trace's `PreflightAbortEvent` do
+ * not: the framework's overall versioning policy is at the
+ * *transport* level — MCP tool results are versioned by the catalog
+ * at `schemas/api-tools-v1.json` (the `v1` in the filename is the
+ * envelope discriminator every MCP consumer respects), and trace
+ * events are versioned by `schemas/run-trace-v1.json`. The CLI's
+ * `--json` output is the one structured surface a downstream
+ * consumer reads directly, with no surrounding envelope to anchor
+ * the version. So this shape carries its own discriminator; the
+ * MCP and trace shapes don't need one. A consumer parsing this
+ * payload SHOULD reject when this field doesn't match the version
+ * it was written against; additive evolution does NOT bump it.
+ */
+export const HOOKS_STATUS_JSON_SCHEMA_VERSION = '1' as const;
 
 /**
- * Full, serialisable status payload (the `--json` shape).
+ * Top-level JSON shape `gan hooks status --json` emits.
  *
- * @property frameworkVersion the current framework version, or `'unknown'`.
- * @property userTier user-tier hook status.
- * @property projectTier project-tier override status.
- * @property runZones active-run zone env vars.
- * @property projectTierTakesPrecedence mirrors `projectTier.present` — a
- *   present project override wins over the user-tier hook.
- * @property legacyDeletionHint `true` when a project override is present *and*
- *   legacy, the precise condition under which the deletion hint is shown.
+ * @property schemaVersion stable version discriminator the JSON
+ *   surface carries; see {@link HOOKS_STATUS_JSON_SCHEMA_VERSION}.
+ *   A consumer parsing `gan hooks status --json` SHOULD reject the
+ *   payload when this field does not match the version it was
+ *   written against. New additive fields do NOT bump the version;
+ *   only a removal / rename / enum-tightening does.
+ * @property userTier the user-tier record.
+ * @property projectTier the project-tier record, or `null` when no file
+ *   exists at `<project>/.claude/hooks/gan-confine.sh`.
+ * @property verdict the top-level resolution: `projectTier.verdict` when
+ *   a project-tier hook is present, otherwise `'current'`. The user tier
+ *   does not carry a verdict — `install.sh` refreshes it on every run, so
+ *   the framework treats it as authoritative-by-construction. Consumers
+ *   gating on this field MUST strictly compare `=== 'current'`; a future
+ *   additive verdict literal (e.g. a `'mismatch'` class) MUST NOT
+ *   silently fail-open by being treated as "not stale".
+ * @property orphanBackupSiblings emitted only when `projectTier` is `null`
+ *   but `<project>/.claude/hooks/` still holds one or more
+ *   `gan-confine.sh.gan-bak.<timestamp>` files; absent otherwise. This
+ *   is the only conditionally-present top-level key on this shape;
+ *   every other field is always present so a destructuring consumer
+ *   does not need to special-case undefined.
  */
-export interface HooksStatusOutput {
-  frameworkVersion: string;
-  userTier: UserTierStatus;
-  projectTier: ProjectTierStatus;
-
-  runZones: RunZonesStatus;
-
-  projectTierTakesPrecedence: boolean;
-
-  legacyDeletionHint: boolean;
+export interface HooksStatusJsonShape {
+  schemaVersion: typeof HOOKS_STATUS_JSON_SCHEMA_VERSION;
+  userTier: UserTierJsonShape;
+  projectTier: ProjectTierJsonShape | null;
+  verdict: 'current' | 'stale' | 'misconfigured';
+  orphanBackupSiblings?: string[];
 }
 
-/**
- * Resolve the installed package root relative to this compiled module.
- *
- * Anchored to this file's location (three levels up from `dist/cli/commands/`),
- * not the process cwd, so it is correct wherever `gan` is invoked from.
- */
-function packageRoot(): string {
-  const here = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(here), '..', '..', '..');
-}
+// `listBackupSiblings` and `readInstalledFrameworkVersion` are
+// imported from `src/hook-probe/` so the migrate command, the
+// status command, and the MCP wrapper share one definition for
+// each — see `src/hook-probe/index.ts` for the rationale.
 
-/**
- * Read the current framework version from the package's `package.json`.
- *
- * Honours `GAN_PACKAGE_ROOT_OVERRIDE` (test seam) over the resolved root.
- *
- * @returns the version string, or `null` when the file is missing/unreadable
- *   or has no string `version`. Never throws — a missing version simply leaves
- *   the staleness check undecidable.
- */
-async function readFrameworkVersion(): Promise<string | null> {
-  const root = process.env.GAN_PACKAGE_ROOT_OVERRIDE ?? packageRoot();
-  const pkgPath = path.join(root, 'package.json');
+// Read a hook file's text. Returns `null` when the file is absent or
+// unreadable — absence is the common, expected case.
+function readHookText(p: string): string | null {
   try {
-    const raw = await readFile(pkgPath, 'utf8');
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === 'string' ? parsed.version : null;
+    return readFileSync(p, 'utf8');
   } catch {
     return null;
   }
 }
 
-/**
- * Read a hook file's text.
- *
- * @param hookPath absolute path to the hook script.
- * @returns the file contents, or `null` when it does not exist or cannot be
- *   read. Never throws — absence is the common, expected case.
- */
-async function readHookText(hookPath: string): Promise<string | null> {
+// Read the user's `~/.claude/settings.json` and extract every command path
+// it registers as a PreToolUse hook. Used to detect Claude Code
+// registration via canonical-path equality. Returns an empty list on any
+// failure (missing file, malformed JSON, unexpected shape) — registration
+// is then reported as `false` rather than the command failing.
+function readSettingsHookCommands(settingsPath: string): string[] {
+  let raw: string;
   try {
-    return await readFile(hookPath, 'utf8');
+    raw = readFileSync(settingsPath, 'utf8');
   } catch {
-    return null;
+    return [];
   }
-}
-
-/**
- * Parse the framework version stamped in a hook's header.
- *
- * Only the first {@link HEADER_LINE_LIMIT} lines are scanned — the version line
- * is a header convention, so bounding the scan keeps a huge or hostile file
- * from being walked end to end. Matches an optional semver pre-release/build
- * suffix.
- *
- * @param content the full hook text.
- * @returns the matched version string, or `null` when no version line is found
- *   within the header window.
- */
-export function parseAuthoredVersion(content: string): string | null {
-  const HEADER_LINE_LIMIT = 50;
-  const lines = content.split('\n', HEADER_LINE_LIMIT + 1);
-  const re = /Source of truth:\s*ClaudeAgents framework,\s*version\s+([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)/;
-  for (let i = 0; i < Math.min(lines.length, HEADER_LINE_LIMIT); i++) {
-    const m = re.exec(lines[i]!);
-    if (m) return m[1]!;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
   }
-  return null;
-}
-
-/**
- * Decide whether a project-tier hook is a legacy artifact.
- *
- * @param content the hook text.
- * @returns `true` only when the hook references the retired `.gan/` zone layout
- *   and does *not* reference the current `.gan-state/` layout. The current-zone
- *   check wins: a hook mentioning both is treated as current, never legacy, so
- *   an up-to-date hook is never mistaken for a deletion candidate.
- */
-export function isLegacyProjectHook(content: string): boolean {
-  const referencesCurrentZone = content.includes('.gan-state/');
-  if (referencesCurrentZone) return false;
-
-  const referencesLegacyZone = content.includes('.gan/');
-  return referencesLegacyZone;
-}
-
-/**
- * Abbreviate a path that lives under the user's home to a `~`-prefixed form
- * for display.
- *
- * @param absPath the absolute path to display.
- * @param home the user's home directory.
- * @returns `~`-relative form when `absPath` equals or is nested under `home`
- *   (the `home + sep` guard avoids mistaking a sibling like `/home/foo-bar`
- *   for being inside `/home/foo`); otherwise `absPath` unchanged.
- */
-function displayUserPath(absPath: string, home: string): string {
-  if (home && (absPath === home || absPath.startsWith(home + path.sep))) {
-    return '~' + absPath.slice(home.length);
-  }
-  return absPath;
-}
-
-/**
- * Read an env var, normalising absent/empty to `null`.
- *
- * @returns the value when it is a non-empty string, else `null` — so an empty
- *   `GAN_*` var is treated as unset rather than a meaningful value.
- */
-function readEnvOrNull(env: NodeJS.ProcessEnv, key: string): string | null {
-  const v = env[key];
-  return typeof v === 'string' && v.length > 0 ? v : null;
-}
-
-/**
- * Collect the active-run confinement zones from the environment.
- *
- * @param env the environment to read.
- * @returns a {@link RunZonesStatus}. When `GAN_RUN_ID` is unset the worktree
- *   and run-dir are forced to `null` without even reading them — outside a run
- *   those vars have no meaning, so this enforces the all-or-nothing invariant.
- */
-function collectRunZones(env: NodeJS.ProcessEnv): RunZonesStatus {
-  const runId = readEnvOrNull(env, 'GAN_RUN_ID');
-  if (runId === null) {
-    return { runId: null, worktree: null, runDir: null };
-  }
-  return {
-    runId,
-    worktree: readEnvOrNull(env, 'GAN_WORKTREE'),
-    runDir: readEnvOrNull(env, 'GAN_RUN_DIR'),
-  };
-}
-
-/**
- * Gather the full hook status. The testable core of this command.
- *
- * @param cwd the project directory (where a project-tier override would live).
- * @param home the user's home directory (where the user-tier hook lives).
- * @param env the environment to read run-zone vars from (defaults to
- *   `process.env`).
- * @returns the assembled {@link HooksStatusOutput}. The framework version and
- *   both hook texts are read concurrently. A missing framework version becomes
- *   `'unknown'`, which forces `userTier.current` to `false` (an undecidable
- *   staleness check errs toward "not current"). May reject if an underlying
- *   read rejects in a way the helpers do not absorb; {@link run} catches that.
- */
-export async function collectStatus(
-  cwd: string,
-  home: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<HooksStatusOutput> {
-  const userPath = path.join(home, '.claude', 'hooks', 'gan-confine.sh');
-  const projectPath = path.join(cwd, '.claude', 'hooks', 'gan-confine.sh');
-
-  // Read the version and both hook files concurrently — they are independent.
-  const [frameworkVersion, userText, projectText] = await Promise.all([
-    readFrameworkVersion(),
-    readHookText(userPath),
-    readHookText(projectPath),
-  ]);
-
-  const authoredVersion = userText !== null ? parseAuthoredVersion(userText) : null;
-  const userTier: UserTierStatus = {
-    path: userPath,
-    present: userText !== null,
-    authoredVersion,
-    current:
-      authoredVersion !== null &&
-      frameworkVersion !== null &&
-      authoredVersion === frameworkVersion,
-  };
-
-  const projectPresent = projectText !== null;
-  const legacy = projectPresent ? isLegacyProjectHook(projectText) : false;
-  const projectTier: ProjectTierStatus = {
-    path: projectPath,
-    present: projectPresent,
-    legacy,
-  };
-
-  return {
-    frameworkVersion: frameworkVersion ?? 'unknown',
-    userTier,
-    projectTier,
-    runZones: collectRunZones(env),
-    // A present project override always wins over the user-tier hook.
-    projectTierTakesPrecedence: projectPresent,
-    // The deletion hint fires only for a present *and* legacy override.
-    legacyDeletionHint: projectPresent && legacy,
-  };
-}
-
-/**
- * Render the hook status for human (non-JSON) output.
- *
- * @param out the collected status.
- * @param home the user's home, used to abbreviate user-tier paths via
- *   {@link displayUserPath}.
- * @returns a multi-section report (trailing newline): the user-tier hook
- *   (with install / staleness guidance), the project-tier override (only when
- *   present, with the legacy-deletion hint when applicable), and the
- *   active-run zones (or guidance that no run is active).
- */
-function renderHuman(out: HooksStatusOutput, home: string): string {
-  const lines: string[] = [];
-
-  const userDisplay = displayUserPath(out.userTier.path, home);
-  lines.push(`User-tier framework hook: ${userDisplay}`);
-  if (out.userTier.present) {
-    if (out.userTier.authoredVersion === null) {
-      lines.push(
-        '  Authored version: unknown (header has no parseable version line).',
-      );
-    } else if (out.userTier.current) {
-      lines.push(`  Authored by ClaudeAgents ${out.userTier.authoredVersion} — current.`);
-    } else {
-      lines.push(
-        `  Authored by ClaudeAgents ${out.userTier.authoredVersion} — stale ` +
-          `(the framework is now ${out.frameworkVersion}). Re-run \`install.sh\` ` +
-          'from the framework repo root to refresh it.',
-      );
+  const commands: string[] = [];
+  const hooks = (parsed as { hooks?: unknown })?.hooks;
+  if (typeof hooks !== 'object' || hooks === null) return commands;
+  const preToolUse = (hooks as { PreToolUse?: unknown }).PreToolUse;
+  if (!Array.isArray(preToolUse)) return commands;
+  for (const entry of preToolUse) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const directCommand = (entry as { command?: unknown }).command;
+    if (typeof directCommand === 'string' && directCommand.length > 0) {
+      commands.push(directCommand);
     }
-  } else {
-    lines.push('  Not installed.');
-    lines.push(
-      '  Run `install.sh` from the framework repo root to install the ' +
-        'user-tier confinement hook.',
-    );
-  }
-
-  if (out.projectTier.present) {
-    lines.push('');
-    lines.push(`Project-tier override: ${out.projectTier.path}`);
-    lines.push(
-      '  Detected. Project-tier overrides take precedence over the user-tier hook.',
-    );
-    if (out.legacyDeletionHint) {
-      lines.push('  This file references `.gan/` (legacy zone layout retired in v0.0.x).');
-      lines.push("  If you don't have a deliberate reason to keep this override, delete it");
-      lines.push("  (`rm .claude/hooks/gan-confine.sh`) — the framework's current user-tier");
-      lines.push('  hook will then apply.');
+    const nested = (entry as { hooks?: unknown }).hooks;
+    if (Array.isArray(nested)) {
+      for (const sub of nested) {
+        if (typeof sub !== 'object' || sub === null) continue;
+        const cmd = (sub as { command?: unknown }).command;
+        if (typeof cmd === 'string' && cmd.length > 0) {
+          commands.push(cmd);
+        }
+      }
     }
   }
-
-  lines.push('');
-  lines.push('Active-run confinement zones:');
-  if (out.runZones.runId === null) {
-    lines.push('  Not in a run. `GAN_RUN_ID`, `GAN_WORKTREE`, and `GAN_RUN_DIR` are unset.');
-    lines.push('  The framework exports these at sprint start; the hook confines writes to');
-    lines.push('  the worktree and the run directory only while a run is active.');
-  } else {
-    lines.push(`  Run id (\`GAN_RUN_ID\`): ${out.runZones.runId}`);
-    lines.push(
-      `  Worktree (\`GAN_WORKTREE\`): ${
-        out.runZones.worktree === null ? 'unset' : displayUserPath(out.runZones.worktree, home)
-      }`,
-    );
-    lines.push(
-      `  Run directory (\`GAN_RUN_DIR\`): ${
-        out.runZones.runDir === null ? 'unset' : displayUserPath(out.runZones.runDir, home)
-      }`,
-    );
-  }
-
-  return lines.join('\n') + '\n';
+  return commands;
 }
 
+// True when one of `commands` canonicalises to the same path as `hookPath`.
+// Canonical-path equality (not `endsWith`) avoids false positives against
+// unrelated entries whose `command` happens to end in the same filename.
+function isRegistered(hookPath: string, commands: readonly string[]): boolean {
+  let canonicalHook: string;
+  try {
+    canonicalHook = canonicalizePath(hookPath);
+  } catch {
+    return false;
+  }
+  for (const cmd of commands) {
+    try {
+      if (canonicalizePath(cmd) === canonicalHook) return true;
+    } catch {
+      // A malformed command path simply does not match; skip it rather
+      // than failing the whole registration check.
+    }
+  }
+  return false;
+}
+
+// True when `p` exists as a regular file.
+function isFileAt(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// Map a contract revision to the human label `gan hooks status` prints
+// beside the user-facing "contract revision:" line.
+function contractRevisionLabel(rev: ContractRevision): string {
+  switch (rev) {
+    case 'F1':
+      return 'F1 (pre-F7; no GAN_RUN_DIR awareness)';
+    case 'F7':
+      return 'F7 (knows GAN_RUN_DIR)';
+    case 'unknown':
+      return 'unknown (no version banner)';
+  }
+}
+
+// Banner / probe verdict resolution is the identity: the probe
+// wins on disagreement in every direction; the banner read is
+// metadata only, so every call site assigns
+// `probeResult.verdict` directly to the per-tier `verdict` field.
+// A prior revision wrapped this assignment in a `resolveVerdict()`
+// helper which was a no-op masquerading as resolution logic — the
+// helper has been inlined.
+
 /**
- * CLI entrypoint for `gan hooks status`.
+ * CLI entry point for `gan hooks status`.
  *
- * @param parsed parsed argv; honours `--json`. Operates on the current working
- *   directory and the user's home — there is no `--project-root`.
- * @returns a {@link CommandResult}; always exit {@link EXIT_OK}. Never throws:
- *   if {@link collectStatus} rejects, the catch substitutes a conservative
- *   "nothing installed / not in a run" report so a diagnostic command can
- *   still produce useful output instead of failing.
+ * @param parsed parsed argv; honours `--json` (machine-readable output)
+ *   and `--project-root <path>` (resolved via the standard
+ *   {@link resolveProjectRoot} helper). Operates on the resolved project
+ *   root and on `~/.claude/` for the user-tier hook.
+ * @returns a {@link CommandResult}. Exit code is `EXIT_OK` when no
+ *   project-tier hook is present or it passes the probe, and
+ *   `EXIT_VALIDATION` (`2`) when the project-tier hook is `stale` or
+ *   `misconfigured` so a CI gate can refuse the workspace. Failure modes:
+ *   the `--project-root` value is missing or not a directory →
+ *   {@link resolveProjectRoot} throws, the catch surfaces the structured
+ *   error to stderr and exits non-zero.
  */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
+  // Outer wrapper: route every failure-path emission through the
+  // `--json` gate. Without `--json`, the structured envelope is
+  // converted to prose at this boundary so an interactive operator
+  // sees `Error: <message>` rather than the raw JSON. With
+  // `--json`, the envelope is forwarded verbatim so a CI gate can
+  // `JSON.parse(stderr.trim())` directly. Mirrors the matching
+  // wrapper in `hooks-migrate.ts`'s `run`; the shared helper is at
+  // {@link presentErrorAsProse}. The wrapper is safe to apply
+  // unconditionally because `presentErrorAsProse` no-ops on
+  // non-envelope stderr (including the success path's empty
+  // stderr).
   const wantJson = parsed.flags['json'] === true;
-  const cwd = process.cwd();
-  const home = os.homedir();
+  const inner = await runInner(parsed);
+  return wantJson ? inner : presentErrorAsProse(inner);
+}
 
-  let out: HooksStatusOutput;
+async function runInner(parsed: ParsedArgs): Promise<CommandResult> {
+  const wantJson = parsed.flags['json'] === true;
+  const projectRootFlag = typeof parsed.flags['project-root'] === 'string'
+    ? (parsed.flags['project-root'] as string)
+    : undefined;
+
+  let projectRootPath: string;
   try {
-    out = await collectStatus(cwd, home, process.env);
-  } catch {
-    // Degrade gracefully: a diagnostic should still report *something* rather
-    // than erroring, so an unexpected failure becomes an all-absent status.
-    out = {
-      frameworkVersion: 'unknown',
-      userTier: {
-        path: path.join(home, '.claude', 'hooks', 'gan-confine.sh'),
-        present: false,
-        authoredVersion: null,
-        current: false,
-      },
-      projectTier: {
-        path: path.join(cwd, '.claude', 'hooks', 'gan-confine.sh'),
-        present: false,
-        legacy: false,
-      },
-      runZones: { runId: null, worktree: null, runDir: null },
-      projectTierTakesPrecedence: false,
-      legacyDeletionHint: false,
+    projectRootPath = resolveProjectRoot(projectRootFlag).path;
+  } catch (e) {
+    // `--project-root` resolution failures are argument errors —
+    // matches `gan hooks migrate`, `gan trust approve`, and the
+    // rest of the CLI. Previously this branch returned
+    // EXIT_VALIDATION, which collapsed argument errors onto the
+    // same exit class as "the project tree has a stale hook" and
+    // left CI gates unable to distinguish the two. Routes through
+    // the shared {@link cliError} helper so a `--json` consumer
+    // can `JSON.parse(stderr.trim())` uniformly across both
+    // `hooks status` and `hooks migrate`.
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      stdout: '',
+      stderr: cliError(
+        'GanHooksStatusInvalidProjectRoot',
+        'invalidProjectRoot',
+        `gan hooks status: ${msg}`,
+      ),
+      code: EXIT_BAD_ARGS,
     };
   }
 
-  const stdout = wantJson ? emitJson(out) : renderHuman(out, home);
-  return { stdout, stderr: '', code: EXIT_OK };
+  const home = os.homedir();
+  const userHookPath = path.join(home, '.claude', 'hooks', 'gan-confine.sh');
+  const userSettingsPath = path.join(home, '.claude', 'settings.json');
+  const projectHooksDir = path.join(projectRootPath, '.claude', 'hooks');
+  const projectHookPath = path.join(projectHooksDir, 'gan-confine.sh');
+
+  const installedVersion = readInstalledFrameworkVersion();
+  const settingsCommands = readSettingsHookCommands(userSettingsPath);
+
+  // User tier: read banner, derive contract revision, check registration.
+  const userText = readHookText(userHookPath);
+  const userBanner = userText !== null
+    ? parseConfineHookBanner(userText)
+    : { version: null, contractRevision: 'unknown' as ContractRevision };
+  const userRegistered = isFileAt(userHookPath) && isRegistered(userHookPath, settingsCommands);
+  const userTier: UserTierJsonShape = {
+    path: userHookPath,
+    frameworkVersion: userBanner.version,
+    contractRevision: userBanner.contractRevision,
+    registered: userRegistered,
+  };
+
+  // Project tier: only when the file exists. Run the shared probe; the
+  // probe is the load-bearing detector — the banner is advisory only.
+  const projectExists = isFileAt(projectHookPath);
+  const projectBackupSiblings = listBackupSiblings(projectHooksDir);
+  let projectTier: ProjectTierJsonShape | null = null;
+  let topLevelVerdict: ConfineProbeVerdict = 'current';
+
+  if (projectExists) {
+    const projectText = readHookText(projectHookPath);
+    const projectBanner = projectText !== null
+      ? parseConfineHookBanner(projectText)
+      : { version: null, contractRevision: 'unknown' as ContractRevision };
+    const bannerVerdict = compareBanner(projectBanner.version, installedVersion);
+    const probeResult = await runConfineHookProbe({ hookPath: projectHookPath });
+    // The probe wins on disagreement; the banner read is metadata.
+    const verdict = probeResult.verdict;
+    projectTier = {
+      path: projectHookPath,
+      frameworkVersion: projectBanner.version,
+      contractRevision: projectBanner.contractRevision,
+      bannerVerdict,
+      probeVerdict: probeResult.verdict,
+      verdict,
+      backupSiblings: projectBackupSiblings,
+    };
+    topLevelVerdict = verdict;
+  }
+
+  // Orphan-backup case: project-tier file absent but backup siblings still
+  // present from a prior `migrate` run. Emit a top-level
+  // `orphanBackupSiblings` array on the JSON surface and a single warning
+  // line on the human surface.
+  const orphanBackupSiblings = !projectExists && projectBackupSiblings.length > 0
+    ? projectBackupSiblings
+    : undefined;
+
+  const json: HooksStatusJsonShape = {
+    schemaVersion: HOOKS_STATUS_JSON_SCHEMA_VERSION,
+    userTier,
+    projectTier,
+    verdict: topLevelVerdict,
+  };
+  if (orphanBackupSiblings !== undefined) {
+    json.orphanBackupSiblings = orphanBackupSiblings;
+  }
+
+  // R3 exit-code mapping: stale or misconfigured → 2 (validation failure)
+  // so a CI gate can refuse the workspace. Otherwise 0.
+  const exitCode = topLevelVerdict === 'current' ? EXIT_OK : EXIT_VALIDATION;
+
+  if (wantJson) {
+    return { stdout: emitJson(json) + '\n', stderr: '', code: exitCode };
+  }
+
+  const human = renderHuman(
+    json,
+    userBanner.version,
+    installedVersion,
+    orphanBackupSiblings,
+  );
+  return { stdout: human, stderr: '', code: exitCode };
+}
+
+/**
+ * Render the multi-section human surface for `gan hooks status`.
+ *
+ * The shape mirrors the verbatim example in the H3 spec § 1: a user-tier
+ * block, an optional project-tier block, the orphan-backup warning when
+ * applicable, and — on a stale / misconfigured project-tier hook — a
+ * remediation hint pointing at `gan hooks migrate`.
+ */
+function renderHuman(
+  json: HooksStatusJsonShape,
+  _userVersion: string | null,
+  installedVersion: string | null,
+  orphanBackupSiblings: readonly string[] | undefined,
+): string {
+  const lines: string[] = [];
+  lines.push(`User-tier hook:    ${json.userTier.path}`);
+  lines.push(
+    `  framework version:  ${json.userTier.frameworkVersion ?? 'unknown'}` +
+      (installedVersion !== null && json.userTier.frameworkVersion === installedVersion
+        ? ''
+        : installedVersion !== null && json.userTier.frameworkVersion !== null
+          ? ` (installed: ${installedVersion})`
+          : ''),
+  );
+  lines.push(`  contract revision:  ${contractRevisionLabel(json.userTier.contractRevision)}`);
+  lines.push(
+    `  Claude Code reg:    ${json.userTier.registered ? 'registered in ~/.claude/settings.json' : 'not registered'}`,
+  );
+
+  if (orphanBackupSiblings !== undefined && orphanBackupSiblings.length > 0) {
+    lines.push('');
+    lines.push(
+      `  Backup siblings present at <project>/.claude/hooks/ from prior migrate operations: ${orphanBackupSiblings.length}. Delete manually if no longer needed.`,
+    );
+  }
+
+  if (json.projectTier !== null) {
+    lines.push('');
+    lines.push(`Project-tier hook: ${json.projectTier.path}`);
+    lines.push(
+      `  framework version:  ${json.projectTier.frameworkVersion ?? 'unknown'}` +
+        (json.projectTier.frameworkVersion === null ? ' (no version banner)' : ''),
+    );
+    lines.push(`  contract revision:  ${contractRevisionLabel(json.projectTier.contractRevision)}`);
+    lines.push(`  banner verdict:     ${json.projectTier.bannerVerdict}`);
+    lines.push(`  probe verdict:      ${json.projectTier.probeVerdict}`);
+    lines.push(`  resolved verdict:   ${json.projectTier.verdict}`);
+    lines.push('  Claude Code reg:    overrides user-tier (project takes precedence)');
+    if (json.projectTier.backupSiblings.length > 0) {
+      lines.push(
+        `  backup siblings:    ${json.projectTier.backupSiblings.length} prior migrate operation(s)`,
+      );
+    }
+
+    if (json.projectTier.verdict === 'stale') {
+      lines.push('');
+      lines.push('  The project-tier hook lags the framework current contract.');
+      lines.push('  A /gan run will fail mid-sprint when an agent tries to write');
+      lines.push('  into the central-store run directory.');
+      lines.push('');
+      lines.push('     If the project-tier hook is a copy of a prior framework hook,');
+      lines.push('     delete it (the user-tier framework hook will apply automatically):');
+      lines.push('       gan hooks migrate --delete');
+      lines.push('');
+      lines.push('     If the project-tier hook is a deliberate override, run');
+      lines.push('     `gan hooks migrate --review` to see the diff against the');
+      lines.push('     framework current template, and update by hand.');
+    } else if (json.projectTier.verdict === 'misconfigured') {
+      lines.push('');
+      lines.push('  The project-tier hook is not a runnable bash script');
+      lines.push('  (no valid shebang, not executable, or the spawn errored).');
+      lines.push('  Fix or remove the file before running /gan:');
+      lines.push('     gan hooks migrate --delete       # remove (with backup)');
+      lines.push('     gan hooks migrate --replace      # replace with the framework template');
+    }
+  }
+
+  return lines.join('\n') + '\n';
 }
