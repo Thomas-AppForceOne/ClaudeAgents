@@ -1,0 +1,13 @@
+{
+  "name": "fixture-package",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "house-rules": "node dist/scripts/house-rules/index.js",
+    "lint-no-spec-ref": "node dist/scripts/lint-no-spec-ref/index.js",
+    "lint-no-stack-leak": "node dist/scripts/lint-no-stack-leak/index.js"
+  }
+}

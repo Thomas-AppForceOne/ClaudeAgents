@@ -6,7 +6,9 @@
     "src/config-server/resolution/resolved-config.ts": "framework infrastructure: documentation comment about runtime package.json read",
     "src/config-server/resolution/stack-resolution.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json",
     "src/config-server/tools/reads.ts": "framework infrastructure: reads its own package.json at runtime",
-    "src/config-server/tools/validate.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json"
+    "src/config-server/tools/validate.ts": "framework infrastructure: documentation comment about packageRoot helper that walks to a package.json",
+    "src/config-server/resolution/criterion-references.ts": "framework infrastructure: parses backtick-quoted npm script tokens from contract criterion descriptions and resolves them against the project's package.json script map (proposer pre-flight)",
+    "src/config-server/tools/validate-criterion-references.ts": "framework infrastructure: MCP wrapper that reads package.json at a git base ref to expose the proposer pre-flight name-resolution surface"
   },
   "transitional": {}
 }

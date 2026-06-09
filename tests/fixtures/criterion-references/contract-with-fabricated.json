@@ -1,0 +1,27 @@
+{
+  "sprintNumber": 1,
+  "features": ["sample-feature"],
+  "criteria": [
+    {
+      "name": "fabricated_house_rules_alias",
+      "description": "Running `npm run test-house-rules` from the worktree exits 0 and reports the new file as a participant.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Fabricated alias of the real house-rules script."
+    },
+    {
+      "name": "fabricated_unrelated_name",
+      "description": "Running `npm run frobnicate-the-widgets` from the worktree exits 0.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Wholly fabricated script name — no candidate within hint distance."
+    },
+    {
+      "name": "real_with_silent_flag",
+      "description": "Running `npm run -s house-rules` from the worktree exits 0.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Silent-flag form must normalise to the bare script name."
+    }
+  ]
+}

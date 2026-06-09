@@ -1,0 +1,27 @@
+{
+  "sprintNumber": 1,
+  "features": ["sample-feature"],
+  "criteria": [
+    {
+      "name": "path_token_only",
+      "description": "The file at `src/config-server/index.ts` is amended to register the new tool.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Backtick-quoted path; not an npm run invocation."
+    },
+    {
+      "name": "symbol_token_only",
+      "description": "The function `validateCriterionReferences` is exported from the resolution module.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Backtick-quoted symbol name; not an npm run invocation."
+    },
+    {
+      "name": "bare_command_token",
+      "description": "Running `node dist/scripts/lint-no-spec-ref/index.js` exits 0.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Bare command (no `npm run` prefix); ignored by v1 pre-flight."
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "sprintNumber": 1,
+  "features": ["sample-feature"],
+  "criteria": [
+    {
+      "name": "house_rules_passes",
+      "description": "Running `npm run house-rules` from the worktree exits 0.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "House-rules byte-identity check stays green."
+    },
+    {
+      "name": "no_spec_ref_passes",
+      "description": "Running `npm run lint-no-spec-ref` from the worktree exits 0.",
+      "threshold": 9,
+      "class": "correctness",
+      "rationale": "Internal-spec references stay out of the shipped surface."
+    },
+    {
+      "name": "build_passes",
+      "description": "Running `npm run build` from the worktree exits 0.",
+      "threshold": 9,
+      "class": "build",
+      "rationale": "Build artefacts are produced cleanly."
+    }
+  ]
+}

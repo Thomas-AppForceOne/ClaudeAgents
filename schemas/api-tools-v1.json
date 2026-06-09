@@ -1572,6 +1572,33 @@
         "type": "object"
       }
     },
+    "validateCriterionReferences": {
+      "description": "Run the contract-proposer's pre-flight name-resolution pass over a draft contract. Walks every `criteria[].description` for backtick-quoted `npm run X` tokens and resolves each against the script map in `package.json` at the supplied git base ref. Returns a structured `{records, unresolvedCount}` result: each record carries the resolved script name, the `kind: \"npmScript\"` discriminator, the boolean resolution flag, an optional `hint` (closest matching script name when the reference does not resolve and a candidate sits within Levenshtein distance 3), the `criterionName` the reference came from, and the verbatim backtick-quoted `source` token. v1 covers `npm run X` only — non-`npm run` backtick tokens are silently ignored.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "baseRef": {
+            "description": "The git revision the wrapper reads `package.json` from (`git show <baseRef>:package.json`). Carried as a single argv element under `execFile`; shell interpolation is impossible at the wrapper boundary.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "contractDraft": {
+            "description": "The proposer's draft contract. The resolver reads only `criteria[].name` and `criteria[].description`; extra fields pass through unchanged. The boundary asserts the value is a plain (non-array) object.",
+            "type": "object"
+          },
+          "cwd": {
+            "description": "Absolute path of the git worktree the `git show` subprocess runs against. Optional — when omitted the wrapper uses `process.cwd()` (for unit-test ergonomics; production callers pass an explicit worktree path).",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractDraft",
+          "baseRef"
+        ],
+        "type": "object"
+      }
+    },
     "validateFindings": {
       "description": "Run the reproduction gate over an independent-review bundle. Walks `bundle.findings` in order: keeps `kind:\"inspection\"` findings unchanged, and for each `kind:\"command\"` finding executes the `reproductionCommand` under the wrapper's safe-by-default `/bin/sh -c` runner. Drops with `reproduction-unsafe` when the command carries a banned metacharacter that slipped past the schema (defence-in-depth); drops with `reproduction-failed` on a non-zero exit; drops with `reproduction-errored` when the runner throws (signal interruption, spawn failure). Returns the kept-findings bundle plus the ordered drop ledger; the per-severity summary is recomputed from the kept findings.",
       "inputSchema": {
@@ -1872,6 +1899,7 @@
     "trustRevoke",
     "updateStackField",
     "validateAll",
+    "validateCriterionReferences",
     "validateFindings",
     "validateOverlay",
     "validateStack",

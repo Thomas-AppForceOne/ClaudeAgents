@@ -106,6 +106,7 @@ import {
   detectEditOscillationTool as runDetectEditOscillation,
 } from './tools/safety.js';
 import { buildEvaluatorPlanTool as runBuildEvaluatorPlan } from './tools/evaluator-tools.js';
+import { validateCriterionReferencesTool as runValidateCriterionReferences } from './tools/validate-criterion-references.js';
 import {
   relockContractTool as runRelockContract,
   validateFindingsTool as runValidateFindings,
@@ -251,6 +252,18 @@ export const SAFETY_TOOL_NAMES: readonly string[] = [
 export const EVALUATOR_TOOL_NAMES: readonly string[] = ['buildEvaluatorPlan'] as const;
 
 /**
+ * Tool names introduced by the contract-proposer's pre-flight name-resolution
+ * surface — a single thin handler behind the shipped
+ * `src/config-server/resolution/criterion-references.ts` library function.
+ * Kept in its own list so the additive surface stays auditable; unioned into
+ * {@link DISPATCH_TOOL_NAMES} for actual dispatch. The proposer prompt names
+ * this tool verbatim at its pre-lock step.
+ */
+export const PROPOSER_PREFLIGHT_TOOL_NAMES: readonly string[] = [
+  'validateCriterionReferences',
+] as const;
+
+/**
  * Tool names introduced by the independent-review subsystem's wire surface —
  * three thin handlers behind the shipped `src/agents/independent-review/`
  * library functions. Kept in its own list so the additive surface stays
@@ -319,6 +332,7 @@ export const DISPATCH_TOOL_NAMES: readonly string[] = [
   ...INDEPENDENT_REVIEW_TOOL_NAMES,
   ...TELEMETRY_TOOL_NAMES,
   ...HOOK_PROBE_TOOL_NAMES,
+  ...PROPOSER_PREFLIGHT_TOOL_NAMES,
 ];
 
 // The slice of package.json this server cares about (name + version).
@@ -1129,6 +1143,35 @@ const TOOL_HANDLERS: Readonly<Record<string, ToolHandlerSpec>> = {
           typeof runBuildEvaluatorPlan
         >[0]['worktreeState'],
       });
+    },
+  },
+  validateCriterionReferences: {
+    // The boundary asserts presence + shape only: the contract draft must be
+    // a plain object (the resolver tolerates a missing `criteria` field but
+    // never a non-object draft), the baseRef must be a non-empty string (the
+    // wrapper passes it as an argv element to `git show`; an empty value
+    // would result in a malformed git ref). cwd is optional — the wrapper
+    // falls back to `process.cwd()` for unit-test ergonomics, but the
+    // orchestrator always supplies an explicit worktree path.
+    required: ['contractDraft', 'baseRef'],
+    handler: (args) => {
+      const contractDraft = requirePlanObjectArg(
+        args,
+        'validateCriterionReferences',
+        'contractDraft',
+      );
+      const baseRef = requireNonEmptyStringArg(args, 'validateCriterionReferences', 'baseRef');
+      const cwdRaw = args['cwd'];
+      const input: Parameters<typeof runValidateCriterionReferences>[0] = {
+        contractDraft: contractDraft as unknown as Parameters<
+          typeof runValidateCriterionReferences
+        >[0]['contractDraft'],
+        baseRef,
+      };
+      if (typeof cwdRaw === 'string' && cwdRaw.length > 0) {
+        input.cwd = cwdRaw;
+      }
+      return runValidateCriterionReferences(input);
     },
   },
   dockerReservePort: {
