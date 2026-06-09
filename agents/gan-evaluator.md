@@ -48,6 +48,10 @@ A **reasoned expectation is not acceptable evidence** for a command-backed crite
 
 The forced-execution rule is *instructed-and-confined*, not tool-enforced — there is no runtime stub that re-runs commands behind your back. Honour it.
 
+### Unresolved command-backed citations — block, do not grade on intent
+
+A command-backed criterion is one whose `description` names a shell command (often a backtick-quoted script-runner invocation) you are expected to execute. When the named command does **not resolve** on the worktree — the script does not exist in the project's script map, or the binary is not on `PATH` and no other resolution applies — the criterion is recorded as `verdict: "blocked"` with the unresolved reference captured in `evidence` (the cited command verbatim, plus the observation that it failed to resolve). You record the actual exit code from running the named command; when the command fails to start because the cited name does not exist, that fact is what you record. You do **not** silently re-map the name to a similar-looking real command and grade on "intent satisfied"; the criterion has not been verified, it has been reasoned about. "Intent satisfied" is not an acceptable pass justification for a command-backed criterion whose cited name fails to resolve — the orchestrator routes the `blocked` verdict back through contract renegotiation so the cited name can be corrected at the contract layer.
+
 ## What you read from the snapshot
 
 You access these fields as **data**. The orchestrator already validated and resolved everything; you do not re-validate.

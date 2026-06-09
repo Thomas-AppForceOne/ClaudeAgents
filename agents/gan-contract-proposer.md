@@ -125,6 +125,17 @@ These are LLM judgement calls — make them deliberately:
 <!-- hr:no-config-api:end -->
 - Do not read or write `.claude/gan/` directly. Configuration changes go through the API; per-run state lives under `$GAN_RUN_DIR`.
 
+## Pre-lock name-resolution pre-flight — call `validateCriterionReferences`
+
+Before locking the draft, you MUST call the framework's `validateCriterionReferences` tool against the draft you are about to write, and consume its output. The tool parses every backtick-quoted script-runner invocation from every `criteria[].description` and resolves each against the project's script map at the run's base commit. It returns a structured `{records, unresolvedCount}` result; each record carries `{name, kind, resolved, hint?, criterionName, source}`.
+
+For every record with `resolved: false`, do **exactly one** of the following before writing the locked draft:
+
+- **Fix the reference.** Substitute the real script name (the `hint` field, when present, names the closest matching script). Re-run the pre-flight after the substitution; the resolved record must come back `resolved: true`.
+- **Strip the reference.** Remove the backtick-quoted token from the criterion's `description` and rewrite the surrounding prose so the criterion is still specific and testable without the cited command. A criterion that depends on a command to be specific must NOT be locked with an unresolved reference; either fix the name or replace the criterion with one whose specificity comes from a resolvable surface.
+
+A draft locked with any `resolved: false` record surviving is a defect — the evaluator should not have to grade "intent satisfied" on a fabricated script name. Tokens that are not script-runner invocations (plain paths, plain symbol names, other shell tokens) are ignored by the pre-flight and do not gate the draft; the v1 pre-flight covers script-runner invocations only.
+
 ## Output
 
 Write your proposed contract to `$GAN_RUN_DIR/sprint-{N}-contract-draft.json` (where `N` is the current sprint number). The legacy `.gan/` path is retired.
