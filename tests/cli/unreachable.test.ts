@@ -81,6 +81,19 @@ function buildBrokenDist(): string {
   const distDest = path.join(tmp, 'dist', 'cli');
   cpSync(distSrc, distDest, { recursive: true });
 
+  // Copy `dist/hook-probe/` verbatim — it is a pure-library helper module the
+  // H3 CLI commands (`hooks-status`, `hooks-migrate`) import at module-load
+  // time. The broken-dist fixture must include it so the dispatcher's top-level
+  // imports resolve; without it, the CLI process dies at module load with
+  // `ERR_MODULE_NOT_FOUND` (a node-token-laden stack trace) BEFORE reaching the
+  // unreachable-error handling this test exercises. The module's only
+  // framework-library coupling is `packageRoot()`, which is called inside
+  // functions (not at module load) and therefore safely throws via the stub
+  // installed below.
+  const hookProbeSrc = path.join(repoRoot, 'dist', 'hook-probe');
+  const hookProbeDest = path.join(tmp, 'dist', 'hook-probe');
+  cpSync(hookProbeSrc, hookProbeDest, { recursive: true });
+
   // determinism/ and errors are copied real (not stubbed): the CLI's error
   // handling needs the genuine ConfigServerError class and canonicalisation to
   // even reach — and correctly classify — the stubbed throws.
