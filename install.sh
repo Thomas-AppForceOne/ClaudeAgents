@@ -531,13 +531,17 @@ install_mcp_server() {
 # `return` — not `die` — is required for trap routing under bash 4.4+).
 bootstrap_build_artifacts() {
   # WARM-TREE GUARD: if both shipped bin entrypoints already exist under
-  # `$REPO_ROOT/dist/`, the tree is built — skip the dependency install
-  # and the build entirely so warm re-runs stay cheap and do no
-  # state-changing npm work. `CAS_FORCE_BOOTSTRAP=1` is a test-only seam
-  # that forces the cold path even on a built checkout.
+  # `$REPO_ROOT/dist/` AND are executable, the tree is built and runnable —
+  # skip the dependency install and the build entirely so warm re-runs stay
+  # cheap and do no state-changing npm work. The `-x` test (not `-f`) is
+  # deliberate: a present-but-non-executable entrypoint (mode 0644, which is
+  # exactly what `tsc` emits before the postbuild chmod) is NOT "warm", so it
+  # falls through to a rebuild whose `postbuild` hook restores the execute bit.
+  # `CAS_FORCE_BOOTSTRAP=1` is a test-only seam that forces the cold path even
+  # on a built checkout.
   if [ "${CAS_FORCE_BOOTSTRAP:-0}" != "1" ] \
-    && [ -f "$REPO_ROOT/dist/config-server/index.js" ] \
-    && [ -f "$REPO_ROOT/dist/cli/index.js" ]; then
+    && [ -x "$REPO_ROOT/dist/config-server/index.js" ] \
+    && [ -x "$REPO_ROOT/dist/cli/index.js" ]; then
     return 0
   fi
 

@@ -17,8 +17,7 @@
  * third-party dependency, nothing from `dist/`, no `require`. Node floor:
  * >=20.10, matching the rest of the toolchain.
  */
-import { chmodSync, statSync } from 'node:fs';
-import { readFileSync } from 'node:fs';
+import { chmodSync, statSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
