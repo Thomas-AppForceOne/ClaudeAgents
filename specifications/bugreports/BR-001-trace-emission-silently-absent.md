@@ -1,6 +1,6 @@
 # BR-001 — Trace emission silently absent on entire runs
 
-**Status:** Needs verification
+**Status:** Closed — deferred to roadmap (v1.0 release-gate workstream, item #25; measurement lands in v2.0). See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Blocker
 **Found in run(s):**
 - `claudeagents-5f2b0a723ee9/runs/20260601T194010-c238` (O1 — `trace/` and `telemetry/` exist but are empty)

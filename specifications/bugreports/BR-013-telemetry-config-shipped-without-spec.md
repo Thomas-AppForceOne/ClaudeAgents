@@ -1,6 +1,6 @@
 # BR-013 — `telemetry/config.json` ships ad-hoc without spec coverage; matches T4 (v1.1)
 
-**Status:** Needs verification
+**Status:** Closed — not-reproducible (per [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0, 2026-06-08)
 **Severity:** Medium
 **Found in run(s):**
 - `workshop-site-71c837164a90/runs/20260608T171254-22af/telemetry/config.json` (the only run that writes this file out of 8 examined)

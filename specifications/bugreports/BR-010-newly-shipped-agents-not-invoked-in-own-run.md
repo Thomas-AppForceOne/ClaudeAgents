@@ -1,6 +1,6 @@
 # BR-010 — Agents shipped mid-run are not invoked on subsequent sprints of that same run
 
-**Status:** Needs verification
+**Status:** Closed pending by-design ruling — not actionable as a fix until F7 snapshot-freshness semantics are clarified (intentional invariant vs. accidental restriction). Reopen as a fix only if the ruling lands on "accidental." See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Medium
 **Found in run(s):**
 - `ClaudeAgents-dea5f7879cf0/runs/20260530T231724-5cc0` (E8 — `gan-reviewer-independent` shipped in sprint 1; no `sprint-2..6-independent-review-A.json` files exist)

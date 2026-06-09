@@ -1,6 +1,6 @@
 # BR-009 — Evaluator harness-condition observations land in free-text `concerns` field; signal does not aggregate
 
-**Status:** Needs verification
+**Status:** Closed — folded into Q2 (v1.1 failure-mode taxonomy / out-of-contract structured-error channel on the evidence bundle). See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Medium
 **Found in run(s):**
 - `ClaudeAgents-dea5f7879cf0/runs/20260530T231724-5cc0/sprint-1-evidence-A.json` (criterion `existing_tests_still_pass`, free-text `concerns` field)

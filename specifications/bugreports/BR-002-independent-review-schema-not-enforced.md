@@ -1,6 +1,6 @@
 # BR-002 — `independent-review-v1.json` schema not enforced at write time
 
-**Status:** Needs verification
+**Status:** Closed — same family as the v1.0 obedience-class known gaps (#3 safety-obedience, #4 trace-emission fidelity). Schema-conformance of LLM-emitted artefacts is the same family of problem — Claude can ignore SKILL.md and the agent prompt — owned by the same release-gate-class workstream as BR-001, not this fix plan. See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Blocker
 **Found in run(s):**
 - `workshop-site-71c837164a90/runs/20260606T195320-b600/sprint-1-independent-review-A.json` (violates v1 schema; uses `sprintIndex`/`attempt` instead of required `sprintNumber`/`attemptLetter`)
