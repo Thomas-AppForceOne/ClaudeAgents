@@ -40,6 +40,7 @@ import type {
   LlmCallEvent,
   OrchestratorMilestoneEvent,
   PreflightAbortEvent,
+  PreflightAbortSubReason,
   SafetyHaltEvent,
   ToolCallEvent,
   TraceEvent,
@@ -255,7 +256,7 @@ export interface ValidationAbortInput {
 export interface PreflightAbortInput {
   preflightStage: 'confineHook';
   errorCode: string;
-  errorSubReason: string;
+  errorSubReason: PreflightAbortSubReason;
   errorMessage: string;
   projectTierHookPath: string;
 }

@@ -322,7 +322,7 @@ function readSourceContentsOrFail(
         ok: false,
         failure: {
           stdout: '',
-          stderr: symlinkRefusalPayload(hookPath, action) + '\n',
+          stderr: symlinkRefusalPayload(hookPath, action),
           code: EXIT_VALIDATION,
         },
       };
@@ -331,7 +331,7 @@ function readSourceContentsOrFail(
     // failure — EACCES (the operator's permissions changed),
     // ENOENT (a deletion race), EIO (a concurrent truncation
     // promoted by readHookContentsNoFollow's short-read check), or
-    // anything else the kernel surfaces. The hint names the
+    // anything else the kernel surfaces. The message names the
     // common causes so the operator has somewhere to start without
     // having to decode the raw `errno` text.
     const msg = e instanceof Error ? e.message : String(e);
@@ -339,10 +339,13 @@ function readSourceContentsOrFail(
       ok: false,
       failure: {
         stdout: '',
-        stderr:
-          `Error: gan hooks migrate --${action} could not read ${hookPath}: ${msg}\n` +
-          `hint: common causes are EACCES (permission flip), ENOENT (deletion race), ` +
-          `or EIO (concurrent truncation).\n`,
+        stderr: migrateError(
+          'GanHooksMigrateSourceReadFailed',
+          'sourceReadFailed',
+          `gan hooks migrate --${action} could not read ${hookPath}: ${msg} ` +
+            `(common causes: EACCES permission flip, ENOENT deletion race, ` +
+            `EIO concurrent truncation)`,
+        ),
         code: EXIT_GENERIC,
       },
     };
@@ -491,18 +494,32 @@ export async function run(
   const wantReview = parsed.flags['review'] === true;
   const yesFlag = parsed.flags['yes'] === true;
 
-  // Argument errors → `EXIT_BAD_ARGS`. The previous revision collapsed
-  // these onto `EXIT_VALIDATION` (2), which made a CI gate unable to
-  // distinguish "the operator typed the command wrong" from "the
-  // operator's hook needs migration." The split keeps the
-  // sysexits-style classification a script can branch on.
+  // Argument errors → `EXIT_BAD_ARGS`. Routed through `migrateError`
+  // so every failure on this command emits a uniform JSON envelope
+  // on stderr that a CI gate can `JSON.parse` without branching on
+  // shape.
   const selected = [wantDelete, wantReplace, wantReview].filter(Boolean).length;
-  if (selected !== 1) {
-    const msg =
-      selected === 0
-        ? 'Error: gan hooks migrate requires exactly one of --delete / --replace / --review.\n'
-        : 'Error: gan hooks migrate accepts exactly one of --delete / --replace / --review (got more than one).\n';
-    return { stdout: '', stderr: msg, code: EXIT_BAD_ARGS };
+  if (selected === 0) {
+    return {
+      stdout: '',
+      stderr: migrateError(
+        'GanHooksMigrateActionRequired',
+        'missingAction',
+        'gan hooks migrate requires exactly one of --delete / --replace / --review.',
+      ),
+      code: EXIT_BAD_ARGS,
+    };
+  }
+  if (selected > 1) {
+    return {
+      stdout: '',
+      stderr: migrateError(
+        'GanHooksMigrateActionConflict',
+        'multipleActions',
+        'gan hooks migrate accepts exactly one of --delete / --replace / --review (got more than one).',
+      ),
+      code: EXIT_BAD_ARGS,
+    };
   }
 
   const projectRootFlag = typeof parsed.flags['project-root'] === 'string'
@@ -512,10 +529,18 @@ export async function run(
   try {
     projectRootPath = resolveProjectRoot(projectRootFlag).path;
   } catch (e) {
-    // `--project-root` resolution failures are also argument errors:
+    // `--project-root` resolution failures are argument errors —
     // the operator pointed `gan` at a non-existent directory.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_BAD_ARGS };
+    return {
+      stdout: '',
+      stderr: migrateError(
+        'GanHooksMigrateInvalidProjectRoot',
+        'invalidProjectRoot',
+        `gan hooks migrate: ${msg}`,
+      ),
+      code: EXIT_BAD_ARGS,
+    };
   }
 
   const hooksDir = path.join(projectRootPath, '.claude', 'hooks');
@@ -532,16 +557,14 @@ export async function run(
     if (!stdin.isTTY) {
       // Non-TTY stdin without `--yes`: fail closed with a structured
       // error the operator can act on by re-running with `--yes`.
-      const payload = JSON.stringify({
-        code: 'GanHooksMigrateConfirmationRequired',
-        subReason: 'confirmationRequired',
-        message:
-          'gan hooks migrate: refusing on non-TTY stdin without --yes; ' +
-          're-run with --yes to bypass the interactive confirmation.',
-      });
       return {
         stdout: '',
-        stderr: payload + '\n',
+        stderr: migrateError(
+          'GanHooksMigrateConfirmationRequired',
+          'confirmationRequired',
+          'gan hooks migrate: refusing on non-TTY stdin without --yes; ' +
+            're-run with --yes to bypass the interactive confirmation.',
+        ),
         code: EXIT_VALIDATION,
       };
     }
@@ -565,7 +588,11 @@ export async function run(
     if (!confirmed) {
       return {
         stdout: '',
-        stderr: 'gan hooks migrate: cancelled.\n',
+        stderr: migrateError(
+          'GanHooksMigrateCancelled',
+          'userCancelled',
+          'gan hooks migrate: cancelled by operator at the confirmation prompt.',
+        ),
         code: EXIT_VALIDATION,
       };
     }
@@ -577,22 +604,59 @@ export async function run(
   return runReplace(hooksDir, hookPath, now);
 }
 
-// Structured stderr payload for the symlink refusal. The diagnostic
-// names the `subReason` so a JSON-piping caller can branch on it, and
-// surfaces the manual remediation (the operator decides whether the
-// link is intentional and resolves it themselves) so the framework
-// never silently follows a symlink and writes through it.
+// Compose a structured-error stderr envelope. Every failure path in
+// `gan hooks migrate` routes through this helper so a JSON-piping
+// consumer can `JSON.parse(stderr)` uniformly without branching on
+// shape — the inconsistency a prior review flagged ("two failures
+// emit JSON, every other failure plain text") would otherwise force
+// every CI gate to know which paths produce which shape.
+//
+// The envelope carries:
+// - `code` — a PascalCase machine token registered in
+//   `src/cli/lib/exit-codes.ts` TABLE so `exitCodeFor()` resolves
+//   it to the corresponding exit code without the call site having
+//   to repeat the mapping.
+// - `subReason` — a per-failure-class discriminator scoped to the
+//   `gan hooks migrate` surface. The set is documented inline as the
+//   `MigrateSubReason` union below.
+// - `message` — operator-facing prose. Single-line so a log reader
+//   piping stderr through `jq` does not have to handle multi-line
+//   payloads.
+type MigrateSubReason =
+  | 'missingAction'
+  | 'multipleActions'
+  | 'invalidProjectRoot'
+  | 'confirmationRequired'
+  | 'userCancelled'
+  | 'projectHookIsSymlink'
+  | 'templateRenderFailed'
+  | 'filesystemFailure'
+  | 'sourceReadFailed';
+
+function migrateError(
+  code: string,
+  subReason: MigrateSubReason,
+  message: string,
+): string {
+  return JSON.stringify({ code, subReason, message }) + '\n';
+}
+
+// Symlink-refusal payload — its own helper because both the lstat-
+// time pre-check and the kernel's ELOOP from O_NOFOLLOW emit the
+// identical envelope. The operator-facing message names the manual
+// remediation (the operator decides whether the link is intentional
+// and resolves it themselves) so the framework never silently
+// follows a symlink and writes through it.
 function symlinkRefusalPayload(hookPath: string, action: 'delete' | 'replace'): string {
-  return JSON.stringify({
-    code: 'GanHooksMigrateProjectHookIsSymlink',
-    subReason: 'projectHookIsSymlink',
-    message:
-      `gan hooks migrate --${action}: refusing to operate on ${hookPath} ` +
+  return migrateError(
+    'GanHooksMigrateProjectHookIsSymlink',
+    'projectHookIsSymlink',
+    `gan hooks migrate --${action}: refusing to operate on ${hookPath} ` +
       `because it is a symbolic link. Following the link could read or ` +
       `clobber a file outside the project's .claude/hooks/ directory. ` +
       `Resolve the link manually (inspect the target with \`readlink ${hookPath}\`, ` +
       `replace the link with a regular file, or remove the link) and re-run.`,
-  });
+  );
 }
 
 function runReview(hookPath: string): CommandResult {
@@ -612,7 +676,15 @@ function runReview(hookPath: string): CommandResult {
     // (package.json unreadable, template missing); they are not the
     // operator's input being wrong, so they map to EXIT_GENERIC.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_GENERIC };
+    return {
+      stdout: '',
+      stderr: migrateError(
+        'GanHooksMigrateTemplateError',
+        'templateRenderFailed',
+        `gan hooks migrate --review could not render the framework template: ${msg}`,
+      ),
+      code: EXIT_GENERIC,
+    };
   }
   const diff = unifiedDiff(current, template, hookPath, '<framework current template>');
   return { stdout: diff, stderr: '', code: EXIT_OK };
@@ -633,7 +705,7 @@ function runDelete(hookPath: string, now: Date): CommandResult {
   if (isSymlinkAt(hookPath)) {
     return {
       stdout: '',
-      stderr: symlinkRefusalPayload(hookPath, 'delete') + '\n',
+      stderr: symlinkRefusalPayload(hookPath, 'delete'),
       code: EXIT_VALIDATION,
     };
   }
@@ -663,7 +735,11 @@ function runDelete(hookPath: string, now: Date): CommandResult {
     const msg = e instanceof Error ? e.message : String(e);
     return {
       stdout: '',
-      stderr: `Error: gan hooks migrate --delete failed: ${msg}\n`,
+      stderr: migrateError(
+        'GanHooksMigrateFilesystemError',
+        'filesystemFailure',
+        `gan hooks migrate --delete failed: ${msg}`,
+      ),
       code: EXIT_GENERIC,
     };
   }
@@ -680,7 +756,15 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     template = renderCurrentTemplate();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_GENERIC };
+    return {
+      stdout: '',
+      stderr: migrateError(
+        'GanHooksMigrateTemplateError',
+        'templateRenderFailed',
+        `gan hooks migrate --replace could not render the framework template: ${msg}`,
+      ),
+      code: EXIT_GENERIC,
+    };
   }
 
   // Create-on-demand parent directory. `mkdir -p`-equivalent; the
@@ -692,7 +776,11 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     const msg = e instanceof Error ? e.message : String(e);
     return {
       stdout: '',
-      stderr: `Error: gan hooks migrate --replace could not create ${hooksDir}: ${msg}\n`,
+      stderr: migrateError(
+        'GanHooksMigrateFilesystemError',
+        'filesystemFailure',
+        `gan hooks migrate --replace could not create ${hooksDir}: ${msg}`,
+      ),
       code: EXIT_GENERIC,
     };
   }
@@ -706,7 +794,11 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
       const msg = e instanceof Error ? e.message : String(e);
       return {
         stdout: '',
-        stderr: `Error: gan hooks migrate --replace failed: ${msg}\n`,
+        stderr: migrateError(
+          'GanHooksMigrateFilesystemError',
+          'filesystemFailure',
+          `gan hooks migrate --replace failed: ${msg}`,
+        ),
         code: EXIT_GENERIC,
       };
     }
@@ -722,7 +814,7 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
   if (isSymlinkAt(hookPath)) {
     return {
       stdout: '',
-      stderr: symlinkRefusalPayload(hookPath, 'replace') + '\n',
+      stderr: symlinkRefusalPayload(hookPath, 'replace'),
       code: EXIT_VALIDATION,
     };
   }
@@ -747,7 +839,11 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     const msg = e instanceof Error ? e.message : String(e);
     return {
       stdout: '',
-      stderr: `Error: gan hooks migrate --replace failed: ${msg}\n`,
+      stderr: migrateError(
+        'GanHooksMigrateFilesystemError',
+        'filesystemFailure',
+        `gan hooks migrate --replace failed: ${msg}`,
+      ),
       code: EXIT_GENERIC,
     };
   }

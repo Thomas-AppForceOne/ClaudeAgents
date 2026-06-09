@@ -57,6 +57,59 @@ export type BannerVerdict =
   | 'installedUnknown';
 
 /**
+ * Trichotomy a consumer often wants to project from a {@link
+ * BannerVerdict}. The six-value union mixes three different
+ * semantics — outcomes of a successful comparison, hook-side
+ * input defects, and framework-side defects — and a CI gate or
+ * UI typically branches on the category rather than the specific
+ * value. The helper exists so the trichotomy lives in one place;
+ * a future verdict added to {@link BannerVerdict} updates this
+ * function and every consumer sees the same projection.
+ *
+ * Categories:
+ * - `'comparable'`     — `matches` / `lags` / `ahead`. The banner
+ *                       parsed and the framework version is
+ *                       known, so the verdict is the result of a
+ *                       valid comparison. CI gates that pass on
+ *                       `matches` and warn on `lags`/`ahead`
+ *                       branch on this category.
+ * - `'inputDefect'`    — `absent` / `unparseable`. The hook's own
+ *                       banner is missing or malformed. The
+ *                       remediation is to edit the hook (or
+ *                       remove it and let the user-tier hook
+ *                       apply).
+ * - `'frameworkDefect'`— `installedUnknown`. The framework's
+ *                       `package.json` could not be read; the
+ *                       hook itself may be perfectly correct.
+ *                       The remediation is to reinstall the
+ *                       framework.
+ */
+export type BannerVerdictKind = 'comparable' | 'inputDefect' | 'frameworkDefect';
+
+/**
+ * Project a {@link BannerVerdict} onto its {@link BannerVerdictKind}
+ * trichotomy. See the comment above {@link BannerVerdictKind} for the
+ * three categories and when a CI gate / UI typically branches on the
+ * kind rather than the specific verdict.
+ *
+ * @param v the parsed verdict.
+ * @returns one of `'comparable' | 'inputDefect' | 'frameworkDefect'`.
+ */
+export function bannerVerdictKind(v: BannerVerdict): BannerVerdictKind {
+  switch (v) {
+    case 'matches':
+    case 'lags':
+    case 'ahead':
+      return 'comparable';
+    case 'absent':
+    case 'unparseable':
+      return 'inputDefect';
+    case 'installedUnknown':
+      return 'frameworkDefect';
+  }
+}
+
+/**
  * One row in the contract-revision pivot table.
  *
  * @property minVersion the lowest framework semver (major.minor.patch only,

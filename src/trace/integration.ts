@@ -18,6 +18,7 @@ import type {
   ValidationAbortEvent,
   SafetyHaltEvent,
   PreflightAbortEvent,
+  PreflightAbortSubReason,
 } from './events.js';
 
 /** A {@link TrustEventEvent} without its envelope fields — the part this module builds. */
@@ -65,7 +66,7 @@ export type PreflightStage = PreflightAbortEvent['preflightStage'];
  */
 export interface PreflightAbortError {
   code: string;
-  subReason: string;
+  subReason: PreflightAbortSubReason;
   message: string;
 }
 

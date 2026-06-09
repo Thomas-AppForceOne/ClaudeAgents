@@ -115,6 +115,21 @@ export interface ProjectTierJsonShape {
  * field) MUST NOT bump it — consumers handle additive evolution by
  * defaulting-allow on unknown enum values for non-gate fields.
  */
+/**
+ * Why this shape carries a `schemaVersion` while the MCP tool's
+ * `ProbeConfineHookResult` and the trace's `PreflightAbortEvent` do
+ * not: the framework's overall versioning policy is at the
+ * *transport* level — MCP tool results are versioned by the catalog
+ * at `schemas/api-tools-v1.json` (the `v1` in the filename is the
+ * envelope discriminator every MCP consumer respects), and trace
+ * events are versioned by `schemas/run-trace-v1.json`. The CLI's
+ * `--json` output is the one structured surface a downstream
+ * consumer reads directly, with no surrounding envelope to anchor
+ * the version. So this shape carries its own discriminator; the
+ * MCP and trace shapes don't need one. A consumer parsing this
+ * payload SHOULD reject when this field doesn't match the version
+ * it was written against; additive evolution does NOT bump it.
+ */
 export const HOOKS_STATUS_JSON_SCHEMA_VERSION = '1' as const;
 
 /**

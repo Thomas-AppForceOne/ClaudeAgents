@@ -35,9 +35,11 @@ export {
 export {
   parseConfineHookBanner,
   compareBanner,
+  bannerVerdictKind,
   CONTRACT_REVISION_PIVOTS,
   type ContractRevision,
   type BannerVerdict,
+  type BannerVerdictKind,
   type ContractRevisionPivot,
   type ParsedBanner,
 } from './banner.js';

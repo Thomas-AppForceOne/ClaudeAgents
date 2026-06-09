@@ -536,7 +536,11 @@
           "$ref": "#/definitions/errorCode"
         },
         "errorSubReason": {
-          "minLength": 1,
+          "description": "Closed set of per-stage discriminators paired with `preflightStage`. The `confineHook` stage emits `noGanRunDirAwareness` (probe ran the hook to completion and the hook refused the GAN_RUN_DIR write) or `projectHookMisconfigured` (the hook is not a runnable bash script). New preflight stages extend this set; the framework's schema then validates the pairing.",
+          "enum": [
+            "noGanRunDirAwareness",
+            "projectHookMisconfigured"
+          ],
           "type": "string"
         },
         "errorMessage": {

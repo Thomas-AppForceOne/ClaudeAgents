@@ -64,19 +64,22 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   // failure, which it would otherwise be conflated with.
   LoopDetected: EXIT_LOOP_DETECTED,
 
-  // `gan hooks migrate` structured-error codes. Both surface as
-  // EXIT_VALIDATION because the input contract (operator's command +
-  // project tree) is malformed in a way that requires the operator to
-  // act before the command can succeed. Registered here so the
-  // `exitCodeFor` lookup recognises them when a caller propagates a
-  // ConfigServerError carrying one of these codes.
+  // `gan hooks migrate` structured-error code registry. Every failure
+  // path in the migrate command routes through `migrateError(...)` and
+  // emits one of these `code` tokens on stderr; registering them here
+  // makes `exitCodeFor` resolve the same exit value uniformly when a
+  // ConfigServerError or other propagated error carries one of the
+  // codes. The grouping matches the migrate command's exit-code split:
+  // bad-args / validation / generic.
+  GanHooksMigrateActionRequired: EXIT_BAD_ARGS,
+  GanHooksMigrateActionConflict: EXIT_BAD_ARGS,
+  GanHooksMigrateInvalidProjectRoot: EXIT_BAD_ARGS,
   GanHooksMigrateConfirmationRequired: EXIT_VALIDATION,
+  GanHooksMigrateCancelled: EXIT_VALIDATION,
   GanHooksMigrateProjectHookIsSymlink: EXIT_VALIDATION,
-
-  // `gan` CLI hygiene: action flags meant for `gan hooks migrate` were
-  // supplied to a different subcommand. The CLI rejects with this code
-  // before any subcommand runs.
-  GanCliActionFlagOutOfContext: EXIT_BAD_ARGS,
+  GanHooksMigrateSourceReadFailed: EXIT_GENERIC,
+  GanHooksMigrateTemplateError: EXIT_GENERIC,
+  GanHooksMigrateFilesystemError: EXIT_GENERIC,
 });
 
 /**
