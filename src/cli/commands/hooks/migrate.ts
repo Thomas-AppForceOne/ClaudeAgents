@@ -30,8 +30,12 @@
  */
 
 import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readSync,
   renameSync,
@@ -248,6 +252,52 @@ function isFileAt(p: string): boolean {
     return statSync(p).isFile();
   } catch {
     return false;
+  }
+}
+
+// Read the hook's contents and mode bits via a single file
+// descriptor opened with `O_NOFOLLOW`. The kernel-level `O_NOFOLLOW`
+// flag makes the open call itself fail with `ELOOP` when the final
+// path component is a symbolic link, closing the TOCTOU window
+// between {@link isSymlinkAt}'s `lstatSync` check and the read /
+// stat that would otherwise be plain `readFileSync` + `statSync`
+// against `hookPath` (both of which follow symlinks). A
+// `rename(2)`-race swap of a symlink in between the check and the
+// read is therefore caught by the kernel instead of leaking the
+// link target's contents into the backup sibling.
+//
+// `hookPath` is the absolute path to the regular file the migrate
+// command has already classified as "present, not a symlink". The
+// helper throws when the open fails (e.g. ELOOP from a racy
+// symlink swap, EACCES from a permission flip) so the caller can
+// surface a structured error and abort the mutation.
+function readHookContentsNoFollow(hookPath: string): { contents: Buffer; mode: number } {
+  const fd = openSync(hookPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    const size = st.size;
+    const buf = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      // readSync may return fewer bytes than requested on a regular file
+      // when the file is being concurrently truncated or extended; loop
+      // until either the buffer is full or readSync returns 0 (EOF).
+      const n = readSync(fd, buf, offset, size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    return {
+      contents: offset === size ? buf : buf.subarray(0, offset),
+      mode: st.mode & 0o7777,
+    };
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // Best-effort close; the file descriptor will be reaped when
+      // the process exits, and the function's contract does not
+      // depend on the close succeeding.
+    }
   }
 }
 
@@ -539,13 +589,36 @@ function runDelete(hookPath: string, now: Date): CommandResult {
       code: EXIT_VALIDATION,
     };
   }
-  const original = readFileSync(hookPath);
-  // Capture the source hook's mode bits BEFORE the unlink so the backup
-  // sibling carries the same permissions and the documented `mv backup
-  // hook` rollback restores a runnable hook. The mask `& 0o7777` keeps
-  // the setuid/setgid/sticky bits along with the standard rwx triples
-  // and discards the file-type bits Node's stat reports above 0o7777.
-  const sourceMode = statSync(hookPath).mode & 0o7777;
+  // Open the hook with `O_NOFOLLOW` to read its contents AND mode
+  // bits under one fd. The kernel-level no-follow flag closes the
+  // TOCTOU window between the {@link isSymlinkAt} check above and
+  // the contents read here: a racy `rename(2)`-swap of a symlink
+  // into the hook path between the lstat and the read would
+  // otherwise let `readFileSync` follow the link and exfiltrate the
+  // target's contents into the backup sibling. `O_NOFOLLOW` makes
+  // the kernel refuse the open with `ELOOP` instead. The same fd is
+  // `fstatSync`-ed for the mode so the source hook's executable bit
+  // is preserved on the backup sibling (the documented `mv backup
+  // hook` rollback restores a runnable hook).
+  let original: Buffer;
+  let sourceMode: number;
+  try {
+    const read = readHookContentsNoFollow(hookPath);
+    original = read.contents;
+    sourceMode = read.mode;
+  } catch (e) {
+    // Most-likely cause is ELOOP from a racy symlink-swap; surface
+    // the structured refusal so a log reader can tell the case
+    // apart from a routine IO failure.
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      stdout: '',
+      stderr:
+        `Error: gan hooks migrate --delete failed reading ${hookPath} ` +
+        `under O_NOFOLLOW: ${msg}\n`,
+      code: EXIT_GENERIC,
+    };
+  }
   const backupPath = composeBackupPath(hookPath, now);
   try {
     // Atomic backup-then-unlink: write the backup via temp+rename FIRST so
@@ -632,11 +705,28 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
   // on disk is impossible: the backup is renamed onto its final path
   // before the original hook is overwritten, and the replacement is
   // renamed onto the original path in one atomic step.
-  const original = readFileSync(hookPath);
-  // Capture the source hook's mode bits BEFORE the overwrite so the
-  // backup sibling carries the same permissions; see the matching
-  // comment in runDelete above for the rationale.
-  const sourceMode = statSync(hookPath).mode & 0o7777;
+  //
+  // Read the source hook's contents and mode under O_NOFOLLOW — same
+  // TOCTOU-closing rationale as in {@link runDelete}; see the long
+  // comment there. A racy symlink-swap between the {@link isSymlinkAt}
+  // check above and this read is caught by the kernel with ELOOP
+  // rather than letting `readFileSync` exfiltrate the link target.
+  let original: Buffer;
+  let sourceMode: number;
+  try {
+    const read = readHookContentsNoFollow(hookPath);
+    original = read.contents;
+    sourceMode = read.mode;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      stdout: '',
+      stderr:
+        `Error: gan hooks migrate --replace failed reading ${hookPath} ` +
+        `under O_NOFOLLOW: ${msg}\n`,
+      code: EXIT_GENERIC,
+    };
+  }
   const backupPath = composeBackupPath(hookPath, now);
   try {
     atomicWriteBuffer(backupPath, original, sourceMode);

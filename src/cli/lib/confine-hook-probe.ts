@@ -365,6 +365,22 @@ async function spawnAndCollect(
         clearTimeout(timeoutHandle);
         timeoutHandle = null;
       }
+      // Drop the per-stream byte counters' references. After this
+      // resolve, subsequent in-flight chunks (bounded by the kernel
+      // pipe buffer between userspace and the child, but non-zero
+      // until SIGKILL is delivered and the OS closes the pipes) would
+      // otherwise keep growing the closure-held `stdoutBytes`/
+      // `stderrBytes` totals — defeating the heap bound the byte cap
+      // exists to enforce. Removing the data listeners here makes the
+      // cap a real bound on the closure's working set.
+      try {
+        child.stdout?.removeAllListeners('data');
+        child.stderr?.removeAllListeners('data');
+      } catch {
+        // The streams may already be ended/closed; either way the
+        // listener removal is best-effort and must not throw out of
+        // settle.
+      }
       resolve(value);
     };
     // Defensive SIGKILL helper: the child may already be reaped (a kill

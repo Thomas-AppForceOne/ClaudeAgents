@@ -25,12 +25,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -563,11 +565,10 @@ describe('gan hooks migrate — symlink refusal', () => {
     const hooksDir = path.join(cwd, '.claude', 'hooks');
     mkdirSync(hooksDir, { recursive: true });
     const hookPath = path.join(hooksDir, 'gan-confine.sh');
-    // The symlink — created via Node's `symlinkSync` to keep the
+    // The symlink — staged with Node's `symlinkSync` to keep the
     // test cross-platform; the migrate command's `lstatSync` check
     // is what decides the refusal regardless of how the link was
     // staged.
-    const { symlinkSync } = await import('node:fs');
     symlinkSync(targetFile, hookPath);
     const result = await runMigrate(
       makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
@@ -586,9 +587,13 @@ describe('gan hooks migrate — symlink refusal', () => {
     expect(parsed['subReason']).toBe('projectHookIsSymlink');
     const canonicalHookPath = path.join(canonical(cwd), '.claude', 'hooks', 'gan-confine.sh');
     expect(parsed['message']).toContain(canonicalHookPath);
-    // Belt-and-braces: the symlink and its target are both intact;
-    // no backup sibling was written into the hooks directory.
-    expect(existsSync(hookPath)).toBe(true);
+    // Belt-and-braces: the symlink itself (not just *something* at
+    // the path) is still a symlink, and its target is intact. A
+    // refactor that unlinked the symlink and replaced it with a
+    // regular file at the same path would pass the looser
+    // `existsSync(hookPath)` check but fail this `lstatSync` check —
+    // which is the property the refusal is supposed to enforce.
+    expect(lstatSync(hookPath).isSymbolicLink()).toBe(true);
     expect(existsSync(targetFile)).toBe(true);
     expect(readFileSync(targetFile, 'utf8')).toBe('SECRET CONTENTS');
     const siblings = readdirSync(hooksDir);
@@ -603,7 +608,6 @@ describe('gan hooks migrate — symlink refusal', () => {
     const hooksDir = path.join(cwd, '.claude', 'hooks');
     mkdirSync(hooksDir, { recursive: true });
     const hookPath = path.join(hooksDir, 'gan-confine.sh');
-    const { symlinkSync } = await import('node:fs');
     symlinkSync(targetFile, hookPath);
     const result = await runMigrate(
       makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
@@ -615,8 +619,10 @@ describe('gan hooks migrate — symlink refusal', () => {
     expect(parsed['subReason']).toBe('projectHookIsSymlink');
     const canonicalHookPath = path.join(canonical(cwd), '.claude', 'hooks', 'gan-confine.sh');
     expect(parsed['message']).toContain(canonicalHookPath);
-    // Symlink + target intact; no backup sibling, no overwrite.
-    expect(existsSync(hookPath)).toBe(true);
+    // Symlink itself is still a symlink (see the `--delete` test
+    // above for why the stronger `lstatSync` check is the load-
+    // bearing pin). Target intact; no backup sibling, no overwrite.
+    expect(lstatSync(hookPath).isSymbolicLink()).toBe(true);
     expect(readFileSync(targetFile, 'utf8')).toBe('SECRET CONTENTS');
     const siblings = readdirSync(hooksDir);
     expect(siblings.filter((n) => n.includes('.gan-bak.'))).toEqual([]);
@@ -635,17 +641,16 @@ describe('gan hooks migrate — symlink refusal', () => {
     const hooksDir = path.join(cwd, '.claude', 'hooks');
     mkdirSync(hooksDir, { recursive: true });
     const hookPath = path.join(hooksDir, 'gan-confine.sh');
-    const { symlinkSync } = await import('node:fs');
     symlinkSync(targetFile, hookPath);
     const result = await runMigrate(
       makeArgs({ action: 'review', yes: true, projectRoot: cwd }),
       { now: () => FIXED_DATE },
     );
-    // Exit 0 with diff output; the symlink is left alone.
+    // Exit 0 with diff output; the symlink is left as a symlink.
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('--- ');
     expect(result.stdout).toContain('+++ ');
-    expect(existsSync(hookPath)).toBe(true);
+    expect(lstatSync(hookPath).isSymbolicLink()).toBe(true);
     expect(readFileSync(targetFile, 'utf8')).toBe('#!/bin/bash\nexit 0\n');
   });
 });
