@@ -45,16 +45,19 @@ import {
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { resolveProjectRoot } from '../../lib/project-root.js';
+import {
+  BACKUP_SIBLING_PREFIX,
+  renderCurrentTemplate,
+} from '../../hook-probe/index.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 import {
   EXIT_BAD_ARGS,
   EXIT_GENERIC,
   EXIT_OK,
   EXIT_VALIDATION,
-} from '../../lib/exit-codes.js';
-import type { ParsedArgs } from '../../lib/args.js';
+} from '../lib/exit-codes.js';
+import type { ParsedArgs } from '../lib/args.js';
 
 /**
  * Result contract shared by every CLI command handler.
@@ -95,53 +98,10 @@ export interface MigrateOptions {
   now?: () => Date;
 }
 
-// File name prefix the backup siblings carry. Kept module-private — the
-// matching scan in `status.ts` pins its own copy of the prefix with the
-// same comment to avoid a circular import between the two CLI modules.
-const BACKUP_SIBLING_PREFIX = 'gan-confine.sh.gan-bak.';
-
-/**
- * Resolve the package root for the installed framework. Mirrors the
- * resolver in `commands/hooks/status.ts`; both honour
- * `GAN_PACKAGE_ROOT_OVERRIDE` as a test seam.
- */
-function packageRoot(): string {
-  const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
-  if (override !== undefined && override.length > 0) return override;
-  const here = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(here), '..', '..', '..', '..');
-}
-
-// Read the installed framework version from the package's `package.json`.
-// Throws when the file is missing or malformed because `--replace`
-// requires a substituted banner; a hook without a parseable banner is
-// exactly the kind of file that breaks future `gan hooks status` reads,
-// so a missing version is a defect not a warning.
-function readInstalledFrameworkVersion(): string {
-  const root = packageRoot();
-  const raw = readFileSync(path.join(root, 'package.json'), 'utf8');
-  const parsed = JSON.parse(raw) as { version?: unknown };
-  if (typeof parsed.version !== 'string' || parsed.version.length === 0) {
-    throw new Error(
-      `gan hooks migrate: framework's package.json has no string 'version' field`,
-    );
-  }
-  return parsed.version;
-}
-
-// Read the framework's current rendered confinement-hook template. The
-// template lives at `<packageRoot>/scripts/hooks/gan-confine.sh.template`;
-// every occurrence of `__GAN_FRAMEWORK_VERSION__` is substituted with the
-// installed version (split/join so a multi-placeholder template renders
-// correctly). The return value is byte-identical to what `install.sh`
-// writes to the user-tier hook path.
-function renderCurrentTemplate(): string {
-  const root = packageRoot();
-  const templatePath = path.join(root, 'scripts', 'hooks', 'gan-confine.sh.template');
-  const tpl = readFileSync(templatePath, 'utf8');
-  const version = readInstalledFrameworkVersion();
-  return tpl.split('__GAN_FRAMEWORK_VERSION__').join(version);
-}
+// `BACKUP_SIBLING_PREFIX` and `renderCurrentTemplate` are imported
+// from `src/hook-probe/` so the migrate command, the status
+// command, and the MCP wrapper share one definition for each — see
+// `src/hook-probe/index.ts` for the rationale.
 
 // Default stdin adapter: reads up to one line via a synchronous `read` on
 // fd 0. Returns null on EOF. The synchronous read keeps the call sequence

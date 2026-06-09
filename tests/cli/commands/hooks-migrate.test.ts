@@ -38,10 +38,10 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { run as runMigrate } from '../../src/cli/commands/hooks/migrate.js';
-import { canonicalizePath } from '../../src/config-server/determinism/index.js';
-import { repoRootDir } from './helpers/spawn.js';
-import { renderedTemplate } from './helpers/confineTemplate.js';
+import { run as runMigrate } from '../../../src/cli/commands/hooks-migrate.js';
+import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
+import { repoRootDir } from '../../installer/helpers/spawn.js';
+import { renderedTemplate } from '../../installer/helpers/confineTemplate.js';
 
 const cleanups: string[] = [];
 

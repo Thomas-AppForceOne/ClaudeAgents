@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { compareBanner } from '../../../src/cli/lib/confine-hook-banner.js';
+import { compareBanner } from '../../src/hook-probe/banner.js';
 
 describe('compareBanner — failure-mode distinction', () => {
   it("banner has bad semver, installedVersion is non-null → 'unparseable'", () => {

@@ -1,7 +1,7 @@
 /**
  * Probe-runner classification tests.
  *
- * The shared probe runner at `src/cli/lib/confine-hook-probe.ts` is the
+ * The shared probe runner at `src/hook-probe/probe.ts` is the
  * single load-bearing detector both `gan hooks status` and the skill-side
  * preflight invoke. The four candidate cases drive the contract directly:
  *
@@ -23,9 +23,9 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { runConfineHookProbe } from '../../src/cli/lib/confine-hook-probe.js';
-import { repoRootDir } from './helpers/spawn.js';
-import { renderedTemplate } from './helpers/confineTemplate.js';
+import { runConfineHookProbe } from '../../src/hook-probe/probe.js';
+import { repoRootDir } from '../installer/helpers/spawn.js';
+import { renderedTemplate } from '../installer/helpers/confineTemplate.js';
 
 const cleanups: string[] = [];
 

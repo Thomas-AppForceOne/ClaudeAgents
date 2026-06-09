@@ -19,26 +19,25 @@
  * so CI can gate on hook hygiene.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   compareBanner,
+  listBackupSiblings,
   parseConfineHookBanner,
-  type BannerVerdict,
-  type ContractRevision,
-} from '../../lib/confine-hook-banner.js';
-import {
+  readInstalledFrameworkVersion,
   runConfineHookProbe,
+  type BannerVerdict,
   type ConfineProbeVerdict,
-} from '../../lib/confine-hook-probe.js';
-import { resolveProjectRoot } from '../../lib/project-root.js';
-import { emitJson } from '../../lib/json-output.js';
-import { EXIT_OK, EXIT_VALIDATION } from '../../lib/exit-codes.js';
-import { canonicalizePath } from '../../../config-server/determinism/index.js';
-import type { ParsedArgs } from '../../lib/args.js';
+  type ContractRevision,
+} from '../../hook-probe/index.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
+import { emitJson } from '../lib/json-output.js';
+import { EXIT_BAD_ARGS, EXIT_OK, EXIT_VALIDATION } from '../lib/exit-codes.js';
+import { canonicalizePath } from '../../config-server/determinism/index.js';
+import type { ParsedArgs } from '../lib/args.js';
 
 /**
  * Result contract shared by every CLI command handler.
@@ -152,39 +151,10 @@ export interface HooksStatusJsonShape {
   orphanBackupSiblings?: string[];
 }
 
-// File name prefix the `migrate` command writes as a backup sibling. The
-// constant is shared with the migrate command (kept module-private here to
-// avoid a circular import; the migrate command pins its own copy with the
-// same comment).
-const BACKUP_SIBLING_PREFIX = 'gan-confine.sh.gan-bak.';
-
-/**
- * Resolve the package root for the installed framework. Anchored to this
- * file's location (four levels up from `dist/cli/commands/hooks/`), not the
- * process cwd, so the result is correct wherever `gan` is invoked from.
- * Honours `GAN_PACKAGE_ROOT_OVERRIDE` as a test seam.
- */
-function packageRoot(): string {
-  const override = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
-  if (override !== undefined && override.length > 0) return override;
-  const here = fileURLToPath(import.meta.url);
-  return path.resolve(path.dirname(here), '..', '..', '..', '..');
-}
-
-// Read the installed framework version from the package's `package.json`.
-// Returns `null` when the file is missing or has no string `version`; the
-// caller treats that as "comparison undecidable" and surfaces an
-// `unparseable` banner verdict.
-function readInstalledFrameworkVersion(): string | null {
-  const root = packageRoot();
-  try {
-    const raw = readFileSync(path.join(root, 'package.json'), 'utf8');
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === 'string' ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
+// `listBackupSiblings` and `readInstalledFrameworkVersion` are
+// imported from `src/hook-probe/` so the migrate command, the
+// status command, and the MCP wrapper share one definition for
+// each — see `src/hook-probe/index.ts` for the rationale.
 
 // Read a hook file's text. Returns `null` when the file is absent or
 // unreadable — absence is the common, expected case.
@@ -260,26 +230,6 @@ function isRegistered(hookPath: string, commands: readonly string[]): boolean {
   return false;
 }
 
-// List absolute paths of every `gan-confine.sh.gan-bak.<timestamp>` file
-// directly under `hooksDir`. Returns the sorted list so the JSON surface is
-// deterministic. An absent or unreadable directory yields an empty array.
-function listBackupSiblings(hooksDir: string): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(hooksDir);
-  } catch {
-    return [];
-  }
-  const matches: string[] = [];
-  for (const name of entries) {
-    if (name.startsWith(BACKUP_SIBLING_PREFIX)) {
-      matches.push(path.join(hooksDir, name));
-    }
-  }
-  matches.sort();
-  return matches;
-}
-
 // True when `p` exists as a regular file.
 function isFileAt(p: string): boolean {
   try {
@@ -334,8 +284,14 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
   try {
     projectRootPath = resolveProjectRoot(projectRootFlag).path;
   } catch (e) {
+    // `--project-root` resolution failures are argument errors —
+    // matches `gan hooks migrate`, `gan trust approve`, and the
+    // rest of the CLI. Previously this branch returned
+    // EXIT_VALIDATION, which collapsed argument errors onto the
+    // same exit class as "the project tree has a stale hook" and
+    // left CI gates unable to distinguish the two.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_VALIDATION };
+    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_BAD_ARGS };
   }
 
   const home = os.homedir();

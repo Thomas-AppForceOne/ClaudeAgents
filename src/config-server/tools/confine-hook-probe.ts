@@ -13,14 +13,15 @@
  * `runConfineHookProbe`; this wrapper composes unchanged.
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  listBackupSiblings,
   runConfineHookProbe,
   type ConfineProbeSubReason,
   type ConfineProbeVerdict,
-} from '../../cli/lib/confine-hook-probe.js';
+} from '../../hook-probe/index.js';
 
 /**
  * Input to {@link probeConfineHook}.
@@ -64,8 +65,6 @@ export interface ProbeConfineHookResult {
   subReason: ConfineProbeSubReason;
   backupSiblings: string[];
 }
-
-const BACKUP_SIBLING_PREFIX = 'gan-confine.sh.gan-bak.';
 
 /**
  * Probe the project-tier confinement hook. The function is the
@@ -126,26 +125,4 @@ function isFileAt(p: string): boolean {
   } catch {
     return false;
   }
-}
-
-// List absolute paths of every `gan-confine.sh.gan-bak.<timestamp>` entry
-// directly under `hooksDir`. Returns the sorted list so the JSON surface
-// is deterministic across operators (the underlying readdir order is
-// filesystem-dependent). An empty array is returned when the directory is
-// absent, unreadable, or holds no matching files.
-function listBackupSiblings(hooksDir: string): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(hooksDir);
-  } catch {
-    return [];
-  }
-  const matches: string[] = [];
-  for (const name of entries) {
-    if (name.startsWith(BACKUP_SIBLING_PREFIX)) {
-      matches.push(path.join(hooksDir, name));
-    }
-  }
-  matches.sort();
-  return matches;
 }
