@@ -83,6 +83,7 @@ BUG_REPORT_URL="https://github.com/Thomas-AppForceOne/ClaudeAgents/issues"
 #   zone-created:<absolute-path>
 #   gitignore-line-added:<gitignore-path>:<line>
 #   npm-installed
+#   build-bootstrapped
 #   confine-hook-written:<absolute-path>
 #   runs-dir-configured:<store-root>
 #   runs-dir-permission-granted:<store-root>
@@ -449,6 +450,25 @@ verify_mcp_bin_on_path() {
     log_error "The framework's npm package linked but its executable did not. This typically means the build artifact at \`dist/\` was not produced — verify \`npm run build\` runs cleanly inside $REPO_ROOT, then re-run \`./install.sh\`."
     return 1
   fi
+  # RESOLUTION IS NOT RUNNABILITY. `tsc` emits the dist bin entrypoints as
+  # non-executable (mode 0644); when the build runs through the package's
+  # `prepare` lifecycle, the bin loses its execute bit and the resolved shim
+  # fails with exit 126 ("Permission denied") even though `command -v` found
+  # it. So after resolution holds we actually RUN the bin. Output is captured
+  # to a discardable variable and never echoed: raw runtime prose can carry
+  # tokens the F4 user-facing boundary forbids (the remediation command in
+  # backticks lets the user reproduce and read the real error themselves).
+  local out
+  if ! out="$(claudeagents-config-server --version </dev/null 2>&1)"; then
+    : "captured but suppressed: $out"
+    log_error "ClaudeAgents installer: \`claudeagents-config-server\` is on PATH but did not run."
+    log_error "The framework's executable resolved but could not start — usually a missing execute bit on the built entrypoint. Re-run \`./install.sh\` from $REPO_ROOT to rebuild and re-link it."
+    # `return 1` (NOT `die`) so the ERR trap installed in `main()` fires
+    # `on_error -> rollback` in the parent shell context (see
+    # `install_mcp_server`'s note on why a return — not die — is required for
+    # trap routing).
+    return 1
+  fi
 }
 
 # install_mcp_server
@@ -481,6 +501,74 @@ install_mcp_server() {
     return 1
   fi
   STATE_LOG+=("npm-installed")
+}
+
+# bootstrap_build_artifacts
+#
+# Ensures the framework's build artifacts (`dist/`) exist under
+# `$REPO_ROOT` BEFORE the global install + bin verification. On a clean
+# checkout (no `dist/`) this installs dev dependencies and runs the
+# build; on a warm tree (current `dist/` already present) it is a no-op.
+#
+# WHY a dedicated installer step (rather than relying on the package's
+# `prepare` lifecycle): a global install of a local directory runs
+# `prepare` in-place, but a clean checkout that has never had its dev
+# dependencies installed cannot build until they are present. Doing the
+# bootstrap here, before `install_mcp_server`, guarantees the bin shim's
+# `dist/` target exists by the time `verify_mcp_bin_on_path` runs.
+#
+# WHY `npm ci --ignore-scripts` (not bare `npm ci`/`npm install`): a bare
+# dependency install re-runs this package's own `prepare` script, which
+# re-enters the build/bootstrap and recurses. `--ignore-scripts` is the
+# load-bearing recursion guard; the explicit `npm run build` afterwards
+# performs the build exactly once.
+#
+# Output of both steps is captured-and-suppressed (mirrors
+# `install_mcp_server`) so raw package-manager prose never leaks through
+# the F4 user-facing boundary; on failure of EITHER step the function
+# `return 1`s so the ERR trap installed in `main()` fires `on_error ->
+# rollback` in the parent shell (see `install_mcp_server`'s note on why a
+# `return` — not `die` — is required for trap routing under bash 4.4+).
+bootstrap_build_artifacts() {
+  # WARM-TREE GUARD: if both shipped bin entrypoints already exist under
+  # `$REPO_ROOT/dist/` AND are executable, the tree is built and runnable —
+  # skip the dependency install and the build entirely so warm re-runs stay
+  # cheap and do no state-changing npm work. The `-x` test (not `-f`) is
+  # deliberate: a present-but-non-executable entrypoint (mode 0644, which is
+  # exactly what `tsc` emits before the postbuild chmod) is NOT "warm", so it
+  # falls through to a rebuild whose `postbuild` hook restores the execute bit.
+  # `CAS_FORCE_BOOTSTRAP=1` is a test-only seam that forces the cold path even
+  # on a built checkout.
+  if [ "${CAS_FORCE_BOOTSTRAP:-0}" != "1" ] \
+    && [ -x "$REPO_ROOT/dist/config-server/index.js" ] \
+    && [ -x "$REPO_ROOT/dist/cli/index.js" ]; then
+    return 0
+  fi
+
+  local out
+  # DEPENDENCY-INSTALL FAILURE. The combined output is captured and
+  # deliberately *not* echoed: raw package-manager prose can carry tokens the
+  # F4 user-facing boundary forbids. We name what failed in framework terms and
+  # hand the user a literal remediation command in backticks (backticked
+  # commands are exempt from the prose-token rule, like the `npm install -g .`
+  # on `install_mcp_server`'s remediation line) so they can reproduce and read
+  # the real underlying error themselves.
+  if ! out="$(cd "$REPO_ROOT" && npm ci --ignore-scripts 2>&1)"; then
+    : "captured but suppressed: $out"
+    log_error "ClaudeAgents installer: failed to install the framework's build dependencies."
+    log_error "The framework could not be built from this checkout. Re-run \`./install.sh\` from $REPO_ROOT; if it keeps failing, run \`npm ci --ignore-scripts\` there to see the underlying error."
+    return 1
+  fi
+  # BUILD FAILURE. Same capture-and-suppress discipline; the remediation points
+  # at the build step specifically so the user knows the dependencies installed
+  # but the compile of the framework's config server did not.
+  if ! out="$(cd "$REPO_ROOT" && npm run build 2>&1)"; then
+    : "captured but suppressed: $out"
+    log_error "ClaudeAgents installer: failed to build the framework's config server."
+    log_error "The framework's build dependencies installed but the build did not complete. Re-run \`./install.sh\` from $REPO_ROOT; if it keeps failing, run \`npm run build\` there to see the underlying error."
+    return 1
+  fi
+  STATE_LOG+=("build-bootstrapped")
 }
 
 # backup_claude_json_once
@@ -2490,6 +2578,14 @@ main() {
 
   probe_version="$(version_probe_mcp)"
   if [ -z "$probe_version" ] || [ "$probe_version" != "$package_version" ]; then
+    # Build the framework's `dist/` artifacts BEFORE the global install so
+    # the bin shim's target exists by the time `verify_mcp_bin_on_path`
+    # runs. The warm-tree guard inside makes this a no-op on a built
+    # checkout, so a version-matched re-run that reaches here (version
+    # mismatch path) still does no redundant build work. A `return 1` from
+    # either step routes through the ERR trap installed above into
+    # `on_error -> rollback`.
+    bootstrap_build_artifacts
     install_mcp_server
   fi
 

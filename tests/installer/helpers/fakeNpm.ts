@@ -6,7 +6,8 @@
  * machine-mutating — unacceptable in a hermetic test. These stubs stand in:
  * the fake `npm` records every invocation to a log file (so a test can assert
  * *what* the installer called, e.g. that a second run did not re-install) and
- * can be told to fail the `install` subcommand on demand; the fake
+ * can be told to fail the dependency-install steps (`install` and `ci`) on
+ * demand; the fake
  * config-server answers `--version` with a caller-chosen string so the
  * installer's version-probe / reinstall logic can be driven both ways.
  *
@@ -22,8 +23,9 @@ import { writeStubBin } from './tmpenv.js';
  * Behaviour knobs for the fake `npm` written by {@link writeFakeNpm}.
  *
  * @property exitCode exit status the stub returns for a normal invocation;
- *   defaults to `0`. (The `install` subcommand can still be forced to fail
- *   independently via the `CAS_FAIL_NPM_INSTALL` env flag.)
+ *   defaults to `0`. (The dependency-install subcommands `install` and `ci`
+ *   can still be forced to fail independently via the `CAS_FAIL_NPM_INSTALL`
+ *   env flag.)
  * @property stderr a line emitted to stderr on every invocation; defaults to
  *   empty (nothing written). Lets a test simulate npm's own error chatter.
  * @property invocationLog absolute path the stub appends each invocation's
@@ -43,10 +45,12 @@ export interface FakeNpmOptions {
  * Write a fake `npm` executable into `bin`.
  *
  * The stub appends its arguments to the invocation log on every call, may
- * print a fixed stderr line, fails the `install` subcommand when
- * `CAS_FAIL_NPM_INSTALL=1` (the rollback suites' npm-failure seam), and
- * otherwise exits with `options.exitCode`. All option values are JSON-escaped
- * before embedding so paths containing quotes or spaces stay intact.
+ * print a fixed stderr line, fails the dependency-install subcommands
+ * (`install` and `ci`) when `CAS_FAIL_NPM_INSTALL=1` (the rollback suites'
+ * npm-failure seam — `ci` covers the bootstrap step, `install` the global
+ * install), and otherwise exits with `options.exitCode`. All option values are
+ * JSON-escaped before embedding so paths containing quotes or spaces stay
+ * intact.
  *
  * @param bin the stub-binary directory to install `npm` into.
  * @param options see {@link FakeNpmOptions}.
@@ -63,7 +67,7 @@ export function writeFakeNpm(bin: string, options: FakeNpmOptions): string {
     `if [ -n ${escapedStderr} ]; then`,
     `  printf '%s\\n' ${escapedStderr} >&2`,
     `fi`,
-    `if [ "\${CAS_FAIL_NPM_INSTALL:-0}" = "1" ] && [ "$1" = "install" ]; then`,
+    `if [ "\${CAS_FAIL_NPM_INSTALL:-0}" = "1" ] && { [ "$1" = "install" ] || [ "$1" = "ci" ]; }; then`,
     `  printf '%s\\n' "npm ERR! injected failure" >&2`,
     `  exit 1`,
     `fi`,

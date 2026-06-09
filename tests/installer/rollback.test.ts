@@ -15,6 +15,11 @@
  *   others alone.
  * - S3-AC4: rollback never touches PRE-EXISTING state — an unrelated symlink
  *   created before the install survives.
+ * - AC-6 / S2-O6 (forced bootstrap `npm ci` failure): with the bootstrap forced
+ *   to run and its dependency install forced to fail, the installer exits
+ *   non-zero, rolls back all prior state, emits F4-compliant prose, and leaks no
+ *   raw package-manager stderr — closing the previously-unexercised
+ *   bootstrap-dependency-install rollback path.
  *
  * What it guards (WHY): a failed install must be atomic-ish — no half-applied
  * symlinks, no mangled user `.claude.json`, no orphaned zones — and crucially
@@ -285,5 +290,80 @@ describe('install.sh — S3 rollback on partial failure', () => {
 
     expect(lstatSync(preexisting).isSymbolicLink()).toBe(true);
     expect(readlinkSync(preexisting)).toBe(preexistingTarget);
+  });
+
+  it('AC-6 / S2-O6: forced bootstrap `npm ci` failure → exit non-zero, FULL rollback, F4 prose, no raw package-manager stderr leak', async () => {
+    // `CAS_FORCE_BOOTSTRAP=1` forces the cold bootstrap path to RUN even on
+    // this already-built checkout; `CAS_FAIL_NPM_INSTALL=1` makes the widened
+    // fake-npm seam fail the bootstrap's `npm ci --ignore-scripts`. With no fake
+    // config-server present the version probe is empty, so the installer reaches
+    // the bootstrap step — proving the BOOTSTRAP-dependency-install failure path
+    // (previously unexercised, the S2-O6 gap) rolls back exactly like the
+    // global-install failure path does.
+    const { tmp, pathOverride, cwd, npmLog } = baseSetup();
+
+    // A fixed `stderr` line on the fake npm is its raw package-manager chatter;
+    // the seam ALSO prints `npm ERR! injected failure` when it trips. Neither
+    // must surface in the installer's own `error:` lines (the F4 boundary
+    // suppresses raw package-manager output).
+    writeFakeNpm(tmp.bin, {
+      exitCode: 0,
+      stderr: 'npm ERR! E_FAKE_BOOTSTRAP',
+      invocationLog: npmLog,
+    });
+
+    const preState = '{\n  "kept": true\n}\n';
+    writeFileSync(path.join(tmp.home, '.claude.json'), preState);
+
+    const result = await runInstall([], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+      extraEnv: { CAS_FORCE_BOOTSTRAP: '1', CAS_FAIL_NPM_INSTALL: '1' },
+    });
+
+    // 1) Exit non-zero.
+    expect(result.exitCode).not.toBe(0);
+
+    // 2) FULL rollback — the same assertions the existing npm-install rollback
+    //    cases use. The bootstrap runs AFTER the agent/skill copies but BEFORE
+    //    any `~/.claude.json` edit, so symlinks/zones must be gone and the user
+    //    JSON must be byte-equal to its pre-state.
+    expect(listAgentSymlinks(tmp.home)).toEqual([]);
+    expect(existsSync(path.join(tmp.home, '.claude', 'skills', 'gan'))).toBe(false);
+
+    const postRaw = readFileSync(path.join(tmp.home, '.claude.json'), 'utf8');
+    expect(postRaw).toBe(preState);
+
+    expect(existsSync(path.join(cwd, '.gan-state'))).toBe(false);
+    expect(existsSync(path.join(cwd, '.gan-cache'))).toBe(false);
+
+    const stragglers = readdirSync(tmp.home).filter(
+      (e) => e.startsWith('.claude.json.tmp.') || e.startsWith('.claude.json.preedit-'),
+    );
+    expect(stragglers).toEqual([]);
+
+    // 3) F4 prose on the installer's OWN error lines: a backticked remediation
+    //    is present and no bare prose tokens leak (same regex as S2-AC10).
+    const errorLines = result.stderr
+      .split('\n')
+      .filter((l) => l.startsWith('error:'))
+      .join('\n');
+
+    const proseToken = /(?<!`)\b(npm|node|Node|MCP server)\b(?!`)/g;
+    const violations = [...errorLines.matchAll(proseToken)].map((m) => m[0]);
+    if (violations.length > 0) {
+      throw new Error(
+        `F4 prose violations in installer error lines: ${violations.join(', ')}\nLines:\n${errorLines}`,
+      );
+    }
+    expect(errorLines).toMatch(/`[^`]+`/);
+    expect(errorLines).toContain('the framework');
+
+    // 4) No raw package-manager stderr leak: neither the fake npm's fixed
+    //    stderr line nor the seam's injected failure line appears in the
+    //    installer's own emitted error lines.
+    expect(errorLines).not.toContain('npm ERR! injected failure');
+    expect(errorLines).not.toContain('E_FAKE_BOOTSTRAP');
   });
 });
