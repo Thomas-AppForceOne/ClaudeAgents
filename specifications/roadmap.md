@@ -105,6 +105,13 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 24. ✅ **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity + SKILL.md status markers. Shipped PR #40.
 25. **Pre-release chores + release gate.** See below.
 
+### Bug-fix specs (post-v1.0 inventory; pre-release)
+
+The bug-fix specs land **after** the v1.0 spec inventory and **before** the release gate. They close defects surfaced by self-build runs against the v1.0 mechanism (the contract pipeline, the evaluator artefact channel, the orchestrator's objection routing, the clarifier output, the stack-manifest honesty). Each fix is a wholly new spec under the next free phase-coded slot — shipped specs stay immutable per PROJECT_CONTEXT § Conventions.
+
+26. ✅ **[Q8](Q8-proposer-name-resolution.md)** — proposer pre-flight name resolution for backtick-quoted `npm run X` script references. Shipped PR #<n>.
+27. ✅ **[Q9](Q9-contract-reviewer-cold-read.md)** — contract-reviewer fresh-context framing, first-pass script-name resolution, and verdict-shape normalisation. Shipped PR #<n>.
+
 ### Known gaps accepted at v1.0
 
 - **No automated end-to-end orchestrator-flow test.** v1.0 ships the *mechanism* for a trustworthy loop (R7 bridge + E8 independent review/forced verification) and proves it by dogfooding plus the release gate below; the automated harness that *measures* discriminator accuracy and variance is v2.0's scope (V1/V2/V3). Mechanism in v1.0, measurement in v2.0 — not the reverse.
