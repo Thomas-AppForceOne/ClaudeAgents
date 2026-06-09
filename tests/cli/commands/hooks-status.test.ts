@@ -193,7 +193,12 @@ describe('gan hooks status (new subdirectory subcommand)', () => {
     const hooksDir = path.join(cwd, '.claude', 'hooks');
     mkdirSync(hooksDir, { recursive: true });
     writeFileSync(
-      path.join(hooksDir, 'gan-confine.sh.gan-bak.2026-06-08T19:42:11Z'),
+      // Millisecond-precision timestamp matching what `gan hooks
+      // migrate` now emits (see hooks-migrate's `formatBackupTimestamp`);
+      // a seconds-only fixture would diverge from the live writer's
+      // output and silently mask a future tightening of the
+      // orphan-backup scan to require ms precision.
+      path.join(hooksDir, 'gan-confine.sh.gan-bak.2026-06-08T19:42:11.000Z'),
       '#!/bin/bash\n# prior content\n',
     );
     const r = await runGan(['hooks', 'status', '--json'], {
@@ -247,6 +252,51 @@ describe('gan hooks status (new subdirectory subcommand)', () => {
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout) as { userTier: { registered: boolean } };
     expect(parsed.userTier.registered).toBe(false);
+  });
+
+  // `~/.claude/settings.json` is operator-authored; a truncated /
+  // half-written / non-object payload must NOT crash status with an
+  // unhandled JSON.parse throw. The command's reader catches the
+  // throw and surfaces `registered: false` (the same outcome as
+  // "no settings file"), giving the operator a consistent surface
+  // whether the file is missing, malformed, or merely doesn't
+  // register the framework hook.
+  it('AC1: malformed settings.json → registered:false, no throw', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, renderedTemplate());
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+    // Truncated JSON — the open brace and the start of a `hooks`
+    // key, then EOF. A `JSON.parse` of this byte sequence throws.
+    writeFileSync(path.join(home, '.claude', 'settings.json'), '{"hooks":');
+    const r = await runGan(['hooks', 'status', '--json'], {
+      cwd,
+      extraEnv: { HOME: home },
+    });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { userTier: { registered: boolean } };
+    expect(parsed.userTier.registered).toBe(false);
+  });
+
+  // An operator running `gan hooks status` from a directory whose
+  // `.claude/` subtree does not exist at all is the common-case
+  // baseline. The status command should treat this as "no
+  // project-tier hook present" — `projectTier: null` — with exit 0.
+  // A regression that crashed on a missing project `.claude/`
+  // directory would surface here.
+  it('AC1: empty project root (no .claude/) → projectTier:null, exit 0', async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, renderedTemplate());
+    // No `.claude/` directory created under cwd.
+    const r = await runGan(['hooks', 'status', '--json'], {
+      cwd,
+      extraEnv: { HOME: home },
+    });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { projectTier: unknown; verdict: string };
+    expect(parsed.projectTier).toBeNull();
+    expect(parsed.verdict).toBe('current');
   });
 
   it('--help exits 0 with usage / examples', async () => {

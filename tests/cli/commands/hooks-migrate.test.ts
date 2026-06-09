@@ -38,7 +38,10 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { run as runMigrate } from '../../../src/cli/commands/hooks-migrate.js';
+import {
+  run as runMigrate,
+  _readHookContentsNoFollowForTests,
+} from '../../../src/cli/commands/hooks-migrate.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 import { repoRootDir } from '../../installer/helpers/spawn.js';
 import { renderedTemplate } from '../../installer/helpers/confineTemplate.js';
@@ -652,5 +655,132 @@ describe('gan hooks migrate — symlink refusal', () => {
     expect(result.stdout).toContain('+++ ');
     expect(lstatSync(hookPath).isSymbolicLink()).toBe(true);
     expect(readFileSync(targetFile, 'utf8')).toBe('#!/bin/bash\nexit 0\n');
+  });
+});
+
+describe('readHookContentsNoFollow — O_NOFOLLOW behavioural pin', () => {
+  // The public surface's `isSymlinkAt` (lstatSync) pre-check catches
+  // a static symlink before `readHookContentsNoFollow` is reached,
+  // so a refusal test through the migrate command cannot tell
+  // whether the kernel-level `O_NOFOLLOW` flag is in place. The two
+  // tests in this block call the helper through its test seam and
+  // assert ELOOP propagates — a behavioural regression that catches
+  // a silent removal of the flag (a refactor that dropped
+  // `O_NOFOLLOW` from the `openSync` call would let the helper
+  // follow the link and return the target's contents, and only
+  // these tests would notice).
+  it('refuses a symlink at the target path with ELOOP', () => {
+    const dir = makeTmpDir('gan-no-follow-');
+    const targetFile = path.join(dir, 'secret');
+    writeFileSync(targetFile, 'SECRET CONTENTS');
+    const linkPath = path.join(dir, 'link-to-secret');
+    symlinkSync(targetFile, linkPath);
+    expect(() => _readHookContentsNoFollowForTests(linkPath)).toThrow(
+      expect.objectContaining({ code: 'ELOOP' }),
+    );
+  });
+
+  it('reads the actual file when the target is a regular file', () => {
+    const dir = makeTmpDir('gan-no-follow-');
+    const filePath = path.join(dir, 'real-hook.sh');
+    writeFileSync(filePath, '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+    const { contents, mode } = _readHookContentsNoFollowForTests(filePath);
+    expect(contents.toString('utf8')).toBe('#!/bin/bash\nexit 0\n');
+    expect(mode & 0o111).not.toBe(0);
+  });
+});
+
+describe('gan hooks migrate --replace template-render failure', () => {
+  // The `--replace` path calls `renderCurrentTemplate()`, which calls
+  // `readInstalledFrameworkVersionOrThrow()` against
+  // `<packageRoot>/package.json`. When that file has no string
+  // `version` field, the renderer throws and `--replace` must fail
+  // closed with a structured `GanHooksMigrateTemplateError` envelope
+  // rather than emitting a hook whose banner reads literally
+  // `version undefined.` — which is exactly the kind of file
+  // `gan hooks status` would later flag.
+  it('refuses with GanHooksMigrateTemplateError when the framework package.json has no version', async () => {
+    const cwd = makeTmpDir('gan-migrate-template-');
+    // Point GAN_PACKAGE_ROOT_OVERRIDE at a fixture root that
+    // mirrors the real package's `package.json` (no `version`)
+    // and `scripts/hooks/gan-confine.sh.template` (real file
+    // content, but irrelevant since the render throws on the
+    // version lookup before reaching the template). The render
+    // path must throw a structured failure rather than emit
+    // `undefined` into the banner.
+    const fakeRoot = makeTmpDir('gan-fake-pkg-');
+    writeFileSync(path.join(fakeRoot, 'package.json'), '{"name": "fake"}');
+    mkdirSync(path.join(fakeRoot, 'scripts', 'hooks'), { recursive: true });
+    writeFileSync(
+      path.join(fakeRoot, 'scripts', 'hooks', 'gan-confine.sh.template'),
+      '#!/bin/bash\n# version __GAN_FRAMEWORK_VERSION__\nexit 0\n',
+    );
+    const previous = process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+    process.env.GAN_PACKAGE_ROOT_OVERRIDE = fakeRoot;
+    try {
+      const result = await runMigrate(
+        makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
+        { now: () => FIXED_DATE },
+      );
+      expect(result.code).toBe(1);
+      const parsed = JSON.parse(result.stderr.trim()) as Record<string, string>;
+      expect(parsed['code']).toBe('GanHooksMigrateTemplateError');
+      expect(parsed['subReason']).toBe('templateRenderFailed');
+      // The message embeds the underlying renderer's throw text;
+      // the throwing path names the missing `version` field. We
+      // assert the code/subReason as the load-bearing contract;
+      // the message text is informational.
+      expect(parsed['message']).toContain('version');
+    } finally {
+      if (previous === undefined) delete process.env.GAN_PACKAGE_ROOT_OVERRIDE;
+      else process.env.GAN_PACKAGE_ROOT_OVERRIDE = previous;
+    }
+  });
+});
+
+describe('gan hooks migrate — concurrent invocations across distinct projects', () => {
+  // The atomic-write temp filename embeds a six-byte random hex
+  // token along with the pid so two same-pid invocations cannot
+  // collide on the temp path. The test stages two separate
+  // project roots, fires `--delete` against both in parallel, and
+  // asserts both succeed with their own backup siblings. A
+  // regression that reverted the temp suffix to pid-only would
+  // race here under vitest's thread pool (workers share the
+  // parent pid).
+  it('two concurrent --delete invocations on distinct project roots both succeed', async () => {
+    const cwdA = makeTmpDir('gan-migrate-concurrent-A-');
+    const cwdB = makeTmpDir('gan-migrate-concurrent-B-');
+    const hookA = seedHook(cwdA, STALE_HOOK);
+    const hookB = seedHook(cwdB, STALE_HOOK);
+    const [resultA, resultB] = await Promise.all([
+      runMigrate(
+        makeArgs({ action: 'delete', yes: true, projectRoot: cwdA }),
+        { now: () => FIXED_DATE },
+      ),
+      runMigrate(
+        makeArgs({ action: 'delete', yes: true, projectRoot: cwdB }),
+        { now: () => FIXED_DATE },
+      ),
+    ]);
+    expect(resultA.code, `A stderr: ${resultA.stderr}`).toBe(0);
+    expect(resultB.code, `B stderr: ${resultB.stderr}`).toBe(0);
+    expect(existsSync(hookA)).toBe(false);
+    expect(existsSync(hookB)).toBe(false);
+    // Each project has its own backup sibling; neither clobbered
+    // the other (different parent directories).
+    const backupA = path.join(
+      canonical(cwdA),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${FIXED_TIMESTAMP}`,
+    );
+    const backupB = path.join(
+      canonical(cwdB),
+      '.claude',
+      'hooks',
+      `gan-confine.sh.gan-bak.${FIXED_TIMESTAMP}`,
+    );
+    expect(existsSync(backupA)).toBe(true);
+    expect(existsSync(backupB)).toBe(true);
   });
 });

@@ -214,3 +214,48 @@ describe('skill-side preflight (H3) — probeConfineHook behavioural matrix', ()
     expect(result.projectTierHookPath).toBeNull();
   });
 });
+
+// H3 AC9 mandates three documentation surfaces in the same diff:
+// the H1 forward-reference paragraph (the single authorised
+// immutability exception), the CLAUDE.md Confinement-section
+// sentence, and the roadmap entry born in shipped form. A refactor
+// that quietly altered any of the three locked substrings would
+// silently break the "spec implementation flips the roadmap entry"
+// definition-of-done from PROJECT_CONTEXT. These content pins
+// catch that drift.
+describe('H3 AC9 — locked-substance content pins', () => {
+  it('specifications/H1-framework-owned-confinement-hook.md carries the H3 forward-reference paragraph', () => {
+    const h1Path = path.join(repoRoot, 'specifications', 'H1-framework-owned-confinement-hook.md');
+    const h1 = readFileSync(h1Path, 'utf8');
+    // The forward-reference paragraph names the H3 spec by id and
+    // points operators at the two CLI subcommands. The
+    // immutability exception is bounded to this single paragraph;
+    // any other edit to H1 is a defect a future content audit
+    // catches.
+    expect(h1).toContain('Forward reference (added by H3)');
+    expect(h1).toContain('gan hooks status');
+    expect(h1).toContain('gan hooks migrate');
+    expect(h1).toContain('specifications/H3-stale-project-hook-detection-and-migration.md');
+  });
+
+  it('specifications/roadmap.md carries the H3 entry in shipped form', () => {
+    const roadmapPath = path.join(repoRoot, 'specifications', 'roadmap.md');
+    const roadmap = readFileSync(roadmapPath, 'utf8');
+    // The shipped-form marker (`✅ **[H3]...`) is what the
+    // same-diff rule requires; a draft-link or `**Next.**`
+    // marker would surface here. The link target must match the
+    // spec's filename verbatim.
+    expect(roadmap).toContain('✅ **[H3](H3-stale-project-hook-detection-and-migration.md)**');
+    expect(roadmap).toContain('Stale project-tier confinement hook detection and migration');
+  });
+
+  it('CLAUDE.md carries the Confinement-section operator pointer', () => {
+    const claudePath = path.join(repoRoot, 'CLAUDE.md');
+    const claude = readFileSync(claudePath, 'utf8');
+    // The sentence names both CLI subcommands and the operator-
+    // visible symptom (mid-attempt confinement denial) so a
+    // log reader has a starting point.
+    expect(claude).toContain('gan hooks status');
+    expect(claude).toContain('gan hooks migrate');
+  });
+});

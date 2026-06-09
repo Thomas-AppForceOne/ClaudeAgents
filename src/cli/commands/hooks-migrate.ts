@@ -908,8 +908,36 @@ export function _composeBackupPathForTests(hookPath: string, now: Date): string 
 /**
  * Test-only seam: existence check for the hook file. Underscore-prefixed
  * to advertise the seam.
+ *
+ * @param p the absolute path to test.
+ * @returns true when `p` exists as a regular file; false otherwise.
  */
 export function _isFileAtForTests(p: string): boolean {
   return isFileAt(p);
+}
+
+/**
+ * Test-only seam: read the hook contents and mode through the same
+ * `O_NOFOLLOW`-protected open the destructive actions use. Exposed
+ * so a test can pass a symlink path directly and assert the helper
+ * throws `ELOOP` — a behavioural regression test that catches a
+ * silent removal of the kernel-level no-follow flag. The
+ * `isSymlinkAt` pre-check at the `runDelete` / `runReplace` call
+ * sites catches the static-symlink case before this helper is
+ * reached, so a test that exercises only the public surface cannot
+ * tell whether `O_NOFOLLOW` is in place. Underscore-prefixed to
+ * advertise the seam.
+ *
+ * @param hookPath the absolute path to read.
+ * @returns the contents and mode-bit triplet on success.
+ * @throws an `Error` carrying `code: 'ELOOP'` when `hookPath` is a
+ *   symlink at the moment of `openSync`; any other I/O error
+ *   surfaces with its native errno code.
+ */
+export function _readHookContentsNoFollowForTests(hookPath: string): {
+  contents: Buffer;
+  mode: number;
+} {
+  return readHookContentsNoFollow(hookPath);
 }
 

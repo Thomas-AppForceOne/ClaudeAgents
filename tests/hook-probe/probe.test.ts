@@ -283,9 +283,11 @@ describe('runConfineHookProbe — runaway hook caps', () => {
     // production preflight from a hanging hook.
     const hookSource = '#!/bin/bash\nsleep 60\n';
     const hookPath = stageHook(hookSource);
+    const pre = snapshotProbeTempDirs();
     const start = Date.now();
     const result = await runConfineHookProbe({ hookPath });
     const elapsed = Date.now() - start;
+    const post = snapshotProbeTempDirs();
     expect(result.verdict).toBe('misconfigured');
     expect(result.subReason).toBe('projectHookMisconfigured');
     // Allow generous slack (the probe cap is 5s plus per-OS SIGKILL
@@ -293,6 +295,11 @@ describe('runConfineHookProbe — runaway hook caps', () => {
     // sleep. A regression that drops the timeout would surface as a
     // test-runner-killing 60s wait.
     expect(elapsed).toBeLessThan(15_000);
+    // Hygiene: the SIGKILL path must still run the `try/finally`
+    // rm on the temp tree. A regression that skipped cleanup on
+    // the timeout branch would surface here as leaked debris that
+    // out-lasts the polling window.
+    await assertNoNewDebris(pre, post);
   }, 30_000);
 
   it('a hook that floods stdout past the byte cap is killed', async () => {
@@ -305,14 +312,42 @@ describe('runConfineHookProbe — runaway hook caps', () => {
     // to stderr would prove the same property.
     const hookSource = '#!/bin/bash\nyes | head -c 2097152\nexit 0\n';
     const hookPath = stageHook(hookSource);
+    const pre = snapshotProbeTempDirs();
     const start = Date.now();
     const result = await runConfineHookProbe({ hookPath });
     const elapsed = Date.now() - start;
+    const post = snapshotProbeTempDirs();
     expect(result.verdict).toBe('misconfigured');
     expect(result.subReason).toBe('projectHookMisconfigured');
     // The kill should land well before the wall-clock cap; a flood
     // of 2 MiB through a pipe completes in milliseconds, so the
     // probe should resolve quickly even though the cap is 5s.
     expect(elapsed).toBeLessThan(10_000);
+    // Hygiene: same rationale as the hang test — the cap-overflow
+    // SIGKILL path must still run the `try/finally` rm.
+    await assertNoNewDebris(pre, post);
   }, 30_000);
+});
+
+describe('runConfineHookProbe — `#!/usr/bin/env bash` env-shebang', () => {
+  // The probe's hermetic PATH (`/usr/bin:/bin:/usr/local/bin:
+  // /opt/homebrew/bin`) contains `/usr/bin`, where `env` lives on
+  // every supported POSIX operator. A hook with the
+  // env-shebang convention (`#!/usr/bin/env bash`) must therefore
+  // classify the same as a literal `#!/bin/bash` hook — both are
+  // common operator conventions and the probe must not silently
+  // misclassify either.
+  it('an env-shebang hook that exits 0 classifies as `current`', async () => {
+    const hookPath = stageHook('#!/usr/bin/env bash\nexit 0\n');
+    const result = await runConfineHookProbe({ hookPath });
+    expect(result.verdict).toBe('current');
+    expect(result.subReason).toBe(null);
+  });
+
+  it('an env-shebang hook that exits 1 classifies as `stale`', async () => {
+    const hookPath = stageHook('#!/usr/bin/env bash\nexit 1\n');
+    const result = await runConfineHookProbe({ hookPath });
+    expect(result.verdict).toBe('stale');
+    expect(result.subReason).toBe('noGanRunDirAwareness');
+  });
 });
