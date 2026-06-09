@@ -365,21 +365,37 @@ async function spawnAndCollect(
         clearTimeout(timeoutHandle);
         timeoutHandle = null;
       }
-      // Drop the per-stream byte counters' references. After this
-      // resolve, subsequent in-flight chunks (bounded by the kernel
-      // pipe buffer between userspace and the child, but non-zero
-      // until SIGKILL is delivered and the OS closes the pipes) would
-      // otherwise keep growing the closure-held `stdoutBytes`/
-      // `stderrBytes` totals — defeating the heap bound the byte cap
-      // exists to enforce. Removing the data listeners here makes the
-      // cap a real bound on the closure's working set.
+      // Drop the per-stream `data` listeners. The cleanup is
+      // centralised here (rather than only in the cap-overflow
+      // branch) so it covers all four resolve paths uniformly:
+      //
+      //   - cap-overflow path  → LOAD-BEARING. Subsequent in-flight
+      //     chunks (bounded by the kernel pipe buffer between
+      //     userspace and the child, but non-zero until SIGKILL is
+      //     delivered and the OS closes the pipes) would otherwise
+      //     keep growing the closure-held `stdoutBytes`/
+      //     `stderrBytes` totals, defeating the heap bound the byte
+      //     cap exists to enforce. With no `data` listener, Node's
+      //     Readable flips back to paused mode and further chunks
+      //     queue on the kernel pipe without being read into JS.
+      //   - wall-clock-timeout path  → LOAD-BEARING for the same
+      //     reason: the hanging hook may still be writing when
+      //     SIGKILL is in flight.
+      //   - normal-exit path  → HARMLESS. The streams have already
+      //     emitted `end` and the listener set is effectively empty;
+      //     removeAllListeners is a no-op. Keeping it in the shared
+      //     settle path is the cost of one method call; the win is
+      //     not having to remember which paths need cleanup.
+      //   - spawn-error path  → HARMLESS. The streams were never
+      //     attached to a running child.
       try {
         child.stdout?.removeAllListeners('data');
         child.stderr?.removeAllListeners('data');
       } catch {
-        // The streams may already be ended/closed; either way the
-        // listener removal is best-effort and must not throw out of
-        // settle.
+        // `removeAllListeners` on Node's EventEmitter is documented
+        // to return `this` and not throw; the catch is belt-and-
+        // braces against a future refactor that wraps the stream in
+        // a proxy whose semantics differ.
       }
       resolve(value);
     };

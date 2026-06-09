@@ -269,35 +269,123 @@ function isFileAt(p: string): boolean {
 // `hookPath` is the absolute path to the regular file the migrate
 // command has already classified as "present, not a symlink". The
 // helper throws when the open fails (e.g. ELOOP from a racy
-// symlink swap, EACCES from a permission flip) so the caller can
-// surface a structured error and abort the mutation.
+// symlink swap, EACCES from a permission flip), when `fstatSync`
+// throws, or when a concurrent writer truncated the file mid-read
+// — see the short-read branch's rationale below. The caller turns
+// the throw into a structured error and aborts the mutation.
 function readHookContentsNoFollow(hookPath: string): { contents: Buffer; mode: number } {
   const fd = openSync(hookPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const st = fstatSync(fd);
     const size = st.size;
+    // Preserve setuid/setgid/sticky bits along with the standard rwx
+    // triples so the backup sibling restores a runnable hook under
+    // the documented `mv backup hook` rollback. The `& 0o7777` mask
+    // drops the file-type bits Node's stat reports above 0o7777.
+    const mode = st.mode & 0o7777;
     const buf = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
-      // readSync may return fewer bytes than requested on a regular file
-      // when the file is being concurrently truncated or extended; loop
-      // until either the buffer is full or readSync returns 0 (EOF).
+      // Regular files can return short reads on POSIX (rare in
+      // practice for a hook the migrate command has just stat-ed,
+      // but the loop is defensive). `readSync` returns 0 only on
+      // EOF or — under a concurrent truncation — when the file got
+      // shorter than `size` after the fstat. The post-loop check
+      // below promotes that case to an error rather than silently
+      // writing a short backup.
       const n = readSync(fd, buf, offset, size - offset, offset);
       if (n === 0) break;
       offset += n;
     }
-    return {
-      contents: offset === size ? buf : buf.subarray(0, offset),
-      mode: st.mode & 0o7777,
-    };
+    if (offset < size) {
+      // The file was truncated between `fstatSync` and the final
+      // `readSync`. A short backup would silently corrupt the
+      // operator's documented rollback (`mv backup hook` would
+      // restore a hook missing its tail). Surface the failure so the
+      // caller can abort and the operator can investigate. Avoid
+      // throwing a plain `Error` so a future caller distinguishing
+      // this case from ELOOP can branch on the `code` field.
+      const err: NodeJS.ErrnoException = new Error(
+        `short read while backing up ${hookPath}: ` +
+        `read ${offset} of ${size} bytes (concurrent truncation?)`,
+      );
+      err.code = 'EIO';
+      throw err;
+    }
+    return { contents: buf, mode };
   } finally {
     try {
       closeSync(fd);
     } catch {
-      // Best-effort close; the file descriptor will be reaped when
-      // the process exits, and the function's contract does not
-      // depend on the close succeeding.
+      // The read already returned the bytes the caller needs, so a
+      // close failure does not affect correctness. A descriptor leak
+      // here would matter for a long-running process, but
+      // `gan hooks migrate` is a one-shot CLI invocation so the
+      // practical impact is bounded.
     }
+  }
+}
+
+// Read the hook contents and mode under {@link
+// readHookContentsNoFollow} and normalise the failure into the same
+// `CommandResult` shape every other branch in `run()` returns. The
+// helper exists to dedup the matching try/catch shells `runDelete`
+// and `runReplace` would otherwise carry verbatim. The discriminated
+// union shape lets the call site `switch` on `ok` and recover the
+// caller's local variables (`original`, `sourceMode`) without
+// re-throwing.
+//
+// ELOOP is mapped to the same `GanHooksMigrateProjectHookIsSymlink`
+// structured payload the {@link isSymlinkAt} pre-check emits: a
+// racy `rename(2)`-swap of a symlink between the lstat and the
+// open is structurally the same failure mode the pre-check catches,
+// just reported by the kernel instead of by userspace. Classifying
+// both at `EXIT_VALIDATION` lets a CI gate treat "your project has
+// a symlink at the hook path" uniformly regardless of when in the
+// open/read sequence it raced in. Every other errno (EIO from the
+// short-read promotion above, EACCES from a permission flip,
+// ENOENT from a deletion race) is an operational failure rather
+// than an input-contract violation, so it maps to `EXIT_GENERIC`.
+function readSourceContentsOrFail(
+  hookPath: string,
+  action: 'delete' | 'replace',
+): { ok: true; original: Buffer; sourceMode: number } | { ok: false; failure: CommandResult } {
+  try {
+    const read = readHookContentsNoFollow(hookPath);
+    return { ok: true, original: read.contents, sourceMode: read.mode };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP') {
+      // Racy symlink-swap caught by the kernel — surface the same
+      // structured payload as the lstat-time refusal.
+      return {
+        ok: false,
+        failure: {
+          stdout: '',
+          stderr: symlinkRefusalPayload(hookPath, action) + '\n',
+          code: EXIT_VALIDATION,
+        },
+      };
+    }
+    // ELOOP was handled above; reaching here means an operational
+    // failure — EACCES (the operator's permissions changed),
+    // ENOENT (a deletion race), EIO (a concurrent truncation
+    // promoted by readHookContentsNoFollow's short-read check), or
+    // anything else the kernel surfaces. The hint names the
+    // common causes so the operator has somewhere to start without
+    // having to decode the raw `errno` text.
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      failure: {
+        stdout: '',
+        stderr:
+          `Error: gan hooks migrate --${action} could not read ${hookPath}: ${msg}\n` +
+          `hint: common causes are EACCES (permission flip), ENOENT (deletion race), ` +
+          `or EIO (concurrent truncation).\n`,
+        code: EXIT_GENERIC,
+      },
+    };
   }
 }
 
@@ -589,36 +677,15 @@ function runDelete(hookPath: string, now: Date): CommandResult {
       code: EXIT_VALIDATION,
     };
   }
-  // Open the hook with `O_NOFOLLOW` to read its contents AND mode
-  // bits under one fd. The kernel-level no-follow flag closes the
-  // TOCTOU window between the {@link isSymlinkAt} check above and
-  // the contents read here: a racy `rename(2)`-swap of a symlink
-  // into the hook path between the lstat and the read would
-  // otherwise let `readFileSync` follow the link and exfiltrate the
-  // target's contents into the backup sibling. `O_NOFOLLOW` makes
-  // the kernel refuse the open with `ELOOP` instead. The same fd is
-  // `fstatSync`-ed for the mode so the source hook's executable bit
-  // is preserved on the backup sibling (the documented `mv backup
-  // hook` rollback restores a runnable hook).
-  let original: Buffer;
-  let sourceMode: number;
-  try {
-    const read = readHookContentsNoFollow(hookPath);
-    original = read.contents;
-    sourceMode = read.mode;
-  } catch (e) {
-    // Most-likely cause is ELOOP from a racy symlink-swap; surface
-    // the structured refusal so a log reader can tell the case
-    // apart from a routine IO failure.
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      stdout: '',
-      stderr:
-        `Error: gan hooks migrate --delete failed reading ${hookPath} ` +
-        `under O_NOFOLLOW: ${msg}\n`,
-      code: EXIT_GENERIC,
-    };
-  }
+  // Read the hook contents and mode under `O_NOFOLLOW`. The helper
+  // collapses the kernel's ELOOP into the same structured
+  // `GanHooksMigrateProjectHookIsSymlink` refusal the lstat-time
+  // check emits, so a racy symlink-swap is reported uniformly
+  // regardless of which side caught it. See {@link
+  // readSourceContentsOrFail} for the failure-classification rules.
+  const sourceRead = readSourceContentsOrFail(hookPath, 'delete');
+  if (!sourceRead.ok) return sourceRead.failure;
+  const { original, sourceMode } = sourceRead;
   const backupPath = composeBackupPath(hookPath, now);
   try {
     // Atomic backup-then-unlink: write the backup via temp+rename FIRST so
@@ -706,27 +773,12 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
   // before the original hook is overwritten, and the replacement is
   // renamed onto the original path in one atomic step.
   //
-  // Read the source hook's contents and mode under O_NOFOLLOW — same
-  // TOCTOU-closing rationale as in {@link runDelete}; see the long
-  // comment there. A racy symlink-swap between the {@link isSymlinkAt}
-  // check above and this read is caught by the kernel with ELOOP
-  // rather than letting `readFileSync` exfiltrate the link target.
-  let original: Buffer;
-  let sourceMode: number;
-  try {
-    const read = readHookContentsNoFollow(hookPath);
-    original = read.contents;
-    sourceMode = read.mode;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      stdout: '',
-      stderr:
-        `Error: gan hooks migrate --replace failed reading ${hookPath} ` +
-        `under O_NOFOLLOW: ${msg}\n`,
-      code: EXIT_GENERIC,
-    };
-  }
+  // Read the source hook's contents and mode under O_NOFOLLOW — see
+  // the matching call in {@link runDelete} for the TOCTOU rationale
+  // and `readSourceContentsOrFail`'s failure-classification rules.
+  const sourceRead = readSourceContentsOrFail(hookPath, 'replace');
+  if (!sourceRead.ok) return sourceRead.failure;
+  const { original, sourceMode } = sourceRead;
   const backupPath = composeBackupPath(hookPath, now);
   try {
     atomicWriteBuffer(backupPath, original, sourceMode);
