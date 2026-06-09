@@ -23,7 +23,10 @@ import { writeStubBin } from './tmpenv.js';
  * The set of installer steps that can be made to fail on demand. Each value
  * maps to a `CAS_FAIL_*` env var (and, for `json-edit`/`zone-prep`, a stubbed
  * binary):
- * - `npm-install` — the global package install (`npm install -g .`).
+ * - `npm-install` — the dependency-install steps: the global package install
+ *   (`npm install -g .`) and the cold-path bootstrap dependency install
+ *   (`npm ci --ignore-scripts`). One flag (`CAS_FAIL_NPM_INSTALL`) trips
+ *   whichever of the two the installer reaches first.
  * - `json-edit` — the node-driven edit of `~/.claude.json`.
  * - `zone-prep` — creation of the `.gan-state` / `.gan-cache` zone dirs.
  * - `confine-hook-write` — writing/registering the confinement hook.

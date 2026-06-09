@@ -20,8 +20,9 @@
     "templates"
   ],
   "scripts": {
-    "prepare": "npm run build",
+    "prepare": "node scripts/prepare-bootstrap.mjs",
     "build": "tsc && tsc -p tsconfig.scripts.json",
+    "postbuild": "node scripts/chmod-bins.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",

@@ -195,10 +195,16 @@ describe('install.sh — S2 happy-path install', () => {
     expect(r2.exitCode).toBe(0);
 
     // `npm root -g` is a read-only lookup the installer may repeat; filtering
-    // it out leaves only state-changing calls (notably `install`). The second
-    // run must make none — that is the idempotency guarantee.
+    // it out leaves only state-changing calls (notably `install` and the
+    // bootstrap `ci`). The second run must make none — that is the idempotency
+    // guarantee. The version-probe gate plus the bootstrap's warm-tree guard
+    // (current `dist/` present) together ensure neither `install -g` nor `ci`
+    // is re-run on a warm, version-matched tree.
     const stateChanging = readNpmInvocations(npmLog).filter((line) => !line.startsWith('root -g'));
     expect(stateChanging).toEqual([]);
+    // Explicitly confirm the bootstrap dependency install is absent on a warm
+    // re-run (the [] assertion above already implies this; this names it).
+    expect(stateChanging.some((line) => line.split(/\s+/)[0] === 'ci')).toBe(false);
 
     const gi = readFileSync(path.join(cwd, '.gitignore'), 'utf8');
     const stateLines = gi.split('\n').filter((l) => l === '.gan-state/');
@@ -228,8 +234,39 @@ describe('install.sh — S2 happy-path install', () => {
     const calls = readNpmInvocations(npmLog);
     expect(calls.length).toBeGreaterThanOrEqual(1);
 
-    expect(calls[0]).toContain('install');
-    expect(calls[0]).toContain('-g');
+    // Find the GLOBAL-INSTALL invocation specifically. The bootstrap step now
+    // logs `npm ci` before `npm install -g .`, so `calls[0]` is no longer
+    // guaranteed to be the global install — assert the reinstall happened by
+    // locating the `install -g` call directly.
+    const globalInstall = calls.find((c) => c.includes('install') && c.includes('-g'));
+    expect(globalInstall).toBeDefined();
+  });
+
+  it('cold install bootstraps the build: `npm ci` runs before `npm install -g .`', async () => {
+    // The repo under test is already built (`dist/` present), so the bootstrap
+    // warm-tree guard would normally skip the dependency install. `CAS_FORCE_
+    // BOOTSTRAP=1` forces the cold path so we can assert ordering: the
+    // bootstrap `npm ci --ignore-scripts` must precede the global
+    // `npm install -g .`.
+    const { tmp, pathOverride, cwd, npmLog } = setup({
+      configServer: { version: '0.0.99-mismatched' },
+      npm: { exitCode: 0 },
+    });
+
+    const result = await runInstall([], {
+      home: tmp.home,
+      pathOverride,
+      cwd,
+      extraEnv: { CAS_FORCE_BOOTSTRAP: '1' },
+    });
+    expect(result.exitCode).toBe(0);
+
+    const calls = readNpmInvocations(npmLog);
+    const ciIndex = calls.findIndex((c) => c.split(/\s+/)[0] === 'ci');
+    const globalInstallIndex = calls.findIndex((c) => c.includes('install') && c.includes('-g'));
+    expect(ciIndex).toBeGreaterThanOrEqual(0);
+    expect(globalInstallIndex).toBeGreaterThanOrEqual(0);
+    expect(ciIndex).toBeLessThan(globalInstallIndex);
   });
 
   it('S2-AC4: --no-claude-code skips MCP registration entirely', async () => {

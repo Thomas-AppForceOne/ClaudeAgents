@@ -417,6 +417,118 @@ else
 fi
 
 ############################################################################
+hdr "F. Clean-checkout install (self-bootstrapping build)"
+############################################################################
+#
+# These two scenarios prove the framework installs from a CLEAN checkout — a
+# copy of the repo with NO node_modules and NO dist/ — exactly as a first-time
+# user clones-and-installs. The build artifacts under dist/ are produced on the
+# fly: by install.sh's bootstrap step (F1) and by the package's `prepare`
+# lifecycle on a bare global install (F2).
+#
+# ISOLATION: each scenario copies the working tree (minus node_modules/.git/
+# dist) into a fresh sandbox via rsync, and points npm's GLOBAL prefix at a
+# throwaway dir (`npm_config_prefix`) so the real global npm and the
+# developer's real ~/.claude are never touched. The bins resolve from that
+# private prefix's bin dir, prepended to PATH.
+
+# Make a clean-checkout copy of the repo into a fresh sandbox dir and echo its
+# path. Excludes node_modules, dist, and .git so the copy genuinely has no
+# build artifacts and no installed dependencies. Uses the working tree (not
+# `git archive`) so the install scripts under test are the ones in the tree.
+make_clean_checkout() {
+  local dest
+  dest=$(new_sbx)/repo
+  mkdir -p "$dest"
+  rsync -a \
+    --exclude '.git/' \
+    --exclude 'node_modules/' \
+    --exclude 'dist/' \
+    "$REPO_ROOT/" "$dest/" >/dev/null 2>&1
+  printf '%s\n' "$dest"
+}
+
+# F1: clean checkout + `install.sh --no-claude-code`. The bootstrap step must
+# build dist/ from scratch, then the global install must put BOTH bins on PATH.
+# Global prefix is isolated so the developer's real global npm is untouched.
+sbx=$(new_sbx)
+clean=$(make_clean_checkout)
+prefix=$(new_sbx)/prefix
+mkdir -p "$prefix/bin"
+if [ ! -d "$clean/node_modules" ] && [ ! -d "$clean/dist" ]; then
+  out=$(cd "$clean" && HOME="$sbx" npm_config_prefix="$prefix" \
+    PATH="$prefix/bin:$PATH" bash install.sh --no-claude-code 2>&1); rc=$?
+  cfg_on_path="no"; gan_on_path="no"; cfg_runs="no"; gan_runs="no"
+  if PATH="$prefix/bin:$PATH" command -v claudeagents-config-server >/dev/null 2>&1; then
+    cfg_on_path="yes"
+  fi
+  if PATH="$prefix/bin:$PATH" command -v gan >/dev/null 2>&1; then
+    gan_on_path="yes"
+  fi
+  # Resolution is not runnability: actually run each bin under the isolated
+  # PATH and require exit 0 (`--version` for the server, `--help` for gan).
+  if PATH="$prefix/bin:$PATH" claudeagents-config-server --version </dev/null >/dev/null 2>&1; then
+    cfg_runs="yes"
+  fi
+  if PATH="$prefix/bin:$PATH" gan --help </dev/null >/dev/null 2>&1; then
+    gan_runs="yes"
+  fi
+  if [ "$rc" -eq 0 ] && [ "$cfg_on_path" = "yes" ] && [ "$gan_on_path" = "yes" ] && \
+     [ "$cfg_runs" = "yes" ] && [ "$gan_runs" = "yes" ] && \
+     assert_install_artifacts "$sbx"; then
+    ok "F1 clean checkout + install.sh --no-claude-code: exit 0, both bins run on PATH"
+  else
+    bad "F1 clean-checkout install.sh" "rc=$rc cfg=$cfg_on_path gan=$gan_on_path cfgRuns=$cfg_runs ganRuns=$gan_runs out=${out:0:200}"
+  fi
+else
+  bad "F1 clean-checkout install.sh" "clean copy still had node_modules/ or dist/"
+fi
+
+# F2: clean checkout + bare `npm install -g .`. The package's `prepare`
+# lifecycle must bootstrap-and-build, producing BOTH dist/ bin entrypoints in
+# the clean copy. Global prefix isolated as in F1.
+#
+# KNOWN EXPOSURE (diagnostic): a bare global install runs `prepare` with npm's
+# global lifecycle environment set, so the bootstrap's nested dependency
+# install can inherit that context and refuse with `ECIGLOBAL` ("`npm ci` does
+# not work for global packages"). If this scenario fails with ECIGLOBAL, the
+# fault is in the package's own `prepare` bootstrap (it must clear the inherited
+# global flags before its nested dependency install), NOT in this gate — the
+# `install.sh` path (F1) is unaffected because it runs its dependency install
+# directly rather than through npm's global lifecycle.
+clean=$(make_clean_checkout)
+prefix=$(new_sbx)/prefix
+mkdir -p "$prefix/bin"
+if [ ! -d "$clean/node_modules" ] && [ ! -d "$clean/dist" ]; then
+  out=$(cd "$clean" && npm_config_prefix="$prefix" \
+    PATH="$prefix/bin:$PATH" npm install -g . 2>&1); rc=$?
+  # Existence is not runnability: the entrypoints must also be executable
+  # (`test -x`) AND actually run under the isolated prefix. `tsc` emits them
+  # 0644, so without the postbuild chmod hook they resolve but fail with
+  # exit 126 — this gate is what catches that regression.
+  cfg_x="no"; cli_x="no"; cfg_runs="no"; gan_runs="no"
+  [ -x "$clean/dist/config-server/index.js" ] && cfg_x="yes"
+  [ -x "$clean/dist/cli/index.js" ] && cli_x="yes"
+  if PATH="$prefix/bin:$PATH" claudeagents-config-server --version </dev/null >/dev/null 2>&1; then
+    cfg_runs="yes"
+  fi
+  if PATH="$prefix/bin:$PATH" gan --help </dev/null >/dev/null 2>&1; then
+    gan_runs="yes"
+  fi
+  if [ "$rc" -eq 0 ] && \
+     [ -f "$clean/dist/config-server/index.js" ] && \
+     [ -f "$clean/dist/cli/index.js" ] && \
+     [ "$cfg_x" = "yes" ] && [ "$cli_x" = "yes" ] && \
+     [ "$cfg_runs" = "yes" ] && [ "$gan_runs" = "yes" ]; then
+    ok "F2 clean checkout + npm install -g .: prepare produced dist/config-server + dist/cli entrypoints that run"
+  else
+    bad "F2 clean-checkout prepare" "rc=$rc config=$([ -f "$clean/dist/config-server/index.js" ] && echo y || echo n) cli=$([ -f "$clean/dist/cli/index.js" ] && echo y || echo n) cfgX=$cfg_x cliX=$cli_x cfgRuns=$cfg_runs ganRuns=$gan_runs out=${out:0:200}"
+  fi
+else
+  bad "F2 clean-checkout prepare" "clean copy still had node_modules/ or dist/"
+fi
+
+############################################################################
 hdr "G. Output format"
 ############################################################################
 
@@ -481,9 +593,10 @@ hdr "Not covered here (requires special fixtures or a real TTY)"
 printf "  - Interactive 8-category prompt UX (Y/n/v/a/s shortcuts) — needs a pty.\n"
 printf "  - Old node version warning (warn-not-die) — needs a fake node stub.\n"
 printf "  - npm install failure rollback (S2-AC10) — needs a fake npm stub.\n"
-printf "  - Missing build artifact at dist/ — needs the package to be globally\n"
-printf "    installed without dist/, which the vitest suite covers.\n"
+printf "  - Forced bootstrap-build failure rollback — needs a fake npm stub.\n"
 printf "  These are exercised by the vitest suite in tests/installer/.\n"
+printf "  (Clean-checkout install from a dist-less tree is covered live in\n"
+printf "   section F above.)\n"
 
 ############################################################################
 hdr "SUMMARY"

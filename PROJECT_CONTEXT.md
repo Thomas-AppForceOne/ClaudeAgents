@@ -29,9 +29,11 @@ This file is authoritative for **conventions** (how we work) and does **not** tr
   - Bin name: `claudeagents-config-server`.
 - **Installer (R2-locked):** Bash (`install.sh`). Covers install + uninstall + the I2 permission-consent flow.
   - **Install pattern:** local-install-only until the package is published — `npm install -g .` from the repo root (or `npm pack && npm install -g <tgz>`). Outside-repo registry fallback is a future task.
+  - **Self-bootstrapping `prepare`:** the package's `prepare` lifecycle script runs the build, so bare `npm install -g .` on a clean checkout (no prior `npm install`, no committed `dist/`) is a supported install path — it bootstraps its own build artifacts. `install.sh` likewise works from a clean checkout.
   - **`MCP_SERVER_VERSION` source of truth:** `install.sh` reads `package.json` at runtime via `node -p` (no hardcoded constant). A maintainer lint that pins the version-source pattern is an R4 follow-up.
   - **`~/.claude.json` + `~/.claude/settings.json` write rules:** single backup per machine before the first edit; JSON manipulation via `node -e` (no `jq` dependency); atomic temp-file + rename with sorted-key + two-space-indent + trailing newline. Per-run preedit copies under STATE_LOG drive rollback on partial failure.
   - **Idempotency check pattern:** version-probe first (`claudeagents-config-server --version`); only run `npm install -g .` if the binary is missing or the version mismatches `package.json`. Re-runs of `configure_permissions` skip categories whose tools are all already in `permissions.allow` (I2 sprint 3b).
+  - **Executable-bin + runnability rule:** `tsc` emits `dist/` bin entrypoints as `0644`, so a `postbuild` hook (`scripts/chmod-bins.mjs`, plain Node ESM) adds the execute bit to every `package.json` `bin` target after every build; install verification (`verify_mcp_bin_on_path`) asserts the bin RUNS (`--version` exit 0 / `test -x`), not merely that it resolves on PATH.
   - **Zones created by installer:** `.gan-state/` and `.gan-cache/` only. Zone 1 (`.claude/gan/`) is left alone (created lazily on first overlay authoring).
 - **Bash testing pattern (R2-locked):** vitest + `child_process.spawn` shelling out to `install.sh`. Tests live under `tests/installer/`. No new CI workflow file (the installer rides the existing test harness).
 - **CLI wrapper (R3-locked):**
