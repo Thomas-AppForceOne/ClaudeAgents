@@ -461,12 +461,36 @@ async function spawnAndCollect(
       });
     }
     if (child.stdin !== null) {
+      // Attach an `error` listener BEFORE the `end()` call so an
+      // asynchronously-emitted EPIPE — what Linux raises when the
+      // child has already exited and closed its stdin before our
+      // write reaches the pipe — does not become an uncaught
+      // exception that crashes the long-lived MCP server. The
+      // condition is structurally common for the `stale` /
+      // `current` cases: a fast-exit hook (e.g. `#!/bin/bash\nexit
+      // 1\n`) closes its stdin immediately, and the kernel
+      // delivers EPIPE on the writer's next write. On macOS the
+      // pipe is buffered such that the write succeeds before the
+      // child's exit closes the pipe, so the bug was invisible
+      // there — but the Linux CI surface fails every test that
+      // stages a fast-exit project hook. Swallowing the error
+      // here is safe: the probe doesn't need the write to
+      // succeed (the hook has already decided its exit code by
+      // the time stdin closes), and the `exit` handler above
+      // still records the verdict.
+      child.stdin.on('error', () => {
+        // Best-effort write — see comment above. The exit code
+        // path resolves the promise; this listener exists only
+        // to prevent the EPIPE from becoming uncaught.
+      });
       try {
         child.stdin.end(stdin);
       } catch {
-        // A write failure here is rare; the `error` event above resolves
-        // the promise as `SPAWN_ERROR`. Swallow the synchronous throw so
-        // the promise resolves through the event path rather than crashing.
+        // A write failure here is rare; the `error` event above
+        // resolves the promise as `SPAWN_ERROR`. Swallow the
+        // synchronous throw so the promise resolves through the
+        // event path rather than crashing. (Async EPIPE is
+        // handled by the dedicated `error` listener above.)
       }
     }
   });

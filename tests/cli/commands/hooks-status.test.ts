@@ -139,13 +139,7 @@ describe('gan hooks status (new subdirectory subcommand)', () => {
       cwd,
       extraEnv: { HOME: home },
     });
-    // TEMP DEBUG: include stderr/stdout in the assertion message so a CI
-    // failure surfaces the underlying cause. Remove once the linux-CI flake
-    // is root-caused.
-    expect(
-      r.exitCode,
-      `exitCode mismatch.\nstderr: ${r.stderr}\nstdout (first 500): ${r.stdout.slice(0, 500)}`,
-    ).toBe(2);
+    expect(r.exitCode).toBe(2);
     const parsed = JSON.parse(r.stdout) as {
       projectTier: { verdict: string; probeVerdict: string } | null;
       verdict: string;
@@ -186,11 +180,7 @@ describe('gan hooks status (new subdirectory subcommand)', () => {
     seedHook(home, renderedTemplate());
     seedHook(cwd, '#!/bin/bash\nexit 1\n');
     const r = await runGan(['hooks', 'status'], { cwd, extraEnv: { HOME: home } });
-    // TEMP DEBUG: see paired test above. Remove with that one.
-    expect(
-      r.exitCode,
-      `exitCode mismatch.\nstderr: ${r.stderr}\nstdout (first 500): ${r.stdout.slice(0, 500)}`,
-    ).toBe(2);
+    expect(r.exitCode).toBe(2);
     expect(r.stdout).toContain('gan hooks migrate --delete');
     expect(r.stdout).toContain('gan hooks migrate --review');
   });
