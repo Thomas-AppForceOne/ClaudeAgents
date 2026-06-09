@@ -135,6 +135,28 @@ const HERMETIC_PROBE_PATH = '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin';
 // cheap and predictable regardless of file size.
 const SHEBANG_SNIFF_BYTES = 4;
 
+// Wall-clock cap on the spawned hook. A hook that does not exit within
+// this many milliseconds is killed with SIGKILL and the probe resolves
+// as `misconfigured`. The cap is the load-bearing protection against a
+// hook that hangs (e.g. an operator-added `sleep infinity`, a `read`
+// that never returns, or a child the hook fork-spawned and waited on
+// without a timeout): without it, the skill-side preflight that runs
+// `probeConfineHook` on every regular `/gan` invocation would block
+// every sprint start on a single misbehaving project hook with no
+// diagnostic. Five seconds is generous for a hook whose normal exit
+// completes in milliseconds.
+const PROBE_TIMEOUT_MS = 5_000;
+
+// Maximum bytes the probe accepts from the spawned hook's stdout or
+// stderr before SIGKILLing the child. A correctly-implemented hook
+// produces little or no output on its allow-list write path. The cap
+// prevents a runaway hook (e.g. `yes | head -c 1G`) from blowing up
+// V8's heap inside the long-lived MCP server process that hosts
+// `probeConfineHook`. The cap is intentionally generous (1 MiB) so a
+// hook that logs a long error message before exiting is not
+// misclassified, while still bounding the worst-case heap footprint.
+const PROBE_STREAM_CAP_BYTES = 1_048_576;
+
 /**
  * Run the behaviour probe against the candidate confinement hook.
  *
@@ -237,8 +259,18 @@ export async function runConfineHookProbe(
     // Hygiene contract: the temp tree is removed on every code path,
     // including a `throw` inside the try block above. `force: true` makes
     // the call idempotent so a partial cleanup (e.g. an interrupted spawn)
-    // does not surface as a secondary error.
-    rmSync(tempRoot, { recursive: true, force: true });
+    // does not surface as a secondary error. The surrounding try/catch is
+    // load-bearing for the function's "never throws" docstring contract:
+    // an `rmSync` failure (e.g. EBUSY on a still-mapped file, EACCES on a
+    // permission flip during NFS reconvergence) must not escape and crash
+    // the long-lived MCP server that hosts `probeConfineHook`.
+    try {
+      rmSync(tempRoot, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; the leaked temp tree will be reaped by the
+      // operator's tmpfile cleaner. Swallowing the throw preserves the
+      // never-throws contract for every caller.
+    }
   }
 }
 
@@ -300,8 +332,10 @@ const SPAWN_ERROR = 'spawnError' as const;
 
 // Spawn the hook with the explicit env and feed the stdin payload. Resolves
 // with the numeric exit code on a normal exit, or with `SPAWN_ERROR` on
-// any spawn-time failure (ENOENT, EACCES, ENOEXEC). The function never
-// throws: the only outcomes are an integer exit code or the sentinel.
+// any spawn-time failure (ENOENT, EACCES, ENOEXEC), on the
+// `PROBE_TIMEOUT_MS` wall-clock cap firing, and on either stream
+// exceeding `PROBE_STREAM_CAP_BYTES`. The function never throws: the only
+// outcomes are an integer exit code or the sentinel.
 async function spawnAndCollect(
   hookPath: string,
   env: Record<string, string>,
@@ -323,11 +357,36 @@ async function spawnAndCollect(
       return;
     }
     let settled = false;
-    const settle = (value: number | typeof SPAWN_ERROR) => {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const settle = (value: number | typeof SPAWN_ERROR): void => {
       if (settled) return;
       settled = true;
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
       resolve(value);
     };
+    // Defensive SIGKILL helper: the child may already be reaped (a kill
+    // attempt on a dead process throws ESRCH on some platforms), so the
+    // try/catch absorbs that race and the caller's `settle` runs either
+    // way.
+    const forceKill = (): void => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The child is already gone; the 'exit' handler will fire (or has
+        // fired) and either path settles the promise.
+      }
+    };
+    // Wall-clock cap: see PROBE_TIMEOUT_MS. The cap exists so a single
+    // hanging project hook cannot block every `/gan` sprint start on the
+    // skill-side preflight. SIGKILL (not SIGTERM) so a hook that traps
+    // termination signals still goes away.
+    timeoutHandle = setTimeout(() => {
+      forceKill();
+      settle(SPAWN_ERROR);
+    }, PROBE_TIMEOUT_MS);
     child.on('error', () => settle(SPAWN_ERROR));
     child.on('exit', (code, signal) => {
       // A signal-only exit (no numeric code) is treated as a non-zero exit
@@ -342,15 +401,31 @@ async function spawnAndCollect(
         settle(1);
       }
     });
-    // Drain stdout/stderr so the child never blocks on a full pipe.
+    // Drain stdout/stderr with a per-stream byte counter. A hook that
+    // exceeds the cap on either stream is SIGKILLed and the probe resolves
+    // as SPAWN_ERROR → `misconfigured`. The counters are per-stream so a
+    // hook that splits a megabyte across both streams still exceeds the
+    // cap on one of them. Without the cap, a runaway hook (`yes`-style)
+    // would buffer unbounded chunks into V8 inside the long-lived MCP
+    // server and OOM the process that the framework cannot recover.
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     if (child.stdout !== null) {
-      child.stdout.on('data', () => {
-        /* discard */
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > PROBE_STREAM_CAP_BYTES) {
+          forceKill();
+          settle(SPAWN_ERROR);
+        }
       });
     }
     if (child.stderr !== null) {
-      child.stderr.on('data', () => {
-        /* discard */
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrBytes += chunk.length;
+        if (stderrBytes > PROBE_STREAM_CAP_BYTES) {
+          forceKill();
+          settle(SPAWN_ERROR);
+        }
       });
     }
     if (child.stdin !== null) {

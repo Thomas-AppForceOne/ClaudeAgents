@@ -354,7 +354,11 @@ describe('gan hooks migrate confirmation discipline', () => {
 });
 
 describe('gan hooks migrate action selection', () => {
-  it('no action selected: exit 2 with usage message', async () => {
+  // Argument errors map to EXIT_BAD_ARGS (64), the sysexits-style
+  // "the operator typed the command wrong" code. Previously these
+  // collapsed onto EXIT_VALIDATION (2), which left a CI gate unable to
+  // distinguish them from a genuine stale-hook detection.
+  it('no action selected: exit 64 with usage message', async () => {
     const cwd = makeTmpDir('gan-migrate-');
     const flags: Record<string, string | boolean> = {
       json: false,
@@ -365,11 +369,11 @@ describe('gan hooks migrate action selection', () => {
       { _: [], flags, doubleDashSeen: false },
       { stdin: NON_TTY_STDIN, now: () => FIXED_DATE },
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(64);
     expect(result.stderr).toContain('exactly one of --delete / --replace / --review');
   });
 
-  it('multiple actions selected: exit 2 with usage message', async () => {
+  it('multiple actions selected: exit 64 with usage message', async () => {
     const cwd = makeTmpDir('gan-migrate-');
     const flags: Record<string, string | boolean> = {
       json: false,
@@ -382,7 +386,7 @@ describe('gan hooks migrate action selection', () => {
       { _: [], flags, doubleDashSeen: false },
       { stdin: NON_TTY_STDIN, now: () => FIXED_DATE },
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(64);
     expect(result.stderr).toContain('got more than one');
   });
 });
@@ -535,4 +539,113 @@ describe('gan hooks migrate --review produces a real unified diff', () => {
 // the linter quiet about the vitest import surface.
 beforeEach(() => {
   /* per-test setup hook reserved for future use */
+});
+
+describe('gan hooks migrate — symlink refusal', () => {
+  // A project-tier hook that is a symlink to a file outside the
+  // hooks directory is a misuse pattern the framework MUST refuse to
+  // follow: the destructive actions would (a) read the link target's
+  // contents into a backup sibling (exfiltrating an arbitrary file
+  // the operator may not have intended to share with the framework),
+  // and (b) leave the operator surprised when `--delete` removes
+  // only the link or `--replace` clobbers the link with a regular
+  // file. The refusal is structured (machine-parseable JSON with
+  // `subReason: 'projectHookIsSymlink'`) so a JSON consumer can
+  // surface the cause without parsing prose.
+  it('--delete on a symlink hook refuses with a structured error', async () => {
+    const cwd = makeTmpDir('gan-migrate-symlink-');
+    const targetDir = makeTmpDir('gan-migrate-symlink-target-');
+    // Stage a target file the symlink will point at. The contents
+    // would be exfiltrated into the backup sibling if the refusal
+    // were absent.
+    const targetFile = path.join(targetDir, 'sensitive');
+    writeFileSync(targetFile, 'SECRET CONTENTS');
+    const hooksDir = path.join(cwd, '.claude', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    const hookPath = path.join(hooksDir, 'gan-confine.sh');
+    // The symlink — created via Node's `symlinkSync` to keep the
+    // test cross-platform; the migrate command's `lstatSync` check
+    // is what decides the refusal regardless of how the link was
+    // staged.
+    const { symlinkSync } = await import('node:fs');
+    symlinkSync(targetFile, hookPath);
+    const result = await runMigrate(
+      makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    // Exit code: EXIT_VALIDATION (2). The command was syntactically
+    // correct; the project tree fails the input contract.
+    expect(result.code).toBe(2);
+    // Structured payload on stderr names the subReason discriminator
+    // and the literal hook path the framework would have followed.
+    // The message embeds the canonical project-root-derived hook
+    // path (not the test's `hookPath` directly — that would resolve
+    // the symlink and point at the link target).
+    const parsed = JSON.parse(result.stderr.trim()) as Record<string, string>;
+    expect(parsed['code']).toBe('GanHooksMigrateProjectHookIsSymlink');
+    expect(parsed['subReason']).toBe('projectHookIsSymlink');
+    const canonicalHookPath = path.join(canonical(cwd), '.claude', 'hooks', 'gan-confine.sh');
+    expect(parsed['message']).toContain(canonicalHookPath);
+    // Belt-and-braces: the symlink and its target are both intact;
+    // no backup sibling was written into the hooks directory.
+    expect(existsSync(hookPath)).toBe(true);
+    expect(existsSync(targetFile)).toBe(true);
+    expect(readFileSync(targetFile, 'utf8')).toBe('SECRET CONTENTS');
+    const siblings = readdirSync(hooksDir);
+    expect(siblings.filter((n) => n.includes('.gan-bak.'))).toEqual([]);
+  });
+
+  it('--replace on a symlink hook refuses with a structured error', async () => {
+    const cwd = makeTmpDir('gan-migrate-symlink-');
+    const targetDir = makeTmpDir('gan-migrate-symlink-target-');
+    const targetFile = path.join(targetDir, 'sensitive');
+    writeFileSync(targetFile, 'SECRET CONTENTS');
+    const hooksDir = path.join(cwd, '.claude', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    const hookPath = path.join(hooksDir, 'gan-confine.sh');
+    const { symlinkSync } = await import('node:fs');
+    symlinkSync(targetFile, hookPath);
+    const result = await runMigrate(
+      makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    expect(result.code).toBe(2);
+    const parsed = JSON.parse(result.stderr.trim()) as Record<string, string>;
+    expect(parsed['code']).toBe('GanHooksMigrateProjectHookIsSymlink');
+    expect(parsed['subReason']).toBe('projectHookIsSymlink');
+    const canonicalHookPath = path.join(canonical(cwd), '.claude', 'hooks', 'gan-confine.sh');
+    expect(parsed['message']).toContain(canonicalHookPath);
+    // Symlink + target intact; no backup sibling, no overwrite.
+    expect(existsSync(hookPath)).toBe(true);
+    expect(readFileSync(targetFile, 'utf8')).toBe('SECRET CONTENTS');
+    const siblings = readdirSync(hooksDir);
+    expect(siblings.filter((n) => n.includes('.gan-bak.'))).toEqual([]);
+  });
+
+  it('--review on a symlink hook does NOT refuse (pure read; the diff captures the target)', async () => {
+    const cwd = makeTmpDir('gan-migrate-symlink-');
+    const targetDir = makeTmpDir('gan-migrate-symlink-target-');
+    const targetFile = path.join(targetDir, 'hook-impl.sh');
+    // The link target carries a real hook — `--review` reads it via
+    // `readFileSync` (which follows the link by design) and diffs
+    // against the framework template. The reviewer is the operator;
+    // pure-read access to the link target is exactly the use case
+    // (does the link's destination still match the framework?).
+    writeFileSync(targetFile, '#!/bin/bash\nexit 0\n');
+    const hooksDir = path.join(cwd, '.claude', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    const hookPath = path.join(hooksDir, 'gan-confine.sh');
+    const { symlinkSync } = await import('node:fs');
+    symlinkSync(targetFile, hookPath);
+    const result = await runMigrate(
+      makeArgs({ action: 'review', yes: true, projectRoot: cwd }),
+      { now: () => FIXED_DATE },
+    );
+    // Exit 0 with diff output; the symlink is left alone.
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('--- ');
+    expect(result.stdout).toContain('+++ ');
+    expect(existsSync(hookPath)).toBe(true);
+    expect(readFileSync(targetFile, 'utf8')).toBe('#!/bin/bash\nexit 0\n');
+  });
 });

@@ -405,6 +405,31 @@ export async function dispatch(rawArgv: readonly string[]): Promise<number> {
     return EXIT_BAD_ARGS;
   }
 
+  // Out-of-context action-flag guard. `--delete`, `--replace`, and
+  // `--review` are declared on the top-level parser (the parser is
+  // single-pass with `allowUnknownFlags: false`, so every flag any
+  // subcommand accepts must be on the top-level spec). But they only
+  // make sense on `gan hooks migrate` — supplying them to e.g.
+  // `gan stacks list --delete` would otherwise parse to a success exit
+  // with the flag silently ignored. Reject here so the surface
+  // advertises only the capabilities a command honours, and a future
+  // `gan stacks delete` does not inherit pre-existing semantics by
+  // accident.
+  const actionFlagInUse =
+    parsed.flags['delete'] === true
+    || parsed.flags['replace'] === true
+    || parsed.flags['review'] === true;
+  if (actionFlagInUse) {
+    const isHooksMigrate = subName === 'hooks' && parsed._[1] === 'migrate';
+    if (!isHooksMigrate) {
+      writeErr(
+        'Error: --delete / --replace / --review are valid only on `gan hooks migrate`.\n',
+      );
+      writeErr('Run `gan hooks migrate --help` for usage.\n');
+      return EXIT_BAD_ARGS;
+    }
+  }
+
   // `gan <sub> --help`: render that subcommand's help page rather than running
   // it. The help command is invoked with the subcommand name as its sole
   // positional and an empty flag set, so the request flags don't leak into it.

@@ -63,6 +63,20 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   // "the framework halted an unproductive loop" from a contract/validation
   // failure, which it would otherwise be conflated with.
   LoopDetected: EXIT_LOOP_DETECTED,
+
+  // `gan hooks migrate` structured-error codes. Both surface as
+  // EXIT_VALIDATION because the input contract (operator's command +
+  // project tree) is malformed in a way that requires the operator to
+  // act before the command can succeed. Registered here so the
+  // `exitCodeFor` lookup recognises them when a caller propagates a
+  // ConfigServerError carrying one of these codes.
+  GanHooksMigrateConfirmationRequired: EXIT_VALIDATION,
+  GanHooksMigrateProjectHookIsSymlink: EXIT_VALIDATION,
+
+  // `gan` CLI hygiene: action flags meant for `gan hooks migrate` were
+  // supplied to a different subcommand. The CLI rejects with this code
+  // before any subcommand runs.
+  GanCliActionFlagOutOfContext: EXIT_BAD_ARGS,
 });
 
 /**

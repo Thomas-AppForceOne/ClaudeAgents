@@ -268,3 +268,51 @@ describe('runConfineHookProbe — child env PATH is hermetic and machine-indepen
   });
 });
 
+// The criterion: the probe's spawn carries a wall-clock cap (per
+// PROBE_TIMEOUT_MS) and per-stream byte caps (per
+// PROBE_STREAM_CAP_BYTES). Without them, a single misbehaving project
+// hook would block every `/gan` sprint start on the skill-side
+// preflight or OOM the long-lived MCP server that hosts
+// `probeConfineHook`. The cap is the load-bearing protection.
+describe('runConfineHookProbe — runaway hook caps', () => {
+  it('a hook that hangs is killed and classified as misconfigured', async () => {
+    // The hook sleeps far longer than the probe's wall-clock cap. The
+    // probe must SIGKILL the child and resolve as `misconfigured`
+    // rather than wait. Total test wall-clock budget is ~6s (5s probe
+    // cap + small overhead); the cap defends both the test and the
+    // production preflight from a hanging hook.
+    const hookSource = '#!/bin/bash\nsleep 60\n';
+    const hookPath = stageHook(hookSource);
+    const start = Date.now();
+    const result = await runConfineHookProbe({ hookPath });
+    const elapsed = Date.now() - start;
+    expect(result.verdict).toBe('misconfigured');
+    expect(result.subReason).toBe('projectHookMisconfigured');
+    // Allow generous slack (the probe cap is 5s plus per-OS SIGKILL
+    // reap time); the test only asserts we do NOT wait for the 60s
+    // sleep. A regression that drops the timeout would surface as a
+    // test-runner-killing 60s wait.
+    expect(elapsed).toBeLessThan(15_000);
+  }, 30_000);
+
+  it('a hook that floods stdout past the byte cap is killed', async () => {
+    // `yes` is universally available on POSIX; piping its output to
+    // `head -c 2M` (2 MiB) doubles the probe's 1 MiB stream cap so
+    // even a generous interpretation of `cap > 1 MiB` is exceeded.
+    // The probe must SIGKILL the child before completion and
+    // classify as misconfigured. The test does NOT depend on which
+    // stream (stdout or stderr) trips the cap; redirecting the flood
+    // to stderr would prove the same property.
+    const hookSource = '#!/bin/bash\nyes | head -c 2097152\nexit 0\n';
+    const hookPath = stageHook(hookSource);
+    const start = Date.now();
+    const result = await runConfineHookProbe({ hookPath });
+    const elapsed = Date.now() - start;
+    expect(result.verdict).toBe('misconfigured');
+    expect(result.subReason).toBe('projectHookMisconfigured');
+    // The kill should land well before the wall-clock cap; a flood
+    // of 2 MiB through a pipe completes in milliseconds, so the
+    // probe should resolve quickly even though the cap is 5s.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 30_000);
+});

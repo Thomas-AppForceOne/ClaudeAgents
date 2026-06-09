@@ -30,6 +30,7 @@
  */
 
 import {
+  lstatSync,
   mkdirSync,
   readFileSync,
   readSync,
@@ -38,11 +39,17 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveProjectRoot } from '../../lib/project-root.js';
-import { EXIT_OK, EXIT_VALIDATION } from '../../lib/exit-codes.js';
+import {
+  EXIT_BAD_ARGS,
+  EXIT_GENERIC,
+  EXIT_OK,
+  EXIT_VALIDATION,
+} from '../../lib/exit-codes.js';
 import type { ParsedArgs } from '../../lib/args.js';
 
 /**
@@ -179,24 +186,46 @@ function formatBackupTimestamp(now: Date): string {
   return now.toISOString();
 }
 
-// Atomic write via temp + rename. Writes to `<dest>.tmp.<pid>` first, then
-// renames onto `dest`. The temp filename pattern matches the spec's pinned
-// shape so a crash between write and rename surfaces clearly. The temp
-// file is unlinked on a rename failure so a partial write does not leave
-// debris.
+// Compose a temp-file name unique enough that two same-process
+// invocations cannot collide. Earlier the suffix was just `<pid>`,
+// which collides across retries inside a single long-lived shell
+// (same PID for the second invocation) and across vitest workers that
+// share a parent PID under `pool: 'threads'`. A six-byte random hex
+// token rules out collisions in practice and surfaces leaked debris
+// with a distinct name an operator can grep for. The pid stays in
+// the name so a `lsof` / `ps` cross-reference still works when a
+// long-running operation is interrupted.
+function tempSuffixForAtomicWrite(): string {
+  return `tmp.${process.pid}.${randomBytes(6).toString('hex')}`;
+}
+
+// Atomic write via temp + rename. Writes to
+// `<dest>.tmp.<pid>.<random>` first, then renames onto `dest`. The
+// temp file shares the parent directory of `dest` (intentionally — the
+// sibling-temp design guarantees the rename is intra-filesystem, so
+// EXDEV is structurally impossible; a future refactor that moves the
+// temp under `os.tmpdir()` would silently re-introduce that bug). The
+// temp file is unlinked on a rename failure so a partial write does
+// not leave debris; a failure to unlink the debris is surfaced in the
+// thrown error message so support can spot the leaked path.
 function atomicWriteFile(dest: string, contents: string, mode: number): void {
   const dir = path.dirname(dest);
-  const tmp = path.join(dir, `${path.basename(dest)}.tmp.${process.pid}`);
+  const tmp = path.join(dir, `${path.basename(dest)}.${tempSuffixForAtomicWrite()}`);
   writeFileSync(tmp, contents, { mode });
   try {
     renameSync(tmp, dest);
   } catch (e) {
+    let cleanupNote = '';
     try {
       unlinkSync(tmp);
     } catch {
-      // Best-effort cleanup; the original throw is what the caller sees.
+      // Surface the leaked debris path so the operator can clean up
+      // manually; previously this branch silently swallowed the
+      // failure and the only visible signal was the original throw.
+      cleanupNote = ` (debris left at ${tmp})`;
     }
-    throw e;
+    const inner = e instanceof Error ? e.message : String(e);
+    throw new Error(`atomic write to ${dest} failed: ${inner}${cleanupNote}`);
   }
 }
 
@@ -217,6 +246,45 @@ function readConfirmation(stdin: StdinAdapter): boolean {
 function isFileAt(p: string): boolean {
   try {
     return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// True when `p` is a symlink (not a regular file). Uses `lstatSync` so
+// the call inspects the link itself rather than its target. Returns
+// false when `p` does not exist at all.
+//
+// The destructive migrate actions (`--delete`, `--replace`) refuse to
+// operate on a symlink: a project hook at `<project>/.claude/hooks/
+// gan-confine.sh` symlinked to a path outside the hooks directory
+// admits two concrete misuse patterns the framework should not be
+// complicit in:
+//
+//   1. Exfiltration. `runDelete`/`runReplace` would `readFileSync` the
+//      hook (which follows the link) and write the target's contents
+//      into a backup sibling — turning a routine "clean up your
+//      project-tier hook" command into a data-extraction primitive
+//      against any file the symlink resolves to.
+//
+//   2. Surprise. `--delete`'s `unlinkSync` removes the link only (not
+//      the target), and `--replace`'s `renameSync` clobbers the link
+//      with a regular file (the target survives). Either is arguably
+//      reasonable, but neither matches the surface's documented
+//      intent ("delete the project-tier hook"), and an operator
+//      reading the stdout `to restore: mv <backup> <hook>` line
+//      cannot tell that the rollback would not restore the symlink
+//      relationship the project shipped.
+//
+// `--review` is exempt because it is a pure read: the diff against
+// the framework template captures the link target's contents, which
+// is exactly what an operator wants to see for "is the link's target
+// stale?". The structured refusal for the destructive actions tells
+// the operator the link is present and points at the manual
+// remediation (resolve the link first).
+function isSymlinkAt(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
   } catch {
     return false;
   }
@@ -325,13 +393,18 @@ export async function run(
   const wantReview = parsed.flags['review'] === true;
   const yesFlag = parsed.flags['yes'] === true;
 
+  // Argument errors → `EXIT_BAD_ARGS`. The previous revision collapsed
+  // these onto `EXIT_VALIDATION` (2), which made a CI gate unable to
+  // distinguish "the operator typed the command wrong" from "the
+  // operator's hook needs migration." The split keeps the
+  // sysexits-style classification a script can branch on.
   const selected = [wantDelete, wantReplace, wantReview].filter(Boolean).length;
   if (selected !== 1) {
     const msg =
       selected === 0
         ? 'Error: gan hooks migrate requires exactly one of --delete / --replace / --review.\n'
         : 'Error: gan hooks migrate accepts exactly one of --delete / --replace / --review (got more than one).\n';
-    return { stdout: '', stderr: msg, code: EXIT_VALIDATION };
+    return { stdout: '', stderr: msg, code: EXIT_BAD_ARGS };
   }
 
   const projectRootFlag = typeof parsed.flags['project-root'] === 'string'
@@ -341,8 +414,10 @@ export async function run(
   try {
     projectRootPath = resolveProjectRoot(projectRootFlag).path;
   } catch (e) {
+    // `--project-root` resolution failures are also argument errors:
+    // the operator pointed `gan` at a non-existent directory.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_VALIDATION };
+    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_BAD_ARGS };
   }
 
   const hooksDir = path.join(projectRootPath, '.claude', 'hooks');
@@ -404,6 +479,24 @@ export async function run(
   return runReplace(hooksDir, hookPath, now);
 }
 
+// Structured stderr payload for the symlink refusal. The diagnostic
+// names the `subReason` so a JSON-piping caller can branch on it, and
+// surfaces the manual remediation (the operator decides whether the
+// link is intentional and resolves it themselves) so the framework
+// never silently follows a symlink and writes through it.
+function symlinkRefusalPayload(hookPath: string, action: 'delete' | 'replace'): string {
+  return JSON.stringify({
+    code: 'GanHooksMigrateProjectHookIsSymlink',
+    subReason: 'projectHookIsSymlink',
+    message:
+      `gan hooks migrate --${action}: refusing to operate on ${hookPath} ` +
+      `because it is a symbolic link. Following the link could read or ` +
+      `clobber a file outside the project's .claude/hooks/ directory. ` +
+      `Resolve the link manually (inspect the target with \`readlink ${hookPath}\`, ` +
+      `replace the link with a regular file, or remove the link) and re-run.`,
+  });
+}
+
 function runReview(hookPath: string): CommandResult {
   if (!isFileAt(hookPath)) {
     return {
@@ -417,8 +510,11 @@ function runReview(hookPath: string): CommandResult {
   try {
     template = renderCurrentTemplate();
   } catch (e) {
+    // Template-resolution failures are framework-internal IO problems
+    // (package.json unreadable, template missing); they are not the
+    // operator's input being wrong, so they map to EXIT_GENERIC.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_VALIDATION };
+    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_GENERIC };
   }
   const diff = unifiedDiff(current, template, hookPath, '<framework current template>');
   return { stdout: diff, stderr: '', code: EXIT_OK };
@@ -430,6 +526,17 @@ function runDelete(hookPath: string, now: Date): CommandResult {
       stdout: `no project-tier hook present at ${hookPath}; nothing to delete\n`,
       stderr: '',
       code: EXIT_OK,
+    };
+  }
+  // Symlink guard: see {@link isSymlinkAt} for the rationale. The
+  // refusal is EXIT_VALIDATION rather than EXIT_BAD_ARGS because the
+  // operator's command was syntactically correct; the project tree
+  // is what fails the migrate's input contract.
+  if (isSymlinkAt(hookPath)) {
+    return {
+      stdout: '',
+      stderr: symlinkRefusalPayload(hookPath, 'delete') + '\n',
+      code: EXIT_VALIDATION,
     };
   }
   const original = readFileSync(hookPath);
@@ -448,11 +555,16 @@ function runDelete(hookPath: string, now: Date): CommandResult {
     atomicWriteBuffer(backupPath, original, sourceMode);
     unlinkSync(hookPath);
   } catch (e) {
+    // Filesystem failures (ENOSPC, EACCES, EBUSY, EROFS) are
+    // operational, not validation: they tell the operator the
+    // environment can't satisfy the request rather than the request
+    // being malformed. Mapped to EXIT_GENERIC so a CI gate can
+    // distinguish them from "stale hook detected, fix me" outcomes.
     const msg = e instanceof Error ? e.message : String(e);
     return {
       stdout: '',
       stderr: `Error: gan hooks migrate --delete failed: ${msg}\n`,
-      code: EXIT_VALIDATION,
+      code: EXIT_GENERIC,
     };
   }
   const stdout =
@@ -468,7 +580,7 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     template = renderCurrentTemplate();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_VALIDATION };
+    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_GENERIC };
   }
 
   // Create-on-demand parent directory. `mkdir -p`-equivalent; the
@@ -481,7 +593,7 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     return {
       stdout: '',
       stderr: `Error: gan hooks migrate --replace could not create ${hooksDir}: ${msg}\n`,
-      code: EXIT_VALIDATION,
+      code: EXIT_GENERIC,
     };
   }
 
@@ -495,13 +607,23 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
       return {
         stdout: '',
         stderr: `Error: gan hooks migrate --replace failed: ${msg}\n`,
-        code: EXIT_VALIDATION,
+        code: EXIT_GENERIC,
       };
     }
     return {
       stdout: `created ${hookPath}\n`,
       stderr: '',
       code: EXIT_OK,
+    };
+  }
+
+  // Symlink guard: refuse to overwrite a symlink the same way
+  // `runDelete` refuses to unlink one — see {@link isSymlinkAt}.
+  if (isSymlinkAt(hookPath)) {
+    return {
+      stdout: '',
+      stderr: symlinkRefusalPayload(hookPath, 'replace') + '\n',
+      code: EXIT_VALIDATION,
     };
   }
 
@@ -524,7 +646,7 @@ function runReplace(hooksDir: string, hookPath: string, now: Date): CommandResul
     return {
       stdout: '',
       stderr: `Error: gan hooks migrate --replace failed: ${msg}\n`,
-      code: EXIT_VALIDATION,
+      code: EXIT_GENERIC,
     };
   }
   const stdout =
@@ -551,20 +673,24 @@ function composeBackupPath(hookPath: string, now: Date): string {
 // missing mode argument would default Node's `writeFileSync` to `0o666 &
 // umask` (typically `0o644` on a standard operator umask) and the
 // rollback would produce a non-executable hook that Claude Code skips
-// silently or rejects with EACCES.
+// silently or rejects with EACCES. Shares the temp-name and
+// EXDEV-by-construction rationale with `atomicWriteFile`; see its
+// comment for why the temp lives next to the dest.
 function atomicWriteBuffer(dest: string, contents: Buffer, mode: number): void {
   const dir = path.dirname(dest);
-  const tmp = path.join(dir, `${path.basename(dest)}.tmp.${process.pid}`);
+  const tmp = path.join(dir, `${path.basename(dest)}.${tempSuffixForAtomicWrite()}`);
   writeFileSync(tmp, contents, { mode });
   try {
     renameSync(tmp, dest);
   } catch (e) {
+    let cleanupNote = '';
     try {
       unlinkSync(tmp);
     } catch {
-      // Best-effort cleanup; the original throw is what the caller sees.
+      cleanupNote = ` (debris left at ${tmp})`;
     }
-    throw e;
+    const inner = e instanceof Error ? e.message : String(e);
+    throw new Error(`atomic write to ${dest} failed: ${inner}${cleanupNote}`);
   }
 }
 

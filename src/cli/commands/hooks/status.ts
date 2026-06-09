@@ -109,20 +109,43 @@ export interface ProjectTierJsonShape {
 }
 
 /**
+ * Discriminator value the JSON shape carries so a downstream consumer
+ * can branch on the shape version. Incremented on a breaking change
+ * (a removed or renamed field, or a tightening of an enum). Additive
+ * evolution (a new optional field, a new enum value on a non-gate
+ * field) MUST NOT bump it — consumers handle additive evolution by
+ * defaulting-allow on unknown enum values for non-gate fields.
+ */
+export const HOOKS_STATUS_JSON_SCHEMA_VERSION = '1' as const;
+
+/**
  * Top-level JSON shape `gan hooks status --json` emits.
  *
+ * @property schemaVersion stable version discriminator the JSON
+ *   surface carries; see {@link HOOKS_STATUS_JSON_SCHEMA_VERSION}.
+ *   A consumer parsing `gan hooks status --json` SHOULD reject the
+ *   payload when this field does not match the version it was
+ *   written against. New additive fields do NOT bump the version;
+ *   only a removal / rename / enum-tightening does.
  * @property userTier the user-tier record.
  * @property projectTier the project-tier record, or `null` when no file
  *   exists at `<project>/.claude/hooks/gan-confine.sh`.
  * @property verdict the top-level resolution: `projectTier.verdict` when
  *   a project-tier hook is present, otherwise `'current'`. The user tier
  *   does not carry a verdict — `install.sh` refreshes it on every run, so
- *   the framework treats it as authoritative-by-construction.
+ *   the framework treats it as authoritative-by-construction. Consumers
+ *   gating on this field MUST strictly compare `=== 'current'`; a future
+ *   additive verdict literal (e.g. a `'mismatch'` class) MUST NOT
+ *   silently fail-open by being treated as "not stale".
  * @property orphanBackupSiblings emitted only when `projectTier` is `null`
  *   but `<project>/.claude/hooks/` still holds one or more
- *   `gan-confine.sh.gan-bak.<timestamp>` files; absent otherwise.
+ *   `gan-confine.sh.gan-bak.<timestamp>` files; absent otherwise. This
+ *   is the only conditionally-present top-level key on this shape;
+ *   every other field is always present so a destructuring consumer
+ *   does not need to special-case undefined.
  */
 export interface HooksStatusJsonShape {
+  schemaVersion: typeof HOOKS_STATUS_JSON_SCHEMA_VERSION;
   userTier: UserTierJsonShape;
   projectTier: ProjectTierJsonShape | null;
   verdict: 'current' | 'stale' | 'misconfigured';
@@ -279,12 +302,12 @@ function contractRevisionLabel(rev: ContractRevision): string {
   }
 }
 
-// Map a banner verdict + probe verdict pair to the resolved tier verdict.
-// Probe wins on disagreement in every direction; the banner read is
-// metadata.
-function resolveVerdict(probe: ConfineProbeVerdict): ConfineProbeVerdict {
-  return probe;
-}
+// Banner / probe verdict resolution is the identity: the probe wins on
+// disagreement in every direction; the banner read is metadata only.
+// The helper that used to wrap this assignment was a no-op masquerading
+// as resolution logic — every call site now uses the probe verdict
+// directly. See the doc-comment on `resolveProbe()` below for the wider
+// "probe is the load-bearing detector" rationale.
 
 /**
  * CLI entry point for `gan hooks status`.
@@ -351,7 +374,8 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
       : { version: null, contractRevision: 'unknown' as ContractRevision };
     const bannerVerdict = compareBanner(projectBanner.version, installedVersion);
     const probeResult = await runConfineHookProbe({ hookPath: projectHookPath });
-    const verdict = resolveVerdict(probeResult.verdict);
+    // The probe wins on disagreement; the banner read is metadata.
+    const verdict = probeResult.verdict;
     projectTier = {
       path: projectHookPath,
       frameworkVersion: projectBanner.version,
@@ -373,6 +397,7 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     : undefined;
 
   const json: HooksStatusJsonShape = {
+    schemaVersion: HOOKS_STATUS_JSON_SCHEMA_VERSION,
     userTier,
     projectTier,
     verdict: topLevelVerdict,

@@ -256,4 +256,24 @@ describe('gan hooks status (new subdirectory subcommand)', () => {
     expect(r.stdout).toContain('gan hooks status');
     expect(r.stdout).toContain('gan hooks migrate');
   });
+
+  // The JSON shape carries `schemaVersion: "1"` as a stable
+  // discriminator so a downstream consumer (a CI gate, an audit
+  // pipeline) can pin the version it parses against. Additive
+  // evolution is allowed without bumping the discriminator; a
+  // removal / rename / enum-tightening does bump. This test pins
+  // the current discriminator value so an accidental bump surfaces
+  // in CI rather than silently breaking every consumer.
+  it("--json output carries schemaVersion='1'", async () => {
+    const home = makeTmpDir('gan-hooks-home-');
+    const cwd = makeTmpDir('gan-hooks-cwd-');
+    seedHook(home, renderedTemplate());
+    const r = await runGan(['hooks', 'status', '--json'], {
+      cwd,
+      extraEnv: { HOME: home },
+    });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { schemaVersion: string };
+    expect(parsed.schemaVersion).toBe('1');
+  });
 });
