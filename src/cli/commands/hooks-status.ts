@@ -35,6 +35,7 @@ import {
 } from '../../hook-probe/index.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
 import { emitJson } from '../lib/json-output.js';
+import { cliError, presentErrorAsProse } from '../lib/cli-error.js';
 import { EXIT_BAD_ARGS, EXIT_OK, EXIT_VALIDATION } from '../lib/exit-codes.js';
 import { canonicalizePath } from '../../config-server/determinism/index.js';
 import type { ParsedArgs } from '../lib/args.js';
@@ -267,12 +268,13 @@ function contractRevisionLabel(rev: ContractRevision): string {
   }
 }
 
-// Banner / probe verdict resolution is the identity: the probe wins on
-// disagreement in every direction; the banner read is metadata only.
-// The helper that used to wrap this assignment was a no-op masquerading
-// as resolution logic — every call site now uses the probe verdict
-// directly. See the doc-comment on `resolveProbe()` below for the wider
-// "probe is the load-bearing detector" rationale.
+// Banner / probe verdict resolution is the identity: the probe
+// wins on disagreement in every direction; the banner read is
+// metadata only, so every call site assigns
+// `probeResult.verdict` directly to the per-tier `verdict` field.
+// A prior revision wrapped this assignment in a `resolveVerdict()`
+// helper which was a no-op masquerading as resolution logic — the
+// helper has been inlined.
 
 /**
  * CLI entry point for `gan hooks status`.
@@ -290,6 +292,23 @@ function contractRevisionLabel(rev: ContractRevision): string {
  *   error to stderr and exits non-zero.
  */
 export async function run(parsed: ParsedArgs): Promise<CommandResult> {
+  // Outer wrapper: route every failure-path emission through the
+  // `--json` gate. Without `--json`, the structured envelope is
+  // converted to prose at this boundary so an interactive operator
+  // sees `Error: <message>` rather than the raw JSON. With
+  // `--json`, the envelope is forwarded verbatim so a CI gate can
+  // `JSON.parse(stderr.trim())` directly. Mirrors the matching
+  // wrapper in `hooks-migrate.ts`'s `run`; the shared helper is at
+  // {@link presentErrorAsProse}. The wrapper is safe to apply
+  // unconditionally because `presentErrorAsProse` no-ops on
+  // non-envelope stderr (including the success path's empty
+  // stderr).
+  const wantJson = parsed.flags['json'] === true;
+  const inner = await runInner(parsed);
+  return wantJson ? inner : presentErrorAsProse(inner);
+}
+
+async function runInner(parsed: ParsedArgs): Promise<CommandResult> {
   const wantJson = parsed.flags['json'] === true;
   const projectRootFlag = typeof parsed.flags['project-root'] === 'string'
     ? (parsed.flags['project-root'] as string)
@@ -304,9 +323,20 @@ export async function run(parsed: ParsedArgs): Promise<CommandResult> {
     // rest of the CLI. Previously this branch returned
     // EXIT_VALIDATION, which collapsed argument errors onto the
     // same exit class as "the project tree has a stale hook" and
-    // left CI gates unable to distinguish the two.
+    // left CI gates unable to distinguish the two. Routes through
+    // the shared {@link cliError} helper so a `--json` consumer
+    // can `JSON.parse(stderr.trim())` uniformly across both
+    // `hooks status` and `hooks migrate`.
     const msg = e instanceof Error ? e.message : String(e);
-    return { stdout: '', stderr: `Error: ${msg}\n`, code: EXIT_BAD_ARGS };
+    return {
+      stdout: '',
+      stderr: cliError(
+        'GanHooksStatusInvalidProjectRoot',
+        'invalidProjectRoot',
+        `gan hooks status: ${msg}`,
+      ),
+      code: EXIT_BAD_ARGS,
+    };
   }
 
   const home = os.homedir();

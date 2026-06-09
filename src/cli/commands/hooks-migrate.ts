@@ -51,6 +51,7 @@ import {
   renderCurrentTemplate,
 } from '../../hook-probe/index.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
+import { cliError, presentErrorAsProse } from '../lib/cli-error.js';
 import {
   EXIT_BAD_ARGS,
   EXIT_GENERIC,
@@ -489,6 +490,23 @@ export async function run(
   parsed: ParsedArgs,
   options: MigrateOptions = {},
 ): Promise<CommandResult> {
+  // Outer wrapper: route every inner-handler emission through the
+  // `--json` gate. Without `--json`, the structured envelope is
+  // converted to prose at this boundary so an interactive operator
+  // sees `Error: <message>` rather than the raw JSON. With
+  // `--json`, the envelope is forwarded verbatim so a CI gate can
+  // `JSON.parse(stderr.trim())` directly. The conversion is safe
+  // to apply unconditionally because `presentErrorAsProse` is a
+  // no-op on stderr that is not envelope-shaped.
+  const wantJson = parsed.flags['json'] === true;
+  const inner = await runInner(parsed, options);
+  return wantJson ? inner : presentErrorAsProse(inner);
+}
+
+async function runInner(
+  parsed: ParsedArgs,
+  options: MigrateOptions = {},
+): Promise<CommandResult> {
   const wantDelete = parsed.flags['delete'] === true;
   const wantReplace = parsed.flags['replace'] === true;
   const wantReview = parsed.flags['review'] === true;
@@ -583,6 +601,12 @@ export async function run(
     // Write prompt to stderr so `--json`-style callers piping stdout to
     // jq still see the prompt; the helper does not invoke writeOut here
     // because the prompt is interactive and must flush synchronously.
+    // The outer `run()` wrapper that converts `CommandResult.stderr`
+    // envelopes to prose under the default path NEVER sees this
+    // write — that's intentional, because the prompt is non-error
+    // pre-decision output that must reach the operator before
+    // stdin is read. Routing the prompt through the envelope would
+    // delay the flush until `run()` returned.
     process.stderr.write(promptLines.join('\n'));
     const confirmed = readConfirmation(stdin);
     if (!confirmed) {
@@ -604,24 +628,18 @@ export async function run(
   return runReplace(hooksDir, hookPath, now);
 }
 
-// Compose a structured-error stderr envelope. Every failure path in
-// `gan hooks migrate` routes through this helper so a JSON-piping
-// consumer can `JSON.parse(stderr)` uniformly without branching on
-// shape — the inconsistency a prior review flagged ("two failures
-// emit JSON, every other failure plain text") would otherwise force
-// every CI gate to know which paths produce which shape.
+// Closed set of `subReason` discriminators every failure path on
+// this command emits. Pairs with the `GanHooksMigrate*` `code`
+// tokens in `src/cli/lib/exit-codes.ts` TABLE; together they form
+// the migrate command's structured-error registry. The
+// shared {@link cliError} helper builds the JSON envelope every
+// failure path returns.
 //
-// The envelope carries:
-// - `code` — a PascalCase machine token registered in
-//   `src/cli/lib/exit-codes.ts` TABLE so `exitCodeFor()` resolves
-//   it to the corresponding exit code without the call site having
-//   to repeat the mapping.
-// - `subReason` — a per-failure-class discriminator scoped to the
-//   `gan hooks migrate` surface. The set is documented inline as the
-//   `MigrateSubReason` union below.
-// - `message` — operator-facing prose. Single-line so a log reader
-//   piping stderr through `jq` does not have to handle multi-line
-//   payloads.
+// Adding a new failure-class requires updating BOTH this union AND
+// a TABLE entry — the file-split is the cost of the API-design
+// review's "co-locate `MigrateSubReason` with the TABLE" follow-up
+// finding; the constraint is documented here so the two halves
+// don't drift.
 type MigrateSubReason =
   | 'missingAction'
   | 'multipleActions'
@@ -633,20 +651,26 @@ type MigrateSubReason =
   | 'filesystemFailure'
   | 'sourceReadFailed';
 
+// Thin typing wrapper around the shared {@link cliError} helper
+// so the `subReason` argument is type-checked against {@link
+// MigrateSubReason} at every call site. The shared helper takes a
+// `string` so the surface stays uniform across the CLI; this
+// wrapper narrows the type locally without re-implementing the
+// envelope shape.
 function migrateError(
   code: string,
   subReason: MigrateSubReason,
   message: string,
 ): string {
-  return JSON.stringify({ code, subReason, message }) + '\n';
+  return cliError(code, subReason, message);
 }
 
-// Symlink-refusal payload — its own helper because both the lstat-
-// time pre-check and the kernel's ELOOP from O_NOFOLLOW emit the
-// identical envelope. The operator-facing message names the manual
-// remediation (the operator decides whether the link is intentional
-// and resolves it themselves) so the framework never silently
-// follows a symlink and writes through it.
+// Symlink-refusal payload — both the lstat-time pre-check and the
+// kernel's ELOOP from O_NOFOLLOW emit the identical envelope. The
+// operator-facing message names the manual remediation (the
+// operator decides whether the link is intentional and resolves it
+// themselves) so the framework never silently follows a symlink
+// and writes through it.
 function symlinkRefusalPayload(hookPath: string, action: 'delete' | 'replace'): string {
   return migrateError(
     'GanHooksMigrateProjectHookIsSymlink',
@@ -939,5 +963,21 @@ export function _readHookContentsNoFollowForTests(hookPath: string): {
   mode: number;
 } {
   return readHookContentsNoFollow(hookPath);
+}
+
+/**
+ * Test-only seam: produce one atomic-write temp suffix. Exposed so
+ * a test can assert that two same-process calls return distinct
+ * strings — the load-bearing property that two concurrent
+ * `--delete` invocations from the same pid cannot collide on the
+ * temp filename. The earlier `tmp.<pid>` form would race; the
+ * current `tmp.<pid>.<6-byte-randomhex>` form is the fix, and this
+ * seam is the unit-test surface that pins it. Underscore-prefixed
+ * to advertise the seam.
+ *
+ * @returns the next composed `tmp.<pid>.<hex>` suffix.
+ */
+export function _tempSuffixForAtomicWriteForTests(): string {
+  return tempSuffixForAtomicWrite();
 }
 

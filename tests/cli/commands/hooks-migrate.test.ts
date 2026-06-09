@@ -41,6 +41,7 @@ import path from 'node:path';
 import {
   run as runMigrate,
   _readHookContentsNoFollowForTests,
+  _tempSuffixForAtomicWriteForTests,
 } from '../../../src/cli/commands/hooks-migrate.js';
 import { canonicalizePath } from '../../../src/config-server/determinism/index.js';
 import { repoRootDir } from '../../installer/helpers/spawn.js';
@@ -133,14 +134,20 @@ function makeTtyYesStdin() {
   };
 }
 
-// Build a ParsedArgs-shaped object for the migrate command.
+// Build a ParsedArgs-shaped object for the migrate command. The
+// `json` option toggles structured-envelope output on stderr —
+// tests that JSON.parse stderr MUST opt in to keep parsing; tests
+// that only assert substrings via `toContain` work either way
+// (the prose form embeds the same code / subReason tokens the JSON
+// envelope carries).
 function makeArgs(opts: {
   action: 'delete' | 'replace' | 'review';
   yes?: boolean;
   projectRoot: string;
+  json?: boolean;
 }) {
   const flags: Record<string, string | boolean> = {
-    json: false,
+    json: opts.json === true,
     help: false,
     'project-root': opts.projectRoot,
   };
@@ -574,7 +581,7 @@ describe('gan hooks migrate — symlink refusal', () => {
     // staged.
     symlinkSync(targetFile, hookPath);
     const result = await runMigrate(
-      makeArgs({ action: 'delete', yes: true, projectRoot: cwd }),
+      makeArgs({ action: 'delete', yes: true, projectRoot: cwd, json: true }),
       { now: () => FIXED_DATE },
     );
     // Exit code: EXIT_VALIDATION (2). The command was syntactically
@@ -613,7 +620,7 @@ describe('gan hooks migrate — symlink refusal', () => {
     const hookPath = path.join(hooksDir, 'gan-confine.sh');
     symlinkSync(targetFile, hookPath);
     const result = await runMigrate(
-      makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
+      makeArgs({ action: 'replace', yes: true, projectRoot: cwd, json: true }),
       { now: () => FIXED_DATE },
     );
     expect(result.code).toBe(2);
@@ -719,7 +726,7 @@ describe('gan hooks migrate --replace template-render failure', () => {
     process.env.GAN_PACKAGE_ROOT_OVERRIDE = fakeRoot;
     try {
       const result = await runMigrate(
-        makeArgs({ action: 'replace', yes: true, projectRoot: cwd }),
+        makeArgs({ action: 'replace', yes: true, projectRoot: cwd, json: true }),
         { now: () => FIXED_DATE },
       );
       expect(result.code).toBe(1);
@@ -738,20 +745,49 @@ describe('gan hooks migrate --replace template-render failure', () => {
   });
 });
 
-describe('gan hooks migrate — concurrent invocations across distinct projects', () => {
+describe('tempSuffixForAtomicWrite — same-pid collision-safety pin', () => {
   // The atomic-write temp filename embeds a six-byte random hex
-  // token along with the pid so two same-pid invocations cannot
-  // collide on the temp path. The test stages two separate
-  // project roots, fires `--delete` against both in parallel, and
-  // asserts both succeed with their own backup siblings. A
-  // regression that reverted the temp suffix to pid-only would
-  // race here under vitest's thread pool (workers share the
-  // parent pid).
+  // token along with the pid. The hex is the load-bearing
+  // protection against two same-pid invocations colliding on the
+  // temp path (vitest's thread pool means workers share the parent
+  // pid, and a single long-lived shell can re-invoke `gan hooks
+  // migrate` faster than the OS recycles pids).
+  //
+  // A prior revision asserted this property indirectly by running
+  // two `--delete` invocations against DISTINCT project roots, but
+  // distinct projects have distinct parent dirs for their temp
+  // files, so a regression to pid-only suffixes would have raced
+  // there silently. The unit test below pins the actual property:
+  // every invocation produces a distinct string.
+  it('100 same-process calls produce 100 distinct suffixes', () => {
+    const suffixes = new Set<string>();
+    for (let i = 0; i < 100; i += 1) {
+      suffixes.add(_tempSuffixForAtomicWriteForTests());
+    }
+    expect(suffixes.size).toBe(100);
+  });
+
+  it('every suffix has the `tmp.<pid>.<12-hex>` shape', () => {
+    const suffix = _tempSuffixForAtomicWriteForTests();
+    // pid component + 6 bytes of hex (12 characters).
+    expect(suffix).toMatch(new RegExp(`^tmp\\.${process.pid}\\.[0-9a-f]{12}$`));
+  });
+});
+
+describe('gan hooks migrate — concurrent invocations across distinct projects', () => {
+  // Smoke test that two concurrent `--delete` invocations across
+  // distinct project roots both complete cleanly. Distinct parent
+  // directories so the temp-name collision the random hex protects
+  // against is not exercised here (see the
+  // `tempSuffixForAtomicWrite — same-pid collision-safety pin`
+  // describe block above for the unit-level pin); this test
+  // protects the higher-level concurrent-execution path's
+  // observable correctness.
   it('two concurrent --delete invocations on distinct project roots both succeed', async () => {
     const cwdA = makeTmpDir('gan-migrate-concurrent-A-');
     const cwdB = makeTmpDir('gan-migrate-concurrent-B-');
-    const hookA = seedHook(cwdA, STALE_HOOK);
-    const hookB = seedHook(cwdB, STALE_HOOK);
+    const hookA = seedHook(cwdA, '#!/bin/bash\n# project A\nexit 1\n');
+    const hookB = seedHook(cwdB, '#!/bin/bash\n# project B\nexit 1\n');
     const [resultA, resultB] = await Promise.all([
       runMigrate(
         makeArgs({ action: 'delete', yes: true, projectRoot: cwdA }),
@@ -767,7 +803,9 @@ describe('gan hooks migrate — concurrent invocations across distinct projects'
     expect(existsSync(hookA)).toBe(false);
     expect(existsSync(hookB)).toBe(false);
     // Each project has its own backup sibling; neither clobbered
-    // the other (different parent directories).
+    // the other. We seed DIFFERENT payloads so a hypothetical
+    // cross-contamination would surface as backup content not
+    // matching the seeded hook content.
     const backupA = path.join(
       canonical(cwdA),
       '.claude',
@@ -782,5 +820,7 @@ describe('gan hooks migrate — concurrent invocations across distinct projects'
     );
     expect(existsSync(backupA)).toBe(true);
     expect(existsSync(backupB)).toBe(true);
+    expect(readFileSync(backupA, 'utf8')).toBe('#!/bin/bash\n# project A\nexit 1\n');
+    expect(readFileSync(backupB, 'utf8')).toBe('#!/bin/bash\n# project B\nexit 1\n');
   });
 });

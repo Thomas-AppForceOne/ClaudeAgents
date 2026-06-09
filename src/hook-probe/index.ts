@@ -32,22 +32,25 @@ export {
   type ConfineProbeSubReason,
 } from './probe.js';
 
+// Only what consumers actually need is re-exported. The full
+// `banner.ts` API (including the internal `bannerVerdictKind`
+// trichotomy projection, the `CONTRACT_REVISION_PIVOTS` table, and
+// the supporting types) stays module-private — a prior PR review
+// flagged the barrel exports as premature abstraction because no
+// caller outside the module consumed them.
 export {
   parseConfineHookBanner,
   compareBanner,
-  bannerVerdictKind,
-  CONTRACT_REVISION_PIVOTS,
   type ContractRevision,
   type BannerVerdict,
-  type BannerVerdictKind,
-  type ContractRevisionPivot,
-  type ParsedBanner,
 } from './banner.js';
 
 export { BACKUP_SIBLING_PREFIX, listBackupSiblings } from './paths.js';
 
+// `readInstalledFrameworkVersionOrThrow` stays module-private —
+// it is only consumed by `renderCurrentTemplate` below; the
+// nullable read is the call-site API consumers want.
 export {
   readInstalledFrameworkVersion,
-  readInstalledFrameworkVersionOrThrow,
   renderCurrentTemplate,
 } from './template.js';

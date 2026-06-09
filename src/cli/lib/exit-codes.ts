@@ -80,6 +80,13 @@ const TABLE: Readonly<Record<string, number>> = Object.freeze({
   GanHooksMigrateSourceReadFailed: EXIT_GENERIC,
   GanHooksMigrateTemplateError: EXIT_GENERIC,
   GanHooksMigrateFilesystemError: EXIT_GENERIC,
+
+  // `gan hooks status` structured-error codes. Currently just the
+  // one argument-error path. Same `Gan<Command><Specific>` shape as
+  // the `GanHooksMigrate*` family above; the prefix scopes the
+  // token to the emitting command so future structured-error
+  // commands extend the registry without collision.
+  GanHooksStatusInvalidProjectRoot: EXIT_BAD_ARGS,
 });
 
 /**
