@@ -23,6 +23,7 @@ import {
   runTraceV1,
   runTraceIndexV1,
   evaluatorEvidenceBundleV1,
+  evaluatorEvidenceBundleV2,
   progressV1,
 } from '../schemas-bundled.js';
 
@@ -82,6 +83,7 @@ function getOverlayValidator(): ValidateFunction {
 let runTraceValidator: ValidateFunction | null = null;
 let runTraceIndexValidator: ValidateFunction | null = null;
 let evaluatorEvidenceBundleValidator: ValidateFunction | null = null;
+let evaluatorEvidenceBundleV2Validator: ValidateFunction | null = null;
 
 /**
  * Compile-once Ajv validator for a single run-trace record.
@@ -109,14 +111,37 @@ export function getRunTraceIndexValidator(): ValidateFunction {
 }
 
 /**
- * Compile-once Ajv validator for the evaluator evidence bundle.
- * @returns the memoised `ValidateFunction`.
+ * Compile-once Ajv validator for the legacy v1 evaluator evidence bundle.
+ *
+ * Retained read-only for parsing pre-T5 bundles a `--recover` flow may
+ * encounter; the new write path (and the live verifier) routes through the
+ * v2 validator below. New consumer code MUST prefer
+ * {@link getEvaluatorEvidenceBundleV2Validator}.
+ *
+ * @returns the memoised `ValidateFunction` bound to v1.
  */
 export function getEvaluatorEvidenceBundleValidator(): ValidateFunction {
   if (evaluatorEvidenceBundleValidator !== null) return evaluatorEvidenceBundleValidator;
   const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
   const compiled = ajv.compile(evaluatorEvidenceBundleV1);
   evaluatorEvidenceBundleValidator = compiled;
+  return compiled;
+}
+
+/**
+ * Compile-once Ajv validator for the v2 evaluator evidence bundle (T5).
+ *
+ * v2 declares the orchestrator-stamped `evaluatorPromptDigest` field as
+ * required at root level. The trace verifier and any new consumer of the
+ * bundle compile against this; v1 is retained only for legacy parses.
+ *
+ * @returns the memoised `ValidateFunction` bound to v2.
+ */
+export function getEvaluatorEvidenceBundleV2Validator(): ValidateFunction {
+  if (evaluatorEvidenceBundleV2Validator !== null) return evaluatorEvidenceBundleV2Validator;
+  const ajv = new Ajv({ strict: true, allErrors: true, useDefaults: false });
+  const compiled = ajv.compile(evaluatorEvidenceBundleV2);
+  evaluatorEvidenceBundleV2Validator = compiled;
   return compiled;
 }
 

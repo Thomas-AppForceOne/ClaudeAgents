@@ -3,31 +3,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "nonNegativeInteger": {
-      "minimum": 0,
-      "type": "integer"
-    },
-    "positiveInteger": {
-      "minimum": 1,
-      "type": "integer"
-    },
-    "severity": {
-      "description": "Severity tier per the measurement-vs-gating convention. blocker triggers a renegotiation round if a corresponding criterion is missing; warning is surfaced and may trigger; advisory is measurement-only.",
-      "enum": [
-        "blocker",
-        "warning",
-        "advisory"
-      ],
-      "type": "string"
-    },
-    "findingKind": {
-      "description": "Discriminator between a command-reproducible finding (carries reproductionCommand + reproduced) and an inspection finding (carries evidencePointer).",
-      "enum": [
-        "command",
-        "inspection"
-      ],
-      "type": "string"
-    },
     "finding": {
       "additionalProperties": false,
       "allOf": [
@@ -45,12 +20,12 @@
           },
           "then": {
             "properties": {
+              "reproduced": {
+                "type": "boolean"
+              },
               "reproductionCommand": {
                 "minLength": 1,
                 "type": "string"
-              },
-              "reproduced": {
-                "type": "boolean"
               }
             },
             "required": [
@@ -118,16 +93,16 @@
           "$ref": "#/definitions/positiveInteger",
           "description": "1-based line number in the cited file at the tip of the run branch."
         },
+        "reproduced": {
+          "description": "Command-kind only: true if the reviewer ran the reproductionCommand and saw the failure, false if asserted without local execution. Required when kind is 'command'.",
+          "type": "boolean"
+        },
         "reproductionCommand": {
           "description": "Command-kind only: a shell command the orchestrator runs from the worktree root to reproduce the defect. Required when kind is 'command'; ignored when kind is 'inspection'. The string is run verbatim under the orchestrator's H1-confined Bash; the schema refuses chaining/substitution/redirection/newline/NUL bytes (banned characters: ; & | backtick $ < > backslash newline carriage-return NUL) and caps length at 512 so a prompt-injected diff cannot steer the reviewer into authoring a destructive payload.",
           "maxLength": 512,
           "minLength": 1,
           "pattern": "^[^;&|`$<>\\n\\r\\u0000\\\\]+$",
           "type": "string"
-        },
-        "reproduced": {
-          "description": "Command-kind only: true if the reviewer ran the reproductionCommand and saw the failure, false if asserted without local execution. Required when kind is 'command'.",
-          "type": "boolean"
         },
         "severity": {
           "$ref": "#/definitions/severity"
@@ -149,6 +124,31 @@
         "suggestedCriterion"
       ],
       "type": "object"
+    },
+    "findingKind": {
+      "description": "Discriminator between a command-reproducible finding (carries reproductionCommand + reproduced) and an inspection finding (carries evidencePointer).",
+      "enum": [
+        "command",
+        "inspection"
+      ],
+      "type": "string"
+    },
+    "nonNegativeInteger": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "positiveInteger": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "severity": {
+      "description": "Severity tier per the measurement-vs-gating convention. blocker triggers a renegotiation round if a corresponding criterion is missing; warning is surfaced and may trigger; advisory is measurement-only.",
+      "enum": [
+        "blocker",
+        "warning",
+        "advisory"
+      ],
+      "type": "string"
     },
     "summary": {
       "additionalProperties": false,
@@ -193,6 +193,11 @@
         "$ref": "#/definitions/finding"
       },
       "type": "array"
+    },
+    "reviewerPromptDigest": {
+      "description": "Optional lowercase SHA-256 hex digest (64 characters) of the independent-reviewer prompt file content as installed under ~/.claude/agents/. Stamped by the orchestrator at reviewer spawn so two review bundles produced under different reviewer-prompt versions are distinguishable. Additive on v1 per the additive-stays-vN ruling in specifications/roadmap.md; consumers that omit the field continue to validate.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
     },
     "sprintNumber": {
       "$ref": "#/definitions/positiveInteger",

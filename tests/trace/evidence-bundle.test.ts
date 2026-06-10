@@ -68,10 +68,19 @@ function trace(): TraceEvent[] {
 
 const CONTRACT = [{ name: 'tls_required_for_sensitive_traffic' }, { name: 'prototype_pollution' }];
 
+// 64-character lowercase hex string used as a stand-in evaluator-prompt
+// digest so the T5 consumer-side gate (assertEvaluatorEvidenceDigest, invoked
+// inside verifyEvidenceBundle as the `digest` check) accepts the fixture
+// without the test having to compute a real SHA-256 of the agent prompt. The
+// value is shape-canonical (matches ^[0-9a-f]{64}$) and content-meaningless,
+// which is exactly the contract the consumer-side gate pins.
+const STUB_PROMPT_DIGEST = 'a'.repeat(64);
+
 function validBundle(): unknown {
   return {
     sprintNumber: 2,
     attemptLetter: 'A',
+    evaluatorPromptDigest: STUB_PROMPT_DIGEST,
     criteria: [
       {
         name: 'tls_required_for_sensitive_traffic',
@@ -183,6 +192,7 @@ describe('evidence_bundle_ref_integrity', () => {
     const bundle = {
       sprintNumber: 1,
       attemptLetter: 'A',
+      evaluatorPromptDigest: STUB_PROMPT_DIGEST,
       criteria: [
         {
           name: 'tls_required_for_sensitive_traffic',

@@ -21,7 +21,8 @@
  * module never throws for a verification failure.
  */
 
-import { getEvaluatorEvidenceBundleValidator } from '../config-server/validation/schema-check.js';
+import { getEvaluatorEvidenceBundleV2Validator } from '../config-server/validation/schema-check.js';
+import { assertEvaluatorEvidenceDigest } from '../config-server/invariants/evaluator-evidence-digest.js';
 import type { TraceEvent } from './events.js';
 
 /**
@@ -33,8 +34,19 @@ export interface ContractCriterionLike {
   name: string;
 }
 
-/** The four verification checks; the `check` discriminant on a failure. */
-export type EvidenceBundleCheck = 'schema' | 'joinKey' | 'refIntegrity' | 'failCompleteness';
+/**
+ * The verification checks the bundle verifier runs; the `check` discriminant
+ * on a failure. `digest` was added by the T5 spec — the bundle must carry the
+ * SHA-256 hex digest of the evaluator-prompt stamped by the orchestrator at
+ * spawn time, so two bundles produced under different evaluator-prompts are
+ * distinguishable in the audit trail.
+ */
+export type EvidenceBundleCheck =
+  | 'schema'
+  | 'joinKey'
+  | 'refIntegrity'
+  | 'failCompleteness'
+  | 'digest';
 
 /**
  * One verification failure.
@@ -162,7 +174,7 @@ export function verifyEvidenceBundle(
 ): EvidenceBundleVerifyResult {
   const failures: EvidenceBundleFailure[] = [];
 
-  const validate = getEvaluatorEvidenceBundleValidator();
+  const validate = getEvaluatorEvidenceBundleV2Validator();
   const schemaValid = validate(bundle) as boolean;
   const schemaErrors: unknown[] = schemaValid ? [] : [...(validate.errors ?? [])];
   if (!schemaValid) {
@@ -180,6 +192,20 @@ export function verifyEvidenceBundle(
 
   // Safe only because the schema check above succeeded.
   const typed = bundle as EvidenceBundleLike;
+
+  // The orchestrator-stamped digest is asserted here as the consumer-side
+  // gate (T5). The check runs after the schema gate so a malformed bundle
+  // produces one focused schema failure rather than co-firing; a bundle that
+  // is schema-valid but lacks the digest (a v1-shaped legacy artefact
+  // reaching the v2 read path) is rejected with the structured-code surface
+  // the assert returns.
+  const digestResult = assertEvaluatorEvidenceDigest(bundle);
+  if (!digestResult.ok) {
+    failures.push({
+      check: 'digest',
+      detail: digestResult.message ?? 'evaluator-evidence-bundle digest check failed.',
+    });
+  }
 
   const contractNames = new Set(contractCriteria.map((c) => c.name));
   for (const crit of typed.criteria) {

@@ -433,10 +433,15 @@ describe('comments_cite_no_development_provenance — C1 instantiation end-to-en
 
     // The evaluator's bundle for an attempt that scored provenance below its
     // threshold: the criterion is recorded as a failing verdict with the
-    // evidence a fail requires.
+    // evidence a fail requires. The bundle carries an evaluatorPromptDigest
+    // because the v2 schema introduced by T5 requires it at root level; the
+    // value is a 64-character lowercase hex stand-in (shape-canonical for
+    // SHA-256 hex), since the fixture pins the verifier's behaviour, not the
+    // bytes the orchestrator would have hashed at spawn.
     const failingBundle = {
       sprintNumber: 1,
       attemptLetter: 'A',
+      evaluatorPromptDigest: 'a'.repeat(64),
       criteria: [
         {
           name: criterionName,

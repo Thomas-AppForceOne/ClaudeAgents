@@ -1,0 +1,212 @@
+{
+  "$id": "https://claudeagents.dev/schemas/evaluator-evidence-bundle-v2.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "criterion": {
+      "allOf": [
+        {
+          "$comment": "Conditional-required (T1 Evidence bundle shape): a pass OR fail verdict must carry reproductionCommand; a fail verdict must ALSO carry deltaFromContract. The 'then' subschemas re-declare the properties they require so the schema compiles cleanly under the repo's pinned ajv strict mode.",
+          "if": {
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "pass",
+                  "fail"
+                ]
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "reproductionCommand": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reproductionCommand"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "evidence"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "fail"
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "deltaFromContract": {
+                    "$ref": "#/definitions/deltaFromContract"
+                  }
+                },
+                "required": [
+                  "deltaFromContract"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "evidence"
+            ],
+            "type": "object"
+          }
+        }
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/definitions/evidence"
+        },
+        "name": {
+          "description": "Join key: matches a criteria[].name in the corresponding sprint-{N}-contract.json.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked",
+            "skipped"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence",
+        "name",
+        "verdict"
+      ],
+      "type": "object"
+    },
+    "deltaFromContract": {
+      "additionalProperties": false,
+      "description": "expected paraphrases the criterion's description; observed is what the evaluator found.",
+      "properties": {
+        "expected": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected",
+        "observed"
+      ],
+      "type": "object"
+    },
+    "evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "deltaFromContract": {
+          "$ref": "#/definitions/deltaFromContract"
+        },
+        "reproductionCommand": {
+          "description": "A deterministic shell command a human can run to re-derive the verdict. Required for pass and fail verdicts; optional for blocked and skipped.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "traceEventRefs": {
+          "description": "Array of <eventType>:<sequenceNumber> strings pointing into the run's trace. May be empty for verdict='skipped'.",
+          "items": {
+            "pattern": "^[a-z][A-Za-z0-9]*:(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "traceEventRefs"
+      ],
+      "type": "object"
+    },
+    "verdictSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "passed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalCriteria": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "blocked",
+        "failed",
+        "passed",
+        "skipped",
+        "totalCriteria"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "JSON Schema (draft-07) for the ClaudeAgents evaluator evidence bundle, v2 (T5). The bundle is the evaluator output artefact at .gan-state/runs/<run-id>/sprint-{N}-feedback-{attemptLetter}.json. v2 adds a required evaluatorPromptDigest field carrying the lowercase SHA-256 hex digest of agents/gan-evaluator.md, stamped by the orchestrator at evaluator spawn and forwarded by the evaluator into the emitted bundle. This is a breaking change vs v1 because the root schema declares additionalProperties: false, so a new required field cannot ride additively on v1. The v1 file is retained read-only for existing run dirs. Every other invariant (the per-criterion conditional-required logic, the join-key invariant on criteria[].name, the verdictSummary tallies) is preserved verbatim.",
+  "properties": {
+    "attemptLetter": {
+      "pattern": "^[A-Z]$",
+      "type": "string"
+    },
+    "criteria": {
+      "items": {
+        "$ref": "#/definitions/criterion"
+      },
+      "type": "array"
+    },
+    "evaluatorPromptDigest": {
+      "description": "Lowercase SHA-256 hex digest (64 characters) of the agents/gan-evaluator.md file content as installed under ~/.claude/agents/, computed by the orchestrator at evaluator spawn and stamped on the bundle path. Required at root level; pinned by pattern so a non-hex or wrong-length value fails validation.",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "sprintNumber": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "verdictSummary": {
+      "$ref": "#/definitions/verdictSummary"
+    }
+  },
+  "required": [
+    "attemptLetter",
+    "criteria",
+    "evaluatorPromptDigest",
+    "sprintNumber",
+    "verdictSummary"
+  ],
+  "title": "ClaudeAgents evaluator evidence bundle, v2",
+  "type": "object"
+}

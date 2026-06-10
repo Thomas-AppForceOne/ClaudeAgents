@@ -17,6 +17,7 @@ import moduleManifestV1Json from '../../schemas/module-manifest-v1.json' with { 
 import runTraceV1Json from '../../schemas/run-trace-v1.json' with { type: 'json' };
 import runTraceIndexV1Json from '../../schemas/run-trace-index-v1.json' with { type: 'json' };
 import evaluatorEvidenceBundleV1Json from '../../schemas/evaluator-evidence-bundle-v1.json' with { type: 'json' };
+import evaluatorEvidenceBundleV2Json from '../../schemas/evaluator-evidence-bundle-v2.json' with { type: 'json' };
 import independentReviewV1Json from '../../schemas/independent-review-v1.json' with { type: 'json' };
 import progressV1Json from '../../schemas/progress-v1.json' with { type: 'json' };
 import telemetryConfigV1Json from '../../schemas/telemetry-config-v1.json' with { type: 'json' };
@@ -38,8 +39,23 @@ export const moduleManifestV1: JsonSchema = moduleManifestV1Json as JsonSchema;
 export const runTraceV1: JsonSchema = runTraceV1Json as JsonSchema;
 /** Schema for the index that aggregates per-run trace records. */
 export const runTraceIndexV1: JsonSchema = runTraceIndexV1Json as JsonSchema;
-/** Schema for the evidence bundle the evaluator emits per run. */
+/** Schema for the evidence bundle the evaluator emits per run (legacy v1; retained read-only). */
 export const evaluatorEvidenceBundleV1: JsonSchema = evaluatorEvidenceBundleV1Json as JsonSchema;
+
+/**
+ * Schema for the evidence bundle the evaluator emits per run, v2.
+ *
+ * v2 adds a required `evaluatorPromptDigest` field carrying the lowercase
+ * SHA-256 hex digest of `agents/gan-evaluator.md`, stamped by the orchestrator
+ * at evaluator spawn and forwarded by the evaluator into the emitted bundle.
+ * The new field is required at the root and pinned by `pattern:
+ * "^[0-9a-f]{64}$"`. Because the v1 schema declares `additionalProperties:
+ * false`, a new required field cannot ride additively on v1; v2 is therefore
+ * the breaking-change destination and the new write path for every evidence
+ * bundle emitted from this spec forward. v1 stays exported for legacy reads
+ * (an O2 `--recover` flow on an older run dir).
+ */
+export const evaluatorEvidenceBundleV2: JsonSchema = evaluatorEvidenceBundleV2Json as JsonSchema;
 
 /**
  * Schema for the artefact the independent-reviewer agent writes per sprint
