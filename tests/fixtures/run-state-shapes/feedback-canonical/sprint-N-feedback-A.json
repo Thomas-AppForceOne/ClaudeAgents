@@ -1,0 +1,4 @@
+{
+  "_fixture": "literal-N form — the canonical template shape, never a live filename",
+  "_purpose": "Pin against a class of drift where the agent writes the template literally instead of substituting N. The H1 hook's run-id arm requires the N segment to be a digit run, so this name does not match the canonical glob."
+}

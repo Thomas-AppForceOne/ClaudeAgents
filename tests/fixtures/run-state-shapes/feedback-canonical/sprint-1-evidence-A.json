@@ -1,0 +1,4 @@
+{
+  "_fixture": "non-canonical evaluator-output filename — original E8-run variant",
+  "_purpose": "Pin a refused-variant filename. The H1 hook must deny a write to this name under the run dir."
+}

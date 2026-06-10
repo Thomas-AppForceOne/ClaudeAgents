@@ -253,6 +253,23 @@ if is_within "$NORM" "$RUN_DIR_NORM"; then
     # T1 trace subtree and opt-in telemetry subtree.
     trace/*) exit 0 ;;
     telemetry/*) exit 0 ;;
+    # --- Named-deny rules for non-canonical evaluator-output filenames -------
+    # The evaluator's per-sprint per-attempt artefact is canonical at
+    # sprint-N-feedback-A.json (Q10). Three historical variants drifted from the
+    # canonical form across self-build runs: -evidence-A.json, the original E8
+    # naming; -evaluator-evidence-A.json, the M4 variant; and -evaluation.json,
+    # the O1 variant. Each surfaces here as an explicit named-deny — with a
+    # message naming the canonical form — so a future drift is caught with a
+    # specific deny rather than the generic default-deny fall-through below.
+    sprint-[0-9]*-evidence-[0-9A-Za-z]*.json)
+      printf '%s\n' "gan-confine: deny — non-canonical evaluator-output filename. The canonical form is sprint-N-feedback-A.json." >&2
+      exit 1 ;;
+    sprint-[0-9]*-evaluator-evidence-[0-9A-Za-z]*.json)
+      printf '%s\n' "gan-confine: deny — non-canonical evaluator-output filename. The canonical form is sprint-N-feedback-A.json." >&2
+      exit 1 ;;
+    sprint-[0-9]*-evaluation.json)
+      printf '%s\n' "gan-confine: deny — non-canonical evaluator-output filename. The canonical form is sprint-N-feedback-A.json." >&2
+      exit 1 ;;
   esac
 fi
 
