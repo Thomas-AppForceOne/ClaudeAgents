@@ -1,6 +1,6 @@
 # BR-006 — Contract-reviewer rubber-stamps drafts without producing change requests
 
-**Status:** Needs verification
+**Status:** Closed — fix shipped by Q9 (contract-reviewer cold-read framing + first-pass script-name resolution + verdict-shape pin). See specifications/Q9-contract-reviewer-cold-read.md and the Q9 roadmap entry.
 **Severity:** High
 **Found in run(s):**
 - `ClaudeAgents-dea5f7879cf0/runs/20260530T231724-5cc0` (E8 — 5 of 6 sprints "approved" with empty `issues[]`; draft and locked contracts byte-identical)

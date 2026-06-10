@@ -1,6 +1,6 @@
 # BR-007 — Proposer does not validate that scripts / files / symbols named in criteria actually resolve
 
-**Status:** Needs verification
+**Status:** Closed — fix shipped by Q8 (proposer pre-flight name-resolution validator: validateCriterionReferences MCP tool + agent-prompt wiring). See specifications/Q8-proposer-name-resolution.md and the Q8 roadmap entry.
 **Severity:** High
 **Found in run(s):**
 - `ClaudeAgents-dea5f7879cf0/runs/20260530T231724-5cc0/sprint-1-contract.json` (criteria reference `npm run -s test-house-rules` and `npm run -s test-no-spec-ref`, neither of which exists)
