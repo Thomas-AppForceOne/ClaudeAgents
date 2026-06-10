@@ -111,6 +111,8 @@ The bug-fix specs land **after** the v1.0 spec inventory and **before** the rele
 
 26. ✅ **[Q8](Q8-proposer-name-resolution.md)** — proposer pre-flight name resolution for backtick-quoted `npm run X` script references. Shipped PR #<n>.
 27. ✅ **[Q9](Q9-contract-reviewer-cold-read.md)** — contract-reviewer fresh-context framing, first-pass script-name resolution, and verdict-shape normalisation. Shipped PR #<n>.
+28. ✅ **[Q10](Q10-evaluator-output-filename-canonical.md)** — canonical evaluator-output filename `sprint-N-feedback-A.json` pinned across the prompt / SKILL.md / H1-hook layers, with explicit named-deny coverage for the three historical non-canonical variants. Shipped PR #<n>.
+29. ✅ **[T5](T5-evaluator-evidence-digest.md)** — required `evaluatorPromptDigest` field on the evidence bundle (schema bumped to `evaluator-evidence-bundle-v2`), plus the analogous optional digests on the independent-review and contract-reviewer outputs. Shipped PR #<n>.
 
 ### Known gaps accepted at v1.0
 

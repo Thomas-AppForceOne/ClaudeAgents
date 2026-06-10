@@ -314,6 +314,7 @@ The orchestrator follows this order on every regular `/gan` invocation:
    - Pass the snapshot to `gan-contract-proposer` (proposes the sprint contract — every security criterion sourced from the active stacks' `securitySurfaces` via the proposer's template-instantiation protocol; the proposer reads `clarified-spec.md` to derive contract criteria).
    - Pass the snapshot and the contract to `gan-generator`.
    - Pass the snapshot, the contract, and the worktree state to `gan-evaluator`. The evaluator's input is **unchanged** — it reads only the contract, never the clarified spec.
+   - **Stamp the evaluator-prompt digest at spawn.** Immediately before spawning the evaluator, the orchestrator reads `agents/gan-evaluator.md` (as installed under `~/.claude/agents/`) via the framework's Read tool, computes the lowercase SHA-256 hex digest `sha256(agents/gan-evaluator.md)`, and passes the resulting 64-character hex string to the evaluator via the spawn context. The evaluator forwards the digest verbatim into the emitted evidence bundle under the `evaluatorPromptDigest` root field; the v2 evidence-bundle schema requires it. The digest is the audit-trail anchor that lets two bundles produced under different evaluator-prompt versions be distinguished after the fact; the orchestrator (not the evaluator) is the writer because a self-computing evaluator could drift from the canonical bytes without detection.
 
    The orchestrator never re-parses configuration files between sprints; it always passes the captured snapshot.
 

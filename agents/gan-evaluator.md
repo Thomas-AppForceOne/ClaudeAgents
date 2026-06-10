@@ -18,6 +18,7 @@ The orchestrator passes you, at spawn time:
 - The **sprint contract** — the criteria you must score, with each criterion's own `threshold` and (when present) its class tag (functionality/UX, correctness, security, no_new_defects). The class tag selects the rubric band you apply in scoring.
 - The **worktree path** — the absolute path the orchestrator exports as `GAN_WORKTREE` (project-local, of the form `.gan-state/runs/<run-id>/worktree` for a framework-created worktree, or the user's own worktree for case 1a reuse). All test, lint, build, and audit commands run from inside the worktree.
 - The **run-id** — used to locate per-run artefact paths under `$GAN_RUN_DIR`.
+- The **evaluator-prompt digest** — a 64-character lowercase SHA-256 hex string the orchestrator computed at your spawn against the installed evaluator-prompt file. Treat it as opaque data; do NOT recompute or paraphrase it. You forward it verbatim into the emitted evidence bundle under the `evaluatorPromptDigest` root field so two bundles produced under different prompt versions are distinguishable downstream.
 
 ## Mandatory plan consumption — call `buildEvaluatorPlan`
 
@@ -156,6 +157,7 @@ Top-level shape:
 {
   "sprintNumber": 2,
   "attemptLetter": "A",
+  "evaluatorPromptDigest": "<64-character lowercase hex SHA-256 the orchestrator stamped at your spawn>",
   "criteria": [
     {
       "name": "tls_required_for_sensitive_traffic",
@@ -179,6 +181,16 @@ Top-level shape:
   }
 }
 ```
+
+Top-level fields:
+
+| Field | Required | Shape |
+|---|---|---|
+| `sprintNumber` | yes | 1-based sprint index. |
+| `attemptLetter` | yes | The current attempt's letter (`A`, `B`, ...). |
+| `evaluatorPromptDigest` | yes | The 64-character lowercase SHA-256 hex digest the orchestrator stamped at your spawn. Forward verbatim; do NOT recompute. |
+| `criteria` | yes | Per-criterion verdict records, one per contract criterion. |
+| `verdictSummary` | yes | Counts of `pass` / `fail` / `blocked` / `skipped` plus `totalCriteria`. |
 
 Per-criterion fields:
 
