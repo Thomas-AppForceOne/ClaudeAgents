@@ -19,6 +19,18 @@
 # End users never run this script, so their single-install behaviour is
 # untouched.
 #
+# No-op in the globally-linked checkout
+# -------------------------------------
+# If you run this in the very checkout that `install.sh` global-linked,
+# the user-scope entry's bin already resolves (through the npm global-link
+# symlink chain) to THIS worktree's `dist/config-server/index.js` — the
+# exact file a local-scope entry would run. Adding a local entry there
+# changes nothing about which code executes; it only makes the two scopes
+# disagree on the literal command string, which is what trips
+# `claude doctor`'s "Conflicting scopes" warning. So in that case the
+# script detects the match, clears any stale local entry, and skips the
+# link — running it there is a no-op by design.
+#
 # Run it once per worktree, any time after you create the worktree (and
 # again whenever you want to be sure the registration is current — it is
 # idempotent).
@@ -42,6 +54,36 @@ readonly EXPECTED_PKG="@claudeagents/config-server"
 
 err()  { printf 'dev-worktree-link: %s\n' "$*" >&2; }
 info() { printf 'dev-worktree-link: %s\n' "$*"; }
+
+# Canonicalise a path, fully resolving every symlink in the chain. Used to
+# tell whether the global install's bin already resolves to THIS worktree's
+# dist entry. Node is always present in a config-server checkout and its
+# realpath resolves the npm global-link chain (`/opt/homebrew/bin/...` ->
+# package symlink -> repo `dist/...`) reliably across platforms — BSD
+# `readlink` lacks `-f` on older macOS. Prints nothing if the path is
+# missing or cannot be resolved.
+realpath_of() {
+  node -e 'process.stdout.write(require("fs").realpathSync(process.argv[1]))' "$1" 2>/dev/null
+}
+
+# Echoes the canonical target of the globally-linked config-server bin when
+# it resolves to THIS worktree's dist entry (i.e. `install.sh` global-linked
+# this very checkout), and nothing otherwise. In that state a local-scope
+# MCP entry would point at the same file as the existing user-scope one,
+# adding nothing but a spurious "Conflicting scopes" warning from
+# `claude doctor`.
+global_points_here() {
+  local bin target dist
+  bin="$(command -v claudeagents-config-server 2>/dev/null || true)"
+  [ -n "$bin" ] || return 0
+  # `|| true` keeps a failed resolve (missing/unreadable path) from tripping
+  # `set -e`; an empty target simply means "no match", handled below.
+  target="$(realpath_of "$bin")" || true
+  dist="$(realpath_of "$DIST_ENTRY")" || true
+  if [ -n "$target" ] && [ "$target" = "$dist" ]; then
+    printf '%s' "$target"
+  fi
+}
 
 # Resolve the worktree root. `git rev-parse --show-toplevel` returns the
 # *worktree's* root inside a linked worktree (not the main checkout),
@@ -82,7 +124,7 @@ for arg in "$@"; do
     --no-build) do_build=0 ;;
     --install)  do_install=1 ;;
     -h|--help)
-      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -103,6 +145,15 @@ case "$mode" in
     info "branch   : $BRANCH"
     if [ -f "$DIST_ENTRY" ]; then
       info "dist     : present ($DIST_ENTRY)"
+      if status_target="$(global_points_here)"; [ -n "$status_target" ]; then
+        info "global   : points at THIS worktree ($(command -v claudeagents-config-server))"
+        info "           -> linking is a no-op here; the user-scope entry already"
+        info "              runs this dist. A local-scope entry would only trigger"
+        info "              claude doctor's 'Conflicting scopes' warning. Use"
+        info "              --unlink to clear any stale local entry."
+      else
+        info "global   : points elsewhere — a local-scope link shadows it here."
+      fi
     else
       info "dist     : MISSING — run without --status to build it"
     fi
@@ -143,6 +194,31 @@ case "$mode" in
       err "build entry not found: $DIST_ENTRY"
       err "Run without --no-build, or 'npm run build' manually, then retry."
       exit 1
+    fi
+
+    # If `install.sh` global-linked THIS checkout, the user-scope entry
+    # already resolves to $DIST_ENTRY — the exact file a local-scope entry
+    # would run. Registering local scope then adds nothing but a spurious
+    # "Conflicting scopes" warning from `claude doctor`. Detect that, drop
+    # any stale local entry from a previous run, and skip the add: linking
+    # the globally-linked checkout is a no-op by design.
+    if global_target="$(global_points_here)"; [ -n "$global_target" ]; then
+      info "global install already points at this worktree:"
+      info "  $(command -v claudeagents-config-server) -> $global_target"
+      info ""
+      info "A local-scope entry would duplicate the existing user-scope one"
+      info "and trigger claude doctor's 'Conflicting scopes' warning, so no"
+      info "local link is needed here."
+      if mcp_in_worktree remove "$SERVER_NAME" --scope local >/dev/null 2>&1; then
+        info ""
+        info "Removed a stale local-scope '$SERVER_NAME' entry left by an"
+        info "earlier run. RESTART Claude Code so it falls back to the global"
+        info "install."
+      fi
+      info ""
+      info "(If you later install.sh a DIFFERENT checkout, re-run this script"
+      info " here to restore the local link.)"
+      exit 0
     fi
 
     # Idempotent: drop any existing local-scope entry first so a re-run
