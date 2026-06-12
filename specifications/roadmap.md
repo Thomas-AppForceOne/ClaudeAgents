@@ -103,7 +103,18 @@ The numbered list below is the v1.0 spec inventory, in execution order. Each ent
 22. ✅ **[O1](O1-resolution-observability.md)** — resolution observability. Shipped PR #38.
 23. ✅ **[O3](O3-telemetry-semantics.md)** — telemetry semantics. Shipped PR #39.
 24. ✅ **[D1](D1-diagnostic-clarity.md)** — diagnostic clarity + SKILL.md status markers. Shipped PR #40.
-25. **Pre-release chores + release gate.** See below.
+
+**Structural-audit hotfix set (2026-06-12).** The audit ([`_audit-2026-06-12-structural.md`](_audit-2026-06-12-structural.md)) traced the first-sprint review failures to a stale confinement-hook allowlist, an unwired first-pass contract review, and the prose-only-enforcement cluster the bug-report corpus documented. These eight items are v1.0-blocking — the release gate cannot run a protocol the loop cannot complete — and land before the pre-release chores, in this order:
+
+25. **Next.** **[H4](H4-confinement-hook-artifact-parity.md)** — confinement-hook artifact parity + run-artifact catalog. Unbreaks `/gan`; no dependencies.
+26. **E9** — contract quality gate (BR-006/BR-007). Spec and implementation in flight on `feature/fix-order-plan-tier5-impl` (the spec file lands on `develop` with that branch); review, rebase onto post-H4 develop, land. Includes the BR-013/BR-015 close-outs.
+27. **[E11](E11-agent-tool-grant-coherence.md)** — agent tool-grant & caller coherence + `web-node` `lintCmd` repair. Parallel-safe with 26.
+28. **[E10](E10-contract-review-wiring-and-negotiation-budget.md)** — first-pass contract-review wiring + negotiation budget. Depends on E9, H4.
+29. **[F9](F9-run-artifact-write-boundary.md)** — schema-gated run-artifact write boundary (closes the BR-001/002/003/005/016 cluster). Depends on H4, E10.
+30. **[O4](O4-run-store-lock-and-recovery-hardening.md)** — run-store, lock & recovery hardening. Slice 1 parallel-safe; slice 2 depends on F9.
+31. **[Q8](Q8-repo-gate-honesty.md)** — repo-gate honesty: CI gating, API-surface parity, prompt-surface parity lints. Depends on H4, E11.
+32. **[D3](D3-skill-executable-surface-reduction.md)** — SKILL.md executable-surface reduction. Depends on E10, F9, O4; lands last.
+33. **Pre-release chores + release gate.** See below.
 
 ### Known gaps accepted at v1.0
 
