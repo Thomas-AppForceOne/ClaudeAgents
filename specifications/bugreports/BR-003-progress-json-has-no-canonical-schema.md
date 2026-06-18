@@ -1,6 +1,6 @@
 # BR-003 — `progress.json` has no canonical schema; field naming varies wildly across runs
 
-**Status:** Needs verification
+**Status:** Closed — same family as the v1.0 obedience-class known gaps (#3 safety-obedience, #4 trace-emission fidelity). The orchestrator's direct JSON writes bypassing `validateProgress` is the same obedience-family pattern as BR-002 — owned by the same release-gate-class workstream as BR-001, not this fix plan. See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Blocker
 **Found in run(s):** All 8 runs — every `progress.json` has a different key-set
 **Filed:** 2026-06-08

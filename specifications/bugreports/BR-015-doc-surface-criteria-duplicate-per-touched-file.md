@@ -1,6 +1,6 @@
 # BR-015 — Documentation-surface criteria duplicate per touched file in sprint contracts
 
-**Status:** Needs verification
+**Status:** Closed — not-reproducible (per [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0, 2026-06-08). Two real anomalies surfaced during verification should be filed as new BRs — see footer.
 **Severity:** Low
 **Found in run(s):**
 - `ClaudeAgents-dea5f7879cf0/runs/20260530T231724-5cc0/sprint-4-contract.json` (26 criteria, of which 8 are the four web-node `documentationSurfaces` × two prompts)

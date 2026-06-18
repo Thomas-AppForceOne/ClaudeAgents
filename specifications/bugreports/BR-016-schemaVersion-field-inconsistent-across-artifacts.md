@@ -1,6 +1,6 @@
 # BR-016 — `schemaVersion` field inconsistently present across artifact files
 
-**Status:** Needs verification
+**Status:** Closed — convention add, not a runtime defect. Covered by the *Schema-versioning ruling (pre-v1.0)* in the roadmap and PROJECT_CONTEXT § *Schema discipline — additive-stays-`vN`*; the artefact-stamping convention is unwritten but lands as a PROJECT_CONTEXT § Conventions addition, not a fix on this plan. See [FIX-ORDER-PLAN.md](FIX-ORDER-PLAN.md) Phase 0.
 **Severity:** Low
 **Found in run(s):** All 8 runs — `schemaVersion` present on some artifact files, absent on others, with no clear rule
 **Filed:** 2026-06-08
